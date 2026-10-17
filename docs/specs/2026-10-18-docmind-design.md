@@ -66,6 +66,7 @@ packages/
   keystore-pg/ PostgresKeyStore (implements @loom/plugin-crypto KeyStore)
   parsers/     DocumentParser registry, one file per format
   embeddings/  EmbeddingProvider implementations (Ollama default)
+  llm-anthropic/ loom `llm` provider on @anthropic-ai/sdk (thinking, refusals)
   vector-pg/   pgvector VectorIndex (implements @loom/memory VectorIndex)
   blob-store/  encrypted filesystem ContentStore
 infra/         docker-compose, SQL migrations
@@ -86,6 +87,7 @@ Dependency rules:
 | `VectorIndex` | `@loom/memory` | upsert / query / delete | pgvector |
 | `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
 | `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
+| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` (§6.5) |
 | `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | Loom projection → Postgres |
 
 Each interface has **one shared conformance test suite** that every implementation must pass.
@@ -97,7 +99,7 @@ Each interface has **one shared conformance test suite** that every implementati
 | Composition root, compliance/erasure | `@loom/app` `defineConfig`, `app.eraseSubject` |
 | Durable flows, steps, logged non-determinism | `@loom/core` |
 | ReAct agent loop, delta chunking | `@loom/agent` |
-| LLM calls (Anthropic), streaming, untrusted-input guard | `@loom/llm` |
+| LLM effects, provider interface, untrusted-input guard | `@loom/llm` (its Anthropic provider is replaced by `packages/llm-anthropic`, §6.5) |
 | Chunking, idempotent sync, grounding, `checkCitations` | `@loom/knowledge` |
 | Embedding/vector-index interfaces, `recallRelevant` | `@loom/memory` |
 | Multi-turn conversations, history reader, barge-in, token-window rotation | `@loom/conversation` |
@@ -310,6 +312,33 @@ Scanned PDF pages with no text layer are routed through the image path.
   - `stop_reason: refusal` is shown as an explicit message.
   - An embedder outage returns "search unavailable", never an answer without sources.
 
+### 6.5 Thinking
+
+The chat shows the model's thinking.
+
+- **What is shown.** Claude's *summarized* thinking: requests use
+  `thinking: {type: "adaptive", display: "summarized"}`. The raw chain of thought is never exposed by
+  the API on any model.
+- **Provider.** Loom's `AnthropicProvider` sends no `thinking` setting, drops thinking deltas, does not
+  preserve thinking blocks across turns, and maps `stop_reason: "refusal"` to `end_turn`. DocMind adds
+  `packages/llm-anthropic`, which implements Loom's `llm` interface on the official
+  `@anthropic-ai/sdk`. It:
+  - streams thinking-summary deltas as their own chunk kind, separate from answer text;
+  - keeps every thinking block (with its signature) in the assistant turn and passes it back unchanged
+    on later requests, as Claude Opus 5.5 requires (preserved thinking). History is append-only; turns
+    are never edited;
+  - reports `refusal` with its `stop_details`;
+  - sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`).
+  It is a candidate for upstreaming into `@loom/llm` later.
+- **Stream.** conversation-sse carries three ordered event kinds per turn: `thinking` deltas,
+  `tool` activity (for example "Searched documents: 'Q3 revenue' → 8 passages"), and `answer` deltas.
+- **Storage.** Thinking summaries and tool-activity steps are stored in the assistant message metadata,
+  encrypted under the user's key like all event-log content, so past chats show them.
+- **UI.** `dm-thinking` is the mocks' tool-step list above each answer, always visible. Its first row,
+  "Thinking", expands to the streamed summary, opens by default while thinking streams, and collapses
+  automatically when the answer starts. It stays expandable in history. Tool-step rows follow in order
+  (see `docs/design/ui-mocks.md` §5).
+
 ## 7. Web UI (`apps/web`)
 
 **Stack.** Vite, Lit and the loom-ui Lit renderer. `@loom/*` and `@loom-ui/*` are aliased to their
@@ -333,6 +362,7 @@ apps/web/src/
 | Upload | `dm-upload-zone` |
 | Document detail (Summary / Analysis / Content tabs) | `dm-doc-detail` |
 | Citations and sources panel | `dm-citation`, `dm-source-panel` |
+| Thinking and tool-activity block (§6.5) | `dm-thinking` |
 | Scope picker, auth forms | `dm-scope-picker`, `dm-auth-form` |
 
 **State.** Small reactive stores (Lit `ReactiveController`s plus `@lit/context`), one per concern:
@@ -346,10 +376,13 @@ auth, sessions, chat, documents. Stores never touch the DOM.
 - Every view is keyboard-navigable with visible focus.
 - Colors meet WCAG AA in light and dark themes.
 
-**Design.** UI mocks come from Claude Design using the brief in Appendix A. Their tokens feed
-`styles/tokens.css`.
+**Design.** UI mocks come from Claude Design using the brief in Appendix A
+(https://claude.ai/artifact/CRd6Vj9zdoiBvATp1nszam). `docs/design/ui-mocks.md` is the implementation
+reference: screens, tokens ("Nocturne" design system, Inter, Phosphor icons, dark base theme) and
+components. Its tokens feed `styles/tokens.css`. The mocks don't draw account settings or confirmation
+dialogs; those follow the component sheet's existing styles.
 
-**Risk.** It is unverified whether `lu-chat` can render custom inline citation markers. PR 34 is a
+**Risk.** It is unverified whether `lu-chat` can render custom inline citation markers. PR 35 is a
 throwaway spike that settles this before UI work. If it can't, `dm-chat-view` renders assistant
 bodies itself and still uses `ChatFeed` for state.
 
@@ -443,32 +476,33 @@ Each milestone ends with something runnable.
 28. History endpoint, send route, conversation-sse stream.
 29. `search_docs` (with MMR) and `list_documents` tools.
 30. `read_section` and `get_summary` tools.
-31. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata.
-32. Auto titles, rename, delete, scope change, stop.
+31. `packages/llm-anthropic`: Loom `llm` interface on `@anthropic-ai/sdk` with summarized thinking, preserved thinking blocks and refusal handling.
+32. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata.
+33. Auto titles, rename, delete, scope change, stop.
 
 **M5 — Erasure**
 
-33. `DELETE /api/me` with an end-to-end non-recoverability integration test.
+34. `DELETE /api/me` with an end-to-end non-recoverability integration test.
 
 **M6 — Web UI** (runnable: the full app in a browser)
 
-34. Spike (throwaway): citation markers in `lu-chat`.
-35. Web scaffold: aliases, router, tokens, API client, SSE helper.
-36. Sign-in, sign-up and account settings (including "Delete my account"). Split if over the limit.
-37. App shell and session sidebar.
-38. Chat view, history paging, streaming.
-39. Citation markers and sources panel.
-40. Composer, scope picker, stop and regenerate.
-41. Upload zone.
-42. Document library table.
-43. Document detail tabs.
+35. Spike (throwaway): citation markers in `lu-chat`.
+36. Web scaffold: aliases, router, tokens, API client, SSE helper.
+37. Sign-in, sign-up and account settings (including "Delete my account"). Split if over the limit.
+38. App shell and session sidebar.
+39. Chat view, history paging, streaming, and the `dm-thinking` block.
+40. Citation markers and sources panel.
+41. Composer, scope picker, stop and regenerate.
+42. Upload zone.
+43. Document library table.
+44. Document detail tabs.
 
 **M7 — Hardening**
 
-44. Playwright end-to-end golden path.
-45. Retrieval eval set.
-46. Token-budget middleware and quota reporting.
-47. README, architecture doc, operations runbook (keys, backups, erasure).
+45. Playwright end-to-end golden path.
+46. Retrieval eval set.
+47. Token-budget middleware and quota reporting.
+48. README, architecture doc, operations runbook (keys, backups, erasure).
 
 **Ordering:**
 
@@ -479,7 +513,7 @@ Each milestone ends with something runnable.
 
 | Risk | Mitigation |
 |---|---|
-| `lu-chat` may lack an inline-citation hook | PR 34 spike; fallback is a custom renderer over `ChatFeed` |
+| `lu-chat` may lack an inline-citation hook | PR 35 spike; fallback is a custom renderer over `ChatFeed` |
 | Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out loom at a pinned ref (as loom-ui does with `LOOM_REF`). Publishing `@loom/*` is tracked as platform work. |
 | Loom is CJS-only in the browser | Vite source aliases (AetherOS precedent) |
 | Embedding residue in backups | Bounded backup retention, documented in the runbook |
