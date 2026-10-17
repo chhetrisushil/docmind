@@ -50,14 +50,27 @@ describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
     }
   });
 
-  it("applies the repo's migrations, which create an unprivileged app role", async () => {
+  it("refuses a tampered docmind_app; else unprivileged, no PUBLIC function execute", async () => {
     const fresh = await createTestDb();
+    const q = (sql: string) => fresh.owner.query(sql);
     try {
+      for (const [bad, undo] of [
+        ["ALTER ROLE docmind_app BYPASSRLS", "ALTER ROLE docmind_app NOBYPASSRLS"],
+        ["GRANT pg_read_all_data TO docmind_app", "REVOKE pg_read_all_data FROM docmind_app"],
+      ] as const) {
+        await q(bad);
+        await expect(migrate(fresh.owner)).rejects.toThrow(/docmind_app must not/);
+        await q(undo);
+      }
       expect(await migrate(fresh.owner)).toContain("0001_app_role.sql");
-      const { rows } = await fresh.owner.query(
-        "SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'docmind_app'",
+      await q("CREATE FUNCTION probe() RETURNS int LANGUAGE sql AS 'SELECT 1'");
+      const { rows } = await q(
+        `SELECT (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication OR EXISTS
+                 (SELECT FROM pg_auth_members m WHERE m.member = r.oid)) AS bad,
+                has_function_privilege('docmind_app', 'probe()', 'EXECUTE') AS exec
+           FROM pg_roles r WHERE rolname = 'docmind_app'`,
       );
-      expect(rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+      expect(rows[0]).toEqual({ bad: false, exec: false });
     } finally {
       await fresh.drop();
     }
