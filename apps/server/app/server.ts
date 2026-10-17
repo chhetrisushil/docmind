@@ -14,9 +14,19 @@ const routes: Record<string, Handler> = {
 /** The HTTP edge. Later PRs add routes to the table; unknown routes are a JSON 404. */
 export function createHttpServer(): Server {
   return createServer((req, res) => {
-    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    let path: string;
+    try {
+      path = new URL(req.url ?? "/", "http://localhost").pathname;
+    } catch {
+      return json(res, 400, { error: { code: "bad_request", message: "invalid request target" } });
+    }
     const handler = routes[`${req.method ?? "GET"} ${path}`];
-    if (handler) handler(req, res);
-    else json(res, 404, { error: { code: "not_found", message: "no such route" } });
+    if (!handler) return json(res, 404, { error: { code: "not_found", message: "no such route" } });
+    try {
+      handler(req, res);
+    } catch {
+      if (res.headersSent) res.end();
+      else json(res, 500, { error: { code: "internal", message: "internal error" } });
+    }
   });
 }
