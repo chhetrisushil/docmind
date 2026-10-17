@@ -15,6 +15,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -28,6 +31,7 @@ jobs:
   gate:
     name: build + typecheck + lint + test
     if: github.event_name == 'push' || github.event.pull_request.draft == false
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     services:
       postgres:
