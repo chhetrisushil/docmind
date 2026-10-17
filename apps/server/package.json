@@ -1,0 +1,24 @@
+{
+  "name": "@docmind/server",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx app/main.ts",
+    "gen": "loom gen --dir app",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@loom/app": "*",
+    "@loom/effect-runtime": "*",
+    "@loom/workflow-runtime": "*"
+  },
+  "devDependencies": {
+    "@loom/cli": "*",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
+  }
+}
