@@ -6,6 +6,8 @@
 CREATE FUNCTION app_tenant_id() RETURNS uuid
   LANGUAGE sql STABLE
   AS $$ SELECT nullif(current_setting('app.tenant_id', true), '')::uuid $$;
+-- 0001 revokes PUBLIC execute on new functions; the policies below call this as docmind_app.
+GRANT EXECUTE ON FUNCTION app_tenant_id() TO docmind_app;
 
 CREATE TABLE tenants (
   id uuid PRIMARY KEY,
