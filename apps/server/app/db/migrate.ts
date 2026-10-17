@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 
 // Resolved from the source tree: this runs under tsx and vitest, never from `dist`.
 export const MIGRATIONS_DIR = resolve(__dirname, "../../../../infra/migrations");
@@ -42,4 +42,34 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
     await client.query("SELECT pg_advisory_unlock($1)", [LOCK_KEY]);
     client.release();
   }
+}
+
+/** Lets `docmind_app` log in. DDL cannot take parameters, so Postgres quotes the password itself. */
+export async function setAppRolePassword(pool: Pool, password: string): Promise<void> {
+  const { rows } = await pool.query<{ ddl: string }>(
+    "SELECT format('ALTER ROLE docmind_app LOGIN PASSWORD %L', $1::text) AS ddl",
+    [password],
+  );
+  await pool.query(rows[0]?.ddl as string);
+}
+
+async function main(): Promise<void> {
+  const url = process.env.DOCMIND_MIGRATE_URL;
+  if (!url) throw new Error("DOCMIND_MIGRATE_URL is not set (the owner role's connection string)");
+  const pool = new Pool({ connectionString: url });
+  try {
+    const applied = await migrate(pool);
+    console.log(applied.length > 0 ? `applied: ${applied.join(", ")}` : "schema is up to date");
+    const password = process.env.DOCMIND_APP_DB_PASSWORD;
+    if (password) await setAppRolePassword(pool, password);
+  } finally {
+    await pool.end();
+  }
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
