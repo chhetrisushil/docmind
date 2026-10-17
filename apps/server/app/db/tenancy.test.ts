@@ -103,12 +103,71 @@ describe.skipIf(!PG_URL)("tenant isolation (needs DOCMIND_TEST_PG_URL)", () => {
     );
   });
 
-  it("has row-level security on every table, including ones later PRs add", async () => {
+  const unprotected = async () => {
     const { rows } = await db.owner.query<{ relname: string }>(
       `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
-         AND relname <> 'schema_migrations'`,
+       WHERE n.nspname = 'public' AND relname <> 'schema_migrations' AND (
+         (c.relkind IN ('r', 'p') AND NOT c.relrowsecurity) OR c.relkind = 'm' OR
+         (c.relkind = 'v' AND NOT coalesce(c.reloptions @> ARRAY['security_invoker=true'], false)))
+       ORDER BY relname`,
     );
-    expect(rows.map((r) => r.relname)).toEqual([]);
+    return rows.map((r) => r.relname);
+  };
+
+  it("has row-level security on every table, including ones later PRs add", async () => {
+    expect(await unprotected()).toEqual([]);
+  });
+
+  it("flags views and materialized views, which would leak every tenant's rows", async () => {
+    await db.owner.query("CREATE VIEW leaky AS SELECT * FROM users");
+    await db.owner.query("CREATE MATERIALIZED VIEW leaky_m AS SELECT * FROM users");
+    await db.owner.query("CREATE VIEW safe WITH (security_invoker = true) AS SELECT * FROM users");
+    expect(await unprotected()).toEqual(["leaky", "leaky_m"]);
+    await db.owner.query("DROP VIEW leaky, safe; DROP MATERIALIZED VIEW leaky_m");
+  });
+
+  it("rejects a session for a user of another tenant, and moving a row to another tenant", async () => {
+    const forge = "INSERT INTO auth_sessions VALUES ('forged', $1, $2, now())";
+    await expect(withTenant(app, A, (tx) => tx.query(forge, [A, USER_B]))).rejects.toThrow(
+      /foreign key/,
+    );
+    const move = "UPDATE users SET tenant_id = $1";
+    await expect(withTenant(app, A, (tx) => tx.query(move, [B]))).rejects.toThrow(
+      /row-level security/,
+    );
+  });
+
+  it("cannot delete or create tenants", async () => {
+    await expect(withTenant(app, A, (tx) => tx.query("DELETE FROM tenants"))).rejects.toThrow(
+      /permission denied/,
+    );
+    const mk = "INSERT INTO tenants (id, name) VALUES ($1, 'x')";
+    await expect(withTenant(app, A, (tx) => tx.query(mk, [crypto.randomUUID()]))).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  it("does not report success when the callback swallowed a database error", async () => {
+    const dup = "INSERT INTO users (id, tenant_id, email, password_hash) VALUES ($1, $2, $3, 'x')";
+    const saved = withTenant(app, A, async (tx) => {
+      await tx.query(dup, [crypto.randomUUID(), A, "b@example.com"]).catch(() => undefined);
+    });
+    await expect(saved).rejects.toThrow(/aborted/);
+  });
+
+  it("does not let a session-level tenant setting outlive withTenant", async () => {
+    await withTenant(app, A, (tx) =>
+      tx.query("SELECT set_config('app.tenant_id', $1, false)", [B]),
+    );
+    const { rows } = await app.query("SELECT count(*)::int AS n FROM users");
+    expect(rows[0].n).toBe(0);
+  });
+
+  it("keeps the original error and discards a connection that died mid-transaction", async () => {
+    const kill = withTenant(app, A, (tx) =>
+      tx.query("SELECT pg_terminate_backend(pg_backend_pid())"),
+    );
+    await expect(kill).rejects.toThrow(/terminat/);
+    expect((await app.query("SELECT 1 AS ok")).rows[0].ok).toBe(1);
   });
 });
