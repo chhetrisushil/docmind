@@ -14,16 +14,28 @@ export async function withTenant<T>(
 ): Promise<T> {
   if (!UUID.test(tenantId)) throw new Error("withTenant: tenantId must be a uuid");
   const tx = await pool.connect();
+  let broken: Error | undefined;
+  const note = (e: Error) => {
+    broken = e;
+  };
+  // A connection lost mid-transaction emits "error"; without a listener that crashes the process.
+  tx.on("error", note);
   try {
     await tx.query("BEGIN");
     await tx.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
     const result = await fn(tx);
-    await tx.query("COMMIT");
+    // An aborted transaction (fn swallowed a database error) answers COMMIT with ROLLBACK.
+    const end = await tx.query("COMMIT");
+    if (end.command === "ROLLBACK") throw new Error("withTenant: transaction was aborted");
     return result;
   } catch (err) {
-    await tx.query("ROLLBACK");
+    // Never let a failed ROLLBACK (dead connection) mask the original error.
+    await tx.query("ROLLBACK").catch(note);
     throw err;
   } finally {
-    tx.release();
+    // Drop any session-level value fn set; release(err) destroys a connection that cannot be trusted.
+    if (!broken) await tx.query("SELECT set_config('app.tenant_id', '', false)").catch(note);
+    tx.off("error", note);
+    tx.release(broken);
   }
 }
