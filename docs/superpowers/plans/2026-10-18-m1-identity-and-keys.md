@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** After M1, a user can sign up, log in and log out over HTTP with an argon2id password and an HTTP-only session cookie, behind an `Authenticator` interface that every request passes through; every user has a data key held by a Postgres key store that passes Loom's KeyStore contract; and Loom's event log and snapshots live in Postgres, encrypted per user with that key store, so destroying a user's key makes their events and checkpoints unreadable.
+**Goal:** After M1, a user can sign up, log in and log out over HTTP with an argon2id password and an HTTP-only session cookie, behind an `Authenticator` interface that every request passes through; sign-up does not reveal which emails are registered, and login and sign-up are rate limited per client address and per email; every user has a data key held by a Postgres key store that passes Loom's KeyStore contract, and the master key that wraps them can be rotated with a resumable tool; and Loom's event log and snapshots live in Postgres, encrypted per user with that key store, so destroying a user's key makes their events and checkpoints unreadable.
 
-**Architecture:** `packages/auth` holds the `Authenticator` interface, its conformance suite and the password/session logic over an `AuthStore` interface (an in-memory store for unit tests); the server implements `AuthStore` on Postgres through `SECURITY DEFINER` functions for the steps that happen before a tenant is known, and mounts the routes behind a `requireAuth` middleware on a router that turns every handler failure into a 500. `packages/keystore-pg` implements Loom's `KeyStore` (`@loom/plugin-crypto`) with one random data key per user, wrapped by a master key (KEK) from the environment and reachable only through `SECURITY DEFINER` functions. Loom's Postgres stores migrate themselves, so they get their own role (`docmind_loom`) and schema (`loom`); `apps/server` wraps them in `EncryptingEventStore` and `EncryptingSnapshotStore` (whole-state sealing), keyed by the owning user.
+**Architecture:** `packages/auth` holds the `Authenticator` interface, its conformance suite and the password/session logic over an `AuthStore` interface (an in-memory store for unit tests); the server implements `AuthStore` on Postgres through `SECURITY DEFINER` functions for the steps that happen before a tenant is known, and mounts the routes behind a `requireAuth` middleware on a router that turns every handler failure into a 500. Sign-up always answers the same `202` and starts no session; login and sign-up go through a Postgres-backed `Throttle` (exponential, time-boxed locks keyed by client address and by a hash of the email). `packages/keystore-pg` implements Loom's `KeyStore` (`@loom/plugin-crypto`) with one random data key per user, wrapped by a master key (KEK) from the environment and reachable only through `SECURITY DEFINER` functions; a rotation command re-wraps every key to a new KEK, as the owner role, never exposing a data key. Loom's Postgres stores migrate themselves, so they get their own role (`docmind_loom`) and schema (`loom`); `apps/server` wraps them in `EncryptingEventStore` and `EncryptingSnapshotStore` (whole-state sealing), keyed by the owning user.
 
 **Tech Stack:** everything in M0, plus `argon2` ^0.45.1 (node-argon2, prebuilt binaries), `zod` ^3.23.8 in the server, and the Loom packages `@loom/plugin-crypto`, `@loom/plugin-postgres` and (tests) `@loom/conformance`, all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db`.
 
@@ -22,8 +22,10 @@ Copied from the spec and the owner's standing rules; every task includes them.
 - **Test hygiene (Loom's AGENTS.md):** no sleeps (wait on conditions); test servers bind `127.0.0.1`; no timing assertions in `*.test.ts`; test files are typechecked (`typecheck:tests`).
 - **Tenancy:** the app connects as a **non-owner role** with no `BYPASSRLS`; RLS checks `tenant_id` against a transaction-local setting; nothing downstream accepts a tenant id from the client; the `Authenticator` produces `{tenantId, userId}` on every request.
 - **Passwords:** hashed with argon2id (spec §4.2). Only a hash of the session cookie token is stored (spec §4.2).
-- **Keys (spec §4.4):** each user has their own data key; `PostgresKeyStore` stores each DEK wrapped by a master KEK identified by `kek_id`; the KEK comes from an env var or file in v1; `destroy` is irreversible.
-- **Migrations:** never edit an applied migration; add a new numbered file in `infra/migrations/` (next free number at plan time is `0004`). Every table has row-level security enabled (the M0 guard test fails otherwise).
+- **No account enumeration through sign-up:** the sign-up response (status, headers, body) is identical whether or not the email is registered, and both paths do the same work (argon2 hash, then one database call). Login answers the same 401 for a wrong password and an unknown email.
+- **Throttling:** login and sign-up are throttled per client address and per email (hash); locks are time-boxed and exponential, never permanent; a throttled request is `429` with `Retry-After` and says nothing about whether the account exists; proxy headers are not trusted unless `DOCMIND_TRUST_PROXY=true`.
+- **Keys (spec §4.4):** each user has their own data key; `PostgresKeyStore` stores each DEK wrapped by a master KEK identified by `kek_id`; the KEK comes from an env var or file in v1; `destroy` is irreversible. No code path logs, returns or prints a plaintext data key.
+- **Migrations:** never edit an applied migration; add a new numbered file in `infra/migrations/` (next free number at plan time is `0004`; this plan uses 0004-0008). Every table has row-level security enabled (the M0 guard test fails otherwise).
 - **`SECURITY DEFINER` functions** (carried from the M0 review): each one has `SET search_path = pg_catalog, pg_temp`, schema-qualifies every object it touches, and has an explicit `REVOKE ALL ... FROM PUBLIC` and `GRANT EXECUTE ... TO docmind_app` (migration 0001 revokes PUBLIC execute by default).
 - **Dependency rules:** packages never import from apps; only `loom.config.ts`/`app/config.ts`/`app/main.ts` choose implementations.
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=20.0.0`.
@@ -32,7 +34,7 @@ Copied from the spec and the owner's standing rules; every task includes them.
 
 ## Verified facts this plan relies on
 
-Checked on this machine on 2026-10-18. The code in this plan was built and run: the 20 PR branches were replayed one after another from `main` (`0d37c50`) in a scratch checkout, and the full gate (`build`, `typecheck`, `typecheck:tests`, `lint`, `test`) was green on every one under `pnpm@9.14.4`, with the Postgres suites running against a local Postgres 17 cluster (superuser URL; `docker` is not installed here, so compose was not used). The line counts in the PR index are measured from those replays.
+Checked on this machine on 2026-10-18. The code in this plan was built and run: the 29 PR branches were replayed one after another from `main` (`0d37c50`) in a scratch checkout, and the full gate (`build`, `typecheck`, `typecheck:tests`, `lint`, `test`) was green on every one under `pnpm@9.14.4`, with the Postgres suites running against a local Postgres 17 cluster (superuser URL; `docker` is not installed here, so compose was not used). The line counts in the PR index are measured from those replays.
 
 ### Loom APIs used (real names, from the checkout at `/Users/such/workspace/loom`, HEAD `8f9eab24`)
 
@@ -60,40 +62,41 @@ Checked on this machine on 2026-10-18. The code in this plan was built and run: 
 | Loom's Postgres stores run DDL at boot, so they cannot connect as `docmind_app` (which owns nothing). Run as a role that **owns a dedicated schema** with `options: "-c search_path=loom"`, they work: spiked against Postgres 17, all 11 tables landed in `loom`, and an encrypting wrapper round-tripped. | PR 8a adds the `docmind_loom` role and `loom` schema; the M0 "RLS on every table" guard only looks at `public`, so Loom's tables do not trip it. |
 | `@loom/conformance` is ESM with extensionless relative imports. Node's native ESM cannot load it, so it must be **inlined by Vite**; and the server's `external: [/@loom\//]` rule would externalize it. | PR 7b adds `server.deps.inline` for it in `apps/server/vitest.config.ts`. |
 | A package's `testing` kit that imports `vitest` cannot be `require()`d from the CommonJS build ("Vitest cannot be imported in a CommonJS module"). | `packages/auth` exposes it as a subpath (`@docmind/auth/testing`) and the server's vitest config aliases that subpath to the TypeScript source (PR 6f). Type checking still uses `testing.d.ts`. |
+| `node-argon2` and Postgres make a rate limiter easy to get subtly wrong, so one suite (`runThrottleConformance`, `packages/auth/src/throttleConformance.ts`) pins the behaviour and runs on both the in-memory and the Postgres throttle; time is moved by shifting stored timestamps, never by sleeping. | The two implementations cannot drift apart; route tests use the in-memory one with a fixed clock. |
 | Node `server.close()` waits for keep-alive sockets that go idle **after** the call; they are not closed for you. | `shutdown()` (PR 5d) sweeps idle connections until the server is down. |
 | `node-argon2` writes parameters as `m=...,p=...,t=...` (not `m,t,p`). | The password test asserts that order. |
 | Calling `auth_sign_up` with a tenant id that already exists is a primary-key error, not "email taken". | Only matters for tests that reuse a tenant id; production generates both ids per call. |
 | `process.env` set in one shell command does not reach the next. | Every gate block below exports `DOCMIND_TEST_PG_URL` in the same command. |
 
-## Deviations from the spec and open questions
+## Deviations from the spec, decisions, and what is still open
 
-Decided here so executors are not blocked; the owner can overrule in review.
+Decided here so executors are not blocked. Items 2, 8, 9 and 10 carry the owner's answers to the four questions that were open in the first version of this plan.
 
-1. **20 PRs, not 4.** The spec's items 5-8 do not fit 200 lines each: item 5 becomes PRs 5a-5d, item 6 becomes 6a-6i, item 7 becomes 7a-7c, item 8 becomes 8a-8d. The first async handler (`requireAuth`) lands in 5d, so the router fix the M0 review asked for ("first async route") lands in 5c, one PR before it, with `shutdown` ordering and the contracts dependency.
-2. **Auth API paths are not in the spec.** Chosen: `POST /api/auth/sign-up`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/me` (the contracts' `MeResponse` already names `GET /api/me`; `DELETE /api/me` is M5). Sign-up answers 201 with `MeResponse`; login 200 with `MeResponse`; logout 204 and always clears the cookie; a taken email is 409 `email_taken`; bad credentials are 401 `invalid_credentials`, identical for a wrong password and an unknown email.
-3. **`AuthStore` is a new interface** in `packages/auth` (spec §3.1 lists only `Authenticator`). It exists so the password and session logic is unit-tested without a database and the Postgres implementation lives in the server, where `withTenant` is. `Authenticator.authenticate` takes `Pick<IncomingMessage, "headers">`, not a whole request, and is async.
-4. **`data_keys` differs from spec §4.2/§4.4.** (a) `destroy` does not delete the row: it nulls `wrapped_dek` and `kek_id` and sets `destroyed_at`, because Loom's contract requires `getOrCreate` to refuse a destroyed subject and `wasDestroyed` to prove it; a deleted row would let a retry mint a fresh key. The row holds no key material afterwards. (b) No `tenant_id` column and no tenant policy: Loom calls the key store outside any tenant context, so the table has RLS **enabled with no policy** and **no privileges for `docmind_app`**; the only way in is four `SECURITY DEFINER` functions (`key_get`, `key_put`, `key_destroy`, `key_was_destroyed`). A compromised app can still ask for a key by subject id, but cannot dump the table or overwrite a key.
-5. **Loom gets its own role and schema** (`docmind_loom`, schema `loom`; migration 0007), because its stores run DDL. `docmind_app` has no privilege on `loom` and `docmind_loom` none on `public`. The server asserts both roles are unprivileged at startup. Requires Postgres 15+ (the compose image is `pg16`) so `public` is not creatable by everyone.
+1. **29 PRs, not 4.** The spec's items 5-8 do not fit 200 lines each: item 5 becomes PRs 5a-5d, item 6 becomes 6a-6n, item 7 becomes 7a-7g, item 8 becomes 8a-8d. The first async handler (`requireAuth`) lands in 5d, so the router fix the M0 review asked for ("first async route") lands in 5c, one PR before it, with `shutdown` ordering and the contracts dependency.
+2. **Auth API paths are not in the spec.** Chosen: `POST /api/auth/sign-up`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/me` (the contracts' `MeResponse` already names `GET /api/me`; `DELETE /api/me` is M5). **Sign-up answers `202 {"status":"accepted"}` with no cookie, always** (decision 9 below); login answers 200 with `MeResponse` and the session cookie; logout 204 and always clears the cookie; bad credentials are 401 `invalid_credentials`, identical for a wrong password and an unknown email; a throttled request is 429 `too_many_requests` with `Retry-After`.
+3. **`AuthStore` is a new interface** in `packages/auth` (spec §3.1 lists only `Authenticator`). It exists so the password and session logic is unit-tested without a database and the Postgres implementation lives in the server, where `withTenant` is. `Authenticator.authenticate` takes `Pick<IncomingMessage, "headers">`, not a whole request, and is async. `Throttle` is likewise an interface with an in-memory and a Postgres implementation that pass one shared suite.
+4. **`data_keys` differs from spec §4.2/§4.4.** (a) `destroy` does not delete the row: it nulls `wrapped_dek` and `kek_id` and sets `destroyed_at`, because Loom's contract requires `getOrCreate` to refuse a destroyed subject and `wasDestroyed` to prove it; a deleted row would let a retry mint a fresh key. The row holds no key material afterwards. (b) No `tenant_id` column and no tenant policy: Loom calls the key store outside any tenant context, so the table has RLS **enabled with no policy** and **no privileges for `docmind_app`**; the only way in is four `SECURITY DEFINER` functions (`key_get`, `key_put`, `key_destroy`, `key_was_destroyed`). A compromised app can still ask for a key by subject id, but cannot dump the table or overwrite a key. `auth_throttle` (migration 0006) follows the same pattern.
+5. **Loom gets its own role and schema** (`docmind_loom`, schema `loom`; migration 0008), because its stores run DDL. `docmind_app` has no privilege on `loom` and `docmind_loom` none on `public`. The server asserts both roles are unprivileged at startup. Requires Postgres 15+ (the compose image is `pg16`) so `public` is not creatable by everyone.
 6. **Per-user subject convention: `u_<userId>:<name>`.** One user, one key, across every execution they own, so erasing a user (M5) destroys one key. An execution id that does not match is its own subject (Loom's default), which is right for system work. Mistakes here are silent (data under the wrong key), so the mapping has its own tests and `executionIdFor` is the only way to build ids.
 7. **Memory vs durable app.** `loom.config.ts` (what the `loom` CLI loads) stays in-memory so `loom gen` needs no database; `app/main.ts` builds the durable, encrypted app with `buildApp(storage, crypto)`. In memory mode the M0 `principalCodec` stays; in durable mode `security.crypto` replaces it.
-8. **Sessions:** 30 days, random 256-bit token, sha256-hashed at rest, a new session per login (no fixation), expired rows swept hourly by `auth_purge_expired_sessions()`. CSRF defence is `SameSite=Lax` plus a hard requirement that mutating requests carry `content-type: application/json` (an HTML form cannot send it). There is no rate limiting or lockout in M1 (not in the spec); argon2id's cost is the only throttle. **Open question for the owner:** schedule login throttling in M7 PR 47, or earlier?
-9. **Sign-up reveals whether an email is registered** (409). Login does not (same 401, decoy hash). Accepted: hiding it at sign-up needs email verification, which the spec does not include.
-10. **KEK handling:** one KEK from `DOCMIND_KEK` (base64, 32 bytes) or `DOCMIND_KEK_FILE`, id from `DOCMIND_KEK_ID` (default `kek-1`). `PostgresKeyStore` accepts several KEKs (first wraps, all unwrap) so rotation is possible, but there is **no re-wrap tool** yet. **Open question:** build the re-wrap job before launch, or leave it to the runbook (M7 PR 48)?
-11. **Carried to M5 (`DELETE /api/me`):** `docmind_app` cannot insert or delete `tenants` (migration 0003), so erasure needs a new `SECURITY DEFINER` function to hard-delete the tenant; `security.compliance.subjectOf` must resolve an event to the same user id that `subjectOfExecution` yields (read `input.userId`, or parse the execution id), and `tenantOf` must return the tenant; `shredSubject` needs `createDurableStorage(...).raw` (the unwrapped stores), which PR 8c already returns.
+8. **Rate limiting and lockout (owner decision; PRs 6h-6k, applied in 6k-6l, wired in 6n).**
+   - *What is limited:* login and sign-up, each **per client address and per email**. The email is keyed by its sha256 whether or not the account exists, so a throttled answer and its timing say nothing about existence (tested: a locked real email and a locked unknown email get byte-identical 429s).
+   - *Backoff, not a permanent lock:* login allows 5 free failures per email and 20 per address; each further failure locks that key for `base * 2^(n - free - 1)` seconds (2 s for an email, 5 s for an address, doubling) capped at **15 minutes**; sign-up counts every attempt (5 free per address, 3 per email, then 60 s doubling to 1 hour). A key left alone for an hour (two for sign-up) starts again from zero, and a successful login clears the email's count. Every lock is time-boxed, so waiting it out is always enough.
+   - *Storage:* Postgres (`auth_throttle`, migration 0006), so counters survive restarts and are shared by every server instance; reached only through `SECURITY DEFINER` functions (RLS on, no policy, no privilege for `docmind_app`, like `data_keys`); counters are purged a day after last use. An in-process map was rejected: each instance would have its own allowance and a deploy would reset it.
+   - *Client address:* the socket's peer address. `X-Forwarded-For` is **not** believed unless `DOCMIND_TRUST_PROXY=true`, which means "exactly one reverse proxy of mine in front, which appends the address it saw; use the last entry". Otherwise a client could invent a new address per guess.
+   - *Residual risks, honestly:* (a) an attacker who keeps guessing at one email can hold that email in its 15-minute lock, which delays that user's login attempts but never blocks them for good; a per-email lock that also asked "has this browser logged in before" would reduce it and is not built. (b) An attacker with many addresses is limited by the per-email counter only. (c) IPv6 clients are keyed by the full address, so one attacker with a whole /64 can rotate addresses; keying IPv6 by /64 is a possible hardening. (d) Argon2id's cost (about 25 ms here) is itself a limit on how fast a single instance answers.
+9. **Sign-up does not reveal whether an email is registered (owner decision; PR 6k).** Design: sign-up never sets a session and always answers `202 {"status":"accepted"}` with identical headers; both paths hash the password with argon2id before one database call, so the work is comparable; the client then logs in. A test asserts the two responses are byte-identical (the `Date` header aside), and that a taken email's password is never changed. **Residual enumeration channel:** sign-up then login still tells an attacker whether an email was registered (login with the password just submitted works for a new email, fails for a taken one), at the cost of two requests and a throwaway account per probe. The sign-up and login rate limits (decision 8) make large-scale probing slow; **email verification would close the channel** (the account is only usable once the owner confirms, so the response cannot depend on whether the email was new) and is left for when the platform has email infrastructure.
+10. **KEK rotation (owner decision; PRs 7d-7g).** `pnpm --filter @docmind/server keys:rotate` re-wraps every live `data_keys` row from the previous KEK to the current one as the owner role: atomic batches, idempotent, resumable after a crash, tombstones untouched, data keys unchanged and never printed or returned; it then verifies every key opens with the new KEK alone and exits non-zero if any key failed to open or is on a KEK nobody provided. Steps are in `docs/operations/rotate-kek.md` (delivered in 7g). Trade-offs: rotation does not change data keys, so it does not help if a data key itself leaked (re-encryption is not built); the old KEK must be kept until database backups taken before the rotation expire (30 days by default, spec §4.4); `PostgresKeyStore` and `loadKeks` support one current and one previous KEK at a time.
+11. **Carried to M5 (`DELETE /api/me`):** `docmind_app` cannot insert or delete `tenants` (migration 0003), so erasure needs a new `SECURITY DEFINER` function to hard-delete the tenant; `security.compliance.subjectOf` must resolve an event to the same user id that `subjectOfExecution` yields (read `input.userId`, or parse the execution id), and `tenantOf` must return the tenant; `shredSubject` needs `createDurableStorage(...).raw` (the unwrapped stores), which PR 8c already returns. The `data_keys` tombstone for an erased user stays (it holds a user id and no key material).
 12. **Carried to M4:** conversation-sse runs its own HTTP server; its `authenticate` callback must adapt `Authenticator` (an `Identity` becomes a `PrincipalChain` with `tenant` and `actor`). `chat_sessions.id` is a Loom conversation id, which must be built with `executionIdFor(userId, ...)` or the chat is encrypted under the wrong key.
 13. **CI is still unproven** (billing). When it is restored the first push to `main` must be watched: it exercises `LOOM_TOKEN`, building `@loom/conformance`, `@loom/plugin-crypto` and `@loom/plugin-postgres` in the Loom checkout, and the superuser `postgres` role the Postgres suites need.
 14. **Not in M1, by design:** password change or reset, email verification, account deletion (M5), the `documents`/`chunks`/`chat_sessions` tables, sign-up UI (M6).
 
-## Decision point (settle before M2 web work; NOT an M1 task)
+**Still unresolved (for the owner, none blocks M1):** (a) whether the thresholds in decision 8 suit real use (they are constants in `packages/auth/src/throttle.ts`); (b) whether to harden against the email-lock residual (8a) or an IPv6 /64 rotation (8c) before launch; (c) whether the hourly purge cadence and the one-day retention of throttle rows are acceptable for the privacy notice (they hold addresses); (d) an automated re-encryption story for a leaked data key (out of scope here).
 
-**D1. How does `apps/web` (Vite) consume `@docmind/contracts`?** Today the package is CommonJS only (`main: ./dist/index.js`, no `exports`), as the server wants. Vite wants ESM, or source.
+## Decision D1 (decided by the owner; applies from M2 / `apps/web`; NOT an M1 task)
 
-| Option | What it is | For | Against |
-|---|---|---|---|
-| A. Dual build | Add an ESM build (`tsc -p tsconfig.esm.json` to `dist/esm`) and an `exports` map with `import`/`require`/`types` | Standard; works for any bundler; no alias in the web app | A second tsconfig and build output; `exports` makes Node resolution of `@docmind/contracts/*` deep imports stricter; the server's `moduleResolution: Node` ignores `exports` (fine) |
-| B. Source consumption | Vite `resolve.alias` maps `@docmind/contracts` to `packages/contracts/src/index.ts` | Zero build change; **identical to what spec §7 already does for `@loom/*`** and `@loom-ui/*`; hot reload across the package | The web app typechecks contracts source with its own tsconfig; contracts must stay free of Node-only imports (it is: just `zod`) |
-
-**Recommendation: B**, for consistency with spec §7 and zero cost in `packages/contracts`; revisit A only if a second consumer outside the workspace appears (it would also be the moment to publish `@loom/*`, see the loom-repo-topology note). Record the choice in the M2 plan header; if A is chosen, the work is one `tsconfig.esm.json`, an `exports` map, and a test that imports both entry points.
+**`apps/web` (Vite) consumes `@docmind/contracts` through a Vite `resolve.alias` to its TypeScript source** (`@docmind/contracts` maps to `packages/contracts/src/index.ts`), exactly as spec §7 already aliases `@loom/*` and `@loom-ui/*`. `packages/contracts` stays CommonJS with no `exports` map: the server keeps consuming `dist`, and no ESM build is added. Consequences the M2/M6 plans must honour: contracts source stays free of Node-only imports (today only `zod`); the web app typechecks that source under its own tsconfig; if a consumer outside the workspace ever appears, revisit (an ESM build with an `exports` map is then a one-file change plus a test importing both entry points, and is the same moment to publish `@loom/*`, see the loom-repo-topology note). The M2 plan header and M6 PR 36 (web scaffold: aliases, router, tokens) record this; there is no longer an open question here.
 
 ## Preconditions (once, before PR 5a)
 
@@ -150,22 +153,31 @@ Merge strictly in this order; cut each branch from `main` after the previous PR 
 | 6b | `feat/m1-auth-password` | argon2id hashing, decoy check, session tokens | 6 | 97 |
 | 6c | `feat/m1-auth-store` | `AuthStore`, `MemoryAuthStore`, session cookie helpers | 7 | 164 |
 | 6d | `feat/m1-auth-authenticator` | `PasswordAuthenticator` passing the conformance suite | 3 | 77 |
-| 6e | `feat/m1-auth-service` | `AuthService`: sign-up, login, logout | 3 | 110 |
-| 6f | `feat/m1-auth-pg-store` | `PgAuthStore` on Postgres | 3 | 187 |
+| 6e | `feat/m1-auth-service` | `AuthService`: sign-up (no session), login, logout | 3 | 113 |
+| 6f | `feat/m1-auth-pg-store` | `PgAuthStore` on Postgres | 3 | 191 |
 | 6g | `feat/m1-http-body` | `readJson` (JSON-only, size-limited, zod-validated) | 3 | 121 |
-| 6h | `feat/m1-auth-routes` | sign-up, login, logout, `GET /api/me` routes | 2 | 159 |
-| 6i | `feat/m1-auth-wiring` | startup role assertion, `createAppPool`, `main.ts` serves the routes | 4 | 135 |
+| 6h | `feat/m1-throttle` | `Throttle` interface, policies, `clientIp` | 5 | 129 |
+| 6i | `feat/m1-throttle-memory` | `MemoryThrottle` and the Throttle conformance suite | 4 | 139 |
+| 6j | `feat/m1-throttle-sql` | `auth_throttle` (0006) behind definer functions; `PgThrottle` | 3 | 159 |
+| 6k | `feat/m1-signup-route` | `POST /api/auth/sign-up`: uniform 202, throttled; `SignUpResponse` | 4 | 175 |
+| 6l | `feat/m1-login-route` | `POST /api/auth/login`, throttled | 2 | 106 |
+| 6m | `feat/m1-auth-session-routes` | logout, `GET /api/me` | 2 | 76 |
+| 6n | `feat/m1-auth-wiring` | startup role assertion, `createAppPool`, `main.ts` serves the routes | 4 | 146 |
 | 7a | `feat/m1-keystore-primitives` | `packages/keystore-pg`: KEK loading, AES-GCM key wrapping | 8 | 138 |
-| 7b | `feat/m1-keystore-pg` | `data_keys` (0006) and `PostgresKeyStore` passing Loom's KeyStore contract | 8 | 196 |
+| 7b | `feat/m1-keystore-pg` | `data_keys` (0007) and `PostgresKeyStore` passing Loom's KeyStore contract | 8 | 196 |
 | 7c | `feat/m1-keystore-pg-security` | key store security tests (restart, race, tombstone, tamper, rotation, privileges) | 1 | 76 |
-| 8a | `feat/m1-loom-role` | `docmind_loom` role and `loom` schema (0007), password CLI | 4 | 100 |
+| 7d | `feat/m1-kek-previous` | `loadKeks`: current and previous KEK | 3 | 60 |
+| 7e | `feat/m1-kek-rotate` | `rotateKek`, `verifyKeys` and their tests | 3 | 187 |
+| 7f | `feat/m1-kek-rotate-failures` | rotation crash-recovery and bad-row tests | 1 | 48 |
+| 7g | `feat/m1-kek-rotate-cli` | `keys:rotate` command, runbook, `.env.example` | 5 | 148 |
+| 8a | `feat/m1-loom-role` | `docmind_loom` role and `loom` schema (0008), password CLI | 4 | 100 |
 | 8b | `feat/m1-erasure-subject` | `executionIdFor`, `subjectOfExecution` | 2 | 43 |
 | 8c | `feat/m1-durable-storage` | Postgres event store and snapshots wrapped by the encrypting stores | 4 | 184 |
-| 8d | `feat/m1-durable-app` | `buildApp` in `config.ts`; `main.ts` serves the encrypted, durable app | 6 | 123 |
+| 8d | `feat/m1-durable-app` | `buildApp` in `config.ts`; `main.ts` serves the encrypted, durable app | 6 | 118 |
 
-Plus `pnpm-lock.yaml` on 5a, 5c, 5d, 6b, 6g, 7a, 7b and 8c (excluded from the budget, listed in each description).
+Plus `pnpm-lock.yaml` on 5a, 5c, 5d, 6b, 6g, 7a, 7b and 8c (excluded from the budget, listed in each description). No route is reachable before PR 6n, and every route is throttled (sign-up, login) or authenticated (me) from the PR that adds it.
 
-**Independent PRs** (could be built in parallel branches, still merged in order): 5a/5b, 6a, 7a, 8a.
+**Independent PRs** (could be built in parallel branches, still merged in order): 5a/5b, 6a, 6h/6i, 7a, 8a.
 
 ---
 # PR 5a: `packages/auth` and the Authenticator contract
@@ -1042,7 +1054,7 @@ Expected: about `154 lines, 6 files`, then the PR URL.
 ---
 # PR 6a: session indexes and the `SECURITY DEFINER` auth functions
 
-**Branch:** `feat/m1-auth-sql`  **Budget:** 3 files, 157 lines. Spec §9 item 6, part 1 of 9. Nothing calls these functions yet.
+**Branch:** `feat/m1-auth-sql`  **Budget:** 3 files, 157 lines. Spec §9 item 6, part 1 of 14. Nothing calls these functions yet.
 
 ### Task 17: migrations 0004 and 0005
 
@@ -1293,7 +1305,7 @@ Expected: about `157 lines, 3 files`, then the PR URL.
 
 # PR 6b: password hashing and session tokens
 
-**Branch:** `feat/m1-auth-password`  **Budget:** 6 files, 97 lines (+ `pnpm-lock.yaml`). Spec §9 item 6, part 2 of 9.
+**Branch:** `feat/m1-auth-password`  **Budget:** 6 files, 97 lines (+ `pnpm-lock.yaml`). Spec §9 item 6, part 2 of 14.
 
 ### Task 18: argon2id and the session token
 
@@ -1508,7 +1520,7 @@ Expected: about `97 lines, 6 files`, then the PR URL.
 
 # PR 6c: `AuthStore`, an in-memory store, and the session cookie
 
-**Branch:** `feat/m1-auth-store`  **Budget:** 7 files, 164 lines. Spec §9 item 6, part 3 of 9.
+**Branch:** `feat/m1-auth-store`  **Budget:** 7 files, 164 lines. Spec §9 item 6, part 3 of 14.
 
 ### Task 19: the storage interface and cookie helpers
 
@@ -1787,7 +1799,7 @@ Expected: about `164 lines, 7 files`, then the PR URL.
 
 # PR 6d: `PasswordAuthenticator`
 
-**Branch:** `feat/m1-auth-authenticator`  **Budget:** 3 files, 77 lines. Spec §9 item 6, part 4 of 9.
+**Branch:** `feat/m1-auth-authenticator`  **Budget:** 3 files, 77 lines. Spec §9 item 6, part 4 of 14.
 
 ### Task 20: the cookie-session Authenticator, passing the conformance suite
 
@@ -1960,7 +1972,7 @@ Expected: about `77 lines, 3 files`, then the PR URL.
 
 # PR 6e: `AuthService` (sign-up, login, logout)
 
-**Branch:** `feat/m1-auth-service`  **Budget:** 3 files, 110 lines. Spec §9 item 6, part 5 of 9.
+**Branch:** `feat/m1-auth-service`  **Budget:** 3 files, 113 lines. Spec §9 item 6, part 5 of 14.
 
 ### Task 21: the account logic
 
@@ -1970,7 +1982,7 @@ Expected: about `77 lines, 3 files`, then the PR URL.
 
 **Interfaces:**
 - Consumes: `AuthStore` (PR 6c); `hashPassword`, `verifyPassword`, `verifyAgainstDecoy`, `newSessionToken`, `hashToken`, `SESSION_TTL_MS` (PR 6b); `Identity`.
-- Produces: `interface StartedSession { identity: Identity; token: string }`; `class AuthService { constructor(store: AuthStore); signUp(email, password): Promise<StartedSession | null> /* null: email taken */; logIn(email, password): Promise<StartedSession | null> /* null: unknown email or wrong password, same work either way */; logOut(identity: Identity, token: string): Promise<void> }`. Emails arrive already normalised by the contracts' `Email` schema.
+- Produces: `interface StartedSession { identity: Identity; token: string }`; `class AuthService { constructor(store: AuthStore); signUp(email, password): Promise<boolean> /* false: email taken; starts NO session; hashes the password before asking the store, so both outcomes cost the same */; logIn(email, password): Promise<StartedSession | null> /* null: unknown email or wrong password, same work either way */; logOut(identity: Identity, token: string): Promise<void> }`. Emails arrive already normalised by the contracts' `Email` schema. `signUp` returns a boolean, not a session, because the HTTP layer must not tell a client whether the email was new (PR 6k); the user logs in afterwards.
 
 - [ ] **Step 1: Create the branch**
 
@@ -2003,11 +2015,9 @@ function setup() {
 }
 
 describe("AuthService", () => {
-  it("signs up, stores only an argon2id hash, and signs the new user in", async () => {
-    const { store, service, whoIs } = setup();
-    const started = await service.signUp(EMAIL, PASSWORD);
-    expect(started).not.toBeNull();
-    expect(await whoIs(started?.token ?? "")).toEqual(started?.identity);
+  it("signs up with only an argon2id hash stored, starting no session", async () => {
+    const { store, service } = setup();
+    expect(await service.signUp(EMAIL, PASSWORD)).toBe(true);
     const stored = await store.findLogin(EMAIL);
     expect(stored?.passwordHash).toMatch(/^\$argon2id\$/);
     expect(JSON.stringify(stored)).not.toContain(PASSWORD);
@@ -2016,14 +2026,15 @@ describe("AuthService", () => {
   it("refuses a second sign-up with the same email and keeps the first password", async () => {
     const { service } = setup();
     await service.signUp(EMAIL, PASSWORD);
-    expect(await service.signUp(EMAIL, "another long password")).toBeNull();
+    expect(await service.signUp(EMAIL, "another long password")).toBe(false);
     expect(await service.logIn(EMAIL, PASSWORD)).not.toBeNull();
     expect(await service.logIn(EMAIL, "another long password")).toBeNull();
   });
 
-  it("logs in with the right password, as the same user, on a new session", async () => {
+  it("logs in as the signed-up user, on a new session each time", async () => {
     const { service, whoIs } = setup();
-    const first = await service.signUp(EMAIL, PASSWORD);
+    await service.signUp(EMAIL, PASSWORD);
+    const first = await service.logIn(EMAIL, PASSWORD);
     const again = await service.logIn(EMAIL, PASSWORD);
     expect(again?.identity).toEqual(first?.identity);
     expect(again?.token).not.toBe(first?.token);
@@ -2039,7 +2050,8 @@ describe("AuthService", () => {
 
   it("ends only the session it is asked to end", async () => {
     const { service, whoIs } = setup();
-    const a = await service.signUp(EMAIL, PASSWORD);
+    await service.signUp(EMAIL, PASSWORD);
+    const a = await service.logIn(EMAIL, PASSWORD);
     const b = await service.logIn(EMAIL, PASSWORD);
     if (!a || !b) throw new Error("setup failed");
     await service.logOut(a.identity, a.token);
@@ -2078,12 +2090,15 @@ export interface StartedSession {
 export class AuthService {
   constructor(private readonly store: AuthStore) {}
 
-  /** Creates a personal tenant and its user and signs them in. Null when the email is taken. */
-  async signUp(email: string, password: string): Promise<StartedSession | null> {
-    const identity = { tenantId: randomUUID(), userId: randomUUID() };
+  /**
+   * Creates a personal tenant and its user; false when the email is taken. It starts no session,
+   * and the HTTP layer must answer the same either way, or sign-up tells anyone which emails are
+   * registered. The password is hashed before the store is asked, so both outcomes cost the same.
+   */
+  async signUp(email: string, password: string): Promise<boolean> {
     const passwordHash = await hashPassword(password);
-    if (!(await this.store.createAccount({ ...identity, email, passwordHash }))) return null;
-    return this.start(identity);
+    const identity = { tenantId: randomUUID(), userId: randomUUID() };
+    return this.store.createAccount({ ...identity, email, passwordHash });
   }
 
   /** Null for an unknown email and for a wrong password alike, after the same amount of work. */
@@ -2147,7 +2162,7 @@ git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} EN
 git push -u origin feat/m1-auth-service
 gh pr create --draft --base main --head feat/m1-auth-service --title "feat(auth): AuthService with sign-up, login and logout" --body "$(cat <<'EOF'
 ## Summary
-- AuthService over an AuthStore: signUp (personal tenant + user + first session; null when the email is taken), logIn (new session per login; the same null, after the same work, for a wrong password and an unknown email), logOut (ends one session).
+- AuthService over an AuthStore: signUp (personal tenant + user, hashes first, starts no session so the HTTP layer can answer identically for a taken email; false when taken), logIn (new session per login; the same null, after the same work, for a wrong password and an unknown email), logOut (ends one session).
 - Passwords are stored only as argon2id hashes (asserted).
 
 ## Not counted toward the 200-line / 10-file limit
@@ -2161,12 +2176,12 @@ EOF
 )"
 ```
 
-Expected: about `110 lines, 3 files`, then the PR URL.
+Expected: about `113 lines, 3 files`, then the PR URL.
 
 ---
 # PR 6f: `PgAuthStore`
 
-**Branch:** `feat/m1-auth-pg-store`  **Budget:** 3 files, 187 lines. Spec §9 item 6, part 6 of 9. Nothing mounts it yet.
+**Branch:** `feat/m1-auth-pg-store`  **Budget:** 3 files, 191 lines. Spec §9 item 6, part 6 of 14. Nothing mounts it yet.
 
 ### Task 22: `AuthStore` on Postgres
 
@@ -2257,28 +2272,34 @@ describe.skipIf(!PG_URL)("PgAuthStore (needs DOCMIND_TEST_PG_URL)", () => {
     };
   }, "PasswordAuthenticator on PgAuthStore");
 
-  it("runs sign-up, login and logout end to end", async () => {
+  const PASSWORD = "correct horse battery";
+  const signedUp = async () => {
     const service = new AuthService(store);
     const email = `${randomUUID()}@example.com`;
-    const started = await service.signUp(email, "correct horse battery");
-    expect(started).not.toBeNull();
-    expect(await service.signUp(email, "correct horse battery")).toBeNull();
-    expect(await store.findEmail(started?.identity as Identity)).toBe(email);
-    const again = await service.logIn(email, "correct horse battery");
-    expect(again?.identity).toEqual(started?.identity);
-    if (!started || !again) throw new Error("setup failed");
+    expect(await service.signUp(email, PASSWORD)).toBe(true);
+    const started = await service.logIn(email, PASSWORD);
+    if (!started) throw new Error("setup failed");
+    return { service, email, started };
+  };
+
+  it("runs sign-up, login and logout end to end", async () => {
+    const { service, email, started } = await signedUp();
+    expect(await service.signUp(email, PASSWORD)).toBe(false);
+    expect(await store.findEmail(started.identity)).toBe(email);
+    const again = await service.logIn(email, PASSWORD);
+    expect(again?.identity).toEqual(started.identity);
     await service.logOut(started.identity, started.token);
     const auth = new PasswordAuthenticator(store);
     const cookie = (t: string) => ({ cookie: `${SESSION_COOKIE}=${t}` });
     expect(await auth.authenticate({ headers: cookie(started.token) })).toBeNull();
-    expect(await auth.authenticate({ headers: cookie(again.token) })).toEqual(again.identity);
+    expect(await auth.authenticate({ headers: cookie(again?.token ?? "") })).toEqual(
+      again?.identity,
+    );
   });
 
   it("cannot end another tenant's session", async () => {
-    const service = new AuthService(store);
-    const a = await service.signUp(`${randomUUID()}@example.com`, "correct horse battery");
-    const b = await service.signUp(`${randomUUID()}@example.com`, "correct horse battery");
-    if (!a || !b) throw new Error("setup failed");
+    const { service, started: a } = await signedUp();
+    const { started: b } = await signedUp();
     await service.logOut(b.identity, a.token);
     const auth = new PasswordAuthenticator(store);
     const headers = { cookie: `${SESSION_COOKIE}=${a.token}` };
@@ -2286,9 +2307,7 @@ describe.skipIf(!PG_URL)("PgAuthStore (needs DOCMIND_TEST_PG_URL)", () => {
   });
 
   it("purges expired sessions and only those", async () => {
-    const service = new AuthService(store);
-    const user = await service.signUp(`${randomUUID()}@example.com`, "correct horse battery");
-    if (!user) throw new Error("setup failed");
+    const { started: user } = await signedUp();
     await db.owner.query(
       "INSERT INTO auth_sessions VALUES ('stale', $1, $2, now() - interval '1 minute')",
       [user.identity.tenantId, user.identity.userId],
@@ -2449,13 +2468,13 @@ EOF
 )"
 ```
 
-Expected: about `187 lines, 3 files`, then the PR URL.
+Expected: about `191 lines, 3 files`, then the PR URL.
 
 ---
 
 # PR 6g: `readJson`
 
-**Branch:** `feat/m1-http-body`  **Budget:** 3 files, 121 lines. Spec §9 item 6, part 7 of 9.
+**Branch:** `feat/m1-http-body`  **Budget:** 3 files, 121 lines. Spec §9 item 6, part 7 of 14.
 
 ### Task 23: JSON-only, size-limited, validated request bodies
 
@@ -2673,215 +2692,212 @@ Expected: about `121 lines, 3 files`, then the PR URL.
 
 ---
 
-# PR 6h: the auth routes
+# PR 6h: throttle policy and the client address
 
-**Branch:** `feat/m1-auth-routes`  **Budget:** 2 files, 159 lines. Spec §9 item 6, part 8 of 9. Not mounted until PR 6i.
+**Branch:** `feat/m1-throttle`  **Budget:** 5 files, 129 lines. Spec §9 item 6, part 8 of 14. Rate limiting is not in the spec; the owner asked for it in M1, and PRs 6h-6k land before any route so no route ships unthrottled.
 
-### Task 24: sign-up, login, logout and `GET /api/me`
+### Task 24: the `Throttle` interface, the policies, and `clientIp`
 
 **Files:**
-- Create: `/Users/such/workspace/docmind/apps/server/app/auth/routes.ts`, `routes.test.ts`
+- Create: `/Users/such/workspace/docmind/packages/auth/src/throttle.ts`, `throttle.test.ts`, `clientIp.ts`, `clientIp.test.ts`
+- Modify: `/Users/such/workspace/docmind/packages/auth/src/index.ts`
 
 **Interfaces:**
-- Consumes: `AuthService`, `AuthStore`, `Authenticator`, `SESSION_TTL_MS`, `sessionCookie`, `clearedSessionCookie`, `readSessionCookie` (`@docmind/auth`); `SignUpRequest`, `LoginRequest`, `MeResponse` (`@docmind/contracts`); `readJson` (PR 6g); `requireAuth` (PR 5d); `Handler`, `json`, `sendError` (PR 5c).
-- Produces: `interface AuthRoutesDeps { service: AuthService; authenticator: Authenticator; store: AuthStore; secureCookies: boolean }` and `authRoutes(deps): Record<string, Handler>` with `POST /api/auth/sign-up` (201 `MeResponse` + `Set-Cookie`; 409 `email_taken`; 400 for a short password), `POST /api/auth/login` (200 `MeResponse` + `Set-Cookie`; 401 `invalid_credentials` for both a wrong password and an unknown email), `POST /api/auth/logout` (always 204 and a cleared cookie; ends only the calling session), `GET /api/me` (200 `MeResponse`; 401 without a live session).
+- Consumes: nothing.
+- Produces (from `@docmind/auth`): `interface ThrottlePolicy { free: number; baseSeconds: number; capSeconds: number; decaySeconds: number }`; `interface Throttle { retryAfter(keys: readonly string[]): Promise<number>; fail(key: string, policy: ThrottlePolicy): Promise<void>; clear(key: string): Promise<void> }`; `POLICIES` (`loginIp`, `loginAccount`, `signUpIp`, `signUpAccount`); `type Scope = "login" | "signup"`; `ipKey(scope, ip): string`; `accountKey(scope, email): string` (a sha256 of the email, never the address itself); `lockSeconds(policy, failures): number`; `clientIp(req: Pick<IncomingMessage, "headers" | "socket">, trustProxy: boolean): string`.
+
+**The policy (why a victim cannot be locked out for good).** The first `free` failures cost nothing. Each failure after that locks the key for `baseSeconds * 2^(n - free - 1)` seconds, at most `capSeconds`, and a key left alone for `decaySeconds` starts again from zero. Every lock is therefore time-boxed: the longest any one lock lasts is 15 minutes for login (1 hour for sign-up), and an attacker who stops stops the lock. Per email (5 free guesses, then 2 s, 4 s, 8 s ... up to 15 min) and per client address (20 free, then 5 s ... up to 15 min); sign-up counts every attempt, 5 free per address and 3 per email, then 60 s ... up to 1 hour. A successful login forgets the email's failures. Keys use a hash of the email, whether or not the account exists, so a throttled answer reveals nothing about existence.
+
+**The client address.** `clientIp` believes only the socket's peer address, by default. Any client can send `X-Forwarded-For`, and believing it would let an attacker pick a new "address" for every guess. With `trustProxy` (env `DOCMIND_TRUST_PROXY=true`, for a deployment behind exactly one reverse proxy of yours that appends the address it saw) the last entry of the header is used. IPv4-mapped IPv6 is written as IPv4.
 
 - [ ] **Step 1: Create the branch**
 
 ```bash
 cd /Users/such/workspace/docmind
 git switch main && git pull --ff-only
-git switch -c feat/m1-auth-routes
+git switch -c feat/m1-throttle
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 2: Write the failing tests**
 
-It runs the routes over the in-memory store through a real HTTP server, so it needs no database. `apps/server/app/auth/routes.test.ts`:
+`packages/auth/src/throttle.test.ts`:
 
 ```ts
-import type { AddressInfo } from "node:net";
-import { AuthService, PasswordAuthenticator } from "@docmind/auth";
-import { MemoryAuthStore } from "@docmind/auth/testing";
-import { ErrorBody, MeResponse } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createHttpServer } from "../server";
-import { authRoutes } from "./routes";
+import { describe, expect, it } from "vitest";
+import { POLICIES, accountKey, ipKey, lockSeconds } from "./throttle";
 
-const store = new MemoryAuthStore();
-const server = createHttpServer(
-  authRoutes({
-    service: new AuthService(store),
-    authenticator: new PasswordAuthenticator(store),
-    store,
-    secureCookies: false,
-  }),
-);
-let base = "";
-
-beforeAll(async () => {
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-});
-
-afterAll(async () => {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-    server.closeAllConnections();
-  });
-});
-
-const post = (path: string, body: unknown, cookie?: string) =>
-  fetch(`${base}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(cookie && { cookie }) },
-    body: JSON.stringify(body),
+describe("throttle policy", () => {
+  it("is free up to the allowance, then doubles up to the cap", () => {
+    const p = POLICIES.loginAccount;
+    const locks = [5, 6, 7, 8, 9, 20].map((n) => lockSeconds(p, n));
+    expect(locks).toEqual([0, 2, 4, 8, 16, 900]);
   });
 
-/** `name=value` of the Set-Cookie header, as a browser would send it back. */
-const cookieOf = (res: Response) => (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-
-const creds = { email: "Ada@Example.com", password: "correct horse battery" };
-
-describe("auth routes", () => {
-  it("signs up, sets an HttpOnly session cookie, and /api/me then answers for that session", async () => {
-    const res = await post("/api/auth/sign-up", creds);
-    expect(res.status).toBe(201);
-    const me = MeResponse.parse(await res.json());
-    expect(me.email).toBe("ada@example.com");
-    expect(res.headers.get("set-cookie")).toMatch(
-      /^dm_session=[\w-]{43}; .*HttpOnly.*SameSite=Lax/,
-    );
-
-    const mine = await fetch(`${base}/api/me`, { headers: { cookie: cookieOf(res) } });
-    expect(MeResponse.parse(await mine.json())).toEqual(me);
-  });
-
-  it("answers 409 for a second sign-up with the same email, whatever its letter case", async () => {
-    const res = await post("/api/auth/sign-up", { ...creds, email: "ADA@example.com" });
-    expect(res.status).toBe(409);
-    expect(ErrorBody.parse(await res.json()).error.code).toBe("email_taken");
-  });
-
-  it("rejects a short password at sign-up with 400", async () => {
-    const res = await post("/api/auth/sign-up", { email: "b@example.com", password: "short" });
-    expect(res.status).toBe(400);
-  });
-
-  it("logs in, and answers the same 401 for a wrong password and an unknown email", async () => {
-    const ok = await post("/api/auth/login", creds);
-    expect(ok.status).toBe(200);
-    expect(cookieOf(ok)).toMatch(/^dm_session=/);
-    const wrong = await post("/api/auth/login", { ...creds, password: "wrong password here" });
-    const unknown = await post("/api/auth/login", { ...creds, email: "x@example.com" });
-    expect([wrong.status, unknown.status]).toEqual([401, 401]);
-    expect(await wrong.json()).toEqual(await unknown.json());
-  });
-
-  it("answers 401 on /api/me without a session", async () => {
-    expect((await fetch(`${base}/api/me`)).status).toBe(401);
-    const forged = { cookie: `dm_session=${"A".repeat(43)}` };
-    expect((await fetch(`${base}/api/me`, { headers: forged })).status).toBe(401);
-  });
-
-  it("logs out: clears the cookie, ends that session only, and is safe to repeat", async () => {
-    const one = cookieOf(await post("/api/auth/login", creds));
-    const two = cookieOf(await post("/api/auth/login", creds));
-    const out = await post("/api/auth/logout", {}, one);
-    expect(out.status).toBe(204);
-    expect(out.headers.get("set-cookie")).toMatch(/^dm_session=; .*Max-Age=0/);
-    expect((await fetch(`${base}/api/me`, { headers: { cookie: one } })).status).toBe(401);
-    expect((await fetch(`${base}/api/me`, { headers: { cookie: two } })).status).toBe(200);
-    expect((await post("/api/auth/logout", {}, one)).status).toBe(204);
+  it("keys an account by a hash of its email, the same for any case-normalised email", () => {
+    expect(accountKey("login", "a@example.com")).toBe(accountKey("login", "a@example.com"));
+    expect(accountKey("login", "a@example.com")).not.toContain("a@example.com");
+    expect(accountKey("login", "a@example.com")).not.toBe(accountKey("signup", "a@example.com"));
+    expect(ipKey("login", "203.0.113.9")).toBe("login-ip:203.0.113.9");
   });
 });
 ```
 
-- [ ] **Step 3: Run it to see it fail**
+`packages/auth/src/clientIp.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { clientIp } from "./clientIp";
+
+const req = (remoteAddress: string | undefined, forwarded?: string) =>
+  ({
+    headers: forwarded === undefined ? {} : { "x-forwarded-for": forwarded },
+    socket: { remoteAddress },
+  }) as Parameters<typeof clientIp>[0];
+
+describe("clientIp", () => {
+  it("believes only the socket by default, whatever the headers say", () => {
+    expect(clientIp(req("203.0.113.9", "1.2.3.4"), false)).toBe("203.0.113.9");
+  });
+
+  it("takes the last forwarded entry (the one our proxy added) when told to trust it", () => {
+    expect(clientIp(req("10.0.0.2", "6.6.6.6, 198.51.100.7"), true)).toBe("198.51.100.7");
+  });
+
+  it("falls back to the socket when trusting but there is no header", () => {
+    expect(clientIp(req("10.0.0.2"), true)).toBe("10.0.0.2");
+  });
+
+  it("writes an IPv4-mapped address as IPv4, and survives a missing address", () => {
+    expect(clientIp(req("::ffff:203.0.113.9"), false)).toBe("203.0.113.9");
+    expect(clientIp(req(undefined), false)).toBe("unknown");
+  });
+});
+```
+
+- [ ] **Step 3: Run them to see them fail**
 
 ```bash
-pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+pnpm --filter @docmind/auth test
 ```
 
-Expected: FAIL, `Failed to resolve import "./routes"`.
+Expected: FAIL, `Failed to resolve import "./throttle"` and `"./clientIp"`.
 
 - [ ] **Step 4: Implement**
 
-`apps/server/app/auth/routes.ts`:
+`packages/auth/src/throttle.ts`:
 
 ```ts
-import {
-  type AuthService,
-  type AuthStore,
-  type Authenticator,
-  SESSION_TTL_MS,
-  clearedSessionCookie,
-  readSessionCookie,
-  sessionCookie,
-} from "@docmind/auth";
-import { LoginRequest, type MeResponse, SignUpRequest } from "@docmind/contracts";
-import { readJson } from "../http/body";
-import { requireAuth } from "../http/requireAuth";
-import { type Handler, json, sendError } from "../http/respond";
+import { createHash } from "node:crypto";
 
-export interface AuthRoutesDeps {
-  service: AuthService;
-  authenticator: Authenticator;
-  store: AuthStore;
-  /** Mark the session cookie Secure: set it for any deployment served over HTTPS. */
-  secureCookies: boolean;
+/**
+ * How failures slow a caller down. The first `free` failures cost nothing; each one after that
+ * locks the key for `baseSeconds * 2^(n - free - 1)`, never more than `capSeconds`, so a lock is
+ * always time-boxed: waiting it out is enough, and nobody is locked out for good. A key left
+ * alone for `decaySeconds` starts again from zero.
+ */
+export interface ThrottlePolicy {
+  free: number;
+  baseSeconds: number;
+  capSeconds: number;
+  decaySeconds: number;
 }
 
-/** Sign-up, login, logout and `GET /api/me`. Every route gets its identity from the session. */
-export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
-  const { service, authenticator, store, secureCookies } = deps;
+/** Counters that survive restarts and are shared by every server instance (Postgres in v1). */
+export interface Throttle {
+  /** Seconds the caller must wait because of any of these keys; 0 when none is locked. */
+  retryAfter(keys: readonly string[]): Promise<number>;
+  /** Counts one failure (for sign-up, one attempt) against a key. */
+  fail(key: string, policy: ThrottlePolicy): Promise<void>;
+  /** Forgets a key, after a successful login. */
+  clear(key: string): Promise<void>;
+}
 
-  return {
-    "POST /api/auth/sign-up": async (req, res) => {
-      const body = await readJson(req, res, SignUpRequest);
-      if (!body) return;
-      const started = await service.signUp(body.email, body.password);
-      if (!started) return sendError(res, 409, "email_taken", "that email is already registered");
-      res.setHeader("set-cookie", sessionCookie(started.token, SESSION_TTL_MS, secureCookies));
-      json(res, 201, { ...started.identity, email: body.email } satisfies MeResponse);
-    },
+export const POLICIES = {
+  /** Per client IP: generous, because many people can share one address. */
+  loginIp: { free: 20, baseSeconds: 5, capSeconds: 900, decaySeconds: 3600 },
+  /** Per email, whether or not it exists: 5 free guesses, then 2 s, 4 s, ... up to 15 min. */
+  loginAccount: { free: 5, baseSeconds: 2, capSeconds: 900, decaySeconds: 3600 },
+  signUpIp: { free: 5, baseSeconds: 60, capSeconds: 3600, decaySeconds: 7200 },
+  signUpAccount: { free: 3, baseSeconds: 60, capSeconds: 900, decaySeconds: 3600 },
+} as const satisfies Record<string, ThrottlePolicy>;
 
-    "POST /api/auth/login": async (req, res) => {
-      const body = await readJson(req, res, LoginRequest);
-      if (!body) return;
-      const started = await service.logIn(body.email, body.password);
-      if (!started) {
-        return sendError(res, 401, "invalid_credentials", "email or password is incorrect");
-      }
-      res.setHeader("set-cookie", sessionCookie(started.token, SESSION_TTL_MS, secureCookies));
-      json(res, 200, { ...started.identity, email: body.email } satisfies MeResponse);
-    },
+export type Scope = "login" | "signup";
 
-    // Always clears the cookie, even for a request with no live session: logging out twice is fine.
-    "POST /api/auth/logout": async (req, res) => {
-      const token = readSessionCookie(req.headers);
-      const identity = await authenticator.authenticate(req);
-      if (token && identity) await service.logOut(identity, token);
-      res.setHeader("set-cookie", clearedSessionCookie(secureCookies));
-      res.writeHead(204);
-      res.end();
-    },
+export const ipKey = (scope: Scope, ip: string): string => `${scope}-ip:${ip}`;
 
-    "GET /api/me": requireAuth(authenticator, async (_req, res, identity) => {
-      const email = await store.findEmail(identity);
-      if (!email) return sendError(res, 401, "unauthorized", "authentication required");
-      json(res, 200, { ...identity, email } satisfies MeResponse);
-    }),
-  };
+/** Keyed by a hash of the email, so the table never holds an address and an unknown email counts like a known one. */
+export const accountKey = (scope: Scope, email: string): string =>
+  `${scope}-acct:${createHash("sha256").update(email).digest("hex")}`;
+
+/** The lock a key has after `failures` failures; the SQL function throttle_fail computes the same. */
+export function lockSeconds(policy: ThrottlePolicy, failures: number): number {
+  if (failures <= policy.free) return 0;
+  return Math.min(
+    policy.capSeconds,
+    policy.baseSeconds * 2 ** Math.min(failures - policy.free - 1, 30),
+  );
 }
 ```
 
-- [ ] **Step 5: Run the test, then the gate**
+`packages/auth/src/clientIp.ts`:
+
+```ts
+import type { IncomingMessage } from "node:http";
+
+/**
+ * The address a request came from, for throttling. By default only the socket's peer address is
+ * believed: any client can send an X-Forwarded-For header, and trusting it would let an attacker
+ * pick a fresh "address" for every guess. Set `trustProxy` only when the server is reachable
+ * through exactly one reverse proxy of yours, which appends the address it saw; the last entry is
+ * then that address. IPv4-mapped IPv6 addresses are written as plain IPv4.
+ */
+export function clientIp(
+  req: Pick<IncomingMessage, "headers" | "socket">,
+  trustProxy: boolean,
+): string {
+  if (trustProxy) {
+    const forwarded = req.headers["x-forwarded-for"];
+    const last = (Array.isArray(forwarded) ? forwarded.join(",") : (forwarded ?? ""))
+      .split(",")
+      .pop()
+      ?.trim();
+    if (last) return normalise(last);
+  }
+  return normalise(req.socket.remoteAddress ?? "unknown");
+}
+
+const normalise = (ip: string): string => ip.replace(/^::ffff:/i, "").toLowerCase();
+```
+
+`packages/auth/src/index.ts`:
+
+```ts
+export { AuthService, type StartedSession } from "./authService";
+export type { AuthRequest, Authenticator, Identity } from "./authenticator";
+export { clientIp } from "./clientIp";
+export { SESSION_COOKIE, clearedSessionCookie, readSessionCookie, sessionCookie } from "./cookie";
+export { hashPassword, verifyAgainstDecoy, verifyPassword } from "./password";
+export { PasswordAuthenticator } from "./passwordAuthenticator";
+export { SESSION_TTL_MS, type SessionToken, hashToken, newSessionToken } from "./session";
+export type { AuthStore, LoginRecord, NewAccount, NewSession } from "./store";
+export {
+  POLICIES,
+  type Scope,
+  type Throttle,
+  type ThrottlePolicy,
+  accountKey,
+  ipKey,
+  lockSeconds,
+} from "./throttle";
+```
+
+- [ ] **Step 5: Run the tests, then the gate**
 
 ```bash
-pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+pnpm --filter @docmind/auth test
 ```
 
-Expected: `6 passed`.
+Expected: `throttle.test.ts` 2 passed, `clientIp.test.ts` 4 passed.
 
 ```bash
 export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
@@ -2894,14 +2910,14 @@ Expected: every command exits 0.
 
 ```bash
 git add -A
-git commit -m "feat(server): sign-up, login, logout and GET /api/me routes" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git commit -m "feat(auth): throttle interface, policies and client address" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
-git push -u origin feat/m1-auth-routes
-gh pr create --draft --base main --head feat/m1-auth-routes --title "feat(server): sign-up, login, logout and GET /api/me routes" --body "$(cat <<'EOF'
+git push -u origin feat/m1-throttle
+gh pr create --draft --base main --head feat/m1-throttle --title "feat(auth): throttle interface, policies and client address" --body "$(cat <<'EOF'
 ## Summary
-- authRoutes(...) per the contracts: POST /api/auth/sign-up (201), /login (200), /logout (204, always clears the cookie), GET /api/me. The paths are not in the spec; see the plan's deviation 2.
-- Wrong password and unknown email give byte-identical 401s. The tenant and user in every response come from the session, never the request.
-- Not mounted yet (PR 6i), so nothing is reachable from main.
+- Throttle (retryAfter / fail / clear) and the four policies for login and sign-up, per client address and per email: free allowance, then exponential locks capped at 15 min (1 h for sign-up), decaying when left alone, so no lock is ever permanent. Account keys are a sha256 of the email.
+- clientIp trusts only the socket unless told to trust one proxy hop (then the last X-Forwarded-For entry).
+- Owner-requested rate limiting (not in the spec). Nothing uses it yet; the routes in PRs 6k-6l do.
 
 ## Not counted toward the 200-line / 10-file limit
 None.
@@ -2914,23 +2930,1242 @@ EOF
 )"
 ```
 
-Expected: about `159 lines, 2 files`, then the PR URL.
+Expected: about `129 lines, 5 files`, then the PR URL.
 
 ---
 
-# PR 6i: the server comes up authenticated, as an unprivileged role
+# PR 6i: the in-memory throttle and the Throttle conformance suite
 
-**Branch:** `feat/m1-auth-wiring`  **Budget:** 4 files, 135 lines. Spec §9 item 6, part 9 of 9. **Behaviour change:** `pnpm start` now needs `DATABASE_URL`.
+**Branch:** `feat/m1-throttle-memory`  **Budget:** 4 files, 139 lines. Spec §9 item 6, part 9 of 14.
 
-### Task 25: startup role assertion, the pool, and `main.ts`
+### Task 25: `MemoryThrottle` and `runThrottleConformance`
+
+**Files:**
+- Create: `/Users/such/workspace/docmind/packages/auth/src/memoryThrottle.ts`, `throttleConformance.ts`, `memoryThrottle.test.ts`
+- Modify: `/Users/such/workspace/docmind/packages/auth/src/testing.ts`
+
+**Interfaces:**
+- Consumes: `Throttle`, `ThrottlePolicy`, `lockSeconds` (PR 6h).
+- Produces (from `@docmind/auth/testing`): `class MemoryThrottle implements Throttle` with a settable `now: () => number` (milliseconds); `interface ThrottleHarness { throttle: Throttle; advance(seconds: number): Promise<void> }`; `runThrottleConformance(make: () => ThrottleHarness | Promise<ThrottleHarness>, label?: string): void`. The suite checks: no lock within the free allowance; the base lock and its expiry; doubling; the cap; decay; `clear`; and the longest lock across several keys. It never sleeps: `advance` moves time.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-throttle-memory
+```
+
+- [ ] **Step 2: Write the failing test**
+
+`packages/auth/src/memoryThrottle.test.ts`:
+
+```ts
+import { MemoryThrottle } from "./memoryThrottle";
+import { runThrottleConformance } from "./throttleConformance";
+
+runThrottleConformance(() => {
+  const throttle = new MemoryThrottle();
+  let offset = 0;
+  throttle.now = () => Date.now() + offset;
+  return {
+    throttle,
+    advance: async (seconds) => {
+      offset += seconds * 1000;
+    },
+  };
+}, "MemoryThrottle");
+```
+
+- [ ] **Step 3: Run it to see it fail**
+
+```bash
+pnpm --filter @docmind/auth test
+```
+
+Expected: FAIL, `Failed to resolve import "./memoryThrottle"`.
+
+- [ ] **Step 4: Implement**
+
+`packages/auth/src/memoryThrottle.ts`:
+
+```ts
+import { type Throttle, type ThrottlePolicy, lockSeconds } from "./throttle";
+
+interface Row {
+  failures: number;
+  lockedUntil: number;
+  updatedAt: number;
+}
+
+/** A Throttle in memory, for tests of everything built on the interface. `now` is settable. */
+export class MemoryThrottle implements Throttle {
+  now: () => number = () => Date.now();
+  private readonly rows = new Map<string, Row>();
+
+  async retryAfter(keys: readonly string[]): Promise<number> {
+    const now = this.now();
+    let wait = 0;
+    for (const key of keys) {
+      const row = this.rows.get(key);
+      if (row && row.lockedUntil > now)
+        wait = Math.max(wait, Math.ceil((row.lockedUntil - now) / 1000));
+    }
+    return wait;
+  }
+
+  async fail(key: string, policy: ThrottlePolicy): Promise<void> {
+    const now = this.now();
+    const old = this.rows.get(key);
+    const stale = !old || now - old.updatedAt >= policy.decaySeconds * 1000;
+    const failures = stale ? 1 : old.failures + 1;
+    const lock = lockSeconds(policy, failures);
+    const lockedUntil = lock > 0 ? now + lock * 1000 : stale ? now : (old?.lockedUntil ?? now);
+    this.rows.set(key, { failures, lockedUntil, updatedAt: now });
+  }
+
+  async clear(key: string): Promise<void> {
+    this.rows.delete(key);
+  }
+}
+```
+
+`packages/auth/src/throttleConformance.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import type { Throttle, ThrottlePolicy } from "./throttle";
+
+/** What the suite needs: the throttle, and a way to move time forward without waiting. */
+export interface ThrottleHarness {
+  throttle: Throttle;
+  advance(seconds: number): Promise<void>;
+}
+
+const P: ThrottlePolicy = { free: 2, baseSeconds: 10, capSeconds: 60, decaySeconds: 300 };
+
+/** The suite every Throttle implementation must pass. */
+export function runThrottleConformance(
+  make: () => ThrottleHarness | Promise<ThrottleHarness>,
+  label = "Throttle",
+): void {
+  const failTimes = async (t: Throttle, key: string, n: number) => {
+    for (let i = 0; i < n; i++) await t.fail(key, P);
+  };
+
+  describe(`${label} conformance`, () => {
+    it("does not lock until the free failures are used up", async () => {
+      const { throttle } = await make();
+      await failTimes(throttle, "k", 2);
+      expect(await throttle.retryAfter(["k"])).toBe(0);
+    });
+
+    it("locks for the base time on the first failure over, and the lock runs out", async () => {
+      const { throttle, advance } = await make();
+      await failTimes(throttle, "k", 3);
+      const wait = await throttle.retryAfter(["k"]);
+      expect(wait).toBeGreaterThan(0);
+      expect(wait).toBeLessThanOrEqual(10);
+      await advance(10);
+      expect(await throttle.retryAfter(["k"])).toBe(0);
+    });
+
+    it("doubles the lock with each further failure", async () => {
+      const { throttle, advance } = await make();
+      await failTimes(throttle, "k", 3);
+      await advance(10);
+      await failTimes(throttle, "k", 1);
+      const wait = await throttle.retryAfter(["k"]);
+      expect(wait).toBeGreaterThan(10);
+      expect(wait).toBeLessThanOrEqual(20);
+    });
+
+    it("never locks for longer than the cap", async () => {
+      const { throttle, advance } = await make();
+      for (let i = 0; i < 12; i++) {
+        await failTimes(throttle, "k", 1);
+        await advance(100);
+      }
+      await failTimes(throttle, "k", 1);
+      const wait = await throttle.retryAfter(["k"]);
+      expect(wait).toBeGreaterThan(30);
+      expect(wait).toBeLessThanOrEqual(60);
+    });
+
+    it("starts again from zero once a key has been left alone for the decay time", async () => {
+      const { throttle, advance } = await make();
+      await failTimes(throttle, "k", 5);
+      await advance(301);
+      await failTimes(throttle, "k", 1);
+      expect(await throttle.retryAfter(["k"])).toBe(0);
+    });
+
+    it("forgets a key that is cleared", async () => {
+      const { throttle } = await make();
+      await failTimes(throttle, "k", 4);
+      await throttle.clear("k");
+      expect(await throttle.retryAfter(["k"])).toBe(0);
+    });
+
+    it("answers with the longest lock among the keys, and keeps keys apart", async () => {
+      const { throttle } = await make();
+      await failTimes(throttle, "a", 3);
+      await failTimes(throttle, "b", 4);
+      const both = await throttle.retryAfter(["a", "b", "c"]);
+      expect(both).toBeGreaterThan(10);
+      expect(await throttle.retryAfter(["c"])).toBe(0);
+      expect(await throttle.retryAfter(["a"])).toBeLessThanOrEqual(10);
+    });
+  });
+}
+```
+
+`packages/auth/src/testing.ts`:
+
+```ts
+export * from "./conformance";
+export * from "./throttleConformance";
+export { MemoryAuthStore } from "./memoryStore";
+export { MemoryThrottle } from "./memoryThrottle";
+```
+
+- [ ] **Step 5: Run the test, then the gate**
+
+```bash
+pnpm --filter @docmind/auth test
+```
+
+Expected: `memoryThrottle.test.ts` 7 passed.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(auth): MemoryThrottle and the Throttle conformance suite" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-throttle-memory
+gh pr create --draft --base main --head feat/m1-throttle-memory --title "feat(auth): MemoryThrottle and the Throttle conformance suite" --body "$(cat <<'EOF'
+## Summary
+- runThrottleConformance: the suite every Throttle must pass (free allowance, base lock and expiry, doubling, cap, decay, clear, longest lock across keys), driven by an advance() hook so nothing sleeps.
+- MemoryThrottle with an injectable clock, for route tests. The Postgres throttle (PR 6j) runs the same suite.
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `139 lines, 4 files`, then the PR URL.
+
+---
+
+# PR 6j: the Postgres throttle
+
+**Branch:** `feat/m1-throttle-sql`  **Budget:** 3 files, 159 lines. Spec §9 item 6, part 10 of 14.
+
+### Task 26: `auth_throttle` (migration 0006) and `PgThrottle`
+
+**Files:**
+- Create: `/Users/such/workspace/docmind/infra/migrations/0006_auth_throttle.sql`, `apps/server/app/auth/pgThrottle.ts`, `pgThrottle.test.ts`
+
+**Interfaces:**
+- Consumes: `Throttle`, `ThrottlePolicy` (PR 6h); `runThrottleConformance` from `@docmind/auth/testing` (PR 6i); the test helpers `createTestDb`, `migrate`, `setAppRolePassword`.
+- Produces: SQL `throttle_retry_after(p_keys text[]) RETURNS integer`, `throttle_fail(p_key text, p_free integer, p_base integer, p_cap integer, p_decay integer) RETURNS void`, `throttle_clear(p_key text) RETURNS void`, `throttle_purge() RETURNS bigint`, all `SECURITY DEFINER` with a pinned `search_path` and an explicit grant to `docmind_app`; table `auth_throttle (key text PRIMARY KEY, failures integer, locked_until timestamptz, updated_at timestamptz)`. TypeScript `class PgThrottle implements Throttle { constructor(pool: Pool); purge(): Promise<number> }`, `pool` connected as `docmind_app`.
+
+**Storage choice.** Postgres, because the counters must survive a restart and be shared by every server instance behind a load balancer (an in-process map would give each instance its own allowance and forget on deploy). No new infrastructure. Like `data_keys`, the table has row-level security **enabled with no policy** and **no privilege for `docmind_app`**: throttling happens before any tenant is known, so a tenant policy cannot describe it, and the app reaches it only through four functions. Rows hold an address or a hash of an email and are deleted a day after their last use (`throttle_purge`, run hourly by the server), so the table is not a log of who logged in.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-throttle-sql
+```
+
+- [ ] **Step 2: Write the failing test**
+
+It runs the whole Throttle conformance suite on Postgres (time moves by shifting the stored timestamps, as the owner), then checks the purge and that `docmind_app` cannot touch the table directly. `apps/server/app/auth/pgThrottle.test.ts`:
+
+```ts
+import { runThrottleConformance } from "@docmind/auth/testing";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { migrate, setAppRolePassword } from "../db/migrate";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { PgThrottle } from "./pgThrottle";
+
+describe.skipIf(!PG_URL)("PgThrottle (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+  const policy = { free: 0, baseSeconds: 1, capSeconds: 1, decaySeconds: 60 };
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    app = new Pool({ connectionString: db.appUrl });
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  // Time moves by shifting the stored timestamps back, so the suite never waits.
+  runThrottleConformance(async () => {
+    await db.owner.query("TRUNCATE auth_throttle");
+    return {
+      throttle: new PgThrottle(app),
+      advance: async (seconds) => {
+        await db.owner.query(
+          `UPDATE auth_throttle SET locked_until = locked_until - make_interval(secs => $1::float8),
+                                    updated_at = updated_at - make_interval(secs => $1::float8)`,
+          [seconds],
+        );
+      },
+    };
+  }, "PgThrottle");
+
+  it("purges counters that are unlocked and a day old, and only those", async () => {
+    await db.owner.query("TRUNCATE auth_throttle");
+    const throttle = new PgThrottle(app);
+    await throttle.fail("old", policy);
+    await throttle.fail("recent", policy);
+    await db.owner.query(
+      "UPDATE auth_throttle SET updated_at = now() - interval '2 days', locked_until = now() - interval '2 days' WHERE key = 'old'",
+    );
+    expect(await throttle.purge()).toBe(1);
+    const { rows } = await db.owner.query("SELECT key FROM auth_throttle");
+    expect(rows).toEqual([{ key: "recent" }]);
+  });
+
+  it("is a table the app role can only reach through the functions", async () => {
+    await expect(app.query("SELECT * FROM auth_throttle")).rejects.toThrow(/permission denied/);
+    await expect(app.query("DELETE FROM auth_throttle")).rejects.toThrow(/permission denied/);
+  });
+});
+```
+
+- [ ] **Step 3: Run it to see it fail**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm --filter @docmind/server exec vitest run app/auth/pgThrottle.test.ts
+```
+
+Expected: FAIL, `Failed to resolve import "./pgThrottle"`.
+
+- [ ] **Step 4: Implement**
+
+`infra/migrations/0006_auth_throttle.sql`:
+
+```sql
+-- Failure counters behind login and sign-up throttling (packages/auth/src/throttle.ts). A key is
+-- "<scope>-ip:<address>" or "<scope>-acct:<sha256 of the email>", so no address of a person is stored
+-- and an email that does not exist is counted like one that does. The counters are in Postgres so
+-- they survive restarts and are shared by every server instance.
+CREATE TABLE auth_throttle (
+  key text PRIMARY KEY,
+  failures integer NOT NULL,
+  locked_until timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL
+);
+
+-- Throttling happens before any tenant is known, so there is no tenant policy: docmind_app gets no
+-- privilege on the table and reaches it only through the functions below.
+ALTER TABLE auth_throttle ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON auth_throttle FROM docmind_app;
+
+-- Seconds until the last of these keys unlocks; 0 when none is locked.
+CREATE FUNCTION throttle_retry_after(p_keys text[])
+  RETURNS integer
+  LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+  AS $$ SELECT COALESCE(ceil(max(extract(epoch FROM t.locked_until - now())))::integer, 0)
+          FROM public.auth_throttle t WHERE t.key = ANY (p_keys) AND t.locked_until > now() $$;
+
+-- Counts one failure. Past the free allowance the key is locked for base * 2^(n - free - 1) seconds,
+-- at most cap. A key idle for p_decay seconds starts again from one failure.
+CREATE FUNCTION throttle_fail(p_key text, p_free integer, p_base integer, p_cap integer, p_decay integer)
+  RETURNS void
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+  AS $$
+DECLARE
+  n integer;
+BEGIN
+  INSERT INTO public.auth_throttle AS t (key, failures, locked_until, updated_at)
+    VALUES (p_key, 1, now(), now())
+    ON CONFLICT (key) DO UPDATE SET
+      failures = CASE WHEN t.updated_at <= now() - make_interval(secs => p_decay)
+                      THEN 1 ELSE t.failures + 1 END,
+      locked_until = CASE WHEN t.updated_at <= now() - make_interval(secs => p_decay)
+                          THEN now() ELSE t.locked_until END,
+      updated_at = now()
+    RETURNING t.failures INTO n;
+  IF n > p_free THEN
+    UPDATE public.auth_throttle
+       SET locked_until = now() + make_interval(
+             secs => least(p_cap::float8, p_base::float8 * power(2, least(n - p_free - 1, 30))))
+     WHERE key = p_key;
+  END IF;
+END
+$$;
+
+CREATE FUNCTION throttle_clear(p_key text)
+  RETURNS void
+  LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+  AS $$ DELETE FROM public.auth_throttle WHERE key = p_key $$;
+
+-- Drops counters that are unlocked and untouched for a day; returns how many.
+CREATE FUNCTION throttle_purge()
+  RETURNS bigint
+  LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+  AS $$ WITH gone AS (DELETE FROM public.auth_throttle
+                       WHERE updated_at < now() - interval '1 day' AND locked_until < now()
+                       RETURNING 1)
+        SELECT count(*) FROM gone $$;
+
+REVOKE ALL ON FUNCTION throttle_retry_after(text[]), throttle_fail(text, integer, integer, integer, integer),
+  throttle_clear(text), throttle_purge() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION throttle_retry_after(text[]), throttle_fail(text, integer, integer, integer, integer),
+  throttle_clear(text), throttle_purge() TO docmind_app;
+```
+
+`apps/server/app/auth/pgThrottle.ts`:
+
+```ts
+import type { Throttle, ThrottlePolicy } from "@docmind/auth";
+import type { Pool } from "pg";
+
+/** Throttle on Postgres (migration 0006), connected as docmind_app. */
+export class PgThrottle implements Throttle {
+  constructor(private readonly pool: Pool) {}
+
+  async retryAfter(keys: readonly string[]): Promise<number> {
+    const { rows } = await this.pool.query("SELECT throttle_retry_after($1::text[]) AS wait", [
+      keys,
+    ]);
+    return rows[0].wait;
+  }
+
+  async fail(key: string, p: ThrottlePolicy): Promise<void> {
+    await this.pool.query("SELECT throttle_fail($1, $2, $3, $4, $5)", [
+      key,
+      p.free,
+      p.baseSeconds,
+      p.capSeconds,
+      p.decaySeconds,
+    ]);
+  }
+
+  async clear(key: string): Promise<void> {
+    await this.pool.query("SELECT throttle_clear($1)", [key]);
+  }
+
+  /** Deletes counters that are unlocked and idle for a day; returns how many. */
+  async purge(): Promise<number> {
+    const { rows } = await this.pool.query("SELECT throttle_purge() AS n");
+    return Number(rows[0].n);
+  }
+}
+```
+
+- [ ] **Step 5: Run the test, then the gate**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm --filter @docmind/server exec vitest run app/auth/pgThrottle.test.ts
+```
+
+Expected: `9 passed` (7 conformance + purge + privileges).
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0 (the M0 "RLS on every table" guard passes: `auth_throttle` has RLS enabled).
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(db): Postgres-backed throttle behind SECURITY DEFINER functions" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-throttle-sql
+gh pr create --draft --base main --head feat/m1-throttle-sql --title "feat(db): Postgres-backed throttle behind SECURITY DEFINER functions" --body "$(cat <<'EOF'
+## Summary
+- Migration 0006: auth_throttle plus throttle_retry_after/fail/clear/purge (SECURITY DEFINER, pinned search_path, explicit grants). RLS on, no policy, no privileges for docmind_app: throttling is pre-tenant, and the app can only use the functions. Postgres so counters survive restarts and are shared across instances.
+- PgThrottle passes runThrottleConformance (same suite as MemoryThrottle); counters older than a day and unlocked are purged.
+- Nothing mounts it yet (PR 6n).
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `159 lines, 3 files`, then the PR URL.
+
+---
+
+# PR 6k: the sign-up route
+
+**Branch:** `feat/m1-signup-route`  **Budget:** 4 files, 175 lines. Spec §9 item 6, part 11 of 14. Not mounted until PR 6n.
+
+### Task 27: `POST /api/auth/sign-up` that does not reveal whether the email is registered
+
+**Files:**
+- Create: `/Users/such/workspace/docmind/apps/server/app/auth/routes.ts`, `routes.test.ts`
+- Modify: `/Users/such/workspace/docmind/packages/contracts/src/auth.ts`, `auth.test.ts`
+
+**Interfaces:**
+- Consumes: `AuthService` (PR 6e: `signUp(email, password): Promise<boolean>`); `Throttle`, `POLICIES`, `ipKey`, `accountKey`, `clientIp` (`@docmind/auth`, PRs 6h-6i); `readJson` (PR 6g); `Handler`, `json`, `sendError` (PR 5c); `SignUpRequest` (`@docmind/contracts`, M0).
+- Produces: contracts `SignUpResponse = { status: "accepted" }` (schema and same-named type); `interface AuthRoutesDeps { service: AuthService; throttle: Throttle; trustProxy: boolean }` (extended in the next PRs) and `authRoutes(deps): Record<string, Handler>` with `POST /api/auth/sign-up`: 202 `SignUpResponse` and **no cookie** for a new email and for a taken one alike; 400 for a short password (before anything is counted); 429 `too_many_requests` with `Retry-After` when the address or the email is locked.
+
+**Design: a uniform 202, no session, then the client logs in.** Sign-up used to start a session and answer `201` with the account, or `409` for a taken email; both reveal whether an email is registered. Now the route does the same thing for both cases: it counts the attempt, hashes the password (argon2id, the expensive part, before the database is asked), calls `auth_sign_up` once, and answers `202 {"status":"accepted"}` with the same headers and no `Set-Cookie`. The work, the status, the headers and the body are identical, and a test asserts the responses are byte-identical for a new email and a taken one (the clock-dependent `Date` header aside). A taken email's existing password is never changed. The client then calls login, which creates the session.
+
+**The residual channel, stated plainly.** Sign-up followed by login still leaks: for a new email, logging in with the password just submitted succeeds; for a taken email it fails (unless the submitter knew the owner's password). So an attacker can still learn "registered" at the price of two requests per email. Two things bound that: the sign-up and login rate limits (per address and per email, in this plan) make large-scale enumeration slow, and it creates a throwaway account for every unregistered email probed. **Email verification would close it** (the response then cannot depend on whether the email was new, because the account is only usable after the owner confirms); the spec has no email infrastructure, so that stays out of M1. Timing is comparable by construction (same hash, one database call each); no timing assertion is made, per the test hygiene rules.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-signup-route
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Contract test, appended to `packages/contracts/src/auth.test.ts`:
+
+```diff
+@@ -1,4 +1,4 @@
+ import { describe, expect, it } from "vitest";
+-import { ErrorBody, LoginRequest, MeResponse, SignUpRequest } from "./index";
++import { ErrorBody, LoginRequest, MeResponse, SignUpRequest, SignUpResponse } from "./index";
+ 
+ const ID = "11111111-1111-4111-8111-111111111111";
+@@ -34,3 +34,8 @@ describe("auth contracts", () => {
+     expect(ErrorBody.safeParse({ error: "no" }).success).toBe(false);
+   });
++
++  it("answers sign-up with the one accepted body", () => {
++    expect(SignUpResponse.parse({ status: "accepted" })).toEqual({ status: "accepted" });
++    expect(SignUpResponse.safeParse({ status: "exists" }).success).toBe(false);
++  });
+ });
+```
+
+Route test (in-memory store and throttle with a fixed clock, through a real HTTP server, so no database is needed). `apps/server/app/auth/routes.test.ts`:
+
+```ts
+import type { AddressInfo } from "node:net";
+import { AuthService } from "@docmind/auth";
+import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
+import { ErrorBody, SignUpResponse } from "@docmind/contracts";
+import { afterEach, describe, expect, it } from "vitest";
+import { createHttpServer } from "../server";
+import { authRoutes } from "./routes";
+
+const closers: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  await Promise.all(closers.splice(0).map((close) => close()));
+});
+
+const PASSWORD = "correct horse battery";
+
+/** A fresh server, store and throttle per test. The clock is fixed, so a lock never runs out. */
+async function start(trustProxy = false) {
+  const store = new MemoryAuthStore();
+  const throttle = new MemoryThrottle();
+  throttle.now = () => 1_000_000;
+  const server = createHttpServer(
+    authRoutes({ service: new AuthService(store), throttle, trustProxy }),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  closers.push(
+    () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+  );
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    store,
+    signUp: (email: string, password = PASSWORD, headers: Record<string, string> = {}) =>
+      fetch(`${base}/api/auth/sign-up`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({ email, password }),
+      }),
+  };
+}
+
+/** Everything a client can see of a response except the Date header. */
+async function wire(res: Response) {
+  const headers = [...res.headers.entries()].filter(([name]) => name !== "date");
+  return { status: res.status, headers, body: await res.text() };
+}
+
+describe("sign-up", () => {
+  it("answers 202 with no cookie, and creates the account", async () => {
+    const api = await start();
+    const res = await api.signUp("Ada@Example.com");
+    expect(res.status).toBe(202);
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(SignUpResponse.parse(await res.json())).toEqual({ status: "accepted" });
+    expect((await api.store.findLogin("ada@example.com"))?.passwordHash).toMatch(/^\$argon2id\$/);
+  });
+
+  it("answers a new email and a taken one with byte-identical responses", async () => {
+    const api = await start();
+    const fresh = await wire(await api.signUp("new@example.com"));
+    const taken = await wire(await api.signUp("new@example.com", "another long password"));
+    expect(taken).toEqual(fresh);
+  });
+
+  it("leaves a taken email's password alone", async () => {
+    const api = await start();
+    await api.signUp("ada@example.com");
+    const first = await api.store.findLogin("ada@example.com");
+    await api.signUp("ada@example.com", "another long password");
+    expect(await api.store.findLogin("ada@example.com")).toEqual(first);
+  });
+
+  it("rejects a short password with 400, before anything is counted", async () => {
+    const api = await start();
+    expect((await api.signUp("b@example.com", "short")).status).toBe(400);
+  });
+
+  it("limits sign-ups per address, then answers 429 with Retry-After", async () => {
+    const api = await start();
+    for (let i = 0; i < 6; i++) await api.signUp(`user${i}@example.com`);
+    const res = await api.signUp("next@example.com");
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(ErrorBody.parse(await res.json()).error.code).toBe("too_many_requests");
+  });
+
+  it("limits sign-ups per email, whether or not it is registered", async () => {
+    const api = await start();
+    for (let i = 0; i < 4; i++) await api.signUp("same@example.com");
+    expect((await api.signUp("same@example.com")).status).toBe(429);
+  });
+
+  it("ignores X-Forwarded-For unless the proxy is trusted", async () => {
+    const spoofed = await start(false);
+    for (let i = 0; i < 6; i++) {
+      await spoofed.signUp(`u${i}@example.com`, PASSWORD, { "x-forwarded-for": `10.0.0.${i}` });
+    }
+    const blocked = await spoofed.signUp("v@example.com", PASSWORD, {
+      "x-forwarded-for": "10.9.9.9",
+    });
+    expect(blocked.status).toBe(429);
+
+    const proxied = await start(true);
+    for (let i = 0; i < 7; i++) {
+      const res = await proxied.signUp(`u${i}@example.com`, PASSWORD, {
+        "x-forwarded-for": `10.0.0.${i}`,
+      });
+      expect(res.status).toBe(202);
+    }
+  });
+});
+```
+
+- [ ] **Step 3: Run them to see them fail**
+
+```bash
+pnpm --filter @docmind/contracts typecheck:tests
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: FAIL, `Module '"./index"' has no exported member 'SignUpResponse'`, and `Failed to resolve import "./routes"`.
+
+- [ ] **Step 4: Implement**
+
+```diff
+@@ -19,5 +19,12 @@ export const LoginRequest = z.object({
+ export type LoginRequest = z.infer<typeof LoginRequest>;
+ 
+-/** `GET /api/me`, and the body of a successful sign-up or login. */
++/**
++ * The only body sign-up ever answers with (202), whether or not the email was already registered:
++ * it must not reveal which emails have accounts. The client then logs in.
++ */
++export const SignUpResponse = z.object({ status: z.literal("accepted") });
++export type SignUpResponse = z.infer<typeof SignUpResponse>;
++
++/** `GET /api/me`, and the body of a successful login. */
+ export const MeResponse = z.object({ userId: Uuid, tenantId: Uuid, email: Email });
+ export type MeResponse = z.infer<typeof MeResponse>;
+```
+
+`apps/server/app/auth/routes.ts`:
+
+```ts
+import {
+  type AuthService,
+  POLICIES,
+  type Throttle,
+  accountKey,
+  clientIp,
+  ipKey,
+} from "@docmind/auth";
+import { SignUpRequest, type SignUpResponse } from "@docmind/contracts";
+import { readJson } from "../http/body";
+import { type Handler, json, sendError } from "../http/respond";
+
+export interface AuthRoutesDeps {
+  service: AuthService;
+  throttle: Throttle;
+  /** Believe X-Forwarded-For (its last entry) for the client address. Only behind one proxy of yours. */
+  trustProxy: boolean;
+}
+
+/** 429 with Retry-After. The body says nothing about whether the account exists. */
+function tooMany(res: Parameters<Handler>[1], seconds: number): void {
+  res.setHeader("retry-after", String(seconds));
+  sendError(res, 429, "too_many_requests", "too many attempts; try again later");
+}
+
+/** Sign-up. (Login, logout and `GET /api/me` follow in the next PRs.) */
+export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
+  const { service, throttle, trustProxy } = deps;
+
+  return {
+    // Answers the same 202 whether or not the email is registered, and never sets a cookie, so the
+    // response cannot tell the two apart; the client then logs in. Every attempt is counted.
+    "POST /api/auth/sign-up": async (req, res) => {
+      const body = await readJson(req, res, SignUpRequest);
+      if (!body) return;
+      const ip = ipKey("signup", clientIp(req, trustProxy));
+      const account = accountKey("signup", body.email);
+      const wait = await throttle.retryAfter([ip, account]);
+      if (wait > 0) return tooMany(res, wait);
+      await throttle.fail(ip, POLICIES.signUpIp);
+      await throttle.fail(account, POLICIES.signUpAccount);
+      await service.signUp(body.email, body.password);
+      json(res, 202, { status: "accepted" } satisfies SignUpResponse);
+    },
+  };
+}
+```
+
+- [ ] **Step 5: Run the tests, then the gate**
+
+```bash
+pnpm build
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: `7 passed`.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(server): sign-up route that does not reveal registered emails" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-signup-route
+gh pr create --draft --base main --head feat/m1-signup-route --title "feat(server): sign-up route that does not reveal registered emails" --body "$(cat <<'EOF'
+## Summary
+- POST /api/auth/sign-up always answers 202 {"status":"accepted"} with no cookie, for a new email and a taken one alike (tested byte-identical; both paths hash the password and make one database call). The user then logs in. The owner rejected the earlier 409.
+- Every attempt is throttled per client address and per email (429 + Retry-After). X-Forwarded-For is ignored unless trustProxy is set (tested).
+- Residual channel (documented in the plan): sign-up then login still tells an attacker whether an email was registered; the rate limits slow it, email verification would close it.
+- Contracts: SignUpResponse. Not mounted yet (PR 6n).
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `175 lines, 4 files`, then the PR URL.
+
+---
+
+# PR 6l: the login route
+
+**Branch:** `feat/m1-login-route`  **Budget:** 2 files, 106 lines. Spec §9 item 6, part 12 of 14.
+
+### Task 28: `POST /api/auth/login`, throttled
+
+**Files:**
+- Modify: `/Users/such/workspace/docmind/apps/server/app/auth/routes.ts`, `routes.test.ts`
+
+**Interfaces:**
+- Consumes: everything from PR 6k; `LoginRequest`, `MeResponse` (`@docmind/contracts`); `sessionCookie`, `SESSION_TTL_MS` (`@docmind/auth`); `AuthService.logIn`.
+- Produces: `AuthRoutesDeps` gains `secureCookies: boolean`; `POST /api/auth/login`: 200 `MeResponse` and `Set-Cookie` on success; 401 `invalid_credentials` for a wrong password and an unknown email, byte-identical; 429 with `Retry-After` while the address or the email is locked, **checked before the password**, so a locked caller learns nothing and the right password does not help until the lock runs out. Failures count against the address (`loginIp`) and the email (`loginAccount`); a success forgets the email's count.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-login-route
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Replace `apps/server/app/auth/routes.test.ts` (the sign-up tests stay; the server now needs `secureCookies`, and the login tests are added):
+
+```diff
+@@ -2,5 +2,5 @@ import type { AddressInfo } from "node:net";
+ import { AuthService } from "@docmind/auth";
+ import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
+-import { ErrorBody, SignUpResponse } from "@docmind/contracts";
++import { ErrorBody, MeResponse, SignUpResponse } from "@docmind/contracts";
+ import { afterEach, describe, expect, it } from "vitest";
+ import { createHttpServer } from "../server";
+@@ -20,5 +20,5 @@ async function start(trustProxy = false) {
+   throttle.now = () => 1_000_000;
+   const server = createHttpServer(
+-    authRoutes({ service: new AuthService(store), throttle, trustProxy }),
++    authRoutes({ service: new AuthService(store), throttle, secureCookies: false, trustProxy }),
+   );
+   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+@@ -33,4 +33,10 @@ async function start(trustProxy = false) {
+   return {
+     store,
++    logIn: (email: string, password = PASSWORD) =>
++      fetch(`${base}/api/auth/login`, {
++        method: "POST",
++        headers: { "content-type": "application/json" },
++        body: JSON.stringify({ email, password }),
++      }),
+     signUp: (email: string, password = PASSWORD, headers: Record<string, string> = {}) =>
+       fetch(`${base}/api/auth/sign-up`, {
+@@ -112,2 +118,63 @@ describe("sign-up", () => {
+   });
+ });
++
++describe("login", () => {
++  it("logs in after sign-up, with an HttpOnly session cookie", async () => {
++    const api = await start();
++    await api.signUp("Ada@Example.com");
++    const res = await api.logIn("ada@example.com");
++    expect(res.status).toBe(200);
++    expect(MeResponse.parse(await res.json()).email).toBe("ada@example.com");
++    expect(res.headers.get("set-cookie")).toMatch(
++      /^dm_session=[\w-]{43}; .*HttpOnly.*SameSite=Lax/,
++    );
++  });
++
++  it("answers the same 401 for a wrong password and an unknown email", async () => {
++    const api = await start();
++    await api.signUp("ada@example.com");
++    const wrong = await api.logIn("ada@example.com", "wrong password here");
++    const unknown = await api.logIn("nobody@example.com");
++    expect([wrong.status, unknown.status]).toEqual([401, 401]);
++    expect(await wrong.text()).toBe(await unknown.text());
++  });
++
++  it("locks an email after five failures, even against the right password", async () => {
++    const api = await start();
++    await api.signUp("ada@example.com");
++    for (let i = 0; i < 6; i++) {
++      expect((await api.logIn("ada@example.com", "wrong password here")).status).toBe(401);
++    }
++    const locked = await api.logIn("ada@example.com");
++    expect(locked.status).toBe(429);
++    expect(Number(locked.headers.get("retry-after"))).toBeGreaterThan(0);
++  });
++
++  it("answers a locked email that exists exactly like one that does not", async () => {
++    const api = await start();
++    await api.signUp("ada@example.com");
++    const lockOut = async (email: string) => {
++      for (let i = 0; i < 6; i++) await api.logIn(email, "wrong password here");
++      return wire(await api.logIn(email));
++    };
++    const known = await lockOut("ada@example.com");
++    const unknown = await lockOut("nobody@example.com");
++    expect(known.status).toBe(429);
++    expect(unknown).toEqual(known);
++  });
++
++  it("forgets an email's failures after a successful login", async () => {
++    const api = await start();
++    await api.signUp("ada@example.com");
++    for (let round = 0; round < 2; round++) {
++      for (let i = 0; i < 4; i++) await api.logIn("ada@example.com", "wrong password here");
++      expect((await api.logIn("ada@example.com")).status).toBe(200);
++    }
++  });
++
++  it("locks a client address after 20 failed logins, whatever emails it tries", async () => {
++    const api = await start();
++    for (let i = 0; i < 21; i++) await api.logIn(`user${i}@example.com`);
++    expect((await api.logIn("another@example.com")).status).toBe(429);
++  });
++});
+```
+
+- [ ] **Step 3: Run them to see them fail**
+
+```bash
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: FAIL: `POST /api/auth/login` is a 404 (`no such route`).
+
+- [ ] **Step 4: Implement**
+
+```diff
+@@ -2,10 +2,17 @@ import {
+   type AuthService,
+   POLICIES,
++  SESSION_TTL_MS,
+   type Throttle,
+   accountKey,
+   clientIp,
+   ipKey,
++  sessionCookie,
+ } from "@docmind/auth";
+-import { SignUpRequest, type SignUpResponse } from "@docmind/contracts";
++import {
++  LoginRequest,
++  type MeResponse,
++  SignUpRequest,
++  type SignUpResponse,
++} from "@docmind/contracts";
+ import { readJson } from "../http/body";
+ import { type Handler, json, sendError } from "../http/respond";
+@@ -14,4 +21,6 @@ export interface AuthRoutesDeps {
+   service: AuthService;
+   throttle: Throttle;
++  /** Mark the session cookie Secure: set it for any deployment served over HTTPS. */
++  secureCookies: boolean;
+   /** Believe X-Forwarded-For (its last entry) for the client address. Only behind one proxy of yours. */
+   trustProxy: boolean;
+@@ -24,7 +33,7 @@ function tooMany(res: Parameters<Handler>[1], seconds: number): void {
+ }
+ 
+-/** Sign-up. (Login, logout and `GET /api/me` follow in the next PRs.) */
++/** Sign-up and login. (Logout and `GET /api/me` follow in the next PR.) */
+ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
+-  const { service, throttle, trustProxy } = deps;
++  const { service, throttle, secureCookies, trustProxy } = deps;
+ 
+   return {
+@@ -43,4 +52,24 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
+       json(res, 202, { status: "accepted" } satisfies SignUpResponse);
+     },
++
++    // Failures count against the client address and against the email (known or not); a success
++    // forgets the email's count. A lock is checked first, so a locked caller learns nothing.
++    "POST /api/auth/login": async (req, res) => {
++      const body = await readJson(req, res, LoginRequest);
++      if (!body) return;
++      const ip = ipKey("login", clientIp(req, trustProxy));
++      const account = accountKey("login", body.email);
++      const wait = await throttle.retryAfter([ip, account]);
++      if (wait > 0) return tooMany(res, wait);
++      const started = await service.logIn(body.email, body.password);
++      if (!started) {
++        await throttle.fail(ip, POLICIES.loginIp);
++        await throttle.fail(account, POLICIES.loginAccount);
++        return sendError(res, 401, "invalid_credentials", "email or password is incorrect");
++      }
++      await throttle.clear(account);
++      res.setHeader("set-cookie", sessionCookie(started.token, SESSION_TTL_MS, secureCookies));
++      json(res, 200, { ...started.identity, email: body.email } satisfies MeResponse);
++    },
+   };
+ }
+```
+
+- [ ] **Step 5: Run the tests, then the gate**
+
+```bash
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: `13 passed` (7 sign-up + 6 login).
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(server): throttled login route" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-login-route
+gh pr create --draft --base main --head feat/m1-login-route --title "feat(server): throttled login route" --body "$(cat <<'EOF'
+## Summary
+- POST /api/auth/login: 200 + HttpOnly session cookie; 401 identical for a wrong password and an unknown email. Locks per email (5 free failures, then exponential up to 15 min) and per address (20 free), checked before the password: a locked caller gets 429 + Retry-After, the right password does not help until the lock expires, and a locked unknown email answers byte-identically to a locked real one (tested). A success forgets the email's failures.
+- Not mounted yet (PR 6n).
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `106 lines, 2 files`, then the PR URL.
+
+---
+
+# PR 6m: logout and `GET /api/me`
+
+**Branch:** `feat/m1-auth-session-routes`  **Budget:** 2 files, 76 lines. Spec §9 item 6, part 13 of 14.
+
+### Task 29: the session routes
+
+**Files:**
+- Modify: `/Users/such/workspace/docmind/apps/server/app/auth/routes.ts`, `routes.test.ts`
+
+**Interfaces:**
+- Consumes: everything from PR 6l; `requireAuth` (PR 5d); `Authenticator`, `AuthStore`, `readSessionCookie`, `clearedSessionCookie` (`@docmind/auth`).
+- Produces: `AuthRoutesDeps` gains `authenticator: Authenticator` and `store: AuthStore`; `POST /api/auth/logout` (always 204 and a cleared cookie; ends only the calling session; safe to repeat) and `GET /api/me` (200 `MeResponse`; 401 without a live session).
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-auth-session-routes
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+```diff
+@@ -1,4 +1,4 @@
+ import type { AddressInfo } from "node:net";
+-import { AuthService } from "@docmind/auth";
++import { AuthService, PasswordAuthenticator } from "@docmind/auth";
+ import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
+ import { ErrorBody, MeResponse, SignUpResponse } from "@docmind/contracts";
+@@ -20,5 +20,12 @@ async function start(trustProxy = false) {
+   throttle.now = () => 1_000_000;
+   const server = createHttpServer(
+-    authRoutes({ service: new AuthService(store), throttle, secureCookies: false, trustProxy }),
++    authRoutes({
++      service: new AuthService(store),
++      authenticator: new PasswordAuthenticator(store),
++      store,
++      throttle,
++      secureCookies: false,
++      trustProxy,
++    }),
+   );
+   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+@@ -32,4 +39,5 @@ async function start(trustProxy = false) {
+   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+   return {
++    base,
+     store,
+     logIn: (email: string, password = PASSWORD) =>
+@@ -179,2 +187,39 @@ describe("login", () => {
+   });
+ });
++
++/** `name=value` of the Set-Cookie header, as a browser would send it back. */
++const cookieOf = (res: Response) => (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
++
++describe("session routes", () => {
++  const signedIn = async () => {
++    const api = await start();
++    await api.signUp("ada@example.com");
++    return { api, cookie: cookieOf(await api.logIn("ada@example.com")) };
++  };
++
++  it("answers /api/me for a live session, and 401 for none or a forged one", async () => {
++    const { api, cookie } = await signedIn();
++    const me = await fetch(`${api.base}/api/me`, { headers: { cookie } });
++    expect(MeResponse.parse(await me.json()).email).toBe("ada@example.com");
++    expect((await fetch(`${api.base}/api/me`)).status).toBe(401);
++    const forged = { cookie: `dm_session=${"A".repeat(43)}` };
++    expect((await fetch(`${api.base}/api/me`, { headers: forged })).status).toBe(401);
++  });
++
++  it("logs out: clears the cookie, ends only that session, and is safe to repeat", async () => {
++    const { api, cookie: one } = await signedIn();
++    const two = cookieOf(await api.logIn("ada@example.com"));
++    const logOut = (cookie: string) =>
++      fetch(`${api.base}/api/auth/logout`, {
++        method: "POST",
++        headers: { "content-type": "application/json", cookie },
++        body: "{}",
++      });
++    const out = await logOut(one);
++    expect(out.status).toBe(204);
++    expect(out.headers.get("set-cookie")).toMatch(/^dm_session=; .*Max-Age=0/);
++    expect((await fetch(`${api.base}/api/me`, { headers: { cookie: one } })).status).toBe(401);
++    expect((await fetch(`${api.base}/api/me`, { headers: { cookie: two } })).status).toBe(200);
++    expect((await logOut(one)).status).toBe(204);
++  });
++});
+```
+
+- [ ] **Step 3: Run them to see them fail**
+
+```bash
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: FAIL: `/api/me` and `/api/auth/logout` answer 404.
+
+- [ ] **Step 4: Implement**
+
+```diff
+@@ -1,10 +1,14 @@
+ import {
+   type AuthService,
++  type AuthStore,
++  type Authenticator,
+   POLICIES,
+   SESSION_TTL_MS,
+   type Throttle,
+   accountKey,
++  clearedSessionCookie,
+   clientIp,
+   ipKey,
++  readSessionCookie,
+   sessionCookie,
+ } from "@docmind/auth";
+@@ -16,8 +20,11 @@ import {
+ } from "@docmind/contracts";
+ import { readJson } from "../http/body";
++import { requireAuth } from "../http/requireAuth";
+ import { type Handler, json, sendError } from "../http/respond";
+ 
+ export interface AuthRoutesDeps {
+   service: AuthService;
++  authenticator: Authenticator;
++  store: AuthStore;
+   throttle: Throttle;
+   /** Mark the session cookie Secure: set it for any deployment served over HTTPS. */
+@@ -33,7 +40,7 @@ function tooMany(res: Parameters<Handler>[1], seconds: number): void {
+ }
+ 
+-/** Sign-up and login. (Logout and `GET /api/me` follow in the next PR.) */
++/** Sign-up, login, logout and `GET /api/me`. Every route gets its identity from the session. */
+ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
+-  const { service, throttle, secureCookies, trustProxy } = deps;
++  const { service, authenticator, store, throttle, secureCookies, trustProxy } = deps;
+ 
+   return {
+@@ -72,4 +79,20 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
+       json(res, 200, { ...started.identity, email: body.email } satisfies MeResponse);
+     },
++
++    // Always clears the cookie, even for a request with no live session: logging out twice is fine.
++    "POST /api/auth/logout": async (req, res) => {
++      const token = readSessionCookie(req.headers);
++      const identity = await authenticator.authenticate(req);
++      if (token && identity) await service.logOut(identity, token);
++      res.setHeader("set-cookie", clearedSessionCookie(secureCookies));
++      res.writeHead(204);
++      res.end();
++    },
++
++    "GET /api/me": requireAuth(authenticator, async (_req, res, identity) => {
++      const email = await store.findEmail(identity);
++      if (!email) return sendError(res, 401, "unauthorized", "authentication required");
++      json(res, 200, { ...identity, email } satisfies MeResponse);
++    }),
+   };
+ }
+```
+
+- [ ] **Step 5: Run the tests, then the gate**
+
+```bash
+pnpm --filter @docmind/server exec vitest run app/auth/routes.test.ts
+```
+
+Expected: `15 passed`.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(server): logout and GET /api/me routes" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-auth-session-routes
+gh pr create --draft --base main --head feat/m1-auth-session-routes --title "feat(server): logout and GET /api/me routes" --body "$(cat <<'EOF'
+## Summary
+- POST /api/auth/logout: always 204 and a cleared cookie, ends only the calling session, safe to repeat. GET /api/me: the caller's MeResponse from the session, 401 otherwise (via requireAuth).
+- Not mounted yet (PR 6n).
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `76 lines, 2 files`, then the PR URL.
+
+---
+
+# PR 6n: the server comes up authenticated, throttled, as an unprivileged role
+
+**Branch:** `feat/m1-auth-wiring`  **Budget:** 4 files, 146 lines. Spec §9 item 6, part 14 of 14. **Behaviour change:** `pnpm start` now needs `DATABASE_URL`.
+
+### Task 30: startup role assertion, the pool, and `main.ts`
 
 **Files:**
 - Create: `/Users/such/workspace/docmind/apps/server/app/db/pool.ts`, `pool.test.ts`
 - Modify: `/Users/such/workspace/docmind/apps/server/app/main.ts`, `/Users/such/workspace/docmind/.env.example`
 
 **Interfaces:**
-- Consumes: `PgAuthStore` (PR 6f); `authRoutes` (PR 6h); `AuthService`, `PasswordAuthenticator` (`@docmind/auth`); `shutdown` (PR 5d); `app` from `./config`.
-- Produces: `assertUnprivilegedRole(pool: Pool): Promise<void>` (throws if `current_user` is a superuser or has `BYPASSRLS`); `createAppPool(connectionString: string): Promise<Pool>` (asserts, ends the pool and rethrows on failure; logs idle-connection errors instead of crashing). `main.ts` reads `DATABASE_URL` (the `docmind_app` URL; required), `DOCMIND_COOKIE_SECURE` (`"true"` marks the cookie Secure), `PORT`, `HOST`; mounts `authRoutes`; purges expired sessions at start and hourly; on SIGINT/SIGTERM drains the server, then closes the app, then the pool.
+- Consumes: `PgAuthStore` (PR 6f); `PgThrottle` (PR 6j); `authRoutes` (PR 6m); `AuthService`, `PasswordAuthenticator` (`@docmind/auth`); `shutdown` (PR 5d); `app` from `./config`.
+- Produces: `assertUnprivilegedRole(pool: Pool): Promise<void>` (throws if `current_user` is a superuser or has `BYPASSRLS`); `createAppPool(connectionString: string): Promise<Pool>` (asserts, ends the pool and rethrows on failure; logs idle-connection errors instead of crashing). `main.ts` reads `DATABASE_URL` (the `docmind_app` URL; required), `DOCMIND_COOKIE_SECURE` (`"true"` marks the cookie Secure), `DOCMIND_TRUST_PROXY` (`"true"` believes the last `X-Forwarded-For` entry; default off), `PORT`, `HOST`; mounts `authRoutes`; purges expired sessions and idle throttle counters at start and hourly; on SIGINT/SIGTERM drains the server, then closes the app, then the pool.
 
 - [ ] **Step 1: Create the branch**
 
@@ -3041,6 +4276,7 @@ Replace `apps/server/app/main.ts`:
 ```ts
 import { AuthService, PasswordAuthenticator } from "@docmind/auth";
 import { PgAuthStore } from "./auth/pgAuthStore";
+import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { app } from "./config";
 import { createAppPool } from "./db/pool";
@@ -3055,17 +4291,23 @@ async function main(): Promise<void> {
   const pool = await createAppPool(databaseUrl);
 
   const store = new PgAuthStore(pool);
+  const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
   const server = createHttpServer(
     authRoutes({
       service: new AuthService(store),
       authenticator,
       store,
+      throttle,
       secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
+      trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
     }),
   );
 
-  const sweep = () => store.purgeExpiredSessions().catch((err) => console.error(err));
+  const sweep = () =>
+    Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
+      console.error(err),
+    );
   void sweep();
   setInterval(sweep, HOUR_MS).unref();
 
@@ -3098,14 +4340,18 @@ main().catch((err) => {
 });
 ```
 
-Document the new variable in `.env.example`:
+Document the new variables in `.env.example`:
 
 ```diff
-@@ -12,4 +12,7 @@ DOCMIND_APP_DB_PASSWORD=change-me-locally
+@@ -12,4 +12,11 @@ DOCMIND_APP_DB_PASSWORD=change-me-locally
  DATABASE_URL=postgres://docmind_app:change-me-locally@127.0.0.1:5432/docmind
  
 +# Set to true when the server is reached over HTTPS (marks the session cookie Secure).
 +DOCMIND_COOKIE_SECURE=false
++
++# Believe X-Forwarded-For for the client address (login/sign-up throttling). Set to true only when the
++# server sits behind exactly one reverse proxy of yours; otherwise any client could fake its address.
++DOCMIND_TRUST_PROXY=false
 +
  # Enables the Postgres integration tests (they skip when unset). The role must be able to
  # CREATE DATABASE: each suite makes, and drops, a database of its own.
@@ -3135,20 +4381,24 @@ export DOCMIND_APP_DB_PASSWORD=change-me-locally
 pnpm --filter @docmind/server db:migrate
 ```
 
-Expected: `applied: ...` listing `0004_auth_session_indexes.sql` and `0005_auth_functions.sql` (all of 0001-0005 on a fresh database).
+Expected: `applied: ...` listing `0004_auth_session_indexes.sql`, `0005_auth_functions.sql` and `0006_auth_throttle.sql` (all of 0001-0006 on a fresh database).
 
 ```bash
 DATABASE_URL=postgres://docmind_app:change-me-locally@127.0.0.1:5432/docmind PORT=3917 pnpm --filter @docmind/server start &
 sleep 4
-curl -s -i -c /tmp/dm-jar -X POST localhost:3917/api/auth/sign-up -H 'content-type: application/json' \
-  -d '{"email":"Smoke@Example.com","password":"correct horse battery"}' | head -3
+curl -s -i -X POST localhost:3917/api/auth/sign-up -H 'content-type: application/json' \
+  -d '{"email":"Smoke@Example.com","password":"correct horse battery"}' | head -1
+curl -s -c /tmp/dm-jar -X POST localhost:3917/api/auth/login -H 'content-type: application/json' \
+  -d '{"email":"smoke@example.com","password":"correct horse battery"}'
 curl -s -b /tmp/dm-jar localhost:3917/api/me
 curl -s -o /dev/null -w '%{http_code}\n' -b /tmp/dm-jar -X POST localhost:3917/api/auth/logout -H 'content-type: application/json' -d '{}'
 curl -s -b /tmp/dm-jar localhost:3917/api/me
+for i in 1 2 3 4 5 6 7; do curl -s -o /dev/null -w '%{http_code} ' -X POST localhost:3917/api/auth/login \
+  -H 'content-type: application/json' -d '{"email":"smoke@example.com","password":"wrong password here"}'; done; echo
 kill %1
 ```
 
-Expected, in order: `HTTP/1.1 201 Created` and a `set-cookie: dm_session=...; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000` header; then `{"userId":"...","tenantId":"...","email":"smoke@example.com"}`; then `204`; then `{"error":{"code":"unauthorized","message":"authentication required"}}`. (`sleep 4` here is a manual smoke step, not a test.) Starting it with the owner's URL as `DATABASE_URL` must instead exit with `database role "..." is a superuser or has BYPASSRLS`.
+Expected, in order: `HTTP/1.1 202 Accepted`; the `MeResponse` JSON for the login; the same JSON from `/api/me`; `204`; the `401` error body; then `401 401 401 401 401 401 429` (the sixth wrong password locks the email for 2 seconds, so the seventh is throttled; the earlier successful login had reset the count). (`sleep 4` is a manual smoke step, not a test.) Starting it with the owner's URL as `DATABASE_URL` must instead exit with `database role "..." is a superuser or has BYPASSRLS`.
 
 - [ ] **Step 7: Commit, check the size, open the draft PR**
 
@@ -3160,29 +4410,29 @@ git push -u origin feat/m1-auth-wiring
 gh pr create --draft --base main --head feat/m1-auth-wiring --title "feat(server): serve the auth routes as an unprivileged database role" --body "$(cat <<'EOF'
 ## Summary
 - Startup assertion (M0 review carry-forward): createAppPool refuses a DATABASE_URL whose role is a superuser or has BYPASSRLS, so a server pointed at the owner's URL does not come up. Tested against the owner role and against docmind_app granted BYPASSRLS.
-- main.ts now needs DATABASE_URL (docmind_app), mounts the auth routes, purges expired sessions at start and hourly, and closes server, then app, then pool on SIGINT/SIGTERM. /healthz still works as before.
-- Smoke-tested by hand: sign-up -> /api/me -> logout -> /api/me 401 against a real database.
+- main.ts now needs DATABASE_URL (docmind_app), mounts the auth routes with the Postgres throttle (DOCMIND_TRUST_PROXY, off by default, controls whether X-Forwarded-For is believed), purges expired sessions and idle throttle counters at start and hourly, and closes server, app, pool in order. /healthz still works as before.
+- Smoke-tested by hand: sign-up (202), login, /api/me, logout, and the 429 after repeated wrong passwords, against a real database.
 
 ## Not counted toward the 200-line / 10-file limit
 None.
 
 ## Test plan
 - [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
-- [x] manual smoke test (commands in the plan, Task 25 step 6)
+- [x] manual smoke test (commands in the plan, Task 30 step 6)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
 
-Expected: about `135 lines, 4 files`, then the PR URL.
+Expected: about `146 lines, 4 files`, then the PR URL.
 
 ---
 # PR 7a: `packages/keystore-pg` primitives (KEK and key wrapping)
 
-**Branch:** `feat/m1-keystore-primitives`  **Budget:** 8 files, 138 lines (+ `pnpm-lock.yaml`). Spec §9 item 7, part 1 of 3.
+**Branch:** `feat/m1-keystore-primitives`  **Budget:** 8 files, 138 lines (+ `pnpm-lock.yaml`). Spec §9 item 7, part 1 of 7.
 
-### Task 26: load the master key; wrap and unwrap data keys
+### Task 31: load the master key; wrap and unwrap data keys
 
 **Files:**
 - Create: `/Users/such/workspace/docmind/packages/keystore-pg/package.json`, `tsconfig.json`, `tsconfig.test.json`
@@ -3437,12 +4687,12 @@ Expected: about `138 lines, 8 files`, then the PR URL.
 
 # PR 7b: `data_keys` and `PostgresKeyStore`
 
-**Branch:** `feat/m1-keystore-pg`  **Budget:** 8 files, 196 lines (+ `pnpm-lock.yaml`; this one is close to the limit, so re-measure and trim comments rather than splitting further). Spec §9 item 7, part 2 of 3.
+**Branch:** `feat/m1-keystore-pg`  **Budget:** 8 files, 196 lines (+ `pnpm-lock.yaml`; this one is close to the limit, so re-measure and trim comments rather than splitting further). Spec §9 item 7, part 2 of 7.
 
-### Task 27: a Postgres `KeyStore` that passes Loom's contract
+### Task 32: a Postgres `KeyStore` that passes Loom's contract
 
 **Files:**
-- Create: `/Users/such/workspace/docmind/infra/migrations/0006_data_keys.sql`, `packages/keystore-pg/src/PostgresKeyStore.ts`, `apps/server/app/keys/postgresKeyStore.test.ts`
+- Create: `/Users/such/workspace/docmind/infra/migrations/0007_data_keys.sql`, `packages/keystore-pg/src/PostgresKeyStore.ts`, `apps/server/app/keys/postgresKeyStore.test.ts`
 - Modify: `/Users/such/workspace/docmind/packages/keystore-pg/src/index.ts`, `packages/keystore-pg/package.json`, `package.json` (root), `apps/server/package.json`, `apps/server/vitest.config.ts`
 
 **Interfaces:**
@@ -3600,7 +4850,7 @@ Expected: FAIL, `PostgresKeyStore is not a constructor` (the package does not ex
 
 - [ ] **Step 5: Write the migration**
 
-`infra/migrations/0006_data_keys.sql`:
+`infra/migrations/0007_data_keys.sql`:
 
 ```sql
 -- Per-subject data keys for crypto-shredding (spec 4.4). A subject is a user. The key is stored
@@ -3688,7 +4938,7 @@ interface KeyRow {
 
 /**
  * Loom's KeyStore on Postgres: one random data key per subject (a user), stored wrapped by a KEK and
- * reached only through the key_* SQL functions (migration 0006). `destroy` leaves a tombstone, and
+ * reached only through the key_* SQL functions (migration 0007). `destroy` leaves a tombstone, and
  * the database never mints a key for a tombstoned subject.
  */
 export class PostgresKeyStore implements KeyStore {
@@ -3780,7 +5030,7 @@ git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} EN
 git push -u origin feat/m1-keystore-pg
 gh pr create --draft --base main --head feat/m1-keystore-pg --title "feat(keystore-pg): PostgresKeyStore passing Loom's KeyStore contract" --body "$(cat <<'EOF'
 ## Summary
-- Migration 0006 data_keys + key_get/key_put/key_destroy/key_was_destroyed (SECURITY DEFINER, pinned search_path, explicit grants). docmind_app has no privilege on the table, only on the functions. destroy wipes the wrapped key and leaves a tombstone, because Loom's contract forbids minting a new key for a destroyed subject; this differs from spec §4.4's "deletes the row" (plan deviation 4).
+- Migration 0007 data_keys + key_get/key_put/key_destroy/key_was_destroyed (SECURITY DEFINER, pinned search_path, explicit grants). docmind_app has no privilege on the table, only on the functions. destroy wipes the wrapped key and leaves a tombstone, because Loom's contract forbids minting a new key for a destroyed subject; this differs from spec §4.4's "deletes the row" (plan deviation 4).
 - PostgresKeyStore (durable) implements @loom/plugin-crypto's KeyStore incl. wasDestroyed; the DEK is AES-GCM-wrapped by the KEK (PR 7a); several KEKs can unwrap (rotation), the first wraps.
 - Passes runKeyStoreConformance from @loom/conformance (8 tests). The conformance test lives in apps/server because the DB test harness does.
 - Root pnpm.overrides links @loom/conformance and @loom/plugin-crypto; the server's vitest config inlines @loom/conformance (ESM with extensionless imports).
@@ -3802,9 +5052,9 @@ Expected: about `196 lines, 8 files`, then the PR URL.
 
 # PR 7c: key store security tests
 
-**Branch:** `feat/m1-keystore-pg-security`  **Budget:** 1 file, 76 lines. Spec §9 item 7, part 3 of 3. Tests only.
+**Branch:** `feat/m1-keystore-pg-security`  **Budget:** 1 file, 76 lines. Spec §9 item 7, part 3 of 7. Tests only.
 
-### Task 28: the properties crypto-shredding relies on
+### Task 33: the properties crypto-shredding relies on
 
 **Files:**
 - Modify: `/Users/such/workspace/docmind/apps/server/app/keys/postgresKeyStore.test.ts`
@@ -3984,14 +5234,862 @@ Expected: about `76 lines, 1 file`, then the PR URL.
 
 ---
 
+# PR 7d: the previous KEK
+
+**Branch:** `feat/m1-kek-previous`  **Budget:** 3 files, 60 lines. Spec §9 item 7 (key rotation requested by the owner), part 4 of 7.
+
+### Task 34: run with a current KEK and, while rotating, a previous one
+
+**Files:**
+- Modify: `/Users/such/workspace/docmind/packages/keystore-pg/src/kek.ts`, `kek.test.ts`, `index.ts`
+
+**Interfaces:**
+- Consumes: `Kek`, `loadKek` (PR 7a); `PostgresKeyStore(pool, keks)` already accepts several KEKs (PR 7b).
+- Produces: `loadKek(env?, name = "DOCMIND_KEK", defaultId?)` generalised to any variable name (`<name>`, `<name>_FILE`, `<name>_ID`; the id defaults to `"kek-1"` only for `DOCMIND_KEK`); `loadKeks(env?): readonly [Kek, ...Kek[]]`: the current KEK first (it wraps new keys), then, if `DOCMIND_KEK_PREVIOUS` (or `_FILE`) is set, the previous one, whose id is required and must differ.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-kek-previous
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+```diff
+@@ -4,5 +4,5 @@ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { describe, expect, it } from "vitest";
+-import { loadKek } from "./kek";
++import { loadKek, loadKeks } from "./kek";
+ 
+ const b64 = randomBytes(32).toString("base64");
+@@ -30,3 +30,24 @@ describe("loadKek", () => {
+     expect(() => loadKek({ DOCMIND_KEK: randomBytes(16).toString("base64") })).toThrow(/32 bytes/);
+   });
++
++  it("loadKeks puts the current KEK first and adds the previous one while rotating", () => {
++    const other = randomBytes(32).toString("base64");
++    expect(loadKeks({ DOCMIND_KEK: b64 }).map((k) => k.id)).toEqual(["kek-1"]);
++    const both = loadKeks({
++      DOCMIND_KEK: b64,
++      DOCMIND_KEK_ID: "kek-2",
++      DOCMIND_KEK_PREVIOUS: other,
++      DOCMIND_KEK_PREVIOUS_ID: "kek-1",
++    });
++    expect(both.map((k) => k.id)).toEqual(["kek-2", "kek-1"]);
++    expect(both[1]?.key.toString("base64")).toBe(other);
++  });
++
++  it("loadKeks refuses a previous KEK without an id, or with the current one's id", () => {
++    const other = randomBytes(32).toString("base64");
++    expect(() => loadKeks({ DOCMIND_KEK: b64, DOCMIND_KEK_PREVIOUS: other })).toThrow(/_ID/);
++    expect(() =>
++      loadKeks({ DOCMIND_KEK: b64, DOCMIND_KEK_PREVIOUS: other, DOCMIND_KEK_PREVIOUS_ID: "kek-1" }),
++    ).toThrow(/different id/);
++  });
+ });
+```
+
+- [ ] **Step 3: Run them to see them fail**
+
+```bash
+pnpm --filter @docmind/keystore-pg test
+```
+
+Expected: FAIL, `loadKeks is not a function` (and a type error from `typecheck:tests`).
+
+- [ ] **Step 4: Implement**
+
+`packages/keystore-pg/src/kek.ts`:
+
+```ts
+import { readFileSync } from "node:fs";
+
+/** A master key-encryption key. Data keys are stored wrapped by one; the id says which. */
+export interface Kek {
+  id: string;
+  key: Buffer;
+}
+
+/**
+ * One KEK from the environment: `<name>` (base64) or `<name>_FILE` (a file holding the base64),
+ * named by `<name>_ID`. A cloud KMS replaces this later, behind the same Kek.
+ */
+export function loadKek(
+  env: NodeJS.ProcessEnv = process.env,
+  name = "DOCMIND_KEK",
+  defaultId = name === "DOCMIND_KEK" ? "kek-1" : undefined,
+): Kek {
+  const file = env[`${name}_FILE`];
+  const b64 = file ? readFileSync(file, "utf8").trim() : env[name];
+  if (!b64) throw new Error(`set ${name} (base64, 32 bytes) or ${name}_FILE`);
+  const key = Buffer.from(b64, "base64");
+  if (key.length !== 32) throw new Error(`${name} must be 32 bytes, got ${key.length}`);
+  const id = env[`${name}_ID`] ?? defaultId;
+  if (!id) throw new Error(`set ${name}_ID, the name that tells this key from the others`);
+  return { id, key };
+}
+
+/**
+ * The KEKs this server runs with: the current one (`DOCMIND_KEK`, id default "kek-1") first, which
+ * wraps new keys, and while a rotation is under way the one being retired (`DOCMIND_KEK_PREVIOUS`,
+ * its id required), which can still open keys not yet re-wrapped.
+ */
+export function loadKeks(env: NodeJS.ProcessEnv = process.env): readonly [Kek, ...Kek[]] {
+  const current = loadKek(env);
+  if (!env.DOCMIND_KEK_PREVIOUS && !env.DOCMIND_KEK_PREVIOUS_FILE) return [current];
+  const previous = loadKek(env, "DOCMIND_KEK_PREVIOUS");
+  if (previous.id === current.id) throw new Error("the previous KEK must have a different id");
+  return [current, previous];
+}
+```
+
+`packages/keystore-pg/src/index.ts`:
+
+```ts
+export { type Kek, loadKek, loadKeks } from "./kek";
+export { PostgresKeyStore } from "./PostgresKeyStore";
+```
+
+- [ ] **Step 5: Run the tests, then the gate**
+
+```bash
+pnpm --filter @docmind/keystore-pg test
+```
+
+Expected: `kek.test.ts` 5 passed.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(keystore-pg): load a previous KEK alongside the current one" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-kek-previous
+gh pr create --draft --base main --head feat/m1-kek-previous --title "feat(keystore-pg): load a previous KEK alongside the current one" --body "$(cat <<'EOF'
+## Summary
+- loadKeks(): DOCMIND_KEK (current, wraps new keys) plus, during a rotation, DOCMIND_KEK_PREVIOUS (+ _ID, required) which can still open keys not yet re-wrapped. Step 2 of the rotation runbook (PR 7g).
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `60 lines, 3 files`, then the PR URL.
+
+---
+
+# PR 7e: the KEK rotation core
+
+**Branch:** `feat/m1-kek-rotate`  **Budget:** 3 files, 187 lines. Spec §9 item 7 (owner request), part 5 of 7.
+
+### Task 35: `rotateKek` and `verifyKeys`
+
+**Files:**
+- Create: `/Users/such/workspace/docmind/packages/keystore-pg/src/rotate.ts`, `apps/server/app/keys/rotateKek.test.ts`
+- Modify: `/Users/such/workspace/docmind/packages/keystore-pg/src/index.ts`
+
+**Interfaces:**
+- Consumes: `Kek`, `wrapKey`, `unwrapKey` (PR 7a); `PostgresKeyStore` (PR 7b) and the server test helpers for the tests (they live in `apps/server`, where the database harness is).
+- Produces (from `@docmind/keystore-pg`): `interface RotateResult { rotated: number; failed: string[]; remaining: Record<string, number> }`; `rotateKek(pool: Pool, keks: readonly [Kek, ...Kek[]], batchSize = 100): Promise<RotateResult>`; `interface VerifyResult { verified: number; wrongKek: number; failed: string[] }`; `verifyKeys(pool: Pool, kek: Kek): Promise<VerifyResult>`. `pool` must be the **owner** role's (the tool reads and updates `data_keys`, which `docmind_app` cannot).
+
+**Design.**
+- *What it does:* for every live row wrapped by a KEK in the list other than `keks[0]`, unwrap the data key with the KEK the row names, wrap the same bytes with `keks[0]`, and update the row. Data keys do not change, so nothing encrypted under them has to be touched.
+- *Idempotent and resumable:* work is done in batches of `batchSize`; each batch is one transaction (`SELECT ... FOR UPDATE SKIP LOCKED` of rows not yet on the target KEK, then an `UPDATE` per row). A crash rolls the batch back whole; a re-run selects only rows still on an old KEK, so it continues where it stopped, and a run when everything is done selects nothing and changes nothing.
+- *Tombstones:* rows with `wrapped_dek IS NULL` (erased users) are never selected, so their state is untouched.
+- *No plaintext keys leave the process:* a data key exists in a local variable between unwrap and wrap; the result carries counts and subject ids only, and nothing is logged.
+- *Bad rows do not block the rest:* a row that will not open under the KEK it names goes into `failed` and is left exactly as it was; rows under a KEK id not provided are left alone and counted in `remaining`. The caller (the command, PR 7g) exits non-zero for either.
+- *Trade-off:* the tool takes row locks per batch (short); it is meant to be run by one operator, so `SKIP LOCKED` can leave a row to the next run if a concurrent writer holds it, and `remaining` says so.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-kek-rotate
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+Five users with keys under the old KEK, one of them erased; rotate; every key opens with the new KEK alone and is the same data key; the tombstone is untouched; a second run changes nothing. `apps/server/app/keys/rotateKek.test.ts`:
+
+```ts
+import { randomBytes, randomUUID } from "node:crypto";
+import { PostgresKeyStore, rotateKek, verifyKeys } from "@docmind/keystore-pg";
+import { Pool } from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { migrate, setAppRolePassword } from "../db/migrate";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+
+const oldKek = { id: "kek-1", key: randomBytes(32) };
+const newKek = { id: "kek-2", key: randomBytes(32) };
+
+describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+  let deks: Map<string, Buffer>;
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    app = new Pool({ connectionString: db.appUrl });
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  /** Five users with keys under the old KEK, one of them erased. */
+  beforeEach(async () => {
+    await db.owner.query("TRUNCATE data_keys");
+    const store = new PostgresKeyStore(app, [oldKek]);
+    deks = new Map();
+    for (let i = 0; i < 5; i++) {
+      const subject = randomUUID();
+      deks.set(subject, await store.getOrCreate(subject));
+    }
+    await store.destroy([...deks.keys()][4] as string);
+  });
+
+  const rows = async () =>
+    (await db.owner.query("SELECT * FROM data_keys ORDER BY subject_id")).rows;
+
+  it("moves every live key to the new KEK without changing any data key", async () => {
+    const result = await rotateKek(db.owner, [newKek, oldKek], 2);
+    expect(result).toEqual({ rotated: 4, failed: [], remaining: {} });
+
+    const onlyNew = new PostgresKeyStore(app, [newKek]);
+    for (const [subject, dek] of deks) {
+      const got = await onlyNew.get(subject);
+      if (await onlyNew.wasDestroyed(subject)) expect(got).toBeNull();
+      else expect(got?.equals(dek)).toBe(true);
+    }
+    expect(await verifyKeys(db.owner, newKek)).toEqual({ verified: 4, wrongKek: 0, failed: [] });
+  });
+
+  it("leaves a tombstone exactly as it was", async () => {
+    const before = (await rows()).filter((r) => r.destroyed_at);
+    await rotateKek(db.owner, [newKek, oldKek]);
+    expect((await rows()).filter((r) => r.destroyed_at)).toEqual(before);
+    expect(before).toHaveLength(1);
+  });
+
+  it("is a no-op when run again", async () => {
+    await rotateKek(db.owner, [newKek, oldKek]);
+    const settled = await rows();
+    expect(await rotateKek(db.owner, [newKek, oldKek])).toEqual({
+      rotated: 0,
+      failed: [],
+      remaining: {},
+    });
+    expect(await rows()).toEqual(settled);
+  });
+});
+```
+
+- [ ] **Step 3: Run it to see it fail**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build
+pnpm --filter @docmind/server exec vitest run app/keys/rotateKek.test.ts
+```
+
+Expected: FAIL, `rotateKek is not a function` (not exported yet).
+
+- [ ] **Step 4: Implement**
+
+`packages/keystore-pg/src/rotate.ts`:
+
+```ts
+import type { Pool } from "pg";
+import type { Kek } from "./kek";
+import { unwrapKey, wrapKey } from "./wrap";
+
+export interface RotateResult {
+  /** Keys re-wrapped by this run. */
+  rotated: number;
+  /** Subjects whose wrapped key would not open under the KEK it names; left exactly as they were. */
+  failed: string[];
+  /** Live keys still wrapped by some other KEK id afterwards, by id and count (an id nobody gave us, or a failure). */
+  remaining: Record<string, number>;
+}
+
+/**
+ * Re-wraps every live data key from the other KEKs to `keks[0]`. It needs the table itself, so it
+ * connects as the migration (owner) role, not as docmind_app.
+ *
+ * - Safe to stop and re-run: each batch is one transaction that moves rows from an old KEK to the new
+ *   one, and a row already on the new KEK is never selected, so a second run does nothing.
+ * - Tombstones (destroyed subjects, no key material) are never selected or changed.
+ * - A data key exists in memory only between unwrap and wrap, and nothing here prints or returns one.
+ * - A row that will not open is reported in `failed`, skipped, and left untouched.
+ */
+export async function rotateKek(
+  pool: Pool,
+  keks: readonly [Kek, ...Kek[]],
+  batchSize = 100,
+): Promise<RotateResult> {
+  const [target] = keks;
+  const byId = new Map(keks.map((k) => [k.id, k]));
+  const failed = new Set<string>();
+  let rotated = 0;
+
+  for (;;) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query<{
+        subject_id: string;
+        wrapped_dek: Buffer;
+        kek_id: string;
+      }>(
+        `SELECT subject_id, wrapped_dek, kek_id FROM data_keys
+          WHERE wrapped_dek IS NOT NULL AND kek_id <> $1 AND kek_id = ANY ($2::text[])
+            AND subject_id <> ALL ($3::text[])
+          ORDER BY subject_id LIMIT $4 FOR UPDATE SKIP LOCKED`,
+        [target.id, [...byId.keys()], [...failed], batchSize],
+      );
+      for (const row of rows) {
+        let rewrapped: Buffer;
+        try {
+          const dek = unwrapKey((byId.get(row.kek_id) as Kek).key, row.subject_id, row.wrapped_dek);
+          rewrapped = wrapKey(target.key, row.subject_id, dek);
+        } catch {
+          failed.add(row.subject_id); // will not open under the KEK it names: report it, change nothing
+          continue;
+        }
+        await client.query(
+          "UPDATE data_keys SET wrapped_dek = $2, kek_id = $3 WHERE subject_id = $1",
+          [row.subject_id, rewrapped, target.id],
+        );
+        rotated++;
+      }
+      await client.query("COMMIT");
+      if (rows.length === 0) break;
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  const { rows } = await pool.query<{ kek_id: string; n: string }>(
+    `SELECT kek_id, count(*) AS n FROM data_keys
+      WHERE wrapped_dek IS NOT NULL AND kek_id <> $1 GROUP BY kek_id`,
+    [target.id],
+  );
+  return {
+    rotated,
+    failed: [...failed].sort(),
+    remaining: Object.fromEntries(rows.map((r) => [r.kek_id, Number(r.n)])),
+  };
+}
+
+export interface VerifyResult {
+  /** Live keys that open with `kek` alone. */
+  verified: number;
+  /** Live keys wrapped under a different KEK id. */
+  wrongKek: number;
+  /** Live keys that name `kek` but do not open. */
+  failed: string[];
+}
+
+/** Checks, with only `kek`, that every live key opens: what must hold before the old KEK is retired. */
+export async function verifyKeys(pool: Pool, kek: Kek): Promise<VerifyResult> {
+  const { rows } = await pool.query<{ subject_id: string; wrapped_dek: Buffer; kek_id: string }>(
+    "SELECT subject_id, wrapped_dek, kek_id FROM data_keys WHERE wrapped_dek IS NOT NULL ORDER BY subject_id",
+  );
+  const result: VerifyResult = { verified: 0, wrongKek: 0, failed: [] };
+  for (const row of rows) {
+    if (row.kek_id !== kek.id) result.wrongKek++;
+    else {
+      try {
+        unwrapKey(kek.key, row.subject_id, row.wrapped_dek);
+        result.verified++;
+      } catch {
+        result.failed.push(row.subject_id);
+      }
+    }
+  }
+  return result;
+}
+```
+
+`packages/keystore-pg/src/index.ts`:
+
+```ts
+export { type Kek, loadKek, loadKeks } from "./kek";
+export { PostgresKeyStore } from "./PostgresKeyStore";
+export { type RotateResult, type VerifyResult, rotateKek, verifyKeys } from "./rotate";
+```
+
+- [ ] **Step 5: Run the test, then the gate**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build
+pnpm --filter @docmind/server exec vitest run app/keys/rotateKek.test.ts
+```
+
+Expected: `3 passed`.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(keystore-pg): rotateKek re-wraps every data key to the current KEK" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-kek-rotate
+gh pr create --draft --base main --head feat/m1-kek-rotate --title "feat(keystore-pg): rotateKek re-wraps every data key to the current KEK" --body "$(cat <<'EOF'
+## Summary
+- rotateKek(ownerPool, [newKek, oldKek]): re-wraps every live data_keys row from the old KEK to the new one in atomic batches (FOR UPDATE SKIP LOCKED); idempotent and resumable (a re-run selects only rows still on an old KEK); tombstones are never selected; data keys are unchanged and never leave the function. verifyKeys(pool, kek) proves every live key opens with that KEK alone.
+- Tests on a real database: rotate, then every key unwraps with only the new KEK and equals the original; the tombstone row is byte-identical; a second run is a no-op.
+- Crash and bad-row tests follow in PR 7f; the command and runbook in PR 7g.
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `187 lines, 3 files`, then the PR URL.
+
+---
+
+# PR 7f: rotation failure-mode tests
+
+**Branch:** `feat/m1-kek-rotate-failures`  **Budget:** 1 file, 48 lines. Spec §9 item 7 (owner request), part 6 of 7. Tests only.
+
+### Task 36: crash recovery, corrupt rows, unknown KEKs
+
+**Files:**
+- Modify: `/Users/such/workspace/docmind/apps/server/app/keys/rotateKek.test.ts`
+
+**Interfaces:**
+- Consumes: `rotateKek`, `verifyKeys` (PR 7e).
+- Produces: nothing new; two tests: a run that crashes in the middle of its second batch leaves exactly the first batch committed (the failing `UPDATE` is injected through a pool wrapper), and a re-run finishes the rest; a row that does not open and a row under an unknown KEK are reported and left byte-identical while the others are rotated.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-kek-rotate-failures
+```
+
+- [ ] **Step 2: Add the tests** (they pin behaviour PR 7e already has; a failure here is a bug in `rotateKek`)
+
+```diff
+@@ -71,3 +71,51 @@ describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
+     expect(await rows()).toEqual(settled);
+   });
++
++  it("finishes after a crash: batches are atomic and a re-run takes the rest", async () => {
++    let updates = 0;
++    const crashing = {
++      query: db.owner.query.bind(db.owner),
++      connect: async () => {
++        const client = await db.owner.connect();
++        const run = client.query.bind(client) as (...args: unknown[]) => unknown;
++        (client as { query: unknown }).query = (...args: unknown[]) => {
++          if (
++            typeof args[0] === "string" &&
++            args[0].startsWith("UPDATE data_keys") &&
++            ++updates === 3
++          ) {
++            throw new Error("crash");
++          }
++          return run(...args);
++        };
++        return client;
++      },
++    } as unknown as Pool;
++
++    await expect(rotateKek(crashing, [newKek, oldKek], 2)).rejects.toThrow("crash");
++    const half = await db.owner.query(
++      "SELECT count(*)::int AS n FROM data_keys WHERE kek_id = 'kek-2'",
++    );
++    expect(half.rows[0].n).toBe(2); // the first batch committed, the second rolled back whole
++
++    const rest = await rotateKek(db.owner, [newKek, oldKek], 2);
++    expect(rest).toEqual({ rotated: 2, failed: [], remaining: {} });
++    expect(await verifyKeys(db.owner, newKek)).toMatchObject({ verified: 4, wrongKek: 0 });
++  });
++
++  it("reports a key that will not open, and keys wrapped by an unknown KEK, and changes neither", async () => {
++    const [bad, stranger] = [...deks.keys()];
++    await db.owner.query("UPDATE data_keys SET wrapped_dek = $2 WHERE subject_id = $1", [
++      bad,
++      randomBytes(60),
++    ]);
++    await db.owner.query("UPDATE data_keys SET kek_id = 'kek-0' WHERE subject_id = $1", [stranger]);
++    const before = (await rows()).filter((r) => r.subject_id === bad || r.subject_id === stranger);
++
++    const result = await rotateKek(db.owner, [newKek, oldKek]);
++    expect(result).toEqual({ rotated: 2, failed: [bad], remaining: { "kek-1": 1, "kek-0": 1 } });
++    expect((await rows()).filter((r) => r.subject_id === bad || r.subject_id === stranger)).toEqual(
++      before,
++    );
++  });
+ });
+```
+
+- [ ] **Step 3: Run them, then the gate**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm --filter @docmind/server exec vitest run app/keys/rotateKek.test.ts
+```
+
+Expected: `5 passed`.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 4: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "test(keystore-pg): rotation survives a crash and reports bad rows" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-kek-rotate-failures
+gh pr create --draft --base main --head feat/m1-kek-rotate-failures --title "test(keystore-pg): rotation survives a crash and reports bad rows" --body "$(cat <<'EOF'
+## Summary
+- Crash test: an UPDATE injected to fail in the second batch rolls that batch back whole (2 of 4 keys rotated), and a re-run rotates the remaining 2.
+- A key that does not open, and a key under a KEK nobody provided, are reported (failed / remaining) and left byte-identical; the other keys still rotate.
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `48 lines, 1 file`, then the PR URL.
+
+---
+
+# PR 7g: the rotation command and its runbook
+
+**Branch:** `feat/m1-kek-rotate-cli`  **Budget:** 5 files, 148 lines. Spec §9 item 7 (owner request), part 7 of 7. The spec's runbook is M7 PR 48; this is its KEK chapter, delivered with the tool.
+
+### Task 37: `pnpm --filter @docmind/server keys:rotate` and `docs/operations/rotate-kek.md`
+
+**Files:**
+- Create: `/Users/such/workspace/docmind/apps/server/app/keys/rotateKek.ts`, `rotateCli.test.ts`, `docs/operations/rotate-kek.md`
+- Modify: `/Users/such/workspace/docmind/apps/server/package.json`, `.env.example`
+
+**Interfaces:**
+- Consumes: `loadKeks`, `rotateKek`, `verifyKeys`, `Kek` (`@docmind/keystore-pg`); the test helpers.
+- Produces: `runRotation(pool: Pool, keks: readonly [Kek, ...Kek[]], options?: { verifyOnly?: boolean }, log?: (line: string) => void): Promise<number>` (rotates unless `verifyOnly`, then verifies with the current KEK alone, prints counts and subject ids, returns the exit code: 0 only when every live key is on the current KEK and opens); the script `keys:rotate` (`tsx app/keys/rotateKek.ts [--verify-only]`), which reads `DOCMIND_MIGRATE_URL` (the owner's URL) and the KEK variables.
+
+- [ ] **Step 1: Create the branch**
+
+```bash
+cd /Users/such/workspace/docmind
+git switch main && git pull --ff-only
+git switch -c feat/m1-kek-rotate-cli
+```
+
+- [ ] **Step 2: Write the failing test**
+
+It runs the whole command against a database, checks what it prints (counts only, never a data key, in hex or base64), and that verification fails with exit code 1 when a key is on another KEK. `apps/server/app/keys/rotateCli.test.ts`:
+
+```ts
+import { randomBytes, randomUUID } from "node:crypto";
+import { PostgresKeyStore } from "@docmind/keystore-pg";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { migrate, setAppRolePassword } from "../db/migrate";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { runRotation } from "./rotateKek";
+
+const oldKek = { id: "kek-1", key: randomBytes(32) };
+const newKek = { id: "kek-2", key: randomBytes(32) };
+
+describe.skipIf(!PG_URL)("the rotation command (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+  const deks = new Map<string, Buffer>();
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    app = new Pool({ connectionString: db.appUrl });
+    const store = new PostgresKeyStore(app, [oldKek]);
+    for (let i = 0; i < 3; i++) {
+      const subject = randomUUID();
+      deks.set(subject, await store.getOrCreate(subject));
+    }
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  it("never returns or prints a data key, and exits non-zero until everything is rotated", async () => {
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+    expect(await runRotation(db.owner, [newKek, oldKek], {}, log)).toBe(0);
+    expect(lines).toEqual([
+      "rotated 3 key(s) to kek-2",
+      "3 key(s) open with kek-2 alone; 0 on another KEK; 0 do not open",
+    ]);
+    const secrets = [...deks.values()].flatMap((d) => [d.toString("hex"), d.toString("base64")]);
+    for (const secret of secrets) expect(lines.join("\n")).not.toContain(secret);
+
+    const [first] = [...deks.keys()];
+    await db.owner.query("UPDATE data_keys SET kek_id = 'kek-1' WHERE subject_id = $1", [first]);
+    expect(await runRotation(db.owner, [newKek], { verifyOnly: true }, log)).toBe(1);
+  });
+});
+```
+
+- [ ] **Step 3: Run it to see it fail**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm --filter @docmind/server exec vitest run app/keys/rotateCli.test.ts
+```
+
+Expected: FAIL, `Failed to resolve import "./rotateKek"`.
+
+- [ ] **Step 4: Implement**
+
+`apps/server/app/keys/rotateKek.ts`:
+
+```ts
+import { type Kek, loadKeks, rotateKek, verifyKeys } from "@docmind/keystore-pg";
+import { Pool } from "pg";
+
+/**
+ * Re-wraps every data key to the current KEK, then proves they all open with that KEK alone.
+ * Prints counts and subject ids, never key material. Returns the process exit code: 0 only when
+ * every live key is on the current KEK and opens.
+ */
+export async function runRotation(
+  pool: Pool,
+  keks: readonly [Kek, ...Kek[]],
+  options: { verifyOnly?: boolean } = {},
+  log: (line: string) => void = console.log,
+): Promise<number> {
+  const [current] = keks;
+  let code = 0;
+  if (!options.verifyOnly) {
+    const run = await rotateKek(pool, keks);
+    log(`rotated ${run.rotated} key(s) to ${current.id}`);
+    for (const subject of run.failed) log(`FAILED to open the key of ${subject}; left unchanged`);
+    for (const [id, n] of Object.entries(run.remaining)) log(`${n} key(s) still wrapped by ${id}`);
+    if (run.failed.length > 0 || Object.keys(run.remaining).length > 0) code = 1;
+  }
+  const check = await verifyKeys(pool, current);
+  log(
+    `${check.verified} key(s) open with ${current.id} alone; ${check.wrongKek} on another KEK; ${check.failed.length} do not open`,
+  );
+  return check.wrongKek > 0 || check.failed.length > 0 ? 1 : code;
+}
+
+async function main(): Promise<void> {
+  const url = process.env.DOCMIND_MIGRATE_URL;
+  if (!url) throw new Error("DOCMIND_MIGRATE_URL is not set (the owner role's connection string)");
+  const pool = new Pool({ connectionString: url });
+  try {
+    process.exitCode = await runRotation(pool, loadKeks(), {
+      verifyOnly: process.argv.includes("--verify-only"),
+    });
+  } finally {
+    await pool.end();
+  }
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err.message);
+    process.exit(1);
+  });
+}
+```
+
+Add the script in `apps/server/package.json`:
+
+```diff
+@@ -10,5 +10,6 @@
+     "typecheck": "tsc -p tsconfig.json --noEmit",
+     "typecheck:tests": "tsc -p tsconfig.test.json",
+-    "db:migrate": "tsx app/db/migrate.ts"
++    "db:migrate": "tsx app/db/migrate.ts",
++    "keys:rotate": "tsx app/keys/rotateKek.ts"
+   },
+   "dependencies": {
+```
+
+`.env.example` (the KEK variables, including the rotation-only ones):
+
+```diff
+@@ -12,4 +12,12 @@ DOCMIND_APP_DB_PASSWORD=change-me-locally
+ DATABASE_URL=postgres://docmind_app:change-me-locally@127.0.0.1:5432/docmind
+ 
++# Master key that wraps every user's data key. Generate: openssl rand -base64 32
++# Losing it makes all encrypted data unreadable; leaking it exposes the wrapped data keys.
++DOCMIND_KEK=
++DOCMIND_KEK_ID=kek-1
++# Only while rotating the KEK (docs/operations/rotate-kek.md): the key being retired.
++# DOCMIND_KEK_PREVIOUS=
++# DOCMIND_KEK_PREVIOUS_ID=
++
+ # Set to true when the server is reached over HTTPS (marks the session cookie Secure).
+ DOCMIND_COOKIE_SECURE=false
+```
+
+The runbook, `docs/operations/rotate-kek.md`:
+
+```
+# Rotating the master key (KEK)
+
+Every user's data key is stored wrapped by the KEK (`data_keys.kek_id` names which one). Rotation
+re-wraps each stored key under a new KEK. It does **not** change any data key, so no event, snapshot or
+blob is rewritten, and it does not help if a data key itself leaked (that needs re-encryption, which
+v1 does not have).
+
+Rotate on a schedule, when someone with access to the KEK leaves, and at once if the KEK may have leaked.
+
+## Before you start
+
+- A database backup, and the old KEK safe in your secret store.
+- The migration (owner) role's URL: the tool reads and updates `data_keys`, which `docmind_app` cannot.
+- Every server instance can be restarted.
+
+## Steps
+
+1. **Make the new KEK.** `openssl rand -base64 32`. Pick an id that was never used, for example `kek-2`.
+2. **Run servers with both.** Set on every instance and restart:
+   `DOCMIND_KEK=<new>`, `DOCMIND_KEK_ID=kek-2`, `DOCMIND_KEK_PREVIOUS=<old>`, `DOCMIND_KEK_PREVIOUS_ID=kek-1`.
+   New users' keys are now wrapped by the new KEK, and old keys still open with the previous one.
+3. **Re-wrap.** From a machine that can reach the database, with the same four variables set:
+   ```bash
+   DOCMIND_MIGRATE_URL=postgres://<owner>@<host>/docmind pnpm --filter @docmind/server keys:rotate
+   ```
+   It prints `rotated N key(s) to kek-2`, then `M key(s) open with kek-2 alone; 0 on another KEK; 0 do not open`,
+   and exits 0. It is safe to stop (Ctrl-C) and to run again: each batch of 100 is one transaction, a key
+   already on the new KEK is skipped, and tombstones (erased users) are never touched.
+4. **If it exits 1,** read the lines it printed. `FAILED to open the key of <user>` means that row does not
+   open under the KEK it names (corruption, or the wrong previous KEK): the row is left as it was; fix the cause
+   and run again. `K key(s) still wrapped by <id>` means keys under a KEK you did not provide: add it as the
+   previous KEK and run again. Do not go on until the run is clean.
+5. **Verify on its own.** `... pnpm --filter @docmind/server keys:rotate -- --verify-only` must exit 0.
+6. **Drop the old KEK from the servers.** Remove `DOCMIND_KEK_PREVIOUS*` and restart every instance.
+7. **Retire the old KEK last.** Backups taken before step 3 still hold keys wrapped by it, and restoring one
+   needs it. Keep the old KEK until those backups have expired (30 days by default, spec §4.4), then destroy it.
+
+If the old KEK leaked, steps 1-6 protect the live database, but a leaked backup from before the rotation can
+still be opened with it. That is why backup retention is bounded.
+```
+
+- [ ] **Step 5: Run the test, then the gate**
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm --filter @docmind/server exec vitest run app/keys/rotateCli.test.ts
+```
+
+Expected: `1 passed`.
+
+```bash
+export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+```
+
+Expected: every command exits 0.
+
+- [ ] **Step 6: Try it by hand against a scratch database** (the runbook's steps 3 and 5)
+
+```bash
+export DOCMIND_MIGRATE_URL=postgres://docmind:docmind@127.0.0.1:5432/docmind
+export DOCMIND_KEK=$(openssl rand -base64 32) DOCMIND_KEK_ID=kek-2
+export DOCMIND_KEK_PREVIOUS=$(openssl rand -base64 32) DOCMIND_KEK_PREVIOUS_ID=kek-1
+pnpm --filter @docmind/server keys:rotate; echo "exit $?"
+pnpm --filter @docmind/server keys:rotate -- --verify-only; echo "exit $?"
+```
+
+Expected on a database with no keys yet: `rotated 0 key(s) to kek-2`, `0 key(s) open with kek-2 alone; 0 on another KEK; 0 do not open`, `exit 0`, twice. (With keys created under a different `kek-1`, the first run prints `FAILED to open the key of <user>` lines and exits 1; that is the tool refusing to guess.)
+
+- [ ] **Step 7: Commit, check the size, open the draft PR**
+
+```bash
+git add -A
+git commit -m "feat(server): keys:rotate command and KEK rotation runbook" -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} END {print a" lines, "n" files"}'
+git push -u origin feat/m1-kek-rotate-cli
+gh pr create --draft --base main --head feat/m1-kek-rotate-cli --title "feat(server): keys:rotate command and KEK rotation runbook" --body "$(cat <<'EOF'
+## Summary
+- pnpm --filter @docmind/server keys:rotate [--verify-only]: re-wraps every data key to the current KEK as the owner role, then verifies they all open with that KEK alone. Prints counts and subject ids only (tested not to contain any data key); exits non-zero for a key that fails to open, a key under an unknown KEK, or a failed verification.
+- docs/operations/rotate-kek.md: the runbook (generate, run with both KEKs, re-wrap, verify, drop the old KEK from servers, retire it only after pre-rotation backups expire).
+- .env.example documents DOCMIND_KEK, DOCMIND_KEK_ID and the rotation-only DOCMIND_KEK_PREVIOUS[_ID].
+
+## Not counted toward the 200-line / 10-file limit
+None.
+
+## Test plan
+- [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)"
+```
+
+Expected: about `148 lines, 5 files`, then the PR URL.
+
+---
+
 # PR 8a: Loom's database role and schema
 
 **Branch:** `feat/m1-loom-role`  **Budget:** 4 files, 100 lines. Spec §9 item 8, part 1 of 4. Nothing connects as the new role yet.
 
-### Task 29: `docmind_loom` owns a `loom` schema and nothing else
+### Task 38: `docmind_loom` owns a `loom` schema and nothing else
 
 **Files:**
-- Create: `/Users/such/workspace/docmind/infra/migrations/0007_loom_role.sql`, `apps/server/app/db/loomRole.test.ts`
+- Create: `/Users/such/workspace/docmind/infra/migrations/0008_loom_role.sql`, `apps/server/app/db/loomRole.test.ts`
 - Modify: `/Users/such/workspace/docmind/apps/server/app/db/migrate.ts`, `apps/server/app/db/testSupport.ts`
 
 **Interfaces:**
@@ -4076,7 +6174,7 @@ Expected: FAIL, `setRolePassword` and `LOOM_PASSWORD` are not exported.
 
 - [ ] **Step 4: Implement**
 
-`infra/migrations/0007_loom_role.sql`:
+`infra/migrations/0008_loom_role.sql`:
 
 ```sql
 -- Loom's Postgres stores (event log, snapshots, leases) create and migrate their own tables, so
@@ -4198,7 +6296,7 @@ git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} EN
 git push -u origin feat/m1-loom-role
 gh pr create --draft --base main --head feat/m1-loom-role --title "feat(db): docmind_loom role and loom schema for Loom's Postgres stores" --body "$(cat <<'EOF'
 ## Summary
-- Loom's Postgres stores run DDL at boot, so they cannot use docmind_app (which owns nothing). Migration 0007 adds docmind_loom (unprivileged, no BYPASSRLS, same guard as docmind_app) owning schema loom; it has no privilege on DocMind's tables and docmind_app none on loom's. Spiked: the event store runs as such a role with search_path=loom.
+- Loom's Postgres stores run DDL at boot, so they cannot use docmind_app (which owns nothing). Migration 0008 adds docmind_loom (unprivileged, no BYPASSRLS, same guard as docmind_app) owning schema loom; it has no privilege on DocMind's tables and docmind_app none on loom's. Spiked: the event store runs as such a role with search_path=loom.
 - db:migrate gives the role a login when DOCMIND_LOOM_DB_PASSWORD is set (setRolePassword generalises setAppRolePassword).
 - Nothing connects as it yet (PR 8c).
 
@@ -4221,7 +6319,7 @@ Expected: about `100 lines, 4 files`, then the PR URL.
 
 **Branch:** `feat/m1-erasure-subject`  **Budget:** 2 files, 43 lines. Spec §9 item 8, part 2 of 4.
 
-### Task 30: `executionIdFor` and `subjectOfExecution`
+### Task 39: `executionIdFor` and `subjectOfExecution`
 
 **Files:**
 - Create: `/Users/such/workspace/docmind/apps/server/app/subject.ts`, `subject.test.ts`
@@ -4350,7 +6448,7 @@ Expected: about `43 lines, 2 files`, then the PR URL.
 
 **Branch:** `feat/m1-durable-storage`  **Budget:** 4 files, 184 lines (+ `pnpm-lock.yaml`). Spec §9 item 8, part 3 of 4.
 
-### Task 31: the Postgres event store and snapshots, wrapped by Loom's encrypting stores
+### Task 40: the Postgres event store and snapshots, wrapped by Loom's encrypting stores
 
 **Files:**
 - Create: `/Users/such/workspace/docmind/apps/server/app/storage.ts`, `storage.test.ts`
@@ -4382,14 +6480,14 @@ git switch -c feat/m1-durable-storage
 `@loom/plugin-crypto` moves from `devDependencies` to `dependencies` (the server now uses it at runtime):
 
 ```diff
-@@ -18,4 +18,6 @@
+@@ -19,4 +19,6 @@
      "@loom/app": "*",
      "@loom/effect-runtime": "*",
 +    "@loom/plugin-crypto": "*",
 +    "@loom/plugin-postgres": "*",
      "@loom/workflow-runtime": "*",
      "pg": "^8.13.0",
-@@ -28,6 +30,5 @@
+@@ -29,6 +31,5 @@
      "vitest": "^2.1.8",
      "@types/pg": "^8.11.0",
 -    "@loom/conformance": "*",
@@ -4650,17 +6748,17 @@ Expected: about `184 lines, 4 files`, then the PR URL.
 
 # PR 8d: the server runs on the durable, encrypted app
 
-**Branch:** `feat/m1-durable-app`  **Budget:** 6 files, 123 lines. Spec §9 item 8, part 4 of 4. **Behaviour change:** `pnpm start` needs `LOOM_DATABASE_URL` and `DOCMIND_KEK`.
+**Branch:** `feat/m1-durable-app`  **Budget:** 6 files, 118 lines. Spec §9 item 8, part 4 of 4. **Behaviour change:** `pnpm start` needs `LOOM_DATABASE_URL` and `DOCMIND_KEK`.
 
-### Task 32: compose it in `loom.config.ts`'s `buildApp`, and start it from `main.ts`
+### Task 41: compose it in `loom.config.ts`'s `buildApp`, and start it from `main.ts`
 
 **Files:**
 - Create: `/Users/such/workspace/docmind/apps/server/app/config.test.ts`
 - Modify: `/Users/such/workspace/docmind/apps/server/app/config.ts`, `apps/server/loom.config.ts`, `apps/server/app/security.ts`, `apps/server/app/main.ts`, `.env.example`
 
 **Interfaces:**
-- Consumes: `createDurableStorage` (PR 8c); `PostgresKeyStore`, `loadKek` (PR 7a/7b); `createAppPool` (PR 6i); `PgAuthStore`, `authRoutes`, `shutdown`.
-- Produces: `buildApp(storage: StorageConfig, crypto?: PrincipalCryptoOptions)` in `app/config.ts` (replaces the old `app` export). With `crypto` the app is durable and encrypted and has no `principalCodec`; without it (the CLI default) it is in-memory with the M0 `principalCodec`. `loom.config.ts` default-exports `buildApp({ kind: "memory" })`. `main.ts` requires `DATABASE_URL`, `LOOM_DATABASE_URL` (the `docmind_loom` URL, checked unprivileged like the app URL), `DOCMIND_KEK`/`DOCMIND_KEK_FILE`, optional `DOCMIND_KEK_ID`, `DOCMIND_COOKIE_SECURE`, `PORT`, `HOST`.
+- Consumes: `createDurableStorage` (PR 8c); `PostgresKeyStore` (PR 7b), `loadKeks` (PR 7d); `createAppPool` (PR 6n); `PgAuthStore`, `authRoutes`, `shutdown`.
+- Produces: `buildApp(storage: StorageConfig, crypto?: PrincipalCryptoOptions)` in `app/config.ts` (replaces the old `app` export). With `crypto` the app is durable and encrypted and has no `principalCodec`; without it (the CLI default) it is in-memory with the M0 `principalCodec`. `loom.config.ts` default-exports `buildApp({ kind: "memory" })`. `main.ts` requires `DATABASE_URL`, `LOOM_DATABASE_URL` (the `docmind_loom` URL, checked unprivileged like the app URL), `DOCMIND_KEK`/`DOCMIND_KEK_FILE`, optional `DOCMIND_KEK_ID` and, while rotating, `DOCMIND_KEK_PREVIOUS[_ID]` (all through `loadKeks()`), and the existing `DOCMIND_COOKIE_SECURE`, `DOCMIND_TRUST_PROXY`, `PORT`, `HOST`.
 
 - [ ] **Step 1: Create the branch**
 
@@ -4798,8 +6896,9 @@ export default buildApp({ kind: "memory" });
 
 ```ts
 import { AuthService, PasswordAuthenticator } from "@docmind/auth";
-import { PostgresKeyStore, loadKek } from "@docmind/keystore-pg";
+import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
+import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { buildApp } from "./config";
 import { createAppPool } from "./db/pool";
@@ -4822,22 +6921,28 @@ async function main(): Promise<void> {
   const loomUrl = required("LOOM_DATABASE_URL", "the docmind_loom connection string");
   await (await createAppPool(loomUrl)).end();
 
-  const keys = new PostgresKeyStore(pool, [loadKek()]);
+  const keys = new PostgresKeyStore(pool, loadKeks());
   const durable = createDurableStorage({ loomUrl, keys });
   const app = buildApp(durable.storage, durable.crypto);
 
   const store = new PgAuthStore(pool);
+  const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
   const server = createHttpServer(
     authRoutes({
       service: new AuthService(store),
       authenticator,
       store,
+      throttle,
       secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
+      trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
     }),
   );
 
-  const sweep = () => store.purgeExpiredSessions().catch((err) => console.error(err));
+  const sweep = () =>
+    Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
+      console.error(err),
+    );
   void sweep();
   setInterval(sweep, HOUR_MS).unref();
 
@@ -4874,7 +6979,7 @@ main().catch((err) => {
 `.env.example`:
 
 ```diff
-@@ -12,4 +12,13 @@ DOCMIND_APP_DB_PASSWORD=change-me-locally
+@@ -12,4 +12,23 @@ DOCMIND_APP_DB_PASSWORD=change-me-locally
  DATABASE_URL=postgres://docmind_app:change-me-locally@127.0.0.1:5432/docmind
  
 +# Loom's event log and snapshots live in their own schema, owned by their own role (docmind_loom).
@@ -4885,9 +6990,19 @@ main().catch((err) => {
 +# Losing it makes all encrypted data unreadable; leaking it exposes the wrapped data keys.
 +DOCMIND_KEK=
 +DOCMIND_KEK_ID=kek-1
++# Only while rotating the KEK (docs/operations/rotate-kek.md): the key being retired.
++# DOCMIND_KEK_PREVIOUS=
++# DOCMIND_KEK_PREVIOUS_ID=
 +
- # Set to true when the server is reached over HTTPS (marks the session cookie Secure).
- DOCMIND_COOKIE_SECURE=false
++# Set to true when the server is reached over HTTPS (marks the session cookie Secure).
++DOCMIND_COOKIE_SECURE=false
++
++# Believe X-Forwarded-For for the client address (login/sign-up throttling). Set to true only when the
++# server sits behind exactly one reverse proxy of yours; otherwise any client could fake its address.
++DOCMIND_TRUST_PROXY=false
++
+ # Enables the Postgres integration tests (they skip when unset). The role must be able to
+ # CREATE DATABASE: each suite makes, and drops, a database of its own.
 ```
 
 - [ ] **Step 5: Run the test, then the gate**
@@ -4923,7 +7038,7 @@ psql postgres://docmind:docmind@127.0.0.1:5432/docmind -Atc "select count(*) fro
 kill %1
 ```
 
-Expected: the server logs `docmind server listening on http://127.0.0.1:3918` and nothing else; the `curl` answers a `MeResponse` JSON; the `psql` count is `11` (Loom's tables, created in schema `loom` by `docmind_loom`). Unsetting `DOCMIND_KEK` must make startup fail with `set DOCMIND_KEK (base64, 32 bytes) or DOCMIND_KEK_FILE`.
+Expected: the server logs `docmind server listening on http://127.0.0.1:3918` and nothing else; the `curl` answers `{"status":"accepted"}`; the `psql` count is `11` (Loom's tables, created in schema `loom` by `docmind_loom`). Unsetting `DOCMIND_KEK` must make startup fail with `set DOCMIND_KEK (base64, 32 bytes) or DOCMIND_KEK_FILE`.
 
 - [ ] **Step 7: Commit, check the size, open the draft PR**
 
@@ -4943,44 +7058,49 @@ None.
 
 ## Test plan
 - [x] `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test` (with DOCMIND_TEST_PG_URL)
-- [x] manual smoke test (plan, Task 32 step 6)
+- [x] manual smoke test (plan, Task 41 step 6)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
 
-Expected: about `123 lines, 6 files`, then the PR URL.
+Expected: about `118 lines, 6 files`, then the PR URL.
 
 ---
 
 ## After PR 8d: M1 exit check
 
-- [ ] On a fresh clone of `main` (with `../loom` built and Postgres up): `export DOCMIND_TEST_PG_URL=...; pnpm install --frozen-lockfile && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`. Expected: all green: 136 tests (contracts 15, auth 29, keystore-pg 6, server 86); the Postgres suites run, not skip.
-- [ ] The two smoke tests (Task 25 step 6, Task 32 step 6) pass on `main`: sign-up, `/api/me`, logout; Loom's tables in schema `loom`; a start with the owner's URL as `DATABASE_URL` or `LOOM_DATABASE_URL` is refused.
-- [ ] Record D1 (contracts ESM vs source) in the M2 plan header before any `apps/web` work.
+- [ ] On a fresh clone of `main` (with `../loom` built and Postgres up): `export DOCMIND_TEST_PG_URL=...; pnpm install --frozen-lockfile && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`. Expected: all green: 176 tests (contracts 16, auth 42, keystore-pg 8, server 110); the Postgres suites run, not skip.
+- [ ] The two smoke tests (Task 30 step 6, Task 41 step 6) pass on `main`: sign-up (202), login, `/api/me`, logout, a 429 after repeated wrong passwords; Loom's tables in schema `loom`; a start with the owner's URL as `DATABASE_URL` or `LOOM_DATABASE_URL` is refused.
+- [ ] Rehearse a rotation once on a scratch database (runbook `docs/operations/rotate-kek.md`), including `--verify-only`.
+- [ ] D1 is decided (Vite alias to source): the M2 plan header says so and `apps/web` is scaffolded that way (M6 PR 36).
 - [ ] If billing is restored: the first push to `main` triggers `ci`; confirm it is green, which also proves `LOOM_TOKEN`, building the three Loom packages M1 added, and the superuser `postgres` role.
 
 ## Self-review
 
-**Spec coverage (§9 M1, plus §3.1, §4.2-4.4):**
+**Spec coverage (§9 M1, plus §3.1, §4.2-4.4) and the owner's four decisions:**
 
-| Spec item | Where |
+| Spec item or decision | Where |
 |---|---|
-| Item 5: `Authenticator` interface, conformance suite, request middleware | PR 5a (interface, suite), PR 5d (`requireAuth`), PR 6d (`PasswordAuthenticator` passes the suite), PR 6f (and on Postgres) |
-| Item 6: password auth (argon2id, session cookie), sign-up, login, logout | PR 6b (argon2id, tokens), 6c (cookie), 6e (service), 6h (routes), 6i (wired) |
-| Item 7: `PostgresKeyStore` passing the Loom KeyStore contract | PR 7b (`runKeyStoreConformance`, 8 tests), 7c (security tests), 7a (KEK + wrapping) |
-| Item 8: Postgres event store wrapped by `EncryptingEventStore` and `EncryptingSnapshotStore` in `loom.config.ts` | PR 8c (stores), 8d (`buildApp` in `config.ts`, started by `main.ts`; `loom.config.ts` stays in-memory for the CLI, see deviation 7) |
-| §4.2 `users.password_hash` argon2id; `auth_sessions` stores only a token hash | PR 6b/6e |
-| §4.2 `data_keys (subject_id, wrapped_dek, kek_id, created_at)` | PR 7b, with the tombstone deviation (4) |
-| §4.3 identity from the Authenticator, never the client; RLS; `SECURITY DEFINER` pre-tenant lookups | PR 5d, 6a, 6f; routes take identity only from the session (6h) |
-| §4.4 per-user DEK, KEK from env/file, `destroy` irreversible, events + snapshots + `*_enc` under the user's key | PR 7a/7b, 8b/8c. Blobs and `*_enc` columns are M2+ (they will call the same `KeyStore`) |
+| Item 5: `Authenticator` interface, conformance suite, request middleware | PR 5a (interface, suite), 5d (`requireAuth`), 6d (`PasswordAuthenticator` passes the suite), 6f (and on Postgres) |
+| Item 6: password auth (argon2id, session cookie), sign-up, login, logout | 6b (argon2id, tokens), 6c (cookie), 6e (service), 6k (sign-up), 6l (login), 6m (logout, `/api/me`), 6n (wired) |
+| Item 7: `PostgresKeyStore` passing the Loom KeyStore contract | 7b (`runKeyStoreConformance`, 8 tests), 7c (security tests), 7a (KEK + wrapping) |
+| Item 8: Postgres event store wrapped by `EncryptingEventStore` and `EncryptingSnapshotStore` in `loom.config.ts` | 8c (stores), 8d (`buildApp` in `config.ts`, started by `main.ts`; `loom.config.ts` stays in-memory for the CLI, deviation 7) |
+| Decision 1: sign-up must not reveal registered emails | 6e (`signUp` returns a boolean, hashes first, no session), 6k (uniform 202, no cookie, byte-identical test), residual channel stated in 6k and deviation 9 |
+| Decision 2: rate limiting and lockout on login and sign-up | 6h (policies, `clientIp`), 6i (`MemoryThrottle` and the conformance suite), 6j (Postgres storage, migration 0006), 6k and 6l (applied before the password is looked at; 429 + `Retry-After`; existence not leaked), 6n (`DOCMIND_TRUST_PROXY`, hourly purge). No route is mounted before PR 6n, and 6n mounts only throttled routes |
+| Decision 3: KEK rotation tool | 7d (`loadKeks`), 7e (`rotateKek`, `verifyKeys`), 7f (crash and bad-row tests), 7g (`keys:rotate` and the runbook) |
+| Decision 4: D1 decided (Vite alias to source) | "Decision D1" section; recorded for M2, no M1 task |
+| §4.2 `users.password_hash` argon2id; `auth_sessions` stores only a token hash | 6b/6e |
+| §4.2 `data_keys (subject_id, wrapped_dek, kek_id, created_at)` | 7b, with the tombstone deviation (4) |
+| §4.3 identity from the Authenticator, never the client; RLS; `SECURITY DEFINER` pre-tenant lookups | 5d, 6a, 6f, 6j; routes take identity only from the session (6m) |
+| §4.4 per-user DEK, KEK from env/file, `destroy` irreversible, events + snapshots + `*_enc` under the user's key | 7a/7b, 8b/8c. Blobs and `*_enc` columns are M2+ (they will call the same `KeyStore`) |
 | §4.4 erasure flow | M5; the pieces M5 needs (`raw` stores, `wasDestroyed`, subject mapping, `shredSubject` proven in PR 8c's test) exist |
 | §8 gates, PR rules | Global Constraints; every PR's close-out |
-| M0 review carry-forwards: router rejection + test; `server.close()` then `app.close()`; contracts dependency; definer `SET search_path` + `GRANT EXECUTE`; startup role assertion; same-named types; session indexes; contracts ESM decision | 5c; 5d; 5c; 6a/7b; 6i (+8d for the Loom role); 5b; 6a (migration 0004); D1 |
+| M0 review carry-forwards: router rejection + test; `server.close()` then `app.close()`; contracts dependency; definer `SET search_path` + `GRANT EXECUTE`; startup role assertion; same-named types; session indexes; contracts ESM decision | 5c; 5d; 5c; 6a/6j/7b (every definer function pins `search_path` and grants `docmind_app` explicitly); 6n (+8d for the Loom role); 5b; 6a (migration 0004); D1 |
 
-**Spec content with no M1 task (intentional):** blob and `*_enc` encryption (M2), `DELETE /api/me` (M5), login throttling (not in the spec; deviation 8), sign-up UI (M6).
+**Spec content with no M1 task (intentional):** blob and `*_enc` encryption (M2), `DELETE /api/me` (M5), email verification (needs email infrastructure; deviation 9), sign-up UI (M6).
 
-**Placeholder scan:** no TBD/TODO/"similar to"; every code step carries file contents copied from the branches that were built and run (the plan is generated from those branches, so a drift would show as a failing replay).
+**Placeholder scan:** no unfinished markers or "similar to" steps; every code step carries file contents copied from the branches that were built and run (the plan is generated from those branches, so a drift would show as a failing replay).
 
-**Type consistency:** `Identity` (5a) is what `requireAuth` (5d), `AuthStore` (6c), `PasswordAuthenticator` (6d), `AuthService` (6e), `PgAuthStore` (6f) and `authRoutes` (6h) use; `AuthStore.findEmail` is defined in 6c and used in 6f/6h; `Handler`/`sendError` (5c) are used by 5d, 6g, 6h; `setRolePassword` (8a) is used in 8c/8d tests, `setAppRolePassword` keeps its M0 signature; `PostgresKeyStore(pool, [kek])` (7b) is what 8c/8d construct; `createDurableStorage(...).{storage,crypto,sealed,raw}` (8c) is what 8d and the tests read; `buildApp(storage, crypto?)` (8d) is what `loom.config.ts` and `main.ts` call; `executionIdFor`/`subjectOfExecution` (8b) are what 8c uses.
+**Type consistency:** `Identity` (5a) is what `requireAuth` (5d), `AuthStore` (6c), `PasswordAuthenticator` (6d), `AuthService` (6e), `PgAuthStore` (6f) and `authRoutes` (6k-6m) use; `AuthService.signUp` is `Promise<boolean>` from 6e on and the sign-up route (6k) ignores the boolean on purpose; `Throttle` and `ThrottlePolicy` (6h) are implemented by `MemoryThrottle` (6i) and `PgThrottle` (6j) and passed to `authRoutes` as `throttle`; `AuthRoutesDeps` grows `service, throttle, trustProxy` (6k), `secureCookies` (6l), `authenticator, store` (6m), and `main.ts` (6n) passes all of them; `AuthStore.findEmail` is defined in 6c and used in 6f/6m; `Handler`/`sendError` (5c) are used by 5d, 6g, 6k-6m; `setRolePassword` (8a) is used in 8c/8d tests, `setAppRolePassword` keeps its M0 signature; `Kek`/`loadKeks` (7a/7d) feed `PostgresKeyStore(pool, keks)` (7b), `rotateKek(pool, keks)` (7e) and `runRotation` (7g); `createDurableStorage(...).{storage,crypto,sealed,raw}` (8c) is what 8d and the tests read; `buildApp(storage, crypto?)` (8d) is what `loom.config.ts` and `main.ts` call; `executionIdFor`/`subjectOfExecution` (8b) are what 8c uses.
