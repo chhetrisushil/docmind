@@ -1,9 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate } from "./migrate";
-import { PG_URL, type TestDb, createTestDb } from "./testSupport";
+import { migrate, setAppRolePassword } from "./migrate";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
 
 describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
@@ -71,6 +72,22 @@ describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
            FROM pg_roles r WHERE rolname = 'docmind_app'`,
       );
       expect(rows[0]).toEqual({ bad: false, exec: false });
+    } finally {
+      await fresh.drop();
+    }
+  });
+
+  it("gives the app role a login that is still not privileged", async () => {
+    const fresh = await createTestDb();
+    try {
+      await migrate(fresh.owner);
+      await setAppRolePassword(fresh.owner, APP_PASSWORD);
+      const app = new Pool({ connectionString: fresh.appUrl });
+      const { rows } = await app.query(
+        "SELECT current_user AS who, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+      );
+      await app.end();
+      expect(rows[0]).toEqual({ who: "docmind_app", rolsuper: false, rolbypassrls: false });
     } finally {
       await fresh.drop();
     }

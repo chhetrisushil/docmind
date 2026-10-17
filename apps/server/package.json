@@ -8,7 +8,8 @@
     "gen": "loom gen --dir app",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:tests": "tsc -p tsconfig.test.json"
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "db:migrate": "tsx app/db/migrate.ts"
   },
   "dependencies": {
     "@loom/app": "*",
