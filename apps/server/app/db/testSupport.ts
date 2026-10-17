@@ -1,0 +1,34 @@
+import { randomBytes } from "node:crypto";
+import { Pool } from "pg";
+
+/** Set by CI and in a local .env; the Postgres suites skip cleanly without it. */
+export const PG_URL = process.env.DOCMIND_TEST_PG_URL;
+
+export interface TestDb {
+  /** Connected as the owner named in DOCMIND_TEST_PG_URL (runs migrations, seeds data). */
+  owner: Pool;
+  drop(): Promise<void>;
+}
+
+/** An empty database of its own, so suites never see each other's tables. */
+export async function createTestDb(): Promise<TestDb> {
+  if (!PG_URL) throw new Error("DOCMIND_TEST_PG_URL is not set");
+  const name = `docmind_t_${randomBytes(6).toString("hex")}`;
+  const admin = new Pool({ connectionString: PG_URL, max: 1 });
+  await admin.query(`CREATE DATABASE ${name}`);
+  await admin.end();
+
+  const url = new URL(PG_URL);
+  url.pathname = `/${name}`;
+  const owner = new Pool({ connectionString: url.toString() });
+
+  return {
+    owner,
+    async drop() {
+      await owner.end();
+      const dropper = new Pool({ connectionString: PG_URL, max: 1 });
+      await dropper.query(`DROP DATABASE ${name} WITH (FORCE)`);
+      await dropper.end();
+    },
+  };
+}

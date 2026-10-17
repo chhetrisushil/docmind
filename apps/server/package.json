@@ -13,12 +13,14 @@
   "dependencies": {
     "@loom/app": "*",
     "@loom/effect-runtime": "*",
-    "@loom/workflow-runtime": "*"
+    "@loom/workflow-runtime": "*",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@loom/cli": "*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "@types/pg": "^8.11.0"
   }
 }
