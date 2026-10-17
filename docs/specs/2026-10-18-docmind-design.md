@@ -130,7 +130,7 @@ Every table carries `tenant_id`.
 - **`tenants`** `(id, name, created_at)`. Sign-up creates a personal tenant.
 - **`users`** `(id, tenant_id, email UNIQUE, password_hash, created_at)`. Passwords are hashed with
   argon2id.
-- **`auth_sessions`** `(token_hash, user_id, expires_at)`. Only a hash of the cookie token is stored.
+- **`auth_sessions`** `(token_hash, tenant_id, user_id, expires_at)`. Only a hash of the cookie token is stored.
 - **`documents`** `(id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
   content_address, fingerprint, status, error, stats jsonb, summary_enc, created_at, updated_at)`
   - `status` is one of `uploaded | parsing | embedding | ready | failed`.
@@ -155,8 +155,11 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
 1. **Identity.** The `Authenticator` produces `{tenantId, userId}` on every request. Nothing
    downstream accepts a tenant ID from the client.
 2. **Row-level security.** Postgres RLS on every table checks
-   `tenant_id = current_setting('app.tenant_id')`, set with `SET LOCAL` in each transaction through
-   `withTenant(tx)`. The app connects as a **non-owner role**, so it cannot bypass RLS.
+   `tenant_id = app_tenant_id()` (a wrapper over `current_setting('app.tenant_id')`), set per
+   transaction by `withTenant(pool, tenantId, fn)`, which opens the transaction itself. The app connects
+   as `docmind_app`: owns no tables, no `BYPASSRLS`, so RLS always applies to it. Lookups that happen
+   before a tenant is known (login by email, session by token hash) go through narrow
+   `SECURITY DEFINER` functions owned by the migration role.
 3. **Event log.** Loom streams are tenant-scoped (Loom tenancy). conversation-sse returns 404 across
    tenants.
 4. **Blobs.** Paths are tenant- and user-prefixed, and the resolver authorizes the tenant (Loom
@@ -514,7 +517,8 @@ Each milestone ends with something runnable.
 | Risk | Mitigation |
 |---|---|
 | `lu-chat` may lack an inline-citation hook | PR 35 spike; fallback is a custom renderer over `ChatFeed` |
-| Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out loom at a pinned ref (as loom-ui does with `LOOM_REF`). Publishing `@loom/*` is tracked as platform work. |
+| Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out the private `chhetrisushil/loom` at a pinned `LOOM_REF` using a read-only `LOOM_TOKEN` secret (as loom-ui does). Publishing `@loom/*` is tracked as platform work. |
+| conversation-sse runs its own HTTP server (no mountable handler) | From M4, the app router proxies `/api/chats/:id/stream` to it on an internal `127.0.0.1` port, keeping one origin for the session cookie |
 | Loom is CJS-only in the browser | Vite source aliases (AetherOS precedent) |
 | Embedding residue in backups | Bounded backup retention, documented in the runbook |
 | Parsing untrusted files | Sandbox, magic-byte sniffing, size and decompression caps |
