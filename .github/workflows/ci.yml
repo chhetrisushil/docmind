@@ -1,0 +1,89 @@
+# DocMind consumes the sibling ../loom checkout via pnpm.overrides (link:), because @loom/* is not
+# published. CI therefore checks loom out NEXT TO this repo at a pinned ref, builds it, then builds,
+# typechecks, lints and tests DocMind against it. The same pattern as loom-ui.
+#
+# chhetrisushil/loom is private: the LOOM_TOKEN repository secret must hold a token with read access
+# to it (a fine-grained PAT with "Contents: read" on that one repository). Without it the loom
+# checkout fails, and so does the run: loudly, rather than testing against nothing.
+name: ci
+
+# Actions minutes are a budget: a PR runs CI once it is READY. Draft PRs skip every job (iterate
+# against the full local gate), and main is checked after each merge.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
+  # new commit, re-run the whole gate, then change this line.
+  LOOM_REF: 8f9eab2492c85bb994d746855f06d2eccc9f45db
+
+jobs:
+  gate:
+    name: build + typecheck + lint + test
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Turns on the Postgres suites; without it they skip.
+      DOCMIND_TEST_PG_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: docmind
+      - name: Checkout loom (the framework DocMind links to)
+        uses: actions/checkout@v4
+        with:
+          repository: chhetrisushil/loom
+          ref: ${{ env.LOOM_REF }}
+          token: ${{ secrets.LOOM_TOKEN }}
+          path: loom
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.14.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            loom/pnpm-lock.yaml
+            docmind/pnpm-lock.yaml
+      - name: Install and build loom
+        working-directory: loom
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: Install DocMind
+        working-directory: docmind
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: docmind
+        run: pnpm build
+      - name: Typecheck
+        working-directory: docmind
+        run: pnpm typecheck
+      - name: Typecheck test files
+        working-directory: docmind
+        run: pnpm typecheck:tests
+      - name: Lint
+        working-directory: docmind
+        run: pnpm lint
+      - name: Test
+        working-directory: docmind
+        run: pnpm test
