@@ -1,0 +1,495 @@
+# DocMind — design spec
+
+- **Date:** 2026-10-18
+- **Status:** draft, awaiting review
+- **Scope:** v1 of a multi-user, RAG-based document assistant built on Loom, loom-ui and the loom CLI.
+
+## 1. Goals
+
+DocMind lets a signed-in user:
+
+1. Upload documents — **txt, md, org, doc, docx, pdf, png/jpg/webp**.
+2. Get an automatic **summary** and **analysis** of each document.
+3. **Search and ask questions** across their documents in a chat, with every answer citing the
+   passages it used.
+4. Return to **past chat sessions** (sidebar list) with full **chat history**.
+5. **Erase** their account, with crypto-shredding making the erasure final even in append-only stores.
+
+### Constraints
+
+- **AetherOS app from day one:** multi-user, tenant-isolated, quota-bounded. It runs standalone
+  until AetherOS provides platform identity.
+- **Auth lives in this app** (email + password), behind an `Authenticator` interface that AetherOS
+  identity can replace later.
+- **Local-first:** runs on a laptop with docker-compose (Postgres + pgvector, Ollama). Embeddings are
+  local by default; chat, summaries and vision use Claude.
+- **Reuse Loom, never duplicate.** New code is written only for capabilities Loom lacks.
+- **Small PRs:** ≤200 changed lines and ≤10 files each, opened as **drafts**, merged only after the
+  owner's review.
+
+### Non-goals (v1)
+
+Google Docs import, shared workspaces (the schema allows them; no UI), lexical/hybrid search (see §4.3),
+a websocket transport, a cloud deployment target.
+
+## 2. Approach
+
+A **Loom-native modular monolith**:
+
+- **Ingestion** is a durable Loom flow.
+- **Chat** is a Loom `agentLoop$` agent with retrieval tools, streamed over conversation-sse.
+- **Storage** is Postgres for everything (event log, pgvector, relational tables).
+- **Extension points** are small interfaces wired only in `loom.config.ts`.
+
+Rejected alternatives:
+
+- **Plain job queue for ingestion.** It loses durability and replay where failures are most common,
+  and it duplicates Loom.
+- **Microservices from day one.** Premature; each PR's line budget would go into wiring instead of
+  features. The monolith's seams allow splitting later (for example, a separate ingestion worker).
+
+## 3. Repo layout
+
+The repo is a pnpm workspace using Turborepo, Biome and Vitest. It gets Loom via `link:../loom`
+until `@loom/*` is published to a registry.
+
+```
+apps/
+  server/      loom.config.ts (defineConfig = composition root), HTTP API, SSE
+    app/flows/ingest-document/        durable ingestion flow
+    app/agents/doc-assistant.ts       agentLoop$ + retrieval tools
+    app/projections/chat-sessions.ts  past-sessions read model
+  web/         Vite + loom-ui Lit renderer + app-local dm-* components
+packages/
+  contracts/   zod schemas + types for the HTTP API (server ⇄ web)
+  auth/        Authenticator interface + password/session implementation
+  keystore-pg/ PostgresKeyStore (implements @loom/plugin-crypto KeyStore)
+  parsers/     DocumentParser registry, one file per format
+  embeddings/  EmbeddingProvider implementations (Ollama default)
+  vector-pg/   pgvector VectorIndex (implements @loom/memory VectorIndex)
+  blob-store/  encrypted filesystem ContentStore
+infra/         docker-compose, SQL migrations
+```
+
+Dependency rules:
+
+- Packages never import from apps.
+- Only `loom.config.ts` chooses which implementation backs each interface.
+
+### 3.1 Extension interfaces
+
+| Interface | Owner | Shape | v1 implementation |
+|---|---|---|---|
+| `Authenticator` | packages/auth | `authenticate(req) → {tenantId, userId} \| null` | email+password, HTTP-only session cookie |
+| `DocumentParser` | packages/parsers | `accepts(mime, ext)`, `parse(bytes) → ParsedDocument` | one per format (§5.3) |
+| `EmbeddingProvider` | `@loom/memory` | `modelId`, `dimensions`, `embed(texts)` | Ollama `nomic-embed-text` |
+| `VectorIndex` | `@loom/memory` | upsert / query / delete | pgvector |
+| `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
+| `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
+| `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | Loom projection → Postgres |
+
+Each interface has **one shared conformance test suite** that every implementation must pass.
+
+### 3.2 Reused from Loom
+
+| Need | Loom package |
+|---|---|
+| Composition root, compliance/erasure | `@loom/app` `defineConfig`, `app.eraseSubject` |
+| Durable flows, steps, logged non-determinism | `@loom/core` |
+| ReAct agent loop, delta chunking | `@loom/agent` |
+| LLM calls (Anthropic), streaming, untrusted-input guard | `@loom/llm` |
+| Chunking, idempotent sync, grounding, `checkCitations` | `@loom/knowledge` |
+| Embedding/vector-index interfaces, `recallRelevant` | `@loom/memory` |
+| Multi-turn conversations, history reader, barge-in, token-window rotation | `@loom/conversation` |
+| Authenticated, resumable SSE | `@loom/plugin-conversation-sse` |
+| Event store | `@loom/plugin-postgres` |
+| Blob seam, GC of unpinned content | `@loom/plugin-content` |
+| Encrypting event and snapshot stores, `shredSubject` | `@loom/plugin-crypto` |
+| Sandboxed execution of parsers | `@loom/plugin-sandbox` |
+| Per-tenant fair scheduling | `@loom/fair-scheduler` |
+| Test harness, evals | `@loom/testing`, `loom eval` |
+| Chat transcript state, Lit widgets | loom-ui `ChatFeed`, `chatSource`, `lu-chat`, `lu-inputs`, `lu-media`, `lu-data-table`, `lu-note` |
+
+## 4. Data model, tenancy and erasure
+
+### 4.1 Where data lives
+
+| Data | Store |
+|---|---|
+| Chat messages and citations | Loom event log (`@loom/conversation`). Never copied elsewhere. |
+| Ingestion progress | Loom event log (ingest flow). `documents.status` is a projection of it. |
+| Original files | `ContentStore`, path `<tenant>/<user>/<sha256>`, encrypted |
+| Everything else | Postgres tables (§4.2) |
+
+### 4.2 Tables
+
+Every table carries `tenant_id`.
+
+- **`tenants`** `(id, name, created_at)`. Sign-up creates a personal tenant.
+- **`users`** `(id, tenant_id, email UNIQUE, password_hash, created_at)`. Passwords are hashed with
+  argon2id.
+- **`auth_sessions`** `(token_hash, user_id, expires_at)`. Only a hash of the cookie token is stored.
+- **`documents`** `(id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
+  content_address, fingerprint, status, error, stats jsonb, summary_enc, created_at, updated_at)`
+  - `status` is one of `uploaded | parsing | embedding | ready | failed`.
+  - `UNIQUE(tenant_id, owner_id, fingerprint)`: re-uploading identical bytes returns the existing
+    document.
+- **`chunks`** `(id, tenant_id, document_id → ON DELETE CASCADE, ordinal, text_enc, locator jsonb,
+  token_count, embedding vector(N), embedding_model)`
+  - Indexes: HNSW (cosine) on `embedding`; B-tree on `(tenant_id, document_id)`.
+- **`chat_sessions`** `(id = Loom conversationId, tenant_id, user_id, title_enc, scope jsonb,
+  created_at, last_message_at, message_count, deleted_at)`
+  - Maintained by the `chat-sessions` projection.
+  - `scope` is `"all"` or `{documentIds: [...]}`.
+- **`data_keys`** `(subject_id, wrapped_dek, kek_id, created_at)`. Owned by `PostgresKeyStore`.
+
+The `_enc` suffix marks a column encrypted at the app level with the owning user's data key (§4.4).
+
+`N`, the embedding dimension, is fixed per deployment by migration. Changing the embedding model runs a
+resumable re-embed flow, driven by `chunks.embedding_model`.
+
+### 4.3 Tenancy enforcement (defense in depth)
+
+1. **Identity.** The `Authenticator` produces `{tenantId, userId}` on every request. Nothing
+   downstream accepts a tenant ID from the client.
+2. **Row-level security.** Postgres RLS on every table checks
+   `tenant_id = current_setting('app.tenant_id')`, set with `SET LOCAL` in each transaction through
+   `withTenant(tx)`. The app connects as a **non-owner role**, so it cannot bypass RLS.
+3. **Event log.** Loom streams are tenant-scoped (Loom tenancy). conversation-sse returns 404 across
+   tenants.
+4. **Blobs.** Paths are tenant- and user-prefixed, and the resolver authorizes the tenant (Loom
+   media-gallery pattern).
+
+**Quotas** (per tenant, configurable):
+
+- 50 MB per file, a total storage cap and a document-count cap, all enforced at upload.
+- LLM token budgets, enforced by middleware.
+
+### 4.4 Crypto-shredding (v1 requirement)
+
+- **Subject.** A user is the unit of erasure. Each user has their own data key (DEK). Erasing a
+  tenant erases all of its users.
+- **Key store.** `PostgresKeyStore` stores each DEK wrapped by a master key-encryption key (KEK). In
+  v1 the KEK comes from an env var or file, identified by `kek_id`; a cloud KMS can replace it later.
+  `destroy(subject)` deletes the row, which is irreversible.
+- **What is encrypted under the user's DEK:**
+
+| Store | Mechanism | After erasure |
+|---|---|---|
+| Loom event log | `EncryptingEventStore` | Reads yield `{ $shredded }` |
+| Loom snapshots | `EncryptingSnapshotStore` with `sealState: true`, same KeyStore | Unreadable |
+| Blobs | Envelope-encrypted before writing to `ContentStore` | Ciphertext only |
+| `*_enc` columns | App-level AEAD with the user's DEK | Rows also hard-deleted |
+| `chunks.embedding` | **Plaintext** (pgvector must compare raw vectors) | Hard-deleted |
+
+- **Erasure flow.** `DELETE /api/me` runs these steps in order:
+  1. `app.eraseSubject(userId)`. This is liveness-gated: shredding is deferred while any of the
+     user's executions is still live.
+  2. Hard-delete the user's rows.
+  3. Delete the user's blobs.
+  4. `KeyStore.destroy(userId)`.
+
+  Each step is idempotent, so a failed erasure can be re-run.
+- **Known trade-offs:**
+  1. Embeddings in Postgres backups survive until those backups expire. Backups must be kept for a
+     limited time (default 30 days), and this is documented in the operations runbook.
+  2. Chunk text is encrypted, so there is no Postgres full-text index. v1 search is vector-only.
+  3. Blob deduplication applies only within a single user.
+  4. Copies retained by the LLM provider are outside the app's control. Requests carry only the
+     content they need.
+
+## 5. Ingestion
+
+### 5.1 Upload — `POST /api/documents` (streamed multipart)
+
+1. Enforce quota and size limits while the file streams in.
+2. Sniff the type from **magic bytes**; the extension is only a hint.
+3. Compute the sha256 fingerprint. A duplicate returns the existing document.
+4. Encrypt and write the blob, insert the `documents` row (`uploaded`), and start `ingest-document`
+   with idempotency key `documentId`.
+
+### 5.2 `ingest-document` flow
+
+Each step is a durable `step$`. A crash resumes at the step that was running. A user retry restarts
+from the step that failed.
+
+| Step | Behavior |
+|---|---|
+| **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in `@loom/plugin-sandbox` with time and memory limits and decompression caps (docx zip bombs). |
+| **chunk** | `@loom/knowledge` chunker. Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
+| **embed** | Batches of 64 → `EmbeddingProvider` → `VectorIndex.upsert`, idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
+| **analyze** | Deterministic statistics: word and page counts, reading time, language, outline, notable dates and numbers. |
+| **summarize** | Map-reduce. Summarize each section in parallel, then reduce to structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest`. |
+| **finalize** | Set `status=ready`. |
+
+**Progress.** Every step emits a progress event, streamed to the browser over
+`GET /api/documents/events` (SSE).
+
+**Failures:**
+
+- **Transient** failures (LLM or embedder 429/5xx, timeouts, Ollama down) retry with exponential
+  backoff.
+- **Permanent** failures (corrupt file, password-protected PDF, unsupported content) set
+  `status=failed` with a human-readable error. `POST /api/documents/:id/retry` re-runs the flow.
+- Deleting a document cancels its flow.
+
+**Scaling.** `@loom/fair-scheduler` caps ingestion concurrency per tenant. Moving flows to a separate
+worker process is a configuration change.
+
+### 5.3 Parsers
+
+| Format | Library | Locator |
+|---|---|---|
+| txt | built-in (BOM / UTF-16 detection) | character range |
+| md | `remark` | heading path |
+| org | `orga` | heading path |
+| docx | `mammoth` → HTML → section tree | heading path |
+| doc | `word-extractor` | paragraph range |
+| pdf | `unpdf` (pdf.js), page by page | page number |
+| image | Claude vision: transcribe text and describe the image | image region |
+
+Scanned PDF pages with no text layer are routed through the image path.
+
+## 6. Agent, retrieval and chat sessions
+
+### 6.1 HTTP API
+
+| Endpoint | Behavior |
+|---|---|
+| `POST /api/chats {scope?}` | Create a Loom conversation. The projection creates the session row. |
+| `GET /api/chats?cursor&q` | List sessions, newest first, 50 per page. `q` filters by title after decryption. |
+| `GET /api/chats/:id/messages?cursor` | Paged history via `ConversationReader.read()`, including stored citations. |
+| `POST /api/chats/:id/messages` | Send a turn. |
+| `GET /api/chats/:id/stream` | conversation-sse: reply deltas, tool activity, citations. Resumable via `Last-Event-ID`. |
+| `POST /api/chats/:id/stop` | Stop generating (barge-in). |
+| `PATCH /api/chats/:id` | Rename or change scope. |
+| `DELETE /api/chats/:id` | Soft-delete (`deleted_at`). |
+
+**Chat lifecycle:**
+
+- Opening an old session loads its history and continues the same conversation.
+- Long sessions use Loom's token-window rotation.
+- A short LLM call titles the session after its first reply, recorded as an event the projection
+  folds. The user can rename it.
+
+### 6.2 `doc-assistant` agent
+
+- **Loop.** Loom `agentLoop$`. The model defaults to `claude-opus-5-5`; model and effort are
+  configurable per route.
+- **Tools.** Read-only, zod-validated. Tenant, user and chat scope are injected from the execution
+  context, **never taken from model arguments**.
+
+| Tool | Behavior |
+|---|---|
+| `search_docs(query, k≤12)` | Embed the query, run pgvector top-k within the scope, re-rank with MMR. Returns `{passageId, docTitle, locator, text}` with the text marked untrusted. |
+| `read_section(documentId, locator)` | Return neighbouring chunks or the whole section. |
+| `get_summary(documentId)` | Return the precomputed summary and analysis. |
+| `list_documents(filter?)` | Return titles, types and status. |
+
+### 6.3 Grounding and citations
+
+- **Citation requirement.** The system prompt requires claims to cite `[[passageId]]` and to answer
+  "not found in your documents" when retrieval is weak. Falling back to general knowledge is a config
+  flag, off by default.
+- **Validation.** Each answer passes through `@loom/knowledge` `checkCitations`. Citations to passages
+  that were not retrieved are stripped.
+- **Rendering.** Valid citations become numbered markers with source cards (document, page or heading,
+  snippet) and are stored in the message metadata.
+
+### 6.4 Safety, determinism and cost
+
+- **Untrusted input.** Document text is untrusted, the tools have no side effects, and Loom's
+  capability ring grants the agent only these tools. A prompt injection in a document can skew an
+  answer but cannot leak data or act.
+- **Determinism.** LLM calls go through `@loom/llm` effects, and retrieval runs inside `ctx.decide` /
+  `recallRelevant`, so `loom debug --at` replays a conversation exactly.
+- **Cost.** The system prompt and tool definitions come first, followed by a prompt-cache breakpoint;
+  per-turn content comes after it. Usage is charged against the tenant's token budget.
+- **Errors:**
+  - An LLM error or timeout puts an error event on the stream, and the UI offers "Regenerate".
+  - `stop_reason: refusal` is shown as an explicit message.
+  - An embedder outage returns "search unavailable", never an answer without sources.
+
+## 7. Web UI (`apps/web`)
+
+**Stack.** Vite, Lit and the loom-ui Lit renderer. `@loom/*` and `@loom-ui/*` are aliased to their
+TypeScript sources (Loom ships CJS only; this follows the AetherOS console precedent), and only
+browser-safe entry points are imported.
+
+```
+apps/web/src/
+  main.ts  router.ts  api/  state/  components/  styles/tokens.css
+```
+
+| Need | Source |
+|---|---|
+| Transcript state, resumable stream fold | loom-ui `ChatFeed`, `chatSource` |
+| Message list | `lu-chat`, wrapped by `dm-chat-view` |
+| Composer | `lu-inputs` / `chatForm`, plus an attach button |
+| Image preview | `lu-media` |
+| Document table | `lu-data-table`, wrapped by `dm-doc-table` |
+| Empty states | `lu-note` |
+| App shell, session sidebar | `dm-app-shell`, `dm-session-list` |
+| Upload | `dm-upload-zone` |
+| Document detail (Summary / Analysis / Content tabs) | `dm-doc-detail` |
+| Citations and sources panel | `dm-citation`, `dm-source-panel` |
+| Scope picker, auth forms | `dm-scope-picker`, `dm-auth-form` |
+
+**State.** Small reactive stores (Lit `ReactiveController`s plus `@lit/context`), one per concern:
+auth, sessions, chat, documents. Stores never touch the DOM.
+
+**Security and accessibility:**
+
+- Assistant answers and extracted document text are untrusted. Markdown is rendered, then sanitized
+  with DOMPurify.
+- The streaming answer region is `aria-live="polite"`.
+- Every view is keyboard-navigable with visible focus.
+- Colors meet WCAG AA in light and dark themes.
+
+**Design.** UI mocks come from Claude Design using the brief in Appendix A. Their tokens feed
+`styles/tokens.css`.
+
+**Risk.** It is unverified whether `lu-chat` can render custom inline citation markers. PR 34 is a
+throwaway spike that settles this before UI work. If it can't, `dm-chat-view` renders assistant
+bodies itself and still uses `ChatFeed` for state.
+
+## 8. Testing and quality gates
+
+| Layer | Tool | Covers |
+|---|---|---|
+| Unit | Vitest | Parsers (fixtures), chunking, key store, citation mapping, contracts, stores |
+| Conformance | Vitest, one suite per interface | Every implementation of the §3.1 interfaces |
+| Flow / agent | `@loom/testing` with scripted LLM and embedder fakes | Crash-resume at each step, retries, failure states, tool sequences, citations |
+| Integration | Vitest + Postgres/pgvector (runs when `DOCMIND_TEST_PG_URL` is set) | RLS isolation (including raw SQL as the app role), vector search, projections, erasure leaves nothing decryptable |
+| Component | Vitest + happy-dom | `dm-*` component states from the mocks |
+| E2E | Playwright | Sign up → upload → ready → ask → cited answer → reload → history intact |
+| Retrieval eval | `loom eval` (manual or nightly, not a merge gate) | Retrieval hit rate and citation validity on a fixture corpus |
+
+**Test hygiene** follows Loom's AGENTS.md:
+
+- No sleeps; wait on conditions.
+- Test servers bind to `127.0.0.1`.
+- No timing assertions in `*.test.ts`.
+- Test files are typechecked.
+
+**PR gate:**
+`pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`, plus integration
+tests when Postgres is available.
+
+**CI:**
+
+- Triggers: `pull_request: [opened, synchronize, reopened, ready_for_review]` and pushes to `main`.
+- **Every PR job is gated on `github.event.pull_request.draft == false`.** Drafts use no Actions
+  minutes.
+
+**PR rules:**
+
+- ≤200 changed lines and ≤10 files. Lockfiles, the generated `loom.gen.ts` and binary fixtures don't
+  count toward the limit but are listed in the PR description.
+- Each PR leaves `main` green and has no half-built reachable paths.
+- Tests go in the same PR as the code they cover.
+- Branch names: `feat/<area>-<thing>`. Commits follow Conventional Commits.
+- Every PR is opened as a **draft**, gets an independent code review before reaching the owner, and
+  is merged only with the owner's approval.
+
+## 9. PR roadmap
+
+Each milestone ends with something runnable.
+
+**M0 — Foundations**
+
+1. Repo scaffold: workspace, Turborepo, Biome, tsconfig, `create-loom-app` server, `/healthz` and its
+   test.
+2. CI workflow (skips drafts), docker-compose (Postgres + pgvector, Ollama), `.env.example`.
+3. `packages/contracts`: zod schemas for auth, documents and chats.
+4. Migration runner, `tenants` / `users` / `auth_sessions`, RLS, and `withTenant(tx)` with an
+   isolation test.
+
+**M1 — Identity and keys**
+
+5. `Authenticator` interface, conformance suite, request middleware.
+6. Password auth (argon2id, session cookie) with sign-up, login and logout.
+7. `packages/keystore-pg`: `PostgresKeyStore` passing the Loom KeyStore contract.
+8. Postgres event store wrapped by `EncryptingEventStore` and `EncryptingSnapshotStore` in
+   `loom.config.ts`.
+
+**M2 — Document storage** (runnable: upload and list via the API)
+
+9. `packages/blob-store`: encrypted filesystem `ContentStore`.
+10. `documents` table, RLS, upload endpoint (magic-byte sniffing, quotas, dedup).
+11. List, get and delete document endpoints.
+
+**M3 — Ingestion** (runnable: documents reach `ready` with summaries)
+
+12. `DocumentParser` interface, registry, conformance suite, txt parser.
+13. Sandboxed parse runner.
+14. `ingest-document` flow skeleton, status projection, progress SSE.
+15. md parser.
+16. org parser.
+17. docx parser.
+18. doc parser.
+19. pdf parser.
+20. image parser (vision).
+21. Chunk step and `chunks` table.
+22. Ollama `EmbeddingProvider` and conformance suite.
+23. `packages/vector-pg` and the embed step.
+24. Analyze step.
+25. Summarize step.
+26. Fair scheduling, retry policy, failed state, retry endpoint.
+
+**M4 — Chat and history** (runnable: cited chat over the API)
+
+27. Chat create, `chat-sessions` projection, list endpoint.
+28. History endpoint, send route, conversation-sse stream.
+29. `search_docs` (with MMR) and `list_documents` tools.
+30. `read_section` and `get_summary` tools.
+31. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata.
+32. Auto titles, rename, delete, scope change, stop.
+
+**M5 — Erasure**
+
+33. `DELETE /api/me` with an end-to-end non-recoverability integration test.
+
+**M6 — Web UI** (runnable: the full app in a browser)
+
+34. Spike (throwaway): citation markers in `lu-chat`.
+35. Web scaffold: aliases, router, tokens, API client, SSE helper.
+36. Sign-in, sign-up and account settings (including "Delete my account"). Split if over the limit.
+37. App shell and session sidebar.
+38. Chat view, history paging, streaming.
+39. Citation markers and sources panel.
+40. Composer, scope picker, stop and regenerate.
+41. Upload zone.
+42. Document library table.
+43. Document detail tabs.
+
+**M7 — Hardening**
+
+44. Playwright end-to-end golden path.
+45. Retrieval eval set.
+46. Token-budget middleware and quota reporting.
+47. README, architecture doc, operations runbook (keys, backups, erasure).
+
+**Ordering:**
+
+- After PR 3, M6 can proceed in parallel with M3–M5 against a mocked API.
+- A PR that exceeds the size limit is split rather than stretched.
+
+## 10. Open risks
+
+| Risk | Mitigation |
+|---|---|
+| `lu-chat` may lack an inline-citation hook | PR 34 spike; fallback is a custom renderer over `ChatFeed` |
+| Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out loom at a pinned ref (as loom-ui does with `LOOM_REF`). Publishing `@loom/*` is tracked as platform work. |
+| Loom is CJS-only in the browser | Vite source aliases (AetherOS precedent) |
+| Embedding residue in backups | Bounded backup retention, documented in the runbook |
+| Parsing untrusted files | Sandbox, magic-byte sniffing, size and decompression caps |
+| Prompt injection via documents | Untrusted tagging, read-only tools, capability ring, citation validation |
+
+## Appendix A — Claude Design brief
+
+The structured prompt for generating UI mocks lives in
+[`docs/design/claude-design-brief.md`](../design/claude-design-brief.md). It covers the screens
+(auth, app shell with session sidebar, chat with streaming and citations, document library with upload,
+document detail, account settings with account deletion), their states, the visual direction and the
+component sheet.
