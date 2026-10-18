@@ -98,3 +98,23 @@ export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<
     updatedAt: row.updated_at.toISOString(),
   };
 }
+
+/**
+ * Serialises writers of one tenant until the transaction ends: quota checks, the duplicate check
+ * and the delete's blob removal all run under it, so they cannot interleave. Held for the length
+ * of a transaction only (the file itself is staged before it is taken).
+ */
+export async function lockTenantForWrite(tx: PoolClient, tenantId: string): Promise<void> {
+  await tx.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
+    `docmind:documents:${tenantId}`,
+  ]);
+}
+
+/** Documents and bytes held by the transaction's tenant (row-level security does the scoping). */
+export async function usageOfTenant(tx: PoolClient): Promise<{ documents: number; bytes: number }> {
+  const { rows } = await tx.query<{ documents: number; bytes: string }>(
+    "SELECT count(*)::int AS documents, coalesce(sum(size_bytes), 0)::text AS bytes FROM documents",
+  );
+  const row = rows[0] as { documents: number; bytes: string };
+  return { documents: row.documents, bytes: Number(row.bytes) };
+}
