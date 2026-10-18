@@ -14,6 +14,7 @@ import { UploadTooLargeError, receiveFile } from "../http/multipart";
 import { peek } from "../http/peek";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
+import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
 import {
   filenameBind,
@@ -32,6 +33,8 @@ export interface DocumentRoutesDeps {
   /** A blob store for this user. Cheap to build: no I/O happens until it is used. */
   blobs: (identity: Identity) => EncryptedFsContentStore;
   limits: DocumentLimits;
+  /** Starts and cancels document ingestion. */
+  ingest: IngestPort;
 }
 
 /** An error answer on the upload route. The request body may be unread, so the connection closes. */
@@ -131,6 +134,18 @@ async function upload(
     return uploadError(req, res, 415, "unsupported_type", "this file type is not supported");
   }
   const { document, duplicate } = outcome.value.result;
+  // The row is committed. Only now start the flow: a rolled-back upload must never have an execution.
+  // A duplicate whose document never left `uploaded` re-attempts the start, which Loom makes start-once.
+  if (!duplicate || document.status === "uploaded") {
+    await deps.ingest.start(identity, document.id).catch((err: unknown) => {
+      // Class and route only: the message could carry anything.
+      console.error(
+        "ingest start failed",
+        err instanceof Error ? err.constructor.name : typeof err,
+        "POST /api/documents",
+      );
+    });
+  }
   json(res, duplicate ? 200 : 201, { document, duplicate } satisfies UploadDocumentResponse);
 }
 

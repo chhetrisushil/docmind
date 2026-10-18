@@ -6,11 +6,15 @@ import { join } from "node:path";
 import type { Authenticator, Identity } from "@docmind/auth";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { ExecutionHandle } from "@loom/workflow-runtime";
 import { Pool } from "pg";
+import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
+import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
+import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { type NewDocument, filenameBind, titleBind } from "./repo";
 import { type DocumentRoutesDeps, documentRoutes } from "./routes";
@@ -74,12 +78,84 @@ export async function newDocument(
   };
 }
 
+export interface IngestProbe {
+  /** The execution handle of every start that created an execution, by document id. */
+  handles: Map<string, ExecutionHandle>;
+  /** "start:<documentId>" and "cancel:<documentId>", in call order. */
+  calls: string[];
+  hold(): void;
+  release(): void;
+  failNext(op: "start" | "cancel"): void;
+}
+
+/** A real in-memory Loom app running the ingest stub against `app`, behind a probe. */
+function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close(): Promise<void> } {
+  let gate: Promise<void> | null = null;
+  let open: () => void = () => {};
+  const real = pgIngestDeps(app);
+  const loom = buildApp({ kind: "memory" }, undefined, {
+    ingest: {
+      documentExists: async (ref) => {
+        await gate;
+        return real.documentExists(ref);
+      },
+    },
+  });
+  const inner = loomIngest(loom.runtime);
+  const failures = { start: 0, cancel: 0 };
+  const probe: IngestProbe = {
+    handles: new Map(),
+    calls: [],
+    hold() {
+      gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+    },
+    release() {
+      open();
+      gate = null;
+    },
+    failNext(op) {
+      failures[op]++;
+    },
+  };
+  const port: IngestPort = {
+    async start(identity, documentId) {
+      probe.calls.push(`start:${documentId}`);
+      if (failures.start > 0) {
+        failures.start--;
+        throw new Error("synthetic-start-error");
+      }
+      const handle = await inner.start(identity, documentId);
+      if (handle) probe.handles.set(documentId, handle);
+      return handle;
+    },
+    async cancel(identity, documentId) {
+      probe.calls.push(`cancel:${documentId}`);
+      if (failures.cancel > 0) {
+        failures.cancel--;
+        throw new Error("synthetic-cancel-error");
+      }
+      await inner.cancel(identity, documentId);
+    },
+  };
+  return {
+    port,
+    probe,
+    close: async () => {
+      probe.release();
+      await loom.close();
+    },
+  };
+}
+
 export interface DocumentHarness {
   base: string;
   owner: Pool;
   app: Pool;
   root: string;
   keys: InMemoryKeyStore;
+  ingest: IngestProbe;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -102,6 +178,7 @@ export async function startDocumentServer(
   const root = mkdtempSync(join(tmpdir(), "dm-docs-"));
   const keys = new InMemoryKeyStore();
   const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
+  const ingest = makeIngest(app);
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
   const server = createHttpServer(
     documentRoutes(
@@ -118,6 +195,7 @@ export async function startDocumentServer(
             maxBytes: limits.maxFileBytes,
           }),
         limits,
+        ingest: ingest.port,
       }),
     ),
   );
@@ -129,6 +207,7 @@ export async function startDocumentServer(
     app,
     root,
     keys,
+    ingest: ingest.probe,
     upload(user, name, data) {
       const form = new FormData();
       form.append("file", new Blob([data]), name);
@@ -148,6 +227,7 @@ export async function startDocumentServer(
       );
     },
     async close() {
+      await ingest.close();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
