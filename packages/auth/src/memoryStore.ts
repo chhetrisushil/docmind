@@ -39,7 +39,8 @@ export class MemoryAuthStore implements AuthStore {
   }
 
   async deleteSession(identity: Identity, tokenHash: string): Promise<void> {
-    if (this.sessions.get(tokenHash)?.tenantId === identity.tenantId) {
+    const s = this.sessions.get(tokenHash);
+    if (s?.tenantId === identity.tenantId && s.userId === identity.userId) {
       this.sessions.delete(tokenHash);
     }
   }
