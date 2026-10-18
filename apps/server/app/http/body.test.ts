@@ -7,10 +7,17 @@ import { readJson } from "./body";
 import { json } from "./respond";
 
 const Echo = z.object({ name: z.string().min(1) });
+const Kind = z.object({ kind: z.enum(["a", "b"]) });
 
 const server = createHttpServer({
   "POST /echo": async (req, res) => {
     const body = await readJson(req, res, Echo);
+    if (body) json(res, 200, body);
+  },
+  "POST /whoami": (req, res) =>
+    json(res, 200, { contentType: req.headers["content-type"] ?? null }),
+  "POST /kind": async (req, res) => {
+    const body = await readJson(req, res, Kind);
     if (body) json(res, 200, body);
   },
 });
@@ -28,8 +35,11 @@ afterAll(async () => {
   });
 });
 
-const post = (body: string, type = "application/json") =>
-  fetch(`${base}/echo`, { method: "POST", headers: { "content-type": type }, body });
+const post = (body: string, type = "application/json", path = "/echo") =>
+  fetch(`${base}${path}`, { method: "POST", headers: { "content-type": type }, body });
+
+/** A valid `{"name": ...}` body of exactly `bytes` bytes. */
+const nameBody = (bytes: number) => `{"name":"${"x".repeat(bytes - 11)}"}`;
 
 describe("readJson", () => {
   it("returns the validated body", async () => {
@@ -38,8 +48,26 @@ describe("readJson", () => {
     expect(await res.json()).toEqual({ name: "ada" });
   });
 
+  it("accepts the media type with parameters and in any case", async () => {
+    const res = await post(JSON.stringify({ name: "ada" }), "Application/JSON; charset=utf-8");
+    expect(res.status).toBe(200);
+  });
+
   it("refuses a body that is not declared as JSON (a form post cannot send it)", async () => {
     const res = await post("name=ada", "application/x-www-form-urlencoded");
+    expect(res.status).toBe(415);
+  });
+
+  it("refuses a body with no Content-Type", async () => {
+    const sent = await fetch(`${base}/whoami`, {
+      method: "POST",
+      body: new TextEncoder().encode(JSON.stringify({ name: "ada" })),
+    });
+    expect(await sent.json()).toEqual({ contentType: null });
+    const res = await fetch(`${base}/echo`, {
+      method: "POST",
+      body: new TextEncoder().encode(JSON.stringify({ name: "ada" })),
+    });
     expect(res.status).toBe(415);
   });
 
@@ -50,9 +78,35 @@ describe("readJson", () => {
     expect(ErrorBody.parse(await bad.json()).error.message).toContain("name:");
   });
 
+  it("answers 400 for bytes that are not valid UTF-8", async () => {
+    const res = await fetch(`${base}/echo`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new Uint8Array([0x7b, 0x22, 0x6e, 0xff, 0x22, 0x7d]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("does not echo a submitted enum value in the error", async () => {
+    const res = await post(
+      JSON.stringify({ kind: "SECRET-MARKER-123" }),
+      "application/json",
+      "/kind",
+    );
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(text).toContain("kind:");
+    expect(text).not.toContain("SECRET-MARKER-123");
+  });
+
   it("answers 413 for an oversized body and keeps serving", async () => {
     const res = await post(JSON.stringify({ name: "x".repeat(20_000) }));
     expect(res.status).toBe(413);
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
+  });
+
+  it("accepts a body of exactly 16 KiB and refuses one byte more", async () => {
+    expect((await post(nameBody(16_384))).status).toBe(200);
+    expect((await post(nameBody(16_385))).status).toBe(413);
   });
 });
