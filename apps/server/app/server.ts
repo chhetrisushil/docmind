@@ -15,12 +15,14 @@ export function createHttpServer(extraRoutes: Record<string, Handler> = {}): Ser
     } catch {
       return sendError(res, 400, "bad_request", "invalid request target");
     }
-    const handler = Object.hasOwn(routes, `${req.method ?? "GET"} ${path}`)
-      ? routes[`${req.method ?? "GET"} ${path}`]
-      : undefined;
+    const method = req.method ?? "GET";
+    const key = `${method} ${path}`;
+    const handler = Object.hasOwn(routes, key) ? routes[key] : undefined;
     if (!handler) return sendError(res, 404, "not_found", "no such route");
     // The async wrapper turns a synchronous throw and a rejected promise into the same failure.
-    (async () => handler(req, res))().catch(() => {
+    (async () => handler(req, res))().catch((err: unknown) => {
+      // Logged server-side only; the client gets the fixed body below, never the error.
+      console.error("handler failed", method, path, err);
       if (res.headersSent) res.end();
       else sendError(res, 500, "internal", "internal error");
     });
