@@ -8,11 +8,16 @@ const server = createHttpServer();
 
 server.listen(port, host, () => console.log(`docmind server listening on http://${host}:${port}`));
 
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => {
-    shutdown(server, app).catch((err) => {
-      console.error(err);
-      process.exitCode = 1;
-    });
+// One shutdown, shared by every signal: a second signal reuses the same promise instead of
+// calling server.close() again, which would reject with ERR_SERVER_NOT_RUNNING.
+let closing: Promise<void> | undefined;
+const stop = () => {
+  closing ??= shutdown(server, app).catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
   });
+};
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, stop);
 }

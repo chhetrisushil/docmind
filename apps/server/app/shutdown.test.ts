@@ -28,6 +28,9 @@ describe("shutdown", () => {
         order.push("app closed");
       },
     });
+    // Yield a macrotask: a shutdown that skipped waiting for close() would have closed the app by now.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual([]);
     release();
 
     expect(await inFlight).toBe("done");
