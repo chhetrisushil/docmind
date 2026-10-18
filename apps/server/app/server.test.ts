@@ -158,6 +158,14 @@ describe("route parameters", () => {
     expect((await fetch(`${paramBase}/things/%E0%A4%A`)).status).toBe(404);
   });
 
+  it("matches a literal colon segment through the pattern, with the segment as the value", async () => {
+    expect(await (await fetch(`${paramBase}/things/:id`)).json()).toEqual({ id: ":id" });
+  });
+
+  it("decodes an encoded slash into one segment", async () => {
+    expect(await (await fetch(`${paramBase}/things/a%2Fb`)).json()).toEqual({ id: "a/b" });
+  });
+
   it("treats a parameter named like an object prototype key as plain data", async () => {
     expect(await (await fetch(`${paramBase}/things/__proto__`)).json()).toEqual({
       id: "__proto__",

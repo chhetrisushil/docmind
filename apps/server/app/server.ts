@@ -55,6 +55,10 @@ function match(
 export function createHttpServer(extraRoutes: Record<string, Handler> = {}): Server {
   const routes = { ...baseRoutes, ...extraRoutes };
   const patterns = compile(routes);
+  // Parameterised keys never match literally: `GET /things/:id` as a request is a pattern match.
+  const exactRoutes = Object.fromEntries(
+    Object.entries(routes).filter(([key]) => !key.includes("/:")),
+  );
   return createServer((req, res) => {
     let path: string;
     try {
@@ -64,7 +68,7 @@ export function createHttpServer(extraRoutes: Record<string, Handler> = {}): Ser
     }
     const method = req.method ?? "GET";
     const key = `${method} ${path}`;
-    const exact = Object.hasOwn(routes, key) ? routes[key] : undefined;
+    const exact = Object.hasOwn(exactRoutes, key) ? exactRoutes[key] : undefined;
     const found = exact
       ? { handler: exact, ctx: { params: {} } satisfies RouteContext }
       : match(patterns, method, path);
