@@ -17,5 +17,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "argon2": "^0.45.1"
   }
 }
