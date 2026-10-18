@@ -21,15 +21,17 @@
     "@loom/plugin-crypto": "*",
     "@loom/plugin-postgres": "*",
     "@loom/workflow-runtime": "*",
+    "busboy": "^1.6.0",
     "pg": "^8.13.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@loom/cli": "*",
+    "@loom/conformance": "*",
+    "@types/busboy": "^1.5.4",
     "@types/node": "^22.0.0",
-    "tsx": "^4.19.2",
-    "vitest": "^2.1.8",
     "@types/pg": "^8.11.0",
-    "@loom/conformance": "*"
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
   }
 }
