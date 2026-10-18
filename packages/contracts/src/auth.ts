@@ -3,6 +3,7 @@ import { Uuid } from "./common";
 
 /** Trimmed and lower-cased on the way in, so `users.email UNIQUE` is case-insensitive. */
 export const Email = z.string().trim().toLowerCase().email().max(254);
+export type Email = z.infer<typeof Email>;
 
 export const SignUpRequest = z.object({
   email: Email,
