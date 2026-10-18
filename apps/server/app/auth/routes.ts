@@ -29,16 +29,17 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
 
   return {
     // Answers the same 202 whether or not the email is registered, and never sets a cookie, so the
-    // response cannot tell the two apart; the client then logs in. Every attempt is counted.
+    // response cannot tell the two apart; the client then logs in. Every attempt is counted first.
     "POST /api/auth/sign-up": async (req, res) => {
       const body = await readJson(req, res, SignUpRequest);
       if (!body) return;
       const ip = ipKey("signup", clientIp(req, trustProxy));
       const account = accountKey("signup", body.email);
-      const wait = await throttle.retryAfter([ip, account]);
-      if (wait > 0) return tooMany(res, wait);
+      // Count, then check (before any argon2): a check-then-count lets a parallel burst all pass.
       await throttle.fail(ip, POLICIES.signUpIp);
       await throttle.fail(account, POLICIES.signUpAccount);
+      const wait = await throttle.retryAfter([ip, account]);
+      if (wait > 0) return tooMany(res, wait);
       await service.signUp(body.email, body.password);
       json(res, 202, { status: "accepted" } satisfies SignUpResponse);
     },
