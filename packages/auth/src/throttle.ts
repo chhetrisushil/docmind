@@ -18,7 +18,10 @@ export interface ThrottlePolicy {
 export interface Throttle {
   /** Seconds the caller must wait because of any of these keys; 0 when none is locked. */
   retryAfter(keys: readonly string[]): Promise<number>;
-  /** Counts one failure (for sign-up, one attempt) against a key. */
+  /**
+   * Counts one failure (for sign-up, one attempt) against a key. A failure made while the key
+   * is locked still counts, and re-locks it from now with the next `lockSeconds` value.
+   */
   fail(key: string, policy: ThrottlePolicy): Promise<void>;
   /**
    * Forgets the account key after a successful login. The IP key is never cleared on success,
