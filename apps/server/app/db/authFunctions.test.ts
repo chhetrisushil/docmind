@@ -41,6 +41,17 @@ describe.skipIf(!PG_URL)("auth SQL functions (need DOCMIND_TEST_PG_URL)", () => 
     expect(rowCount).toBe(0);
   });
 
+  it("refuses to add a user to an existing tenant", async () => {
+    const U3 = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+    await expect(
+      app.query("SELECT auth_sign_up($1, $2, 'new@example.com', 'hash')", [T1, U3]),
+    ).rejects.toMatchObject({ code: "23505" });
+    const members = await db.owner.query("SELECT 1 FROM users WHERE tenant_id = $1", [T1]);
+    expect(members.rowCount).toBe(1);
+    const created = await db.owner.query("SELECT 1 FROM users WHERE email = 'new@example.com'");
+    expect(created.rowCount).toBe(0);
+  });
+
   it("finds a live session by token hash and ignores an expired one", async () => {
     await withTenant(app, T1, async (tx) => {
       await tx.query(
@@ -79,21 +90,38 @@ describe.skipIf(!PG_URL)("auth SQL functions (need DOCMIND_TEST_PG_URL)", () => 
   it("is executable by the app role and by nobody else", async () => {
     const { rows } = await db.owner.query(
       `SELECT p.proname,
-              has_function_privilege('docmind_app', p.oid, 'EXECUTE') AS app,
-              has_function_privilege(0, p.oid, 'EXECUTE') AS public
+              p.proacl::text[] AS acl,
+              pg_get_userbyid(p.proowner) AS owner
          FROM pg_proc p
         WHERE prosecdef AND proname LIKE 'auth\\_%' AND pronamespace = 'public'::regnamespace`,
     );
     expect(rows.length).toBe(4);
-    for (const r of rows) expect([r.app, r.public], r.proname).toEqual([true, false]);
+    for (const r of rows)
+      expect([...r.acl].sort(), r.proname).toEqual(
+        [`${r.owner}=X/${r.owner}`, `docmind_app=X/${r.owner}`].sort(),
+      );
   });
 
   it("indexes sessions by (tenant_id, user_id) and by expires_at", async () => {
     const { rows } = await db.owner.query(
-      "SELECT indexdef FROM pg_indexes WHERE tablename = 'auth_sessions'",
+      "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'auth_sessions' ORDER BY indexname",
     );
-    const defs = rows.map((r) => r.indexdef).join("\n");
-    expect(defs).toContain("(tenant_id, user_id)");
-    expect(defs).toContain("(expires_at)");
+    expect(rows).toEqual([
+      {
+        indexname: "auth_sessions_expires_at_idx",
+        indexdef:
+          "CREATE INDEX auth_sessions_expires_at_idx ON public.auth_sessions USING btree (expires_at)",
+      },
+      {
+        indexname: "auth_sessions_pkey",
+        indexdef:
+          "CREATE UNIQUE INDEX auth_sessions_pkey ON public.auth_sessions USING btree (token_hash)",
+      },
+      {
+        indexname: "auth_sessions_tenant_user_idx",
+        indexdef:
+          "CREATE INDEX auth_sessions_tenant_user_idx ON public.auth_sessions USING btree (tenant_id, user_id)",
+      },
+    ]);
   });
 });
