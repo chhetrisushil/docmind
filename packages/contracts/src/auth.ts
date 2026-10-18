@@ -18,6 +18,13 @@ export const LoginRequest = z.object({
 });
 export type LoginRequest = z.infer<typeof LoginRequest>;
 
-/** `GET /api/me`, and the body of a successful sign-up or login. */
+/**
+ * The only body sign-up ever answers with (202), whether or not the email was already registered:
+ * it must not reveal which emails have accounts. The client then logs in.
+ */
+export const SignUpResponse = z.object({ status: z.literal("accepted") });
+export type SignUpResponse = z.infer<typeof SignUpResponse>;
+
+/** `GET /api/me`, and the body of a successful login. */
 export const MeResponse = z.object({ userId: Uuid, tenantId: Uuid, email: Email });
 export type MeResponse = z.infer<typeof MeResponse>;
