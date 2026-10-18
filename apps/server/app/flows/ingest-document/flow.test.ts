@@ -6,7 +6,7 @@ import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor } from "../../subject";
 import type { IngestDeps } from "./deps";
-import { IngestOutput, IngestStartInput, ingestBeginStep, ingestDocumentFlow } from "./flow";
+import { IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
 
 const ids = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -60,7 +60,9 @@ describe("ingest-document stub flow", () => {
   it("fails at its step, not silently, when the app was built without ingest deps", async () => {
     const app = buildApp({ kind: "memory" });
     const handle = await run(ids(), app);
-    await expect(handle.waitForCompletion()).rejects.toThrow(/ingest-begin/);
+    await expect(handle.waitForCompletion()).rejects.toThrow(
+      /No effect registered for toolId: "ingest-begin"/,
+    );
     await app.close();
   });
 
@@ -102,7 +104,7 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
   });
 
   it("marks nothing sensitive, and so registers no event paths", () => {
-    expect(sensitivePathsFromSteps([ingestBeginStep])).toEqual({});
+    expect(sensitivePathsFromSteps(ingestDocumentFlow.definition.steps)).toEqual({});
     // If a content-bearing field is ever added to this flow, register it in the same PR and update
     // this expectation: an event written before its path is registered stays readable forever.
     expect(SENSITIVE_EVENT_PATHS).toEqual({});
