@@ -17,8 +17,6 @@ export function loadKek(env: NodeJS.ProcessEnv = process.env): Kek {
   const id = env.DOCMIND_KEK_ID ?? "kek-1";
   if (!KEK_ID.test(id)) throw new Error("DOCMIND_KEK_ID must match /^[a-z0-9][a-z0-9._-]{0,63}$/");
   const file = env.DOCMIND_KEK_FILE;
-  if (env.DOCMIND_KEK && file)
-    throw new Error("set one of DOCMIND_KEK or DOCMIND_KEK_FILE, not both");
   const name = file ? "DOCMIND_KEK_FILE" : "DOCMIND_KEK";
   const b64 = file ? readFileSync(file, "utf8").trim() : env.DOCMIND_KEK;
   if (!b64) throw new Error("set DOCMIND_KEK (base64, 32 bytes) or DOCMIND_KEK_FILE");
