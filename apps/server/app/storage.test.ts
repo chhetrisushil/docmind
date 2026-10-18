@@ -108,7 +108,13 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     const raw = await stores.raw.snapshotStore.loadLatest(exec);
     expect(JSON.stringify(raw?.state)).not.toContain("private words");
 
-    await keys.destroy(user);
-    await expect(stores.sealed.snapshotStore.loadLatest(exec)).rejects.toThrow();
+    await shredSubject(keys, stores.raw.eventStore, exec, {
+      subjectId: user,
+      executionIds: [exec],
+      snapshotStore: stores.raw.snapshotStore,
+    });
+    await expect(stores.sealed.snapshotStore.loadLatest(exec)).rejects.toBeInstanceOf(
+      PayloadShreddedError,
+    );
   });
 });

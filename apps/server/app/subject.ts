@@ -1,13 +1,8 @@
+import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
-
-/**
- * Loom's `MAX_EXECUTION_ID_BYTES` (`@loom/plugin-postgres`, `PostgresEventStore.ts`). Copied, not
- * imported, because this package does not depend on the Postgres plugin; Loom refuses a longer id at
- * append time, so this check fails earlier and says why.
- */
-const MAX_EXECUTION_ID_BYTES = 1024;
 
 /**
  * The execution id for something a user owns. Loom encrypts an execution's data under the key of
