@@ -73,16 +73,19 @@ describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
 
   it("finishes after a crash: batches are atomic and a re-run takes the rest", async () => {
     let updates = 0;
+    const patched = new WeakSet<object>(); // the pool hands the same client back, so wrap it once
     const crashing = {
       query: db.owner.query.bind(db.owner),
       connect: async () => {
         const client = await db.owner.connect();
+        if (patched.has(client)) return client;
+        patched.add(client);
         const run = client.query.bind(client) as (...args: unknown[]) => unknown;
         (client as { query: unknown }).query = (...args: unknown[]) => {
           if (
             typeof args[0] === "string" &&
             args[0].startsWith("UPDATE data_keys") &&
-            ++updates === 3
+            ++updates === 4
           ) {
             throw new Error("crash");
           }
@@ -92,11 +95,18 @@ describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
       },
     } as unknown as Pool;
 
+    const before = await rows();
     await expect(rotateKek(crashing, [newKek, oldKek], 2)).rejects.toThrow("crash");
-    const half = await db.owner.query(
-      "SELECT count(*)::int AS n FROM data_keys WHERE kek_id = 'kek-2'",
-    );
-    expect(half.rows[0].n).toBe(2); // the first batch committed, the second rolled back whole
+    expect(updates).toBe(4); // batch 2 had already written one row when it failed
+    const after = await rows();
+    const live = after.filter((r) => !r.destroyed_at);
+    const done = live.filter((r) => r.kek_id === "kek-2");
+    const undone = live.filter((r) => r.kek_id !== "kek-2");
+    expect(done).toHaveLength(2); // the first batch committed
+    expect(undone).toHaveLength(2); // the second rolled back whole, including its one written row
+    for (const row of undone) {
+      expect(row).toEqual(before.find((r) => r.subject_id === row.subject_id));
+    }
 
     const rest = await rotateKek(db.owner, [newKek, oldKek], 2);
     expect(rest).toEqual({ rotated: 2, failed: [], remaining: {} });
