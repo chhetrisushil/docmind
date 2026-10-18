@@ -70,4 +70,77 @@ describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
     });
     expect(await rows()).toEqual(settled);
   });
+
+  it("finishes after a crash: batches are atomic and a re-run takes the rest", async () => {
+    let updates = 0;
+    const crashing = {
+      query: db.owner.query.bind(db.owner),
+      connect: async () => {
+        const client = await db.owner.connect();
+        const run = client.query.bind(client) as (...args: unknown[]) => unknown;
+        (client as { query: unknown }).query = (...args: unknown[]) => {
+          if (
+            typeof args[0] === "string" &&
+            args[0].startsWith("UPDATE data_keys") &&
+            ++updates === 3
+          ) {
+            throw new Error("crash");
+          }
+          return run(...args);
+        };
+        return client;
+      },
+    } as unknown as Pool;
+
+    await expect(rotateKek(crashing, [newKek, oldKek], 2)).rejects.toThrow("crash");
+    const half = await db.owner.query(
+      "SELECT count(*)::int AS n FROM data_keys WHERE kek_id = 'kek-2'",
+    );
+    expect(half.rows[0].n).toBe(2); // the first batch committed, the second rolled back whole
+
+    const rest = await rotateKek(db.owner, [newKek, oldKek], 2);
+    expect(rest).toEqual({ rotated: 2, failed: [], remaining: {} });
+    expect(await verifyKeys(db.owner, newKek)).toMatchObject({ verified: 4, wrongKek: 0 });
+  });
+
+  it("reports a key that will not open, and keys wrapped by an unknown KEK, and changes neither", async () => {
+    const [bad, stranger] = [...deks.keys()];
+    await db.owner.query("UPDATE data_keys SET wrapped_dek = $2 WHERE subject_id = $1", [
+      bad,
+      randomBytes(60),
+    ]);
+    await db.owner.query("UPDATE data_keys SET kek_id = 'kek-0' WHERE subject_id = $1", [stranger]);
+    const before = (await rows()).filter((r) => r.subject_id === bad || r.subject_id === stranger);
+
+    const result = await rotateKek(db.owner, [newKek, oldKek]);
+    expect(result).toEqual({ rotated: 2, failed: [bad], remaining: { "kek-1": 1, "kek-0": 1 } });
+    expect((await rows()).filter((r) => r.subject_id === bad || r.subject_id === stranger)).toEqual(
+      before,
+    );
+
+    // With only the new KEK, verification still flags the bad row (by subject id) and the unknown-KEK row.
+    expect(await verifyKeys(db.owner, newKek)).toEqual({ verified: 2, wrongKek: 2, failed: [] });
+    const oldOnly = await verifyKeys(db.owner, oldKek);
+    expect(oldOnly.failed).toEqual([bad]);
+  });
+
+  it("skips a row another transaction holds, counts it as remaining, and takes it next run", async () => {
+    const [locked] = [...deks.keys()];
+    const holder = await db.owner.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM data_keys WHERE subject_id = $1 FOR UPDATE", [locked]);
+      const result = await rotateKek(db.owner, [newKek, oldKek]);
+      expect(result).toEqual({ rotated: 3, failed: [], remaining: { "kek-1": 1 } });
+      await holder.query("COMMIT");
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined); // no-op after COMMIT; frees the lock if the test failed
+      holder.release();
+    }
+    expect(await rotateKek(db.owner, [newKek, oldKek])).toEqual({
+      rotated: 1,
+      failed: [],
+      remaining: {},
+    });
+  });
 });
