@@ -3,4 +3,4 @@ dist
 *.tsbuildinfo
 .turbo
 .env
-/data
+data/
