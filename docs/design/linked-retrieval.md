@@ -1,7 +1,7 @@
 # Linked retrieval: semantic seeds, then link hops
 
-**Status:** proposal (2026-10-18). Targets M3 (ingestion) and M4 (chat). Amends spec §4.2, §5 and §6.2
-once accepted.
+**Status:** accepted direction (2026-10-18). Targets M3 (ingestion) and M4 (chat). Folded into spec
+§4.2, §5 and §6.2 when the M3 and M4 plans are written; the open questions below are settled there.
 
 ## Problem
 
