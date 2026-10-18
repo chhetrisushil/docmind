@@ -10,17 +10,20 @@ export class MemoryAuthStore implements AuthStore {
   now: () => Date = () => new Date();
 
   async findLogin(email: string): Promise<LoginRecord | null> {
-    return this.accounts.get(email) ?? null;
+    const a = this.accounts.get(email);
+    if (!a) return null;
+    return { tenantId: a.tenantId, userId: a.userId, passwordHash: a.passwordHash };
   }
 
+  // Stores copies, so a caller that mutates its objects later cannot change what is stored.
   async createAccount(a: NewAccount): Promise<boolean> {
     if (this.accounts.has(a.email)) return false;
-    this.accounts.set(a.email, a);
+    this.accounts.set(a.email, { ...a });
     return true;
   }
 
   async createSession(s: NewSession): Promise<void> {
-    this.sessions.set(s.tokenHash, s);
+    this.sessions.set(s.tokenHash, { ...s, expiresAt: new Date(s.expiresAt) });
   }
 
   async findSession(tokenHash: string): Promise<Identity | null> {

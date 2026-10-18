@@ -20,7 +20,10 @@ export interface NewSession extends Identity {
  * functions for the steps that happen before a tenant is known, `withTenant` for the rest).
  */
 export interface AuthStore {
-  /** The account an email belongs to, if any. Emails arrive already lower-cased. */
+  /**
+   * The account an email belongs to, if any. Emails arrive already lower-cased. Returns exactly
+   * `{ tenantId, userId, passwordHash }`: the email is not echoed back, matching `auth_find_login`.
+   */
   findLogin(email: string): Promise<LoginRecord | null>;
   /** Creates the personal tenant and its first user together. False when the email is taken. */
   createAccount(account: NewAccount): Promise<boolean>;

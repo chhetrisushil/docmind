@@ -8,6 +8,25 @@ describe("session cookie", () => {
     expect(readSessionCookie({})).toBeUndefined();
   });
 
+  it("treats an empty value as absent", () => {
+    expect(readSessionCookie({ cookie: `${SESSION_COOKIE}=` })).toBeUndefined();
+    expect(readSessionCookie({ cookie: `${SESSION_COOKIE}=; a=1` })).toBeUndefined();
+  });
+
+  it("first dm_session wins when the header repeats it", () => {
+    expect(readSessionCookie({ cookie: `${SESSION_COOKIE}=first; ${SESSION_COOKIE}=second` })).toBe(
+      "first",
+    );
+  });
+
+  it("skips malformed parts without throwing", () => {
+    expect(() => readSessionCookie({ cookie: "junk; ;; =tok; noeq" })).not.toThrow();
+    expect(readSessionCookie({ cookie: "junk; ;; =tok; noeq" })).toBeUndefined();
+    expect(readSessionCookie({ cookie: ";;;" })).toBeUndefined();
+    expect(readSessionCookie({ cookie: `junk; ${SESSION_COOKIE}=tok ;` })).toBe("tok");
+    expect(readSessionCookie({ cookie: `  ${SESSION_COOKIE}  =  tok  ` })).toBe("tok");
+  });
+
   it("is HttpOnly and SameSite=Lax, Secure only when asked", () => {
     const plain = sessionCookie("tok", 90_000, false);
     expect(plain).toBe(`${SESSION_COOKIE}=tok; Path=/; HttpOnly; SameSite=Lax; Max-Age=90`);
