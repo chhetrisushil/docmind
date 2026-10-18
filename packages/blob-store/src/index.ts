@@ -5,6 +5,7 @@ export {
   FINGERPRINT_INFO,
   addressOf,
   deriveFingerprintKey,
+  fingerprintHasher,
   fingerprintOf,
   parseAddress,
   sameFingerprint,
