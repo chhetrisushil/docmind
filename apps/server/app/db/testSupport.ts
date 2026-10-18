@@ -6,12 +6,15 @@ export const PG_URL = process.env.DOCMIND_TEST_PG_URL;
 
 /** Cluster-wide and fixed, so test files agree on it. */
 export const APP_PASSWORD = "docmind_app_test";
+export const LOOM_PASSWORD = "docmind_loom_test";
 
 export interface TestDb {
   /** Connected as the owner named in DOCMIND_TEST_PG_URL (runs migrations, seeds data). */
   owner: Pool;
   /** The same database as `docmind_app`; call `setAppRolePassword` first. */
   appUrl: string;
+  /** The same database as `docmind_loom`; call `setRolePassword(owner, "docmind_loom", LOOM_PASSWORD)` first. */
+  loomUrl: string;
   drop(): Promise<void>;
 }
 
@@ -29,10 +32,14 @@ export async function createTestDb(): Promise<TestDb> {
   const appUrl = new URL(url);
   appUrl.username = "docmind_app";
   appUrl.password = APP_PASSWORD;
+  const loomUrl = new URL(url);
+  loomUrl.username = "docmind_loom";
+  loomUrl.password = LOOM_PASSWORD;
 
   return {
     owner,
     appUrl: appUrl.toString(),
+    loomUrl: loomUrl.toString(),
     async drop() {
       await owner.end();
       const dropper = new Pool({ connectionString: PG_URL, max: 1 });

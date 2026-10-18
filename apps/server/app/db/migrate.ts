@@ -44,14 +44,21 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
   }
 }
 
-/** Lets `docmind_app` log in. DDL cannot take parameters, so Postgres quotes the password itself. */
-export async function setAppRolePassword(pool: Pool, password: string): Promise<void> {
+/** Lets a DocMind role log in. DDL cannot take parameters, so Postgres quotes the password itself. */
+export async function setRolePassword(
+  pool: Pool,
+  role: "docmind_app" | "docmind_loom",
+  password: string,
+): Promise<void> {
   const { rows } = await pool.query<{ ddl: string }>(
-    "SELECT format('ALTER ROLE docmind_app LOGIN PASSWORD %L', $1::text) AS ddl",
-    [password],
+    "SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', $1::text, $2::text) AS ddl",
+    [role, password],
   );
   await pool.query(rows[0]?.ddl as string);
 }
+
+export const setAppRolePassword = (pool: Pool, password: string) =>
+  setRolePassword(pool, "docmind_app", password);
 
 async function main(): Promise<void> {
   const url = process.env.DOCMIND_MIGRATE_URL;
@@ -62,6 +69,8 @@ async function main(): Promise<void> {
     console.log(applied.length > 0 ? `applied: ${applied.join(", ")}` : "schema is up to date");
     const password = process.env.DOCMIND_APP_DB_PASSWORD;
     if (password) await setAppRolePassword(pool, password);
+    const loomPassword = process.env.DOCMIND_LOOM_DB_PASSWORD;
+    if (loomPassword) await setRolePassword(pool, "docmind_loom", loomPassword);
   } finally {
     await pool.end();
   }
