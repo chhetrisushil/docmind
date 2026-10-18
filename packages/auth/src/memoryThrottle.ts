@@ -6,7 +6,10 @@ interface Row {
   updatedAt: number;
 }
 
-/** A Throttle in memory, for tests of everything built on the interface. `now` is settable. */
+/**
+ * A Throttle in memory: a test double, never pruned, so rows accumulate for the life of the
+ * object. Not for production; the Postgres throttle is. `now` is settable, in milliseconds.
+ */
 export class MemoryThrottle implements Throttle {
   now: () => number = () => Date.now();
   private readonly rows = new Map<string, Row>();
