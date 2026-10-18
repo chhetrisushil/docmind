@@ -6,7 +6,12 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
-import { type DurableStorage, createDurableStorage, loomPoolConfig } from "./storage";
+import {
+  type DurableStorage,
+  createDurableStorage,
+  loomPoolConfig,
+  openDurableStorage,
+} from "./storage";
 import { executionIdFor } from "./subject";
 
 describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG_URL)", () => {
@@ -28,6 +33,7 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
 
   afterAll(async () => {
     await stores?.storage.eventStore.close?.();
+    await stores?.close();
     await app?.end();
     await db?.drop();
   });
@@ -169,5 +175,47 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     await expect(stores.sealed.snapshotStore.loadLatest(exec)).rejects.toBeInstanceOf(
       PayloadShreddedError,
     );
+  });
+});
+
+describe.skipIf(!PG_URL)("openDurableStorage (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    await setRolePassword(db.owner, "docmind_loom", LOOM_PASSWORD);
+    app = new Pool({ connectionString: db.appUrl });
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  const keysFor = () =>
+    new PostgresKeyStore(app, [{ id: "kek-1", key: createSecretKey(randomBytes(32)) }]);
+
+  it("rejects, naming no URL, when Loom's schema DDL cannot run", async () => {
+    await db.owner.query("ALTER SCHEMA loom OWNER TO CURRENT_USER");
+    await db.owner.query("REVOKE ALL ON SCHEMA loom FROM docmind_loom");
+    try {
+      const err = await openDurableStorage({ loomUrl: db.loomUrl, keys: keysFor() }).then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(err?.message).toMatch(/^Loom storage failed to boot: /);
+      expect(err?.message).not.toContain(LOOM_PASSWORD);
+    } finally {
+      await db.owner.query("ALTER SCHEMA loom OWNER TO docmind_loom");
+    }
+  });
+
+  it("resolves once the DDL has run", async () => {
+    const durable = await openDurableStorage({ loomUrl: db.loomUrl, keys: keysFor() });
+    await durable.storage.eventStore.close?.();
+    await durable.close();
   });
 });
