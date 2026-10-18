@@ -5,10 +5,13 @@ import { subjectOfExecution } from "./subject";
 
 type CustomStorage = Extract<StorageConfig, { kind: "custom" }>;
 
+/** Pool config for docmind_loom; `search_path` keeps Loom's tables in schema `loom`. */
+export function loomPoolConfig(loomUrl: string): { connectionString: string; options: string } {
+  return { connectionString: loomUrl, options: "-c search_path=loom" };
+}
+
 export interface DurableStorageOptions {
-  /** Connection string for the docmind_loom role (it owns the `loom` schema). */
   loomUrl: string;
-  /** Where per-user data keys live. Event payloads and snapshots are sealed under these. */
   keys: KeyStore;
 }
 
@@ -20,9 +23,7 @@ interface StorePair {
 export interface DurableStorage {
   storage: CustomStorage;
   crypto: PrincipalCryptoOptions;
-  /** The encrypting pair that `storage` hands to Loom. */
   sealed: StorePair;
-  /** The unwrapped pair. */
   raw: StorePair;
 }
 
@@ -34,20 +35,18 @@ export interface DurableStorage {
  * - `raw` is the unwrapped pair, which erasure needs (`shredSubject` must write its tombstone to the
  *   raw log; M5).
  *
- * Both wrappers use the same KeyStore and the same subject mapping, so one destroyed key erases a
- * user's events and snapshots together. The snapshot store seals the whole folded state.
- * `subjectOfExecution` is the crypto subject only; it is not `compliance.subjectOf` (M5).
+ * Both wrappers share one KeyStore and `subjectOfExecution` (the crypto subject only, not
+ * `compliance.subjectOf`), so one destroyed key erases a user's events and snapshots together.
  */
 export function createDurableStorage({ loomUrl, keys }: DurableStorageOptions): DurableStorage {
-  const pg = postgresStorage({
-    url: { connectionString: loomUrl, options: "-c search_path=loom" },
-  });
+  const pg = postgresStorage({ url: loomPoolConfig(loomUrl) });
   const events = new EncryptingEventStore(pg.eventStore, keys, {
     sensitive: {},
     subjectOf: subjectOfExecution,
   });
   const snapshots = new EncryptingSnapshotStore(pg.snapshotStore, keys, {
     sealState: true,
+    legacyPlaintext: "refuse",
     subjectOf: subjectOfExecution,
     events: pg.eventStore,
   });
