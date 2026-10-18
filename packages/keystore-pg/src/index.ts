@@ -1,2 +1,2 @@
-export { type Kek, loadKek } from "./kek";
+export { type Kek, loadKek, loadKeks } from "./kek";
 export { PostgresKeyStore } from "./PostgresKeyStore";
