@@ -18,8 +18,9 @@ export const executionAuthorizer: ExecutionAuthorizer = executionAccessPolicy({
   rules: { start: "any", resume: "owner", cancel: "owner", query: "owner" },
 });
 
-// The log stores an opaque ref, never a tenant or actor verbatim. In-memory until the durable
-// event store lands (M1 PR 8); then it is backed by the users table.
+// For the in-memory app only (the CLI and tests): the log stores an opaque ref, never a tenant or
+// actor verbatim. The durable app does not use this; it seals the identity under the user's key
+// instead (`security.crypto`, see config.ts).
 const principals = new Map<string, PrincipalChain>();
 export const principalCodec: PrincipalCodec = {
   toRef(chain) {
