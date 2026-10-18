@@ -1,12 +1,19 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { PayloadShreddedError, shredSubject } from "@loom/plugin-crypto";
+import { MAX_EXECUTION_ID_BYTES, PostgresEventStore } from "@loom/plugin-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
 import { type DurableStorage, createDurableStorage } from "./storage";
-import { executionIdFor } from "./subject";
+import { MAX_EXECUTION_ID_BYTES as LOCAL_MAX_EXECUTION_ID_BYTES, executionIdFor } from "./subject";
+
+describe("execution id limit", () => {
+  it("equals the limit Loom's Postgres event store enforces", () => {
+    expect(LOCAL_MAX_EXECUTION_ID_BYTES).toBe(MAX_EXECUTION_ID_BYTES);
+  });
+});
 
 describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
@@ -41,6 +48,29 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     payload: { text, author: "kept in the clear" },
   });
 
+  it("boots Loom's schema as docmind_loom with no privilege warning", async () => {
+    const notices: string[] = [];
+    const pool = new Pool({ connectionString: db.loomUrl, options: "-c search_path=loom" });
+    pool.on("connect", (client) => {
+      client.on("notice", (n) => notices.push(String(n.message)));
+    });
+    const store = new PostgresEventStore(pool as never); // pg typings differ between the linked Loom and this repo;
+    try {
+      await store.read("boot-probe");
+      expect(notices.filter((m) => m.startsWith("loom:"))).toEqual([]);
+      expect(await store.incarnationAnchors()).toBe(true);
+    } finally {
+      await store.close();
+      await pool.end();
+    }
+    const { rows } = await db.owner.query(
+      `SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'loom' AND t.tgname = 'trg_events_incarnation'`,
+    );
+    expect(rows).toHaveLength(1);
+  });
+
   it("seals each user's events under that user's key, not the execution's", async () => {
     const userA = randomUUID();
     const exec = executionIdFor(userA, "notes-1");
@@ -51,6 +81,20 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     });
     const stored = (await stores.raw.eventStore.read(exec))[0]?.payload as { text: object };
     expect(JSON.stringify(stored.text)).not.toContain("secret A");
+
+    // The table itself, read as docmind_loom, holds no plaintext either.
+    const loom = new Pool({ connectionString: db.loomUrl, options: "-c search_path=loom" });
+    try {
+      const { rows } = await loom.query(
+        "SELECT payload::text AS p FROM events WHERE execution_id = $1",
+        [exec],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].p).not.toContain("secret A");
+      expect(rows[0].p).toContain("kept in the clear");
+    } finally {
+      await loom.end();
+    }
 
     const { rows } = await db.owner.query(
       "SELECT subject_id FROM data_keys WHERE subject_id = ANY($1)",
@@ -88,6 +132,19 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     });
     expect(await keys.wasDestroyed(userA)).toBe(true);
     expect(await keys.wasDestroyed(userB)).toBe(false);
+  });
+
+  it("makes events unreadable when only the key is destroyed through the KeyStore", async () => {
+    const [userA, userB] = [randomUUID(), randomUUID()];
+    const [execA, execB] = [executionIdFor(userA, "k"), executionIdFor(userB, "k")];
+    for (const e of [execA, execB]) await stores.sealed.eventStore.append(note(e, "plain words"));
+
+    await keys.destroy(userA);
+
+    await expect(stores.sealed.eventStore.read(execA)).rejects.toThrow();
+    expect((await stores.sealed.eventStore.read(execB))[0]?.payload).toMatchObject({
+      text: "plain words",
+    });
   });
 
   it("seals snapshots under the same key, so the checkpoint is erased with the events", async () => {
