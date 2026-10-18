@@ -10,7 +10,8 @@ const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
  * owns must carry the user's id: that puts all of their data under one key, and destroying the key
  * erases it all. Callers that start executions for a user use this to build the id. Every
  * user-owned start AND every `runtime.fork` must pass an explicit `executionId` from `executionIdFor`
- * for that user; otherwise Loom uses a ULID and the data falls outside the user's key.
+ * for that user; otherwise Loom uses a ULID and the data falls outside the user's key. Execution ids,
+ * including `name`, are stored in plaintext and survive erasure, so `name` must never carry user content.
  */
 export function executionIdFor(userId: string, name: string): string {
   if (!CANONICAL_USER_ID.test(userId)) {
