@@ -74,4 +74,11 @@ describe("executionIdFor", () => {
   it("round-trips through subjectOfExecution", () => {
     expect(subjectOfExecution({ executionId: executionIdFor(USER, "a:b:c") })).toBe(USER);
   });
+
+  it("keeps the user for Loom's :: children and ~n continue-as-new successors", () => {
+    const parent = executionIdFor(USER, "ingest-1");
+    for (const executionId of [`${parent}::step#0`, `${parent}::a::b#2`, `${parent}~1`]) {
+      expect(subjectOfExecution({ executionId })).toBe(USER);
+    }
+  });
 });
