@@ -45,3 +45,49 @@ describe("http server", () => {
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
   });
 });
+
+describe("handler failures", () => {
+  const failing = createHttpServer({
+    "GET /rejects": async () => {
+      throw new Error("boom");
+    },
+    "GET /throws": () => {
+      throw new Error("boom");
+    },
+    "GET /rejects-after-headers": async (_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("partial");
+      throw new Error("boom");
+    },
+  });
+  let url = "";
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => failing.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(failing.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      failing.close(() => resolve());
+      failing.closeAllConnections();
+    });
+  });
+
+  it.each(["/rejects", "/throws"])(
+    "answers a JSON 500 when %s fails, and keeps serving",
+    async (path) => {
+      const res = await fetch(`${url}${path}`);
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: { code: "internal", message: "internal error" } });
+      expect((await fetch(`${url}/healthz`)).status).toBe(200);
+    },
+  );
+
+  it("ends a response that already started instead of hanging or crashing", async () => {
+    const res = await fetch(`${url}/rejects-after-headers`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("partial");
+    expect((await fetch(`${url}/healthz`)).status).toBe(200);
+  });
+});
