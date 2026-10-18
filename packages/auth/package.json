@@ -1,0 +1,21 @@
+{
+  "name": "@docmind/auth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Authenticator interface, its conformance suite, and the password/session implementation.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "peerDependencies": {
+    "vitest": ">=2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}
