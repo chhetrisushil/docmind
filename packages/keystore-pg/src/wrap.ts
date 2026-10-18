@@ -6,9 +6,7 @@ const DEK_BYTES = 32;
 const WRAPPED_BYTES = IV_BYTES + TAG_BYTES + DEK_BYTES;
 const AAD_PREFIX = Buffer.from("docmind-dek-v1\0");
 
-function aad(subjectId: string): Buffer {
-  return Buffer.concat([AAD_PREFIX, Buffer.from(subjectId)]);
-}
+const aad = (subjectId: string): Buffer => Buffer.concat([AAD_PREFIX, Buffer.from(subjectId)]);
 
 /**
  * AES-256-GCM seal of a data key under the KEK, as iv || tag || ciphertext. The subject is
