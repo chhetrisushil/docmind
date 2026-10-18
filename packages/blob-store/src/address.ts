@@ -22,6 +22,20 @@ export function fingerprintOf(fingerprintKey: Buffer, bytes: Uint8Array): string
   return createHmac("sha256", fingerprintKey).update(bytes).digest("hex");
 }
 
+/** Streaming form of `fingerprintOf`: same key, same hex, fed chunk by chunk. */
+export function fingerprintHasher(fingerprintKey: Buffer): {
+  update(chunk: Uint8Array): void;
+  digest(): string;
+} {
+  const hmac = createHmac("sha256", fingerprintKey);
+  return {
+    update: (chunk) => {
+      hmac.update(chunk);
+    },
+    digest: () => hmac.digest("hex"),
+  };
+}
+
 export const addressOf = (fingerprint: string): string => `${ADDRESS_PREFIX}${fingerprint}`;
 
 /** The fingerprint inside an address this store could have issued, or null for anything else. */

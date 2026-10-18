@@ -5,6 +5,7 @@ import {
   FINGERPRINT_INFO,
   addressOf,
   deriveFingerprintKey,
+  fingerprintHasher,
   fingerprintOf,
   parseAddress,
   sameFingerprint,
@@ -77,5 +78,15 @@ describe("addresses", () => {
     expect(sameFingerprint(fp, fp)).toBe(true);
     expect(sameFingerprint(fp, "b".repeat(64))).toBe(false);
     expect(sameFingerprint(fp, "a")).toBe(false);
+  });
+});
+
+describe("fingerprintHasher", () => {
+  it("matches fingerprintOf when fed in chunks", () => {
+    const key = deriveFingerprintKey(DEK);
+    const hasher = fingerprintHasher(key);
+    hasher.update(bytes("hello "));
+    hasher.update(bytes("world"));
+    expect(hasher.digest()).toBe(fingerprintOf(key, bytes("hello world")));
   });
 });
