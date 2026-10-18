@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** After M2, a signed-in user can upload a document (txt, md, org, doc, docx, pdf, png, jpg, webp) to `POST /api/documents`, list their documents (`GET /api/documents`, paged), read one (`GET /api/documents/:id`) and delete one (`DELETE /api/documents/:id`); the type is decided from magic bytes, the size and the tenant's quotas are enforced while the file streams in, identical bytes from the same user are stored once, the original bytes are envelope-encrypted under the user's data key in a filesystem `ContentStore`, titles and filenames are encrypted in Postgres, and everything is tenant-isolated by row-level security and shaped so that the later `DELETE /api/me` can remove a user's rows, then blobs, then key. M2 also closes the three M1 carry-forwards (sensitive event paths, `x:` and child execution ids, `executionIdFor`).
+**Goal:** After M2, a signed-in user can upload a document (txt, md, org, doc, docx, pdf, png, jpg, webp) to `POST /api/documents`, list their documents (`GET /api/documents`, paged), read one (`GET /api/documents/:id`) and delete one (`DELETE /api/documents/:id`); the type is decided from magic bytes, the size and the tenant's quotas are enforced while the file streams in, identical bytes from the same user are stored once (found by a **keyed** fingerprint, not a plain hash), the original bytes are envelope-encrypted under the user's data key in a filesystem `ContentStore`, titles, filenames and (later) stats and summaries are encrypted in Postgres, and everything is tenant-isolated by row-level security and shaped so that the later `DELETE /api/me` can remove a user's rows, then blobs, then key. A stub `ingest-document` Loom flow is started after each new upload commits (spec §5.1 step 4) and cancelled when the document is deleted. M2 also closes the three M1 carry-forwards (sensitive event paths, `x:` and child execution ids, `executionIdFor`).
 
-**Architecture:** `packages/blob-store` implements Loom's `ContentStore` SPI (`@loom/plugin-content`) as one instance per user: bytes are addressed by the sha256 of the plaintext, sealed with a per-blob random key that is itself wrapped by the user's data key (from the `KeyStore`), and written atomically to `<root>/<tenant>/<user>/<sha256>`; a two-phase `stage()`/`commit()` lets the upload handler decide, inside a database transaction, whether the blob is kept. The server adds a `documents` table (migration 0009, RLS like every other table, `*_enc` columns sealed with Loom's `encryptValue` bound to the row and column), a streaming multipart reader on `busboy`, a pure magic-byte sniffer, per-tenant quotas checked under a per-tenant advisory lock, and the four document routes behind `requireAuth`. Document ingestion is **not started** in M2 (M3 owns the `ingest-document` flow); rows stay `uploaded`.
+**Architecture:** `packages/blob-store` implements Loom's `ContentStore` SPI (`@loom/plugin-content`) as one instance per user: bytes are addressed by `hmac-sha256:<fingerprint>`, where the fingerprint is HMAC-SHA256 of the plaintext under a key derived (HKDF) from the user's data key; they are sealed with a per-blob random key that is itself wrapped by the user's data key (from the `KeyStore`), and written atomically to `<root>/<tenant>/<user>/<fingerprint>`; a two-phase `stage()`/`commit()` lets the upload handler decide, inside a database transaction, whether the blob is kept. The server adds a `documents` table (migration 0009, RLS like every other table, `*_enc` columns including `stats_enc` sealed with Loom's `encryptValue` bound to the row and column), a streaming multipart reader on `busboy`, a pure magic-byte sniffer, per-tenant quotas checked under a per-tenant advisory lock, the four document routes behind `requireAuth`, and the `ingest-document` stub flow (`apps/server/app/flows/ingest-document/`) with an `IngestPort` that starts it (execution id `executionIdFor(userId, "ingest-" + documentId)`, input = ids only) after the upload transaction commits and cancels it before a delete.
 
-**Tech Stack:** everything in M0 and M1, plus `busboy` ^1.6.0 and `@types/busboy` ^1.5.4 (multipart), and the Loom package `@loom/plugin-content` (the `ContentStore` SPI) linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db` like the others.
+**Tech Stack:** everything in M0 and M1, plus `busboy` ^1.6.0 and `@types/busboy` ^1.5.4 (multipart), `@loom/core` (flow, step and handler builders for the stub flow), and the Loom package `@loom/plugin-content` (the `ContentStore` SPI), all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db` like the others.
 
-**Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout and interfaces, §4 tables, tenancy, quotas and crypto-shredding, §5.1 upload, §6.1 conventions, §8 gates and PR rules, §9 M2 = items 9-11). M1 plan (model for structure, and source of the carry-forwards): `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m1-identity-and-keys.md`. Accepted direction for M3/M4 that M2 must not block: `/Users/such/workspace/docmind/docs/design/linked-retrieval.md`. Executors read all of them.
+**Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout and interfaces, §4 tables, tenancy, quotas and crypto-shredding, §5.1 upload, §5.2 `ingest-document` flow, §6.1 conventions, §8 gates and PR rules, §9 M2 = items 9-11 and the start/cancel half of M3 item 14). M1 plan (model for structure, and source of the carry-forwards): `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m1-identity-and-keys.md`. Accepted direction for M3/M4 that M2 must not block: `/Users/such/workspace/docmind/docs/design/linked-retrieval.md`. Executors read all of them.
 
 ## Global Constraints
 
@@ -19,13 +19,14 @@ Copied from the spec and the owner's standing rules; every task includes them.
 - **Commit trailer:** every commit ends with the line `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`. Every PR description ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - **The local gate is the merge gate:** `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`, with `DOCMIND_TEST_PG_URL` exported **in the same shell command** so the Postgres suites run instead of skipping (test database on `127.0.0.1:55432`, see Preconditions). A task whose Postgres suite is skipped has not passed its gate.
 - **Test hygiene (Loom's AGENTS.md):** no sleeps (wait on conditions); test servers bind `127.0.0.1`; no timing assertions in `*.test.ts`; test files are typechecked (`typecheck:tests`); every Postgres suite creates its own database with `createTestDb()`.
-- **Never log, print, return in an error, or put in a test name or snapshot:** `DATABASE_URL`, `LOOM_DATABASE_URL`, passwords, the KEK or any data key, emails, session tokens, **filenames, titles or document content**. Error messages name variables (`DOCMIND_TENANT_MAX_BYTES must be a positive integer`), never values. `.env.example` holds placeholders only. Server logs for a failed upload carry the error class and the request path, never the filename.
+- **Never log, print, return in an error, or put in a test name or snapshot:** `DATABASE_URL`, `LOOM_DATABASE_URL`, passwords, the KEK or any data key (including the derived fingerprint key), emails, session tokens, **filenames, titles or document content**. Error messages name variables (`DOCMIND_TENANT_MAX_BYTES must be a positive integer`), never values. `.env.example` holds placeholders only. Server logs for a failed upload or a failed flow start carry the error class and the request path, never the filename.
 - **Tenancy:** RLS on every table (`tenant_id = app_tenant_id()`), every query runs inside `withTenant`; the app role `docmind_app` owns no tables and has no `BYPASSRLS`; nothing downstream accepts a tenant or user id from the client (they come from the `Authenticator`); any lookup that must happen before a tenant is known goes through a `SECURITY DEFINER` function with `SET search_path = pg_catalog, pg_temp`, schema-qualified names, `REVOKE ALL ... FROM PUBLIC` and an explicit `GRANT EXECUTE ... TO docmind_app` (M2 needs none).
-- **Encryption (spec §4.4):** `*_enc` columns are AEAD under the owning user's data key (subject = the user id); blobs are envelope-encrypted under the user's data key; the blob path is `<tenant>/<user>/<sha256>`; deduplication happens only within one user. A key is only ever obtained from the `KeyStore`; no code path logs or returns a plaintext data key.
-- **Untrusted input:** uploaded bytes, multipart headers, part names and filenames are untrusted. Size caps are enforced **while streaming**; the type comes from magic bytes (the extension is only a hint); **no path is ever built from a client string** (blob paths are built from validated UUIDs and a 64-hex digest); filenames are sanitized before they are stored and never reach the filesystem or a log.
-- **Execution ids (M1 carry-forward):** every execution start and every `runtime.fork` for a user passes an explicit `executionId` built by `executionIdFor(userId, name)`; `name` never carries user content (execution ids are plaintext and survive erasure). Task 42 adds a ratchet test.
-- **Event payloads (M1 carry-forward):** any event path that can carry user content (filenames, titles, document text, summaries, questions) must be registered as sensitive in `apps/server/app/sensitive.ts` (or derived from `sensitive(...)` step schemas) **in the same PR that adds the flow**; flow start inputs carry ids only (`{ documentId }`), never a filename or title.
-- **Erasure shape:** document rows reference `users` with `ON DELETE CASCADE`; blobs live under one directory per user; so erasing a user is "delete the user (cascades their rows) -> `eraseUserBlobs` -> destroy the key", each step idempotent.
+- **Encryption (spec §4.4):** `*_enc` columns (`title_enc`, `filename_enc`, `stats_enc`, `summary_enc`) are AEAD under the owning user's data key (subject = the user id); blobs are envelope-encrypted under the user's data key; the blob path is `<tenant>/<user>/<fingerprint>` where **fingerprint = HMAC-SHA256(plaintext) under a key HKDF-derived from the user's data key** (label `docmind-fingerprint-v1`) - an intentional deviation from spec §5.1 step 3's "sha256 fingerprint"; deduplication happens only within one user. A key is only ever obtained from the `KeyStore`; no code path logs or returns a plaintext data key or the derived fingerprint key.
+- **Untrusted input:** uploaded bytes, multipart headers, part names and filenames are untrusted. Size caps are enforced **while streaming**; the type comes from magic bytes (the extension is only a hint); **no path is ever built from a client string** (blob paths are built from validated UUIDs and a 64-hex fingerprint); filenames are sanitized before they are stored and never reach the filesystem or a log.
+- **Execution ids (M1 carry-forward):** every execution start and every `runtime.fork` for a user passes an explicit `executionId` built by `executionIdFor(userId, name)`; `name` never carries user content (execution ids are plaintext and survive erasure). Task 42 adds a ratchet test; the `ingest-document` start (Tasks 54 and 56) is its first real user.
+- **Event payloads (M1 carry-forward):** any event path that can carry user content (filenames, titles, document text, summaries, questions) must be registered as sensitive in `apps/server/app/sensitive.ts` (or derived from `sensitive(...)` step schemas) **in the same PR that adds the flow**; flow start inputs carry ids only, never a filename or title. The M2 `ingest-document` stub has start input `{ tenantId, userId, documentId }` (three UUIDs) and step output `{ outcome }` (a two-value enum): nothing in it can carry user content, so it registers no paths, and Task 53 pins that with tests that fail if a content-bearing field is ever added without registering it.
+- **Flow lifecycle:** a document's ingest execution is started **after** the upload transaction commits (never inside it), exactly once per new document (idempotency key = the document id, realised as the caller-chosen execution id, which Loom makes start-once); a failed start never fails the upload. A delete **cancels the execution first**, then removes the row and the blob; a flow step that finds its document gone stops cleanly (outcome `document_gone`, not a failure).
+- **Erasure shape:** document rows reference `users` with `ON DELETE CASCADE`; blobs live under one directory per user; so erasing a user is "delete the user (cascades their rows) -> `eraseUserBlobs` -> destroy the key", each step idempotent. The key destroyed last is also the one the fingerprints derive from, so afterwards a fingerprint can no longer be computed or tested.
 - **Migrations:** never edit an applied migration; the next free number is `0009` (this plan adds exactly one). Every table has RLS enabled (the M0 guard test fails otherwise).
 - **Dependency rules:** packages never import from apps; only `loom.config.ts`, `app/config.ts` and `app/main.ts` choose which implementation backs an interface.
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=20.0.0`.
@@ -41,38 +42,44 @@ Read from the Loom checkout at `/Users/such/workspace/loom` (HEAD `8f9eab24`) an
 
 | Need | Real shape | Where |
 |---|---|---|
-| ContentStore SPI | `interface ContentStore { put(bytes: Uint8Array): Promise<ContentRef>; putStream?(stream: AsyncIterable<Uint8Array>): Promise<ContentRef>; get(ref): Promise<Uint8Array \| null>; getMany?; delete(ref): Promise<void>; deleteIfUntouchedSince?; listPage?; touchClock?; touch? }`. `ContentRef = { readonly __loomContent: string /* "sha256:<hex>" */; readonly size?: number; readonly codec?: string }`. `get` MUST return `null` (never throw) on absence; `delete` is idempotent physical erasure; `put` is idempotent by address. `contentAddress(bytes)` = `sha256:<hex>` of the bytes. The SPI 1.3.0 optionals (`deleteIfUntouchedSince`, `listPage`, `touchClock`) are "all three or none". | `plugins/content/src/ContentStore.ts`, `content.ts`; exported from `@loom/plugin-content` |
-| ContentStore contract suite | `runContentStoreConformance(factory: () => ContentStoreLike, label?, { clocked? })` from `@loom/conformance` (registers vitest tests: round trip, idempotent put, distinct refs, `get` of `sha256:deadbeef` is `null`, idempotent delete, `putStream` address equals `put` address, plus optional-method checks that are skipped when a method is absent). | `packages/conformance/src/index.ts:3039` |
-| Field envelope | `encryptValue(key: Buffer, value: unknown, aad?: { v: string; bind: string }): Envelope` and `decryptValue(key, envelope, bind?)` from `@loom/plugin-crypto`: AES-256-GCM, random IV, JSON value, AAD bound to a context string; `decryptValue` **passes a non-envelope through unchanged** (so DocMind checks the shape itself, Task 47). | `plugins/crypto/src/crypto.ts:76-120` |
-| KeyStore | `getOrCreate(subjectId): Promise<Buffer>` (32-byte key; refuses a destroyed subject), `get(subjectId): Promise<Buffer \| null>`, `destroy`, `wasDestroyed`. `InMemoryKeyStore` (no constructor arguments) is the test double. | `plugins/crypto/src/keystore.ts` |
+| ContentStore SPI | `interface ContentStore { put(bytes: Uint8Array): Promise<ContentRef>; putStream?(stream: AsyncIterable<Uint8Array>): Promise<ContentRef>; get(ref): Promise<Uint8Array \| null>; getMany?; delete(ref): Promise<void>; deleteIfUntouchedSince?; listPage?; touchClock?; touch? }`. `ContentRef = { readonly __loomContent: string /* "sha256:<hex>" in the default scheme */; readonly size?: number; readonly codec?: string }`. `get` MUST return `null` (never throw) on absence; `delete` is idempotent physical erasure; `put` is idempotent by address. `contentAddress(bytes)` = `sha256:<hex>` of the bytes is a helper, not a requirement of the SPI; only `CachingContentStore` re-hashes, and only for addresses that start with `sha256:`. The SPI 1.3.0 optionals (`deleteIfUntouchedSince`, `listPage`, `touchClock`) are "all three or none". | `plugins/content/src/ContentStore.ts`, `content.ts`, `CachingContentStore.ts:146`; exported from `@loom/plugin-content` |
+| ContentStore contract suite | `runContentStoreConformance(factory: () => ContentStoreLike, label?, { clocked? })` from `@loom/conformance` (registers vitest tests: round trip, idempotent put, distinct refs, `get` of `sha256:deadbeef` is `null`, idempotent delete, `putStream` address equals `put` address, plus optional-method checks that are skipped when a method is absent). **It compares addresses only with each other** (equal for equal bytes, different for different bytes) and never recomputes `sha256` of the plaintext, so a keyed address passes; the one literal it uses is the absent ref `sha256:deadbeef`, which our `parseAddress` rejects, so `get` answers `null`. | `packages/conformance/src/index.ts:3039` |
+| Field envelope | `encryptValue(key: Buffer, value: unknown, aad?: { v: string; bind: string }): Envelope` and `decryptValue(key, envelope, bind?)` from `@loom/plugin-crypto`: AES-256-GCM, random IV, JSON value, AAD bound to a context string; `decryptValue` **passes a non-envelope through unchanged** (so DocMind checks the shape itself, Task 48). | `plugins/crypto/src/crypto.ts:76-120` |
+| KeyStore | `getOrCreate(subjectId): Promise<Buffer>` (the raw 32-byte data key; refuses a destroyed subject), `get(subjectId): Promise<Buffer \| null>`, `destroy`, `wasDestroyed`. **The raw DEK is exposed**, so a purpose-specific key can be derived from it with HKDF (Node `crypto.hkdfSync`) and no `KeyStore` change or extra key table is needed. `InMemoryKeyStore` (no constructor arguments) is the test double. | `plugins/crypto/src/keystore.ts` |
 | Child execution ids | A `::`-derived child is `<parent>::<segment>`; a continue-as-new successor is `<root>~<n>`; a user-owned id is `u_<uuid>:<name>`. `subjectOfExecution` (M1) matches `^u_(uuid)(?::|$)`, so children and successors of a user's execution keep the user subject; Task 42 pins that with tests. | `apps/server/app/subject.ts` |
-| Sensitive event paths | `EncryptingEventStore` takes `sensitive: Record<eventType, string[]>`; `sensitivePathsFromSteps(steps)` derives `STEP_COMPLETED -> output.<path>` from `sensitive(...)` step output schemas. M1 passes `sensitive: {}`. | `plugins/crypto/src/EncryptingEventStore.ts`, `derive.ts` |
+| Sensitive event paths | `EncryptingEventStore` takes `sensitive: Record<eventType, string[]>`; `sensitivePathsFromSteps(steps)` derives `STEP_COMPLETED -> output.<path>` from `sensitive(...)` step output schemas (returns `{}` when none is marked). M1 passes `sensitive: {}`. | `plugins/crypto/src/EncryptingEventStore.ts`, `derive.ts` |
+| Flows | A flow is `{ definition: flow$({ id, name, version, inputSchema, outputSchema, steps }), runner }` (`RegisteredFlow` from `@loom/workflow-runtime`); a step is `step$({ id, name, inputSchema, outputSchema, handler: handler$(async (input, ctx) => ...) })` (`flow$`, `step$`, `handler$` from `@loom/core`; `ctx` carries `executionId`, `stepId`, `attempt`); the runner calls `ctx.run(step, input)`. `loom gen --dir app` (`pnpm --filter @docmind/server gen`) scans `app/flows/<name>/flow.ts` and writes `app/loom.gen.ts`, whose `flowModules` M0 already passes to `defineConfig`. Under `security.strict` the `authorizer` (a `GrantTable` keyed by **workflow id**) must list the step ids a flow may run (a step id doubles as its tool id). | `tools/scaffold/src/templates.ts` (flow and security templates), `packages/core/src/builders/step.ts`, `packages/app/src/registerFlows.ts` |
+| Start, idempotency, cancel | `runtime.start(flow, input, { executionId, principal })` returns an `ExecutionHandle` (`executionId`, `waitForCompletion`, `getState`, `cancel`) without waiting for the body. With a caller-chosen `executionId` start is **start-once**: a second start rejects with `ExecutionAlreadyExistsError` (exported from `@loom/workflow-runtime`) and nothing runs. `runtime.cancel(executionId, reason?, { principal })` cancels by id (aborts a live run, or fences then appends `EXECUTION_CANCELLED`); returns `true` if it cancelled, `false` if the execution was already terminal, and **throws `Error("No execution found for id: ...")`** for an unknown id. The M0 `executionAuthorizer` (`requireTenant: true`, `cancel: "owner"`) needs a principal `{ tenant, actor }`; the actor that started an execution owns it. | `packages/workflow-runtime/src/WorkflowRuntime.ts:2953` (`cancel`), `:3349` (`start`), `types.ts:405` (`RunOptions`), `types.ts:835`, `:1151` |
 
 ### This repo (M1, on `main`)
 
-`createHttpServer(extraRoutes)` routes by exact `"METHOD /path"` keys (no path parameters yet: Task 54 adds them); `Handler = (req, res) => void | Promise<void>`; `json`, `sendError(res, status, code, message)` in `app/http/respond.ts`; `requireAuth(authenticator, (req, res, identity) => ...)` in `app/http/requireAuth.ts`; `Identity = { tenantId, userId }` from `@docmind/auth`; `withTenant(pool, tenantId, fn)` in `app/db/tenant.ts`; migrations `0001-0008` (last: `0008_loom_role.sql`); `createTestDb()`, `PG_URL`, `APP_PASSWORD` in `app/db/testSupport.ts`; `migrate`, `setAppRolePassword` in `app/db/migrate.ts`; `createDurableStorage({ loomUrl, keys })` in `app/storage.ts` (passes `sensitive: {}`); `PostgresKeyStore` and `loadKeks` from `@docmind/keystore-pg`; `DocumentDto`, `UploadDocumentResponse`, `ListDocumentsQuery`, `ListDocumentsResponse`, `DocumentStats`, `DocumentSummary` already exist in `packages/contracts/src/documents.ts` and are used unchanged. The session cookie is `SameSite=Lax`, which is what keeps a cross-site HTML form (the one cross-origin way to send `multipart/form-data`) from carrying the session to `POST /api/documents`.
+`createHttpServer(extraRoutes)` routes by exact `"METHOD /path"` keys (no path parameters yet: Task 58 adds them); `Handler = (req, res) => void | Promise<void>`; `json`, `sendError(res, status, code, message)` in `app/http/respond.ts`; `requireAuth(authenticator, (req, res, identity) => ...)` in `app/http/requireAuth.ts`; `Identity = { tenantId, userId }` from `@docmind/auth`; `withTenant(pool, tenantId, fn)` in `app/db/tenant.ts`; migrations `0001-0008` (last: `0008_loom_role.sql`); `createTestDb()`, `PG_URL`, `APP_PASSWORD` in `app/db/testSupport.ts`; `migrate`, `setAppRolePassword` in `app/db/migrate.ts`; `createDurableStorage({ loomUrl, keys })` in `app/storage.ts` (passes `sensitive: {}`); `buildApp(storage, crypto?)` in `app/config.ts` (already passes `flowModules` from `app/loom.gen.ts`, currently empty) and `authorizer`/`executionAuthorizer` in `app/security.ts` (`authorizer` is an empty `GrantTable`); `PostgresKeyStore` and `loadKeks` from `@docmind/keystore-pg` (a KEK rotation re-wraps data keys and leaves each DEK unchanged, so keys derived from a DEK are stable across rotations); `DocumentDto`, `UploadDocumentResponse`, `ListDocumentsQuery`, `ListDocumentsResponse`, `DocumentStats`, `DocumentSummary` already exist in `packages/contracts/src/documents.ts` and are used unchanged. The session cookie is `SameSite=Lax`, which is what keeps a cross-site HTML form (the one cross-origin way to send `multipart/form-data`) from carrying the session to `POST /api/documents`.
 
 ### Uncertain (verify on the first run; each has a stated fallback)
 
-1. **busboy option and event names** (`defParamCharset`, `limits.*`, the `file` event signature `(name, stream, { filename })`, the `limit` event on the file stream, the `close` event). Written from busboy 1.6 documentation. If a name differs, adjust Task 50 only.
-2. **`runContentStoreConformance` accepting a store with none of the SPI 1.3.0 optionals.** The kit documents them as optional ("when supported"); if it does not, implement `touchClock`/`listPage`/`deleteIfUntouchedSince` over directory mtimes in Task 44 and say so in the PR.
-3. **`pnpm` resolving `@loom/plugin-content` through the new root override** (Task 43 adds it next to the others). If `pnpm install` complains, run it from the repo root with `--no-frozen-lockfile` once and commit the lockfile.
+1. **busboy option and event names** (`defParamCharset`, `limits.*`, the `file` event signature `(name, stream, { filename })`, the `limit` event on the file stream, the `close` event). Written from busboy 1.6 documentation. If a name differs, adjust Task 51 only.
+2. **`runContentStoreConformance` accepting a store with none of the SPI 1.3.0 optionals.** The kit documents them as optional ("when supported"); if it does not, implement `touchClock`/`listPage`/`deleteIfUntouchedSince` over directory mtimes in Task 45a and say so in the PR. (The keyed `hmac-sha256:` address is *not* a risk here: the kit never recomputes a sha256, see the table above.)
+3. **`pnpm` resolving `@loom/plugin-content` and `@loom/core` through the new root overrides** (Task 43 adds the first, Task 53 the second, next to the others). If `pnpm install` complains, run it from the repo root with `--no-frozen-lockfile` once and commit the lockfile.
+4. **Flow authoring names** (new): `flow$`/`step$`/`handler$` import paths and option names, `ctx.run(step, input)`, that `loom gen` emits `flowModules` entries for `app/flows/ingest-document/flow.ts` exporting `ingestDocumentFlow`, and that the `GrantTable` key is the workflow id (`ingest-document`) and the grant the step id (`ingest-begin`). Written from Loom's scaffold templates. If a name differs, adjust Task 53 only; the `IngestPort` hides the rest.
+5. **Start and cancel semantics** (new): that `runtime.start` resolves with a handle before the step body finishes (if it waits for completion, fire it without `await` in `loomIngest` and attach `.catch`, and say so in the PR); that a caller-chosen duplicate id rejects with `ExecutionAlreadyExistsError`; the option shape `{ executionId, principal: { tenant, actor } }` for start and `{ principal }` for cancel; and that "no such execution" is only detectable by the message `No execution found for id` (there is no typed error). If the message differs, `loomIngest.cancel` must still treat "unknown execution" as success: adjust the matcher in Task 54 and keep its test.
+6. **Process-global flow dependencies** (new): flows are static modules (`loom gen`), so the stub step reads its database access from a module-level holder (`setIngestDeps`). Test harnesses that coexist in one test file share the last one set; only tests that assert flow outcomes (Tasks 53, 56, 60) own the single live harness. If the executor finds a per-app injection point in `defineConfig`, prefer it and drop the holder.
+7. **`hkdfSync` return type** (new): Node returns an `ArrayBuffer`; the code wraps it in `Buffer.from`. Nothing else about Node's HKDF is relied on.
 
 ## Deviations from the spec, decisions, and what is still open
 
-Decided here so executors are not blocked. The owner's questions are at the end of the plan.
+Decided here (and, where it was an open question, by the owner: see "Decisions (owner, 2026-10-18)" at the end) so executors are not blocked.
 
-1. **The blob store is one instance per user.** Spec §3.1 says `ContentStore` is "encrypted filesystem" with path `<tenant>/<user>/<sha256>`. `ContentStore.put(bytes)` has no user parameter, so `EncryptedFsContentStore` is constructed with `{ root, tenantId, userId, keys }` and the server builds one per request (cheap: no I/O in the constructor). The content address is `sha256:<hex of the plaintext>` (this is what makes dedup and the path work), not a hash of the ciphertext.
-2. **Blob format** (`DMB1`): `magic(4) | wrapIv(12) | wrapTag(16) | wrappedBlobKey(32) | bodyIv(12) | ciphertext | bodyTag(16)`. A random 32-byte blob key encrypts the body (AES-256-GCM, streamable); the user's data key wraps the blob key. Both AEAD operations authenticate `docmind-blob-v1\0<tenant>/<user>`, so a file copied into another user's directory fails to open. The plaintext hash is re-checked after decryption, so a file renamed to another digest also fails. Loom's `encryptValue` is not used here because it seals a JSON value in memory; blobs need streaming binary.
-3. **Two-phase writes (`stage` / `commit`).** The upload handler streams into a temp file (hashing and sealing as it goes), then, **inside the database transaction and under a per-tenant advisory lock**, checks duplicates and quotas, inserts the row and only then renames the blob into place. Delete takes the same lock, deletes the row and the blob, then commits. With both under one lock, a delete cannot unlink a blob that a concurrent upload of the same bytes has just decided to reuse. Residual: if `COMMIT` itself fails after the blob was removed (connection loss), the row survives without its blob and a retry of the delete finishes the job; if it fails after a *new* blob was committed, the handler deletes that blob.
-4. **`*_enc` columns are `jsonb`** holding Loom's envelope (`encryptValue`), bound to `<userId>|document:<documentId>:<column>` so an envelope moved to another row or column fails to open. This reuses Loom's cipher instead of adding another.
-5. **Sniffing rules** (Task 48): PDF `%PDF-` at offset 0; PNG, JPEG and WebP by signature (the bytes decide the type even if the extension disagrees); OLE2 (`D0CF11E0A1B11AE1`) is accepted only as `.doc` and ZIP (`PK\x03\x04`) only as `.docx` (the container alone does not say which Office format it is, and xls/pptx share them); anything else must look like text (no NUL or control bytes in the first 4 KiB, or a UTF-16 BOM) *and* have a `.txt`, `.md`/`.markdown` or `.org` extension. Empty files are rejected. Deep validation of docx/pdf happens in the M3 parsers inside the sandbox.
-6. **Quotas** (Task 49/53): per file `DOCMIND_MAX_UPLOAD_BYTES` (default 50 MiB, spec §4.3), per tenant `DOCMIND_TENANT_MAX_BYTES` (default 1 GiB) and `DOCMIND_TENANT_MAX_DOCUMENTS` (default 500), plus at most `DOCMIND_MAX_CONCURRENT_UPLOADS` (default 2) uploads in flight per user per process. The same limits apply to every tenant; per-tenant overrides are not built (no schema for it yet).
-7. **Statuses and the flow.** M2 inserts rows as `uploaded` and starts no execution. Spec §5.1 step 4 ("start `ingest-document`") moves to M3 PR 14, which also decides how documents left in `uploaded` (uploaded before M3 ships, or after a crash between insert and start) get picked up. See open question 1.
-8. **HTTP codes.** `201` new document, `200` duplicate (same `UploadDocumentResponse` shape with `duplicate: true`), `400 invalid_request` (not a single `file` part, malformed multipart), `401`, `403 quota_exceeded`, `413 payload_too_large`, `415 unsupported_media_type` (not multipart) and `415 unsupported_type` (sniffed type not supported), `429 too_many_uploads` with `Retry-After`; `GET`/`DELETE` of someone else's document or a non-UUID id is the same `404 not_found` as a missing one.
-9. **Known trade-offs added to spec §4.4's list** (to be copied into the M7 runbook): (a) `documents.fingerprint`, `content_address` and the blob file name are the plaintext sha256, so someone holding a backup or the disk can test whether a *known* file was uploaded; erasure removes the rows and files, backups keep the rows for their retention window. (b) `documents.stats` (M3: outline, dates, numbers) is plaintext in spec §4.2 although it is derived from content; **M3 must seal it** (`stats_enc`) unless the owner decides otherwise. (c) `documents.error` is plaintext, so it must only ever hold fixed messages, never a filename.
-10. **Carried to M3:** start `ingest-document` with `executionIdFor(userId, "ingest-" + documentId)` and `{ documentId }` as the only input; cancel it when a document is deleted (Task 56 deletes unconditionally, because nothing runs yet); read blobs with `EncryptedFsContentStore.get`; register the flow's sensitive paths in `sensitive.ts`; seal `stats`.
-11. **Carried to M5 (`DELETE /api/me`):** `docmind_app` cannot delete from `tenants` or `users` today (0003 revokes tenant insert/delete; user deletion needs a `SECURITY DEFINER` function), so M5 adds that function; the cascade from `users` removes `documents`; `eraseUserBlobs` (Task 45) removes the files; `shredSubject` and `KeyStore.destroy` do the rest. Task 56 proves the cascade and the blob step in a test.
+1. **The blob store is one instance per user, and its addresses are keyed.** Spec §3.1 says `ContentStore` is "encrypted filesystem" with path `<tenant>/<user>/<sha256>`. `ContentStore.put(bytes)` has no user parameter, so `EncryptedFsContentStore` is constructed with `{ root, tenantId, userId, keys }` and the server builds one per request (cheap: no I/O in the constructor). **Intentional deviation from spec §5.1 step 3 and §4.1:** the "sha256 fingerprint" is replaced by `HMAC-SHA256(plaintext)` under a key derived from the user's data key. The content address is `hmac-sha256:<64 hex>`; `documents.fingerprint` is the bare hex, `documents.content_address` the full address, and the blob file name the hex. Why HKDF-from-the-DEK rather than a separate wrapped per-user fingerprint key: `KeyStore.getOrCreate` already returns the raw DEK, so deriving costs no schema change, no second key to wrap, rotate or destroy, and destroying the DEK (erasure step 4) destroys the fingerprint key with it, which is exactly "after erasure the fingerprints cannot be tested". HKDF with a fixed label keeps the HMAC key independent of the AES uses of the same DEK (Loom's event/field encryption, the blob key wrap). A separate wrapped key was rejected because it adds a table and a destroy step that could drift from the DEK's. Loom's `contentAddress()` helper and `CachingContentStore` assume `sha256:`; the store uses neither, its scheme prefix differs on purpose, and the conformance kit passes because it only compares addresses with each other.
+2. **Blob format** (`DMB1`): `magic(4) | wrapIv(12) | wrapTag(16) | wrappedBlobKey(32) | bodyIv(12) | ciphertext | bodyTag(16)`. A random 32-byte blob key encrypts the body (AES-256-GCM, streamable); the user's data key wraps the blob key. Both AEAD operations authenticate `docmind-blob-v1\0<tenant>/<user>`, so a file copied into another user's directory fails to open. The keyed fingerprint is re-checked after decryption, so a file renamed to another address also fails. Loom's `encryptValue` is not used here because it seals a JSON value in memory; blobs need streaming binary.
+3. **Two-phase writes (`stage` / `commit`).** The upload handler streams into a temp file (fingerprinting and sealing as it goes), then, **inside the database transaction and under a per-tenant advisory lock**, checks duplicates and quotas, inserts the row and only then renames the blob into place. Delete takes the same lock for its row and blob removal, so a delete cannot unlink a blob that a concurrent upload of the same bytes has just decided to reuse. Residual: if `COMMIT` itself fails after the blob was removed (connection loss), the row survives without its blob and a retry of the delete finishes the job; if it fails after a *new* blob was committed, the handler deletes that blob. The flow is started only after `COMMIT` succeeded, so a rolled-back upload never has an execution.
+4. **`*_enc` columns are `jsonb`** holding Loom's envelope (`encryptValue`), bound to `<userId>|document:<documentId>:<column>` so an envelope moved to another row or column fails to open. This reuses Loom's cipher instead of adding another. **`stats_enc` replaces the spec's plaintext `stats jsonb`** (owner decision 6): outline, dates and numbers derive from content. M2 never writes it (the analyze step is M3); `toDto` already opens it.
+5. **Sniffing rules** (Task 49): PDF `%PDF-` at offset 0; PNG, JPEG and WebP by signature (the bytes decide the type even if the extension disagrees); OLE2 (`D0CF11E0A1B11AE1`) is accepted only as `.doc` and ZIP (`PK\x03\x04`) only as `.docx` (the container alone does not say which Office format it is, and xls/pptx share them); anything else must look like text (no NUL or control bytes in the first 4 KiB, or a UTF-16 BOM) *and* have a `.txt`, `.md`/`.markdown` or `.org` extension. Empty files are rejected. Deep validation of docx/pdf happens in the M3 parsers inside the sandbox.
+6. **Quotas** (Task 50/57, accepted by the owner): per file `DOCMIND_MAX_UPLOAD_BYTES` (default 50 MiB, spec §4.3), per tenant `DOCMIND_TENANT_MAX_BYTES` (default 1 GiB) and `DOCMIND_TENANT_MAX_DOCUMENTS` (default 500), plus at most `DOCMIND_MAX_CONCURRENT_UPLOADS` (default 2) uploads in flight per user per process. The same limits apply to every tenant; per-tenant overrides are not built (no schema for it yet).
+7. **Statuses and the flow.** M2 inserts rows as `uploaded` and, once the transaction commits, starts the `ingest-document` stub flow (spec §5.1 step 4; owner decision 1). The stub is the smallest honest skeleton of spec §5.2: one durable step `ingest-begin` that confirms the document still exists and **writes nothing**, so the status stays `uploaded`; its output is `{ outcome: "accepted" | "document_gone" }`. **Reconciled with the spec's M3 item 14 ("flow skeleton, status projection, progress SSE")**: M2 delivers flow registration, the grants entry, the start-after-commit call, the execution id and idempotency convention, ids-only input, the sensitive-path rule and its tests, cancel-on-delete and the "document gone" clean stop. M3 item 14 therefore shrinks to: replace `ingest-begin` with the §5.2 step list (`parse`, `chunk`, `embed`, `analyze`, `summarize`, `finalize` as durable `step$`s, empty bodies in item 14), reuse the same `documentExists` guard at the top of each step, add the status projection and the progress SSE, and add the sweep that starts the flow for documents left in `uploaded` with no execution (a crash between commit and start; M2 only re-attempts the start when the same bytes are uploaded again, see Task 56). Loom pins an in-flight execution to its flow body fingerprint, so a stub execution that is still running when M3 changes the flow is not silently upgraded; M3 item 14 must decide whether to cancel and restart them (recommended: the sweep cancels stub executions of documents still `uploaded` and starts a new one under a name carrying a counter, never content).
+8. **HTTP codes.** `201` new document, `200` duplicate (same `UploadDocumentResponse` shape with `duplicate: true`), `400 invalid_request` (not a single `file` part, malformed multipart), `401`, `403 quota_exceeded`, `413 payload_too_large`, `415 unsupported_media_type` (not multipart) and `415 unsupported_type` (sniffed type not supported), `429 too_many_uploads` with `Retry-After`; `GET`/`DELETE` of someone else's document or a non-UUID id is the same `404 not_found` as a missing one; `DELETE` is `204`, and `404` once the document is gone (a repeated delete is safe: it changes nothing and cancels nothing again).
+9. **Known trade-offs added to spec §4.4's list** (to be copied into the M7 runbook): (a) `documents.fingerprint`, `content_address` and the blob file name are now keyed hashes, so a holder of a backup or the disk can no longer test whether a *known* file was uploaded (they would need the user's data key); backups of the rows still hold the fingerprints until retention ends, and they are meaningless once the key is destroyed. (b) `documents.stats_enc` is sealed from the start. (c) `documents.error` is plaintext, so it must only ever hold fixed, non-content messages, never a filename or document text. (d) The `ingest-document` start input and execution id carry the tenant, user and document UUIDs in plaintext in the event log (execution ids always do); they are pseudonymous identifiers, not user content, and the execution's sealed data is erased with the key.
+10. **Carried to M3:** replace the stub steps as described in item 7; read blobs with `EncryptedFsContentStore.get`; register the flow's sensitive paths in `sensitive.ts` in the PR that adds any content-bearing output; write `stats_enc` from the analyze step. The execution-id convention, the cancel-on-delete and the start-after-commit are already in place.
+11. **Carried to M5 (`DELETE /api/me`):** `docmind_app` cannot delete from `tenants` or `users` today (0003 revokes tenant insert/delete; user deletion needs a `SECURITY DEFINER` function), so M5 adds that function; the cascade from `users` removes `documents`; `eraseUserBlobs` (Task 46a) removes the files; `app.eraseSubject(userId)` (liveness-gated, so it waits for the user's ingest executions; the delete route's cancel does the same job per document) and `KeyStore.destroy` do the rest. Task 61 proves the cascade and the blob step in a test.
 
 ## Preconditions (once, before Task 42)
 
@@ -92,10 +99,11 @@ Expected: no output from `status`; HEAD is `ef8eae1` or a descendant (the plan c
 git -C /Users/such/workspace/loom rev-parse HEAD
 command ls /Users/such/workspace/loom/plugins/content/dist/index.js \
   /Users/such/workspace/loom/plugins/crypto/dist/index.js \
+  /Users/such/workspace/loom/packages/core/dist/index.js \
   /Users/such/workspace/loom/packages/conformance/dist/index.js
 ```
 
-Expected: `8f9eab2492c85bb994d746855f06d2eccc9f45db` (or a descendant) and the three files listed. If any is missing, run `pnpm install && pnpm build` in `/Users/such/workspace/loom`.
+Expected: `8f9eab2492c85bb994d746855f06d2eccc9f45db` (or a descendant) and the four files listed. If any is missing, run `pnpm install && pnpm build` in `/Users/such/workspace/loom`.
 
 - [ ] **Step 3: A superuser Postgres on 55432 for the test suites**
 
@@ -112,28 +120,37 @@ Expected: one row. (Use whatever superuser URL the local test cluster takes; the
 |---|---|---|---|
 | 42 | `feat/server-event-path-registry` | `sensitive.ts` registry wired into the event store; `x:` and child-id tests; `executionIdFor` ratchet | ~150 / 6 |
 | 43 | `feat/blob-store-envelope` | `packages/blob-store` scaffold, streaming blob envelope | ~190 / 8 |
-| 44 | `feat/blob-store-fs` | `EncryptedFsContentStore` (stage/commit, put, get, delete) passing the ContentStore conformance suite | ~190 / 4 |
-| 45 | `feat/blob-store-hardening` | size cap, `eraseUserBlobs`, `removeStaleTemp`, tamper/cross-user/hostile-ref tests | ~190 / 4 |
-| 46 | `feat/db-documents-table` | migration 0009 `documents` + RLS + isolation tests | ~140 / 2 |
-| 47 | `feat/server-field-crypto` | `FieldCrypto` for `*_enc` columns | ~120 / 2 |
-| 48 | `feat/server-upload-sniff` | magic-byte sniffer, filename sanitizer | ~190 / 2 |
-| 49 | `feat/server-upload-limits` | limits from env, `peek`, `.env.example`, `.gitignore` | ~150 / 6 |
-| 50 | `feat/server-multipart` | busboy-based single-file reader | ~200 / 5 |
-| 51 | `feat/server-documents-repo` | documents repository, DTO mapping, test harness | ~190 / 3 |
-| 52 | `feat/api-document-upload` | `POST /api/documents` (dedup) and server wiring | ~200 / 5 |
-| 53 | `feat/api-upload-quotas` | quotas, per-user in-flight cap, rejection and cleanup tests | ~200 / 4 |
-| 54 | `feat/server-route-params` | path parameters in the router | ~90 / 5 |
-| 55 | `feat/api-document-read` | `GET /api/documents`, `GET /api/documents/:id` | ~200 / 4 |
-| 56 | `feat/api-document-delete` | `DELETE /api/documents/:id`, race and erasure-shape tests | ~170 / 3 |
-| 57 | `test/api-documents-e2e` | M2 acceptance test over real auth | ~150 / 1 |
+| 44 | `feat/blob-store-fingerprint` | HKDF-derived fingerprint key, HMAC fingerprint, `hmac-sha256:` address format | ~90 / 3 |
+| 45a | `feat/blob-store-fs` | `EncryptedFsContentStore` (stage/commit, put, get, delete, keyed addresses) passing the ContentStore conformance suite | ~175 / 4 |
+| 45b | `test/blob-store-fs-layout` | layout, keyed-address and stage/commit tests | ~70 / 1 |
+| 46a | `feat/blob-store-maintenance` | `eraseUserBlobs`, `removeStaleTemp` | ~115 / 3 |
+| 46b | `test/blob-store-hardening` | size cap, tamper, cross-user, hostile-ref and destroyed-key tests | ~125 / 1 |
+| 47 | `feat/db-documents-table` | migration 0009 `documents` (with `stats_enc`) + RLS + isolation tests | ~145 / 2 |
+| 48 | `feat/server-field-crypto` | `FieldCrypto` for `*_enc` columns | ~120 / 2 |
+| 49 | `feat/server-upload-sniff` | magic-byte sniffer, filename sanitizer | ~190 / 2 |
+| 50 | `feat/server-upload-limits` | limits from env, `peek`, `.env.example`, `.gitignore` | ~150 / 6 |
+| 51 | `feat/server-multipart` | busboy-based single-file reader | ~200 / 5 |
+| 52a | `feat/server-documents-repo` | documents repository (insert, find, DTO incl. `stats_enc`), harness basics | ~190 / 3 |
+| 52b | `feat/server-documents-tenant-usage` | `lockTenantForWrite`, `usageOfTenant` | ~110 / 2 |
+| 53 | `feat/flow-ingest-document-stub` | `ingest-document` stub flow, grants, `loom gen` output, ids-only and no-sensitive-path tests | ~170 / 7 |
+| 54 | `feat/server-ingest-port` | `IngestPort` over the Loom runtime (start-once, cancel-by-id), Postgres deps for the stub step | ~175 / 4 |
+| 55a | `feat/api-document-upload` | `POST /api/documents` (keyed dedup), upload harness | ~185 / 3 |
+| 55b | `test/api-upload-dedup` | dedup, cross-user and keyed-name tests | ~75 / 1 |
+| 56 | `feat/api-upload-starts-ingest` | start `ingest-document` after the upload commits; `main.ts` wiring (routes, flow deps, stale temp cleanup) | ~180 / 5 |
+| 57 | `feat/api-upload-quotas` | quotas, per-user in-flight cap, rejection and cleanup tests | ~200 / 4 |
+| 58 | `feat/server-route-params` | path parameters in the router | ~90 / 5 |
+| 59 | `feat/api-document-read` | `GET /api/documents`, `GET /api/documents/:id` | ~200 / 4 |
+| 60 | `feat/api-document-delete` | `DELETE /api/documents/:id`: cancel the flow, then row and blob; in-flight and repeated-delete tests | ~190 / 3 |
+| 61 | `test/api-delete-race-erasure` | upload/delete race test and the erasure-shape test | ~90 / 1 |
+| 62 | `test/api-documents-e2e` | M2 acceptance test over real auth, with the flow | ~170 / 1 |
 
-**Sizes are estimated by eye; the code was not replayed.** Several tasks are close to the limit and the tests are the bulk of most of them. If `git diff --stat` shows more than 200 changed lines or 10 files (lockfile and generated files excluded), split exactly as follows rather than trimming tests: Task 43 -> envelope tests in a second PR; Task 45 -> `hardening.test.ts` in its own PR; Task 48 -> `sanitizeFilename`/`titleFromFilename` in their own PR; Task 52 -> the `main.ts` wiring moves into Task 53; Task 53 -> `inFlight.ts` and its test become their own PR before it; Task 55 -> `GET /api/documents/:id` becomes its own PR after the list endpoint; Task 56 -> the race test and the erasure-shape test become their own PR. A split task keeps its number with a letter (45a, 45b) and its place in the stack.
+**Sizes are estimated by eye; the code was not replayed.** Tasks 45, 46, 52 and 55 were split into a/b pairs in this revision because their counted code exceeded the limit once the owner's decisions were applied; the lettered tasks keep their place in the stack (a before b). Several others are still close to the limit and the tests are the bulk of most of them. If `git diff --stat` shows more than 200 changed lines or 10 files (lockfile and generated files excluded), split exactly as follows rather than trimming tests: Task 43 -> envelope tests in a second PR; Task 49 -> `sanitizeFilename`/`titleFromFilename` in their own PR; Task 54 -> `pgDeps.ts` and its test in their own PR before it; Task 56 -> the `main.ts` wiring and `removeStaleTemp` call in their own PR after it; Task 57 -> `inFlight.ts` and its test become their own PR before it; Task 59 -> `GET /api/documents/:id` becomes its own PR after the list endpoint; Task 60 -> the in-flight and repeated-delete tests become their own PR after it. A further split keeps its number with the next letter.
 
 ---
 
 ### Task 42: sensitive event paths, `x:` and child execution ids, and the `executionIdFor` ratchet
 
-Closes M1 carry-forwards 1-3. M2 starts no execution, so there is nothing to register *yet*; this task makes the registry the single, tested place that M3 must extend, proves the two execution-id cases M1 left untested, and adds a guard so a start or fork that bypasses `executionIdFor` fails the build.
+Closes M1 carry-forwards 1-3. M2's one flow (the `ingest-document` stub, Task 53) carries ids only, so there is nothing to register *yet*; this task makes the registry the single, tested place every later flow must extend, proves the two execution-id cases M1 left untested, and adds a guard so a runtime start or fork that bypasses `executionIdFor` fails the build.
 
 **Files:**
 - Create: `apps/server/app/sensitive.ts`
@@ -169,7 +186,9 @@ import { describe, expect, it } from "vitest";
 const APP = resolve(__dirname);
 // A call that starts or forks an execution. The runtime would otherwise mint a ULID, and the
 // execution's data would fall outside the user's key (see subject.ts).
-const STARTS = /\.\s*(?:start|startExecution|fork)\s*\(/;
+// Only the runtime's own start/fork: a method named `start` on some other object (the `IngestPort` in
+// Task 54, whose single implementation sits in a file that also calls `executionIdFor(`) is not one.
+const STARTS = /[Rr]untime\s*\.\s*(?:start|startExecution|fork)\s*\(/;
 
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -185,6 +204,7 @@ describe("execution ids", () => {
     expect(STARTS.test("await runtime.start(def, { executionId })")).toBe(true);
     expect(STARTS.test("runtime\n  .fork(id, 3)")).toBe(true);
     expect(STARTS.test("server.listen(0)")).toBe(false);
+    expect(STARTS.test("await deps.ingest.start(identity, documentId)")).toBe(false);
   });
 
   it("every source file that starts or forks an execution builds the id with executionIdFor", () => {
@@ -281,14 +301,15 @@ Create `apps/server/app/sensitive.ts`:
  * Event paths that can carry user content, sealed in the log under the owning user's key.
  *
  * Rules for every flow, agent or tool added later (M3 onwards):
- *  - a flow's start input carries ids only (`{ documentId }`), never a filename, title or text;
+ *  - a flow's start input carries ids only (the `ingest-document` stub: `{ tenantId, userId, documentId }`), never a filename, title or text;
  *  - any step output or event field that can hold user content (document text, summaries, questions,
  *    answers) is listed here, or marked `sensitive(...)` in its schema and derived with
  *    `sensitivePathsFromSteps`; add it in the SAME PR that adds the flow, because an event written
  *    before its path is registered stays readable in the clear forever;
  *  - execution ids are plaintext and survive erasure, so they never contain user content either.
  *
- * M2 starts no execution, so nothing is registered yet.
+ * M2's only flow (`ingest-document`, Task 53) has a start input of three UUIDs and a two-value enum
+ * output, so nothing is registered yet; Task 53's tests fail if that stops being true.
  */
 export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> = {};
 ```
@@ -347,7 +368,7 @@ git add apps/server/app/sensitive.ts apps/server/app/storage.ts apps/server/app/
 git commit -m "feat(server): event path registry, x: and child execution id tests, executionIdFor guard
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-gh pr create --draft --title "feat(server): event path registry, x: and child execution id tests" --body "Closes the M1 carry-forwards. M2 starts no execution, so the registry is empty by design; M3 extends it in the PR that adds the flow.
+gh pr create --draft --title "feat(server): event path registry, x: and child execution id tests" --body "Closes the M1 carry-forwards. The M2 stub flow carries ids only, so the registry is empty by design (Task 53 proves it); the PR that first adds content-bearing flow output extends it.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
@@ -667,7 +688,196 @@ Expected: gate green; at most 200 changed lines (lockfile excluded) and 10 files
 
 ---
 
-### Task 44: `EncryptedFsContentStore` core, passing Loom's ContentStore conformance suite
+### Task 44: keyed fingerprint and the `hmac-sha256:` address format
+
+Owner decision 5: the plaintext sha256 is replaced by an HMAC keyed from the user's data key. This task is the pure, I/O-free part; Task 45a uses it. See Deviation 1 for why HKDF-from-the-DEK was chosen over a separate wrapped key.
+
+**Files:**
+- Create: `packages/blob-store/src/address.ts`
+- Create: `packages/blob-store/src/address.test.ts`
+- Modify: `packages/blob-store/src/index.ts`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks (Task 43 created the package).
+- Produces (from `@docmind/blob-store`):
+  - `FINGERPRINT_INFO = "docmind-fingerprint-v1"`, `ADDRESS_PREFIX = "hmac-sha256:"`
+  - `deriveFingerprintKey(dek: Buffer): Buffer`: HKDF-SHA256, empty salt, `info = FINGERPRINT_INFO`, 32 bytes. Deterministic per DEK; never equal to the DEK.
+  - `fingerprintOf(fingerprintKey: Buffer, bytes: Uint8Array): string`: HMAC-SHA256, 64 lowercase hex digits.
+  - `addressOf(fingerprint: string): string` -> `hmac-sha256:<fingerprint>`; `parseAddress(address: string): string | null` returns the 64-hex fingerprint of a well-formed address and `null` for anything else (wrong scheme, wrong length, upper case, trailing characters).
+  - `sameFingerprint(a: string, b: string): boolean`: constant-time comparison of two fingerprints.
+
+- [ ] **Step 1: Write the failing test**
+
+`packages/blob-store/src/address.test.ts`:
+
+```ts
+import { createHash, hkdfSync, randomBytes } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  ADDRESS_PREFIX,
+  FINGERPRINT_INFO,
+  addressOf,
+  deriveFingerprintKey,
+  fingerprintOf,
+  parseAddress,
+  sameFingerprint,
+} from "./address";
+
+const DEK = randomBytes(32);
+const bytes = (s: string) => Buffer.from(s);
+
+describe("fingerprint key", () => {
+  it("is deterministic per data key, 32 bytes, and not the data key itself", () => {
+    const a = deriveFingerprintKey(DEK);
+    expect(a.length).toBe(32);
+    expect(a.equals(deriveFingerprintKey(DEK))).toBe(true);
+    expect(a.equals(DEK)).toBe(false);
+    expect(a.equals(deriveFingerprintKey(randomBytes(32)))).toBe(false);
+  });
+
+  it("is domain-separated by its label", () => {
+    const other = Buffer.from(hkdfSync("sha256", DEK, Buffer.alloc(0), "docmind-something-else", 32));
+    expect(deriveFingerprintKey(DEK).equals(other)).toBe(false);
+    expect(FINGERPRINT_INFO).toBe("docmind-fingerprint-v1");
+  });
+});
+
+describe("fingerprintOf", () => {
+  it("is 64 lowercase hex digits, stable for equal bytes and different for different bytes", () => {
+    const key = deriveFingerprintKey(DEK);
+    const a = fingerprintOf(key, bytes("same"));
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintOf(key, bytes("same"))).toBe(a);
+    expect(fingerprintOf(key, bytes("other"))).not.toBe(a);
+  });
+
+  it("is not the plain sha256, and differs between users (different data keys) for the same bytes", () => {
+    const plain = createHash("sha256").update("quarterly numbers").digest("hex");
+    const mine = fingerprintOf(deriveFingerprintKey(DEK), bytes("quarterly numbers"));
+    const yours = fingerprintOf(deriveFingerprintKey(randomBytes(32)), bytes("quarterly numbers"));
+    expect(mine).not.toBe(plain);
+    expect(mine).not.toBe(yours);
+  });
+});
+
+describe("addresses", () => {
+  const fp = "a".repeat(64);
+
+  it("round-trips a fingerprint", () => {
+    expect(addressOf(fp)).toBe(`${ADDRESS_PREFIX}${fp}`);
+    expect(parseAddress(addressOf(fp))).toBe(fp);
+  });
+
+  it("rejects everything that is not exactly hmac-sha256:<64 lowercase hex>", () => {
+    for (const bad of [
+      "",
+      `sha256:${fp}`, // the plain scheme is not this store's
+      "sha256:deadbeef",
+      `${ADDRESS_PREFIX}${"A".repeat(64)}`,
+      `${ADDRESS_PREFIX}${"a".repeat(63)}`,
+      `${ADDRESS_PREFIX}${fp}a`,
+      `${ADDRESS_PREFIX}${fp}\n`,
+      `${ADDRESS_PREFIX}../${"a".repeat(61)}`,
+      fp,
+    ]) {
+      expect(parseAddress(bad), bad).toBeNull();
+    }
+  });
+
+  it("compares fingerprints without short-circuiting on length mismatches", () => {
+    expect(sameFingerprint(fp, fp)).toBe(true);
+    expect(sameFingerprint(fp, "b".repeat(64))).toBe(false);
+    expect(sameFingerprint(fp, "a")).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pnpm --filter @docmind/blob-store exec vitest run src/address.test.ts`
+Expected: FAIL (module not found).
+
+- [ ] **Step 3: Implement**
+
+`packages/blob-store/src/address.ts`:
+
+```ts
+import { createHmac, hkdfSync, timingSafeEqual } from "node:crypto";
+
+/** HKDF `info` for the fingerprint key. A new label (v2) is a new, unrelated key. */
+export const FINGERPRINT_INFO = "docmind-fingerprint-v1";
+/** Scheme of this store's content addresses. Not `sha256:`: the value is keyed, not a plain hash. */
+export const ADDRESS_PREFIX = "hmac-sha256:";
+
+const FINGERPRINT = /^[0-9a-f]{64}$/;
+
+/**
+ * The key a user's fingerprints are computed under, derived from their data key. HKDF keeps it
+ * independent of the AES uses of the same data key, and destroying the data key (erasure step 4)
+ * destroys it too: afterwards nobody can compute a fingerprint to test a known file against. The
+ * data key is uniformly random, so an empty salt is fine. Never log or return the result.
+ */
+export function deriveFingerprintKey(dek: Buffer): Buffer {
+  return Buffer.from(hkdfSync("sha256", dek, Buffer.alloc(0), FINGERPRINT_INFO, 32));
+}
+
+/** HMAC-SHA256 of the plaintext under the user's fingerprint key, as 64 lowercase hex digits. */
+export function fingerprintOf(fingerprintKey: Buffer, bytes: Uint8Array): string {
+  return createHmac("sha256", fingerprintKey).update(bytes).digest("hex");
+}
+
+export const addressOf = (fingerprint: string): string => `${ADDRESS_PREFIX}${fingerprint}`;
+
+/** The fingerprint inside an address this store could have issued, or null for anything else. */
+export function parseAddress(address: string): string | null {
+  if (!address.startsWith(ADDRESS_PREFIX)) return null;
+  const fingerprint = address.slice(ADDRESS_PREFIX.length);
+  return FINGERPRINT.test(fingerprint) ? fingerprint : null;
+}
+
+export function sameFingerprint(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+```
+
+Add to `packages/blob-store/src/index.ts`:
+
+```ts
+export {
+  ADDRESS_PREFIX,
+  FINGERPRINT_INFO,
+  addressOf,
+  deriveFingerprintKey,
+  fingerprintOf,
+  parseAddress,
+  sameFingerprint,
+} from "./address";
+```
+
+- [ ] **Step 4: Run to verify it passes, gate, commit**
+
+Run: `pnpm --filter @docmind/blob-store exec vitest run`
+Expected: PASS.
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c feat/blob-store-fingerprint
+git add packages/blob-store
+git commit -m "feat(blob-store): keyed fingerprint and hmac-sha256 content addresses
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "feat(blob-store): keyed fingerprint and hmac-sha256 content addresses" --body "Replaces the plaintext sha256 fingerprint with an HMAC keyed from the user's data key (HKDF, label docmind-fingerprint-v1). Intentional deviation from spec 5.1 step 3; see the plan's Deviation 1.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 90 changed lines, 3 files.
+
+---
+
+### Task 45a: `EncryptedFsContentStore` core, passing Loom's ContentStore conformance suite
 
 **Files:**
 - Create: `packages/blob-store/src/EncryptedFsContentStore.ts`
@@ -676,14 +886,16 @@ Expected: gate green; at most 200 changed lines (lockfile excluded) and 10 files
 - Modify: `packages/blob-store/src/index.ts`
 
 **Interfaces:**
-- Consumes: Task 43 (`sealStream`, `openBytes`, `BlobScope`, the three errors).
+- Consumes: Task 43 (`sealStream`, `openBytes`, `BlobScope`, the three errors) and Task 44 (`deriveFingerprintKey`, `fingerprintOf`, `addressOf`, `parseAddress`, `sameFingerprint`).
 - Produces:
   - `interface EncryptedFsContentStoreOptions { root: string; tenantId: string; userId: string; keys: KeyStore; maxBytes?: number }` (`root` absolute; `tenantId`/`userId` canonical lowercase UUIDs; `maxBytes` default 52428800)
-  - `interface StagedBlob { readonly ref: ContentRef /* size = plaintext bytes */; commit(): Promise<{ created: boolean }>; discard(): Promise<void> }`
-  - `class EncryptedFsContentStore implements ContentStore` with `stage(source: AsyncIterable<Uint8Array>): Promise<StagedBlob>`, `put`, `putStream`, `get`, `delete`, and `readonly userDir: string`.
-  - `commit()` renames the sealed temp file to `<root>/<tenantId>/<userId>/<hex>` unless that file already exists (then the temp file is removed and `created` is `false`). `discard()` is a no-op after `commit()` or a second `discard()`.
+  - `interface StagedBlob { readonly ref: ContentRef /* address = hmac-sha256:<fingerprint>, size = plaintext bytes */; readonly fingerprint: string /* the bare 64-hex keyed hash */; commit(): Promise<{ created: boolean }>; discard(): Promise<void> }`
+  - `class EncryptedFsContentStore implements ContentStore` with `stage(source: AsyncIterable<Uint8Array>): Promise<StagedBlob>`, `put`, `putStream`, `get`, `delete`, and `readonly userDir: string`. The store **computes the keyed address itself**: callers never supply or compute one, and `get`/`delete` accept only addresses `parseAddress` accepts (anything else, including a plain `sha256:<hex>`, is "absent").
+  - `commit()` renames the sealed temp file to `<root>/<tenantId>/<userId>/<fingerprint>` unless that file already exists (then the temp file is removed and `created` is `false`). `discard()` is a no-op after `commit()` or a second `discard()`.
 
-- [ ] **Step 1: Write the failing test (the contract suite plus the layout)**
+**How the conformance suite still passes:** Loom's ContentStore contract needs equal bytes to give equal refs, distinct bytes distinct refs, `put`/`putStream` to agree, `get` of an absent ref (including the literal `sha256:deadbeef`) to be `null`, and `delete` to be idempotent. It never recomputes a sha256 of the plaintext (Verified facts), so a keyed address meets all of it: within one store instance the key is fixed, so the HMAC is a deterministic, collision-resistant function of the bytes.
+
+- [ ] **Step 1: Write the failing test (the contract suite; the layout tests are Task 45b)**
 
 `packages/blob-store/vitest.config.ts`:
 
@@ -709,13 +921,12 @@ export default defineConfig({
 `packages/blob-store/src/EncryptedFsContentStore.test.ts`:
 
 ```ts
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runContentStoreConformance } from "@loom/conformance";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 
 const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -727,73 +938,17 @@ const freshRoot = (): string => {
   roots.push(root);
   return root;
 };
-const storeAt = (root: string, keys = new InMemoryKeyStore()) =>
-  new EncryptedFsContentStore({ root, tenantId: TENANT, userId: USER, keys });
 
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
 // The same contract every ContentStore owes (Loom ADR 0046), run on a fresh directory each time.
-runContentStoreConformance(() => storeAt(freshRoot()), "EncryptedFsContentStore");
-
-describe("EncryptedFsContentStore layout", () => {
-  const bytes = (s: string) => new TextEncoder().encode(s);
-  const hex = (s: string) => createHash("sha256").update(s).digest("hex");
-
-  it("stores ciphertext at <root>/<tenant>/<user>/<sha256 of the plaintext>", async () => {
-    const root = freshRoot();
-    const store = storeAt(root);
-    const ref = await store.put(bytes("quarterly numbers"));
-    expect(ref.__loomContent).toBe(`sha256:${hex("quarterly numbers")}`);
-    expect(ref.size).toBe(17);
-    expect(readdirSync(join(root, TENANT, USER))).toEqual([hex("quarterly numbers")]);
-    const onDisk = readFileSync(join(root, TENANT, USER, hex("quarterly numbers")));
-    expect(onDisk.includes("quarterly")).toBe(false);
-  });
-
-  it("stores identical bytes once for one user and leaves no temp files", async () => {
-    const root = freshRoot();
-    const store = storeAt(root);
-    await store.put(bytes("same"));
-    await store.put(bytes("same"));
-    expect(readdirSync(join(root, TENANT, USER))).toHaveLength(1);
-  });
-
-  it("keeps two users' copies of the same bytes apart", async () => {
-    const root = freshRoot();
-    const keys = new InMemoryKeyStore();
-    const other = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1";
-    const a = storeAt(root, keys);
-    const b = new EncryptedFsContentStore({ root, tenantId: TENANT, userId: other, keys });
-    const ref = await a.put(bytes("shared words"));
-    expect(await b.get(ref)).toBeNull();
-    await b.put(bytes("shared words"));
-    expect(readdirSync(join(root, TENANT))).toEqual([USER, other].sort());
-  });
-
-  it("stage() holds nothing at the final path until commit, and discard removes the temp file", async () => {
-    const root = freshRoot();
-    const store = storeAt(root);
-    async function* once() {
-      yield bytes("staged");
-    }
-    const staged = await store.stage(once());
-    expect(await store.get(staged.ref)).toBeNull();
-    await staged.discard();
-    expect(readdirSync(join(root, TENANT, USER))).toEqual([]);
-
-    const again = await store.stage(once());
-    expect(await again.commit()).toEqual({ created: true });
-    expect(await store.get(again.ref)).not.toBeNull();
-    await again.discard(); // no-op after commit
-    expect(await store.get(again.ref)).not.toBeNull();
-
-    const dup = await store.stage(once());
-    expect(await dup.commit()).toEqual({ created: false });
-    expect(readdirSync(join(root, TENANT, USER))).toHaveLength(1);
-  });
-});
+// The addresses are keyed (hmac-sha256:), which the kit accepts: it only compares them with each other.
+runContentStoreConformance(
+  () => new EncryptedFsContentStore({ root: freshRoot(), tenantId: TENANT, userId: USER, keys: new InMemoryKeyStore() }),
+  "EncryptedFsContentStore",
+);
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -806,7 +961,7 @@ Expected: FAIL (module not found).
 `packages/blob-store/src/EncryptedFsContentStore.ts`:
 
 ```ts
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -814,11 +969,11 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ContentRef, ContentStore } from "@loom/plugin-content";
 import type { KeyStore } from "@loom/plugin-crypto";
+import { addressOf, deriveFingerprintKey, fingerprintOf, parseAddress, sameFingerprint } from "./address";
 import { type BlobScope, openBytes, sealStream } from "./envelope";
 import { BlobCorruptError, BlobKeyUnavailableError, BlobTooLargeError } from "./errors";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const ADDRESS = /^sha256:([0-9a-f]{64})$/;
 const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 
 export interface EncryptedFsContentStoreOptions {
@@ -834,8 +989,10 @@ export interface EncryptedFsContentStoreOptions {
 }
 
 export interface StagedBlob {
-  /** Address of the plaintext, and its size in bytes. */
+  /** Keyed address (`hmac-sha256:<fingerprint>`) of the plaintext, and its size in bytes. */
   readonly ref: ContentRef;
+  /** The bare 64-hex keyed hash: `documents.fingerprint` and the blob's file name. */
+  readonly fingerprint: string;
   /** Moves the sealed file to its final path. `created` is false if this user already had it. */
   commit(): Promise<{ created: boolean }>;
   /** Removes the staged file. A no-op once committed or discarded. */
@@ -849,10 +1006,11 @@ const exists = (path: string): Promise<boolean> =>
   );
 
 /**
- * Loom's ContentStore for one user, on the local filesystem. Bytes are addressed by the sha256 of
- * the plaintext, sealed under the user's data key (see envelope.ts) and written to
- * `<root>/<tenantId>/<userId>/<hex>`. No client string ever reaches a path: the segments are
- * validated UUIDs and a 64-digit hex digest.
+ * Loom's ContentStore for one user, on the local filesystem. Bytes are addressed by an HMAC of the
+ * plaintext keyed from the user's data key (see address.ts), sealed under that data key (see
+ * envelope.ts) and written to `<root>/<tenantId>/<userId>/<fingerprint>`. The store computes the
+ * address itself, so Loom's sha256 `contentAddress()` is never involved. No client string ever
+ * reaches a path: the segments are validated UUIDs and a 64-digit hex fingerprint.
  */
 export class EncryptedFsContentStore implements ContentStore {
   readonly userDir: string;
@@ -872,15 +1030,15 @@ export class EncryptedFsContentStore implements ContentStore {
   }
 
   /**
-   * Streams `source` into a sealed temp file, hashing and counting the plaintext on the way
+   * Streams `source` into a sealed temp file, fingerprinting and counting the plaintext on the way
    * (throws `BlobTooLargeError` past `maxBytes`, removing the temp file). Nothing is visible at
    * the final path until `commit()`.
    */
   async stage(source: AsyncIterable<Uint8Array>): Promise<StagedBlob> {
     const dek = await this.keys.getOrCreate(this.scope.userId);
+    const hash = createHmac("sha256", deriveFingerprintKey(dek));
     await mkdir(this.userDir, { recursive: true, mode: 0o700 });
     const tmp = join(this.userDir, `.tmp-${randomBytes(12).toString("hex")}`);
-    const hash = createHash("sha256");
     const max = this.maxBytes;
     let size = 0;
     async function* counted(): AsyncGenerator<Uint8Array> {
@@ -906,11 +1064,12 @@ export class EncryptedFsContentStore implements ContentStore {
       await rm(tmp, { force: true });
       throw err;
     }
-    const hex = hash.digest("hex");
-    const final = join(this.userDir, hex);
+    const fingerprint = hash.digest("hex");
+    const final = join(this.userDir, fingerprint);
     let state: "staged" | "committed" | "discarded" = "staged";
     return {
-      ref: { __loomContent: `sha256:${hex}`, size },
+      ref: { __loomContent: addressOf(fingerprint), size },
+      fingerprint,
       commit: async () => {
         if (state !== "staged") throw new Error("blob is no longer staged");
         try {
@@ -952,11 +1111,11 @@ export class EncryptedFsContentStore implements ContentStore {
   }
 
   async get(ref: ContentRef): Promise<Uint8Array | null> {
-    const hex = ADDRESS.exec(ref.__loomContent)?.[1];
-    if (!hex) return null; // not an address this store could have issued
+    const fingerprint = parseAddress(ref.__loomContent);
+    if (!fingerprint) return null; // not an address this store could have issued
     let sealed: Buffer;
     try {
-      sealed = await readFile(join(this.userDir, hex));
+      sealed = await readFile(join(this.userDir, fingerprint));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
@@ -964,16 +1123,16 @@ export class EncryptedFsContentStore implements ContentStore {
     const dek = await this.keys.get(this.scope.userId);
     if (!dek) throw new BlobKeyUnavailableError();
     const plain = openBytes(dek, this.scope, sealed);
-    if (createHash("sha256").update(plain).digest("hex") !== hex) {
+    if (!sameFingerprint(fingerprintOf(deriveFingerprintKey(dek), plain), fingerprint)) {
       throw new BlobCorruptError("blob content does not match its address");
     }
     return plain;
   }
 
   async delete(ref: ContentRef): Promise<void> {
-    const hex = ADDRESS.exec(ref.__loomContent)?.[1];
-    if (!hex) return;
-    await rm(join(this.userDir, hex), { force: true });
+    const fingerprint = parseAddress(ref.__loomContent);
+    if (!fingerprint) return;
+    await rm(join(this.userDir, fingerprint), { force: true });
   }
 }
 ```
@@ -981,6 +1140,15 @@ export class EncryptedFsContentStore implements ContentStore {
 Replace `packages/blob-store/src/index.ts` with:
 
 ```ts
+export {
+  ADDRESS_PREFIX,
+  FINGERPRINT_INFO,
+  addressOf,
+  deriveFingerprintKey,
+  fingerprintOf,
+  parseAddress,
+  sameFingerprint,
+} from "./address";
 export {
   EncryptedFsContentStore,
   type EncryptedFsContentStoreOptions,
@@ -993,7 +1161,7 @@ export { type BlobScope, OVERHEAD_BYTES, openBytes, sealStream } from "./envelop
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter @docmind/blob-store exec vitest run`
-Expected: PASS (the Loom contract tests listed by name, plus the three layout tests). If the conformance kit rejects a store without the SPI 1.3.0 optionals (Uncertain #2), implement `touchClock` (`Date.now()`), `listPage` (readdir of `userDir`, skipping `.tmp-*`, sorted, with `mtimeMs` as `touchedAt`) and `deleteIfUntouchedSince` (stat then `rm` if `mtimeMs < cutoff`) in this task and note it in the PR.
+Expected: PASS (the Loom contract tests, listed by name). If the conformance kit rejects a store without the SPI 1.3.0 optionals (Uncertain #2), implement `touchClock` (`Date.now()`), `listPage` (readdir of `userDir`, skipping `.tmp-*`, sorted, with `mtimeMs` as `touchedAt`; addresses via `addressOf`) and `deleteIfUntouchedSince` (stat then `rm` if `mtimeMs < cutoff`) in this task and note it in the PR. If the kit fails on the keyed address itself, that is a new finding: stop and report it to the owner rather than falling back to `sha256:`.
 
 - [ ] **Step 5: Gate, measure, commit**
 
@@ -1001,29 +1169,158 @@ Expected: PASS (the Loom contract tests listed by name, plus the three layout te
 export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
 git diff --stat HEAD~0 && git switch -c feat/blob-store-fs
 git add packages/blob-store
-git commit -m "feat(blob-store): encrypted filesystem ContentStore
+git commit -m "feat(blob-store): encrypted filesystem ContentStore with keyed addresses
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-gh pr create --draft --title "feat(blob-store): encrypted filesystem ContentStore" --body "Passes Loom's ContentStore conformance suite.
+gh pr create --draft --title "feat(blob-store): encrypted filesystem ContentStore with keyed addresses" --body "Passes Loom's ContentStore conformance suite; addresses are hmac-sha256:<fingerprint> (Task 44).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
-Expected: gate green; at most 200 changed lines, 10 files (about 190 / 4).
+Expected: gate green; about 175 changed lines, 4 files.
 
 ---
 
-### Task 45: blob-store hardening: size cap, erasure, stale temp files
+### Task 45b: `EncryptedFsContentStore` layout and keyed-address tests
+
+Test-only PR (the behaviour is Task 45a's). It pins where blobs land, that addresses are keyed, that two users never share a fingerprint, and the stage/commit/discard contract.
 
 **Files:**
-- Modify: `packages/blob-store/src/EncryptedFsContentStore.ts` (nothing: the cap already exists; only tests exercise it)
+- Create: `packages/blob-store/src/EncryptedFsContentStore.layout.test.ts`
+
+**Interfaces:**
+- Consumes: Task 44 (`deriveFingerprintKey`, `fingerprintOf`), Task 45a (`EncryptedFsContentStore`, `stage`).
+- Produces: nothing (tests only).
+
+- [ ] **Step 1: Write the tests**
+
+`packages/blob-store/src/EncryptedFsContentStore.layout.test.ts`:
+
+```ts
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { afterAll, describe, expect, it } from "vitest";
+import { deriveFingerprintKey, fingerprintOf } from "./address";
+import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
+
+const TENANT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const USER = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+
+const roots: string[] = [];
+const freshRoot = (): string => {
+  const root = mkdtempSync(join(tmpdir(), "dm-blobs-"));
+  roots.push(root);
+  return root;
+};
+const storeAt = (root: string, keys = new InMemoryKeyStore()) =>
+  new EncryptedFsContentStore({ root, tenantId: TENANT, userId: USER, keys });
+
+afterAll(() => {
+  for (const root of roots) rmSync(root, { recursive: true, force: true });
+});
+
+describe("EncryptedFsContentStore layout", () => {
+  const bytes = (s: string) => new TextEncoder().encode(s);
+  const fingerprint = async (keys: InMemoryKeyStore, user: string, s: string) =>
+    fingerprintOf(deriveFingerprintKey(await keys.getOrCreate(user)), bytes(s));
+
+  it("stores ciphertext at <root>/<tenant>/<user>/<keyed fingerprint of the plaintext>", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const store = storeAt(root, keys);
+    const ref = await store.put(bytes("quarterly numbers"));
+    const fp = await fingerprint(keys, USER, "quarterly numbers");
+    expect(ref.__loomContent).toBe(`hmac-sha256:${fp}`);
+    expect(ref.size).toBe(17);
+    expect(fp).not.toBe(createHash("sha256").update("quarterly numbers").digest("hex"));
+    expect(readdirSync(join(root, TENANT, USER))).toEqual([fp]);
+    expect(readFileSync(join(root, TENANT, USER, fp)).includes("quarterly")).toBe(false);
+  });
+
+  it("stores identical bytes once for one user and leaves no temp files", async () => {
+    const root = freshRoot();
+    const store = storeAt(root);
+    await store.put(bytes("same"));
+    await store.put(bytes("same"));
+    expect(readdirSync(join(root, TENANT, USER))).toHaveLength(1);
+  });
+
+  it("keeps two users' copies of the same bytes apart, under different fingerprints", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const other = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1";
+    const a = storeAt(root, keys);
+    const b = new EncryptedFsContentStore({ root, tenantId: TENANT, userId: other, keys });
+    const refA = await a.put(bytes("shared words"));
+    expect(await b.get(refA)).toBeNull();
+    const refB = await b.put(bytes("shared words"));
+    expect(refB.__loomContent).not.toBe(refA.__loomContent);
+    expect(readdirSync(join(root, TENANT))).toEqual([USER, other].sort());
+  });
+
+  it("stage() holds nothing at the final path until commit, and discard removes the temp file", async () => {
+    const root = freshRoot();
+    const store = storeAt(root);
+    async function* once() {
+      yield bytes("staged");
+    }
+    const staged = await store.stage(once());
+    expect(staged.ref.__loomContent).toBe(`hmac-sha256:${staged.fingerprint}`);
+    expect(await store.get(staged.ref)).toBeNull();
+    await staged.discard();
+    expect(readdirSync(join(root, TENANT, USER))).toEqual([]);
+
+    const again = await store.stage(once());
+    expect(await again.commit()).toEqual({ created: true });
+    expect(await store.get(again.ref)).not.toBeNull();
+    await again.discard(); // no-op after commit
+    expect(await store.get(again.ref)).not.toBeNull();
+
+    const dup = await store.stage(once());
+    expect(await dup.commit()).toEqual({ created: false });
+    expect(readdirSync(join(root, TENANT, USER))).toHaveLength(1);
+  });
+
+  it("treats a plain sha256 address, however well formed, as absent", async () => {
+    const store = storeAt(freshRoot());
+    await store.put(bytes("x"));
+    const plain = `sha256:${createHash("sha256").update("x").digest("hex")}`;
+    expect(await store.get({ __loomContent: plain })).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Run, gate, commit**
+
+Run: `pnpm --filter @docmind/blob-store exec vitest run`
+Expected: PASS (no failing-first step: these tests pin Task 45a behaviour; a failure is a Task 45a bug, fixed there).
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c test/blob-store-fs-layout
+git add packages/blob-store
+git commit -m "test(blob-store): layout and keyed-address tests for the filesystem ContentStore
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "test(blob-store): layout and keyed-address tests for the filesystem ContentStore" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 70 changed lines, 1 file.
+
+---
+
+### Task 46a: erasure and stale-temp cleanup (`eraseUserBlobs`, `removeStaleTemp`)
+
+**Files:**
 - Create: `packages/blob-store/src/maintenance.ts`
 - Create: `packages/blob-store/src/maintenance.test.ts`
-- Create: `packages/blob-store/src/hardening.test.ts`
 - Modify: `packages/blob-store/src/index.ts`
 
 **Interfaces:**
-- Consumes: Task 44 (`EncryptedFsContentStore`, `stage`, the errors).
+- Consumes: Task 45a (`EncryptedFsContentStore`).
 - Produces:
   - `eraseUserBlobs(root: string, tenantId: string, userId: string): Promise<void>`: removes `<root>/<tenantId>/<userId>` recursively; idempotent; validates both ids as UUIDs and `root` as absolute (throws `Error` otherwise).
   - `removeStaleTemp(root: string, olderThanMs: number, now?: number): Promise<number>`: removes `.tmp-*` files older than `olderThanMs` under `<root>/<uuid>/<uuid>/`; returns how many.
@@ -1109,152 +1406,10 @@ describe("removeStaleTemp", () => {
 });
 ```
 
-`packages/blob-store/src/hardening.test.ts`:
-
-```ts
-import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { afterAll, describe, expect, it } from "vitest";
-import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
-import { BlobCorruptError, BlobKeyUnavailableError, BlobTooLargeError } from "./errors";
-
-const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-const A = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
-const B = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1";
-const enc = (s: string) => new TextEncoder().encode(s);
-const hex = (s: string) => createHash("sha256").update(s).digest("hex");
-const roots: string[] = [];
-const freshRoot = () => {
-  const root = mkdtempSync(join(tmpdir(), "dm-blobs-"));
-  roots.push(root);
-  return root;
-};
-afterAll(() => {
-  for (const r of roots) rmSync(r, { recursive: true, force: true });
-});
-const storeFor = (root: string, userId = A, keys = new InMemoryKeyStore(), maxBytes?: number) =>
-  new EncryptedFsContentStore({ root, tenantId: T, userId, keys, ...(maxBytes ? { maxBytes } : {}) });
-
-describe("size cap", () => {
-  it("rejects a stream over maxBytes while it is being written and leaves no file", async () => {
-    const root = freshRoot();
-    const store = storeFor(root, A, new InMemoryKeyStore(), 10);
-    async function* big() {
-      yield enc("12345");
-      yield enc("678901"); // 11 bytes in total
-    }
-    await expect(store.putStream(big())).rejects.toBeInstanceOf(BlobTooLargeError);
-    expect(readdirSync(join(root, T, A))).toEqual([]);
-  });
-
-  it("accepts a stream of exactly maxBytes", async () => {
-    const store = storeFor(freshRoot(), A, new InMemoryKeyStore(), 10);
-    const ref = await store.put(enc("0123456789"));
-    expect(ref.size).toBe(10);
-  });
-
-  it("leaves no temp file when the source itself fails midway", async () => {
-    const root = freshRoot();
-    const store = storeFor(root);
-    async function* broken() {
-      yield enc("partial");
-      throw new Error("client went away");
-    }
-    await expect(store.putStream(broken())).rejects.toThrow("client went away");
-    expect(readdirSync(join(root, T, A))).toEqual([]);
-  });
-});
-
-describe("tampering and misplacement", () => {
-  it("throws BlobCorruptError when the stored file was changed", async () => {
-    const root = freshRoot();
-    const store = storeFor(root);
-    const ref = await store.put(enc("original"));
-    const file = join(root, T, A, hex("original"));
-    const bytes = readFileSync(file);
-    bytes[bytes.length - 20] = (bytes[bytes.length - 20] ?? 0) ^ 1;
-    writeFileSync(file, bytes);
-    await expect(store.get(ref)).rejects.toBeInstanceOf(BlobCorruptError);
-  });
-
-  it("will not open a file copied into another user's directory", async () => {
-    const root = freshRoot();
-    const keys = new InMemoryKeyStore();
-    const a = storeFor(root, A, keys);
-    const b = storeFor(root, B, keys);
-    const ref = await a.put(enc("a's secret"));
-    mkdirSync(join(root, T, B), { recursive: true });
-    copyFileSync(join(root, T, A, hex("a's secret")), join(root, T, B, hex("a's secret")));
-    await keys.getOrCreate(B);
-    await expect(b.get(ref)).rejects.toBeInstanceOf(BlobCorruptError);
-  });
-
-  it("will not open a file renamed to another digest", async () => {
-    const root = freshRoot();
-    const store = storeFor(root);
-    await store.put(enc("one"));
-    const other = await store.put(enc("two"));
-    copyFileSync(join(root, T, A, hex("one")), join(root, T, A, hex("two")));
-    await expect(store.get(other)).rejects.toBeInstanceOf(BlobCorruptError);
-  });
-
-  it("reports a missing key as BlobKeyUnavailableError, not as absence", async () => {
-    const root = freshRoot();
-    const keys = new InMemoryKeyStore();
-    const store = storeFor(root, A, keys);
-    const ref = await store.put(enc("keyed"));
-    await keys.destroy(A);
-    await expect(store.get(ref)).rejects.toBeInstanceOf(BlobKeyUnavailableError);
-  });
-});
-
-describe("hostile refs and construction", () => {
-  it("never leaves the user's directory for a crafted address", async () => {
-    const root = freshRoot();
-    const store = storeFor(root);
-    await store.put(enc("keep me"));
-    const outside = join(root, "outside.txt");
-    writeFileSync(outside, "do not touch");
-    for (const address of [
-      "sha256:../../outside.txt",
-      `sha256:${"A".repeat(64)}`,
-      `sha256:${"a".repeat(63)}`,
-      "sha256:",
-      "../outside.txt",
-      `sha256:${"a".repeat(64)}/../x`,
-    ]) {
-      expect(await store.get({ __loomContent: address })).toBeNull();
-      await store.delete({ __loomContent: address });
-    }
-    expect(readFileSync(outside, "utf8")).toBe("do not touch");
-    expect(readdirSync(join(root, T, A))).toHaveLength(1);
-  });
-
-  it("rejects a relative root and ids that are not canonical UUIDs", () => {
-    const keys = new InMemoryKeyStore();
-    expect(() => new EncryptedFsContentStore({ root: "rel", tenantId: T, userId: A, keys })).toThrow();
-    for (const userId of ["..", `${A}/x`, A.toUpperCase(), ""]) {
-      expect(() => new EncryptedFsContentStore({ root: freshRoot(), tenantId: T, userId, keys })).toThrow();
-    }
-  });
-
-  it("creates private directories and files", async () => {
-    if (process.platform === "win32") return;
-    const root = freshRoot();
-    await storeFor(root).put(enc("private"));
-    expect(statSync(join(root, T, A)).mode & 0o077).toBe(0);
-    expect(statSync(join(root, T, A, hex("private"))).mode & 0o077).toBe(0);
-  });
-});
-```
-
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `pnpm --filter @docmind/blob-store exec vitest run src/maintenance.test.ts src/hardening.test.ts`
-Expected: `maintenance.test.ts` FAILS (module not found); the `hardening.test.ts` cases pass already (they pin Task 44 behaviour). If one of them fails, that is a real Task 44 bug: fix it in this PR.
+Run: `pnpm --filter @docmind/blob-store exec vitest run src/maintenance.test.ts`
+Expected: FAIL (module not found).
 
 - [ ] **Step 3: Implement**
 
@@ -1328,19 +1483,212 @@ Expected: PASS.
 
 ```bash
 export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
-git switch -c feat/blob-store-hardening
+git switch -c feat/blob-store-maintenance
 git add packages/blob-store
-git commit -m "feat(blob-store): erasure, stale temp cleanup and hardening tests
+git commit -m "feat(blob-store): erasure and stale temp cleanup
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-gh pr create --draft --title "feat(blob-store): erasure, stale temp cleanup and hardening tests" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+gh pr create --draft --title "feat(blob-store): erasure and stale temp cleanup" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
-Expected: gate green; at most 200 changed lines. If the two test files push it over, move `hardening.test.ts` "hostile refs and construction" block into its own follow-up PR.
+Expected: gate green; about 115 changed lines, 3 files.
 
 ---
 
-### Task 46: migration 0009 `documents` with row-level security
+### Task 46b: blob-store hardening tests (size cap, tampering, hostile refs, destroyed key)
+
+Test-only PR for Task 45a's behaviour, with keyed addresses.
+
+**Files:**
+- Create: `packages/blob-store/src/hardening.test.ts`
+
+**Interfaces:**
+- Consumes: Task 44 (`deriveFingerprintKey`, `fingerprintOf`), Task 45a (`EncryptedFsContentStore`, `stage`, the errors).
+- Produces: nothing (tests only).
+
+- [ ] **Step 1: Write the tests**
+
+`packages/blob-store/src/hardening.test.ts`:
+
+```ts
+import { createHash } from "node:crypto";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { afterAll, describe, expect, it } from "vitest";
+import { deriveFingerprintKey, fingerprintOf } from "./address";
+import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
+import { BlobCorruptError, BlobKeyUnavailableError, BlobTooLargeError } from "./errors";
+
+const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const A = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+const B = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1";
+const enc = (s: string) => new TextEncoder().encode(s);
+// The file name a blob gets: the keyed fingerprint of its plaintext for that user.
+const fpOf = async (keys: InMemoryKeyStore, user: string, s: string) =>
+  fingerprintOf(deriveFingerprintKey(await keys.getOrCreate(user)), enc(s));
+const roots: string[] = [];
+const freshRoot = () => {
+  const root = mkdtempSync(join(tmpdir(), "dm-blobs-"));
+  roots.push(root);
+  return root;
+};
+afterAll(() => {
+  for (const r of roots) rmSync(r, { recursive: true, force: true });
+});
+const storeFor = (root: string, userId = A, keys = new InMemoryKeyStore(), maxBytes?: number) =>
+  new EncryptedFsContentStore({ root, tenantId: T, userId, keys, ...(maxBytes ? { maxBytes } : {}) });
+
+describe("size cap", () => {
+  it("rejects a stream over maxBytes while it is being written and leaves no file", async () => {
+    const root = freshRoot();
+    const store = storeFor(root, A, new InMemoryKeyStore(), 10);
+    async function* big() {
+      yield enc("12345");
+      yield enc("678901"); // 11 bytes in total
+    }
+    await expect(store.putStream(big())).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(readdirSync(join(root, T, A))).toEqual([]);
+  });
+
+  it("accepts a stream of exactly maxBytes", async () => {
+    const store = storeFor(freshRoot(), A, new InMemoryKeyStore(), 10);
+    const ref = await store.put(enc("0123456789"));
+    expect(ref.size).toBe(10);
+  });
+
+  it("leaves no temp file when the source itself fails midway", async () => {
+    const root = freshRoot();
+    const store = storeFor(root);
+    async function* broken() {
+      yield enc("partial");
+      throw new Error("client went away");
+    }
+    await expect(store.putStream(broken())).rejects.toThrow("client went away");
+    expect(readdirSync(join(root, T, A))).toEqual([]);
+  });
+});
+
+describe("tampering and misplacement", () => {
+  it("throws BlobCorruptError when the stored file was changed", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const store = storeFor(root, A, keys);
+    const ref = await store.put(enc("original"));
+    const file = join(root, T, A, await fpOf(keys, A, "original"));
+    const bytes = readFileSync(file);
+    bytes[bytes.length - 20] = (bytes[bytes.length - 20] ?? 0) ^ 1;
+    writeFileSync(file, bytes);
+    await expect(store.get(ref)).rejects.toBeInstanceOf(BlobCorruptError);
+  });
+
+  it("will not open a file copied into another user's directory", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const a = storeFor(root, A, keys);
+    const b = storeFor(root, B, keys);
+    const ref = await a.put(enc("a's secret"));
+    const name = await fpOf(keys, A, "a's secret");
+    mkdirSync(join(root, T, B), { recursive: true });
+    copyFileSync(join(root, T, A, name), join(root, T, B, name));
+    await keys.getOrCreate(B);
+    await expect(b.get(ref)).rejects.toBeInstanceOf(BlobCorruptError);
+  });
+
+  it("will not open a file renamed to another address", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const store = storeFor(root, A, keys);
+    await store.put(enc("one"));
+    const other = await store.put(enc("two"));
+    copyFileSync(join(root, T, A, await fpOf(keys, A, "one")), join(root, T, A, await fpOf(keys, A, "two")));
+    await expect(store.get(other)).rejects.toBeInstanceOf(BlobCorruptError);
+  });
+
+  it("reports a missing key as BlobKeyUnavailableError, not as absence", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const store = storeFor(root, A, keys);
+    const ref = await store.put(enc("keyed"));
+    await keys.destroy(A);
+    await expect(store.get(ref)).rejects.toBeInstanceOf(BlobKeyUnavailableError);
+  });
+
+  it("cannot compute a fingerprint once the key is destroyed, so a known file cannot be tested for", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    const store = storeFor(root, A, keys);
+    await store.put(enc("known file"));
+    await keys.destroy(A);
+    expect(await keys.get(A)).toBeNull(); // no data key, so no derived fingerprint key either
+    await expect(store.put(enc("known file"))).rejects.toThrow(); // getOrCreate refuses a destroyed subject
+    await expect(store.stage((async function* () { yield enc("known file"); })())).rejects.toThrow();
+  });
+});
+
+describe("hostile refs and construction", () => {
+  it("never leaves the user's directory for a crafted address", async () => {
+    const root = freshRoot();
+    const store = storeFor(root);
+    await store.put(enc("keep me"));
+    const outside = join(root, "outside.txt");
+    writeFileSync(outside, "do not touch");
+    for (const address of [
+      "hmac-sha256:../../outside.txt",
+      `hmac-sha256:${"A".repeat(64)}`,
+      `hmac-sha256:${"a".repeat(63)}`,
+      "hmac-sha256:",
+      `sha256:${createHash("sha256").update("keep me").digest("hex")}`, // the plain scheme is not ours
+      "../outside.txt",
+      `hmac-sha256:${"a".repeat(64)}/../x`,
+    ]) {
+      expect(await store.get({ __loomContent: address })).toBeNull();
+      await store.delete({ __loomContent: address });
+    }
+    expect(readFileSync(outside, "utf8")).toBe("do not touch");
+    expect(readdirSync(join(root, T, A))).toHaveLength(1);
+  });
+
+  it("rejects a relative root and ids that are not canonical UUIDs", () => {
+    const keys = new InMemoryKeyStore();
+    expect(() => new EncryptedFsContentStore({ root: "rel", tenantId: T, userId: A, keys })).toThrow();
+    for (const userId of ["..", `${A}/x`, A.toUpperCase(), ""]) {
+      expect(() => new EncryptedFsContentStore({ root: freshRoot(), tenantId: T, userId, keys })).toThrow();
+    }
+  });
+
+  it("creates private directories and files", async () => {
+    if (process.platform === "win32") return;
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    await storeFor(root, A, keys).put(enc("private"));
+    expect(statSync(join(root, T, A)).mode & 0o077).toBe(0);
+    expect(statSync(join(root, T, A, await fpOf(keys, A, "private"))).mode & 0o077).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run, gate, commit**
+
+Run: `pnpm --filter @docmind/blob-store exec vitest run src/hardening.test.ts`
+Expected: PASS (no failing-first step: these cases pin Task 45a behaviour; if one fails, that is a real Task 45a bug: fix it there).
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c test/blob-store-hardening
+git add packages/blob-store
+git commit -m "test(blob-store): size cap, tampering, hostile ref and destroyed key tests
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "test(blob-store): size cap, tampering, hostile ref and destroyed key tests" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 125 changed lines, 1 file.
+
+---
+
+### Task 47: migration 0009 `documents` with row-level security
 
 **Files:**
 - Create: `infra/migrations/0009_documents.sql`
@@ -1348,7 +1696,7 @@ Expected: gate green; at most 200 changed lines. If the two test files push it o
 
 **Interfaces:**
 - Consumes: `tenants`, `users (tenant_id, id)` unique key (0003), `app_tenant_id()` (0002).
-- Produces: table `documents (id uuid PK, tenant_id, owner_id, title_enc jsonb, filename_enc jsonb, mime text, size_bytes bigint, content_address text, fingerprint text, status text, error text, stats jsonb, summary_enc jsonb, created_at, updated_at)` with `UNIQUE (tenant_id, owner_id, fingerprint)`, FK `(tenant_id, owner_id) -> users (tenant_id, id) ON DELETE CASCADE`, index `documents_owner_created_idx (tenant_id, owner_id, created_at DESC, id DESC)`, and policy `tenant_isolation`.
+- Produces: table `documents (id uuid PK, tenant_id, owner_id, title_enc jsonb, filename_enc jsonb, mime text, size_bytes bigint, content_address text, fingerprint text, status text, error text, stats_enc jsonb, summary_enc jsonb, created_at, updated_at)` with `UNIQUE (tenant_id, owner_id, fingerprint)`, FK `(tenant_id, owner_id) -> users (tenant_id, id) ON DELETE CASCADE`, index `documents_owner_created_idx (tenant_id, owner_id, created_at DESC, id DESC)`, and policy `tenant_isolation`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1380,7 +1728,7 @@ const insert = (
     `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
                             content_address, fingerprint, status)
      VALUES ($1, $2, $3, '{"x":1}', '{"x":2}', 'text/plain', $4, $5, $6, $7)`,
-    [id, tenant, owner, extra.size ?? 5, `sha256:${fingerprint}`, fingerprint, extra.status ?? "uploaded"],
+    [id, tenant, owner, extra.size ?? 5, `hmac-sha256:${fingerprint}`, fingerprint, extra.status ?? "uploaded"],
   );
 
 describe.skipIf(!PG_URL)("documents table (needs DOCMIND_TEST_PG_URL)", () => {
@@ -1449,6 +1797,23 @@ describe.skipIf(!PG_URL)("documents table (needs DOCMIND_TEST_PG_URL)", () => {
     await expect(bad("NOT-HEX", {})).rejects.toThrow(/fingerprint/);
   });
 
+  it("accepts only keyed addresses and has no plaintext stats column", async () => {
+    await expect(
+      withTenant(app, A, (tx) =>
+        tx.query(
+          `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
+                                  content_address, fingerprint)
+           VALUES ('10000000-0000-4000-8000-0000000000aa', $1, $2, '{}', '{}', 'text/plain', 1, $3, $4)`,
+          [A, USER_A, `sha256:${HEX("e")}`, HEX("e")], // the plain scheme is refused
+        ),
+      ),
+    ).rejects.toThrow(/content_address/);
+    const cols = await db.owner.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'documents'");
+    const names = cols.rows.map((r) => r.column_name as string);
+    expect(names).toContain("stats_enc");
+    expect(names).not.toContain("stats");
+  });
+
   it("is removed with its owner, and docmind_app owns nothing", async () => {
     await db.owner.query("DELETE FROM users WHERE id = $1", [USER_A2]);
     const { rows } = await db.owner.query("SELECT count(*)::int AS n FROM documents WHERE owner_id = $1", [USER_A2]);
@@ -1471,9 +1836,9 @@ Expected: FAIL (`relation "documents" does not exist`).
 `infra/migrations/0009_documents.sql`:
 
 ```sql
--- Uploaded documents (spec 4.2). Titles, filenames and summaries are sealed with the owner's data
--- key (the *_enc columns hold Loom's envelope as jsonb); everything else is metadata. The original
--- bytes live in the blob store, addressed by content_address.
+-- Uploaded documents (spec 4.2). Titles, filenames, stats and summaries are sealed with the owner's
+-- data key (the *_enc columns hold Loom's envelope as jsonb); everything else is metadata. The
+-- original bytes live in the blob store, addressed by content_address.
 CREATE TABLE documents (
   id uuid PRIMARY KEY,
   tenant_id uuid NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
@@ -1482,14 +1847,16 @@ CREATE TABLE documents (
   filename_enc jsonb NOT NULL,
   mime text NOT NULL,
   size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
-  -- sha256 of the plaintext, as the ContentStore ref ("sha256:<hex>") and as bare hex.
-  content_address text NOT NULL CHECK (content_address ~ '^sha256:[0-9a-f]{64}$'),
+  -- Keyed fingerprint of the plaintext (HMAC-SHA256 under a key derived from the owner's data key),
+  -- as the ContentStore ref ("hmac-sha256:<hex>") and as bare hex. Not a plain hash: knowing a
+  -- file's sha256 does not let anyone test whether it was uploaded.
+  content_address text NOT NULL CHECK (content_address ~ '^hmac-sha256:[0-9a-f]{64}$'),
   fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
   status text NOT NULL DEFAULT 'uploaded'
     CHECK (status IN ('uploaded', 'parsing', 'embedding', 'ready', 'failed')),
   -- Plain text: only ever a fixed message, never a filename or document text.
   error text,
-  stats jsonb,
+  stats_enc jsonb, -- outline, dates, numbers derive from content: sealed like the other *_enc columns
   summary_enc jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
@@ -1525,7 +1892,7 @@ gh pr create --draft --title "feat(db): documents table with row-level security"
 
 ---
 
-### Task 47: `FieldCrypto` for the `*_enc` columns
+### Task 48: `FieldCrypto` for the `*_enc` columns
 
 **Files:**
 - Create: `apps/server/app/crypto/fields.ts`
@@ -1537,7 +1904,7 @@ gh pr create --draft --title "feat(db): documents table with row-level security"
   - `interface UserFieldCipher { seal(bind: string, value: unknown): Promise<unknown>; open(bind: string, envelope: unknown): Promise<unknown>; openText(bind: string, envelope: unknown): Promise<string> }`
   - `class FieldCrypto { constructor(keys: KeyStore); forUser(userId: string): UserFieldCipher }`: the key is fetched lazily and once per cipher (`seal` uses `getOrCreate`, `open` uses `get`); the AAD context is `<userId>|<bind>`.
   - `class FieldKeyUnavailableError extends Error`
-  - Callers use binds of the form `document:<documentId>:title`.
+  - Callers use binds of the form `document:<documentId>:title` (also `:filename`, `:stats`, `:summary`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1696,7 +2063,7 @@ gh pr create --draft --title "feat(server): FieldCrypto for the *_enc columns" -
 
 ---
 
-### Task 48: magic-byte sniffer and filename sanitizer
+### Task 49: magic-byte sniffer and filename sanitizer
 
 **Files:**
 - Create: `apps/server/app/documents/sniff.ts`
@@ -1896,7 +2263,7 @@ gh pr create --draft --title "feat(server): magic-byte sniffer and filename sani
 
 ---
 
-### Task 49: upload limits from the environment, `peek`, and config placeholders
+### Task 50: upload limits from the environment, `peek`, and config placeholders
 
 **Files:**
 - Create: `apps/server/app/documents/limits.ts`
@@ -2155,7 +2522,7 @@ gh pr create --draft --title "feat(server): upload limits from the environment a
 
 ---
 
-### Task 50: streaming single-file multipart reader (busboy)
+### Task 51: streaming single-file multipart reader (busboy)
 
 **Files:**
 - Modify: `apps/server/package.json` (add `busboy` to `dependencies`, `@types/busboy` to `devDependencies`) and `pnpm-lock.yaml` (not counted)
@@ -2413,7 +2780,7 @@ export function receiveFile<T>(
 }
 ```
 
-Notes for the executor: busboy's typings and event semantics are the plan's least-verified part (see "Uncertain" #1). The invariant to preserve is that **a request answered 400 or 413 leaves no row and no blob**: that is why only the first file part is acted on (a failure discovered after the handler's work has committed would be too late) and why the handler runs inside `receiveFile`'s own `work` promise, which `close` awaits before resolving. Task 53 asserts the invariant through the whole route. `settle` keeps the first outcome, which is the right rule now that nothing after the first file part can fail the request.
+Notes for the executor: busboy's typings and event semantics are the plan's least-verified part (see "Uncertain" #1). The invariant to preserve is that **a request answered 400 or 413 leaves no row and no blob**: that is why only the first file part is acted on (a failure discovered after the handler's work has committed would be too late) and why the handler runs inside `receiveFile`'s own `work` promise, which `close` awaits before resolving. Task 57 asserts the invariant through the whole route. `settle` keeps the first outcome, which is the right rule now that nothing after the first file part can fail the request.
 
 - [ ] **Step 5: Run to verify it passes, gate, commit**
 
@@ -2434,7 +2801,7 @@ gh pr create --draft --title "feat(server): streaming single-file multipart read
 
 ---
 
-### Task 51: documents repository, DTO mapping, and the test harness
+### Task 52a: documents repository (insert, find, DTO mapping) and the test harness basics
 
 **Files:**
 - Create: `apps/server/app/documents/repo.ts`
@@ -2442,17 +2809,15 @@ gh pr create --draft --title "feat(server): streaming single-file multipart read
 - Create: `apps/server/app/documents/repo.pg.test.ts`
 
 **Interfaces:**
-- Consumes: Task 46 (table), Task 47 (`UserFieldCipher`), contracts `DocumentDto`, `DocumentStats`, `DocumentSummary`.
+- Consumes: Task 47 (table), Task 48 (`UserFieldCipher`), contracts `DocumentDto`, `DocumentStats`, `DocumentSummary`.
 - Produces (all from `app/documents/repo.ts`; every function takes the `PoolClient` that `withTenant` supplies):
-  - `interface DocumentRow { id: string; title_enc: unknown; filename_enc: unknown; mime: string; size_bytes: string; status: DocumentStatus; error: string | null; stats: unknown; summary_enc: unknown; created_at: Date; updated_at: Date; created_cursor: string }`
+  - `interface DocumentRow { id: string; title_enc: unknown; filename_enc: unknown; mime: string; size_bytes: string; status: DocumentStatus; error: string | null; stats_enc: unknown; summary_enc: unknown; created_at: Date; updated_at: Date; created_cursor: string }`
   - `DOCUMENT_COLUMNS: string` (the SELECT/RETURNING list, including `created_cursor`)
-  - `lockTenantForWrite(tx, tenantId): Promise<void>`: `pg_advisory_xact_lock` on the tenant; held to commit.
   - `findByFingerprint(tx, ownerId, fingerprint): Promise<DocumentRow | undefined>`
   - `insertDocument(tx, doc: NewDocument): Promise<DocumentRow>` where `NewDocument = { id, tenantId, ownerId, titleEnc: unknown, filenameEnc: unknown, mime, sizeBytes: number, contentAddress, fingerprint }`
-  - `usageOfTenant(tx): Promise<{ documents: number; bytes: number }>` (RLS limits it to the transaction's tenant)
   - `toDto(row, cipher): Promise<DocumentDto>`
-  - `titleBind(id)`, `filenameBind(id)`, `summaryBind(id)`: `document:<id>:title|filename|summary`
-- From `app/documents/testHarness.ts` (used by Tasks 52-57): `T1`, `T2`, `U1`, `U1B`, `U2`, `ALICE`, `ALICE2`, `BOB` (`Identity`s), `seedUsers(owner: Pool)`, `testAuthenticator` (header `x-test-user: alice | alice2 | bob`), `PNG`, `PDF`, `TEXT` sample byte buffers.
+  - `titleBind(id)`, `filenameBind(id)`, `statsBind(id)`, `summaryBind(id)`: `document:<id>:title|filename|stats|summary`
+- From `app/documents/testHarness.ts` (used by Tasks 53-62): `T1`, `T2`, `U1`, `U1B`, `U2`, `ALICE`, `ALICE2`, `BOB` (`Identity`s), `seedUsers(owner: Pool)`, `testAuthenticator` (header `x-test-user: alice | alice2 | bob`), `PNG`, `PDF`, `TEXT` sample byte buffers.
 
 - [ ] **Step 1: Write the harness and the failing test**
 
@@ -2482,7 +2847,7 @@ export async function seedUsers(owner: Pool): Promise<void> {
       ('${U2}', '${T2}', 'bob@example.com', 'x')`);
 }
 
-const BY_HEADER: Record<string, Identity> = { alice: ALICE, alice2: ALICE2, bob: BOB };
+export const BY_HEADER: Record<string, Identity> = { alice: ALICE, alice2: ALICE2, bob: BOB };
 
 /** Test-only: who the caller is comes from the `x-test-user` header. */
 export const testAuthenticator: Authenticator = {
@@ -2509,14 +2874,15 @@ import { migrate, setAppRolePassword } from "../db/migrate";
 import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import {
+  DOCUMENT_COLUMNS,
+  type DocumentRow,
   type NewDocument,
   filenameBind,
   findByFingerprint,
   insertDocument,
-  lockTenantForWrite,
+  statsBind,
   titleBind,
   toDto,
-  usageOfTenant,
 } from "./repo";
 import { T1, T2, U1, U1B, U2, seedUsers } from "./testHarness";
 
@@ -2550,7 +2916,7 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
       filenameEnc: await cipher.seal(filenameBind(id), "Quarterly report.pdf"),
       mime: "application/pdf",
       sizeBytes: size,
-      contentAddress: `sha256:${fingerprint}`,
+      contentAddress: `hmac-sha256:${fingerprint}`,
       fingerprint,
     };
   }
@@ -2586,15 +2952,6 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
     });
   });
 
-  it("counts a tenant's documents and bytes across its users, and nothing of other tenants", async () => {
-    await withTenant(app, T2, async (tx) => insertDocument(tx, await newDoc(T2, U2, FP("3"), 7)));
-    await withTenant(app, T1, async (tx) => insertDocument(tx, await newDoc(T1, U1B, FP("4"), 100)));
-    const t1 = await withTenant(app, T1, (tx) => usageOfTenant(tx));
-    const t2 = await withTenant(app, T2, (tx) => usageOfTenant(tx));
-    expect(t1).toEqual({ documents: 3, bytes: 1234 + 10 + 100 });
-    expect(t2).toEqual({ documents: 1, bytes: 7 });
-  });
-
   it("refuses to open a DTO whose envelope was moved to another document", async () => {
     const a = await newDoc(T1, U1, FP("5"));
     const b = await newDoc(T1, U1, FP("6"));
@@ -2604,25 +2961,33 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
     ).rejects.toThrow();
   });
 
-  it("serialises two writers of one tenant on the advisory lock", async () => {
-    const order: string[] = [];
-    const first = withTenant(app, T1, async (tx) => {
-      await lockTenantForWrite(tx, T1);
-      order.push("first-has-lock");
-      await new Promise((r) => setImmediate(r));
-      order.push("first-done");
+  it("opens stats_enc into the DTO's stats and never stores it in the clear", async () => {
+    const doc = await newDoc(T1, U1, FP("7"));
+    const cipher = fields.forUser(U1);
+    const stats = {
+      wordCount: 3,
+      pageCount: null,
+      readingTimeMinutes: 0.1,
+      language: "en",
+      outline: ["Secret heading"],
+      dates: [],
+      numbers: [],
+    };
+    const dto = await withTenant(app, T1, async (tx) => {
+      await insertDocument(tx, doc);
+      await tx.query("UPDATE documents SET stats_enc = $2::jsonb WHERE id = $1", [
+        doc.id,
+        JSON.stringify(await cipher.seal(statsBind(doc.id), stats)),
+      ]);
+      const { rows } = await tx.query<DocumentRow>(`SELECT ${DOCUMENT_COLUMNS} FROM documents WHERE id = $1`, [doc.id]);
+      return toDto(rows[0] as DocumentRow, cipher);
     });
-    const second = withTenant(app, T1, async (tx) => {
-      await lockTenantForWrite(tx, T1);
-      order.push("second-has-lock");
-    });
-    await Promise.all([first, second]);
-    expect(order.indexOf("first-done")).toBeLessThan(order.indexOf("second-has-lock"));
+    expect(dto.stats).toEqual(stats);
+    const raw = await db.owner.query("SELECT stats_enc::text AS s FROM documents WHERE id = $1", [doc.id]);
+    expect(raw.rows[0].s).not.toContain("Secret heading");
   });
 });
 ```
-
-(The last test's `order` assertion holds only if `first` takes the lock first; if the scheduler starts `second` first, swap the labels — assert that **whichever acquired first finished before the other acquired**: record `[who-has-lock, who-done]` pairs and check no interleaving. The executor makes this symmetric when the first run shows which way it goes.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -2645,10 +3010,11 @@ import type { UserFieldCipher } from "../crypto/fields";
 
 export const titleBind = (id: string) => `document:${id}:title`;
 export const filenameBind = (id: string) => `document:${id}:filename`;
+export const statsBind = (id: string) => `document:${id}:stats`;
 export const summaryBind = (id: string) => `document:${id}:summary`;
 
 /** The SELECT/RETURNING list. `created_cursor` is the microsecond-exact keyset value. */
-export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, status, error, stats,
+export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, status, error, stats_enc,
   summary_enc, created_at, updated_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor`;
 
@@ -2660,7 +3026,7 @@ export interface DocumentRow {
   size_bytes: string; // bigint arrives as text
   status: DocumentStatus;
   error: string | null;
-  stats: unknown;
+  stats_enc: unknown;
   summary_enc: unknown;
   created_at: Date;
   updated_at: Date;
@@ -2677,17 +3043,6 @@ export interface NewDocument {
   sizeBytes: number;
   contentAddress: string;
   fingerprint: string;
-}
-
-/**
- * Serialises writers of one tenant until the transaction ends: quota checks, the duplicate check
- * and the delete's blob removal all run under it, so they cannot interleave. Held for the length
- * of a transaction only (the file itself is staged before it is taken).
- */
-export async function lockTenantForWrite(tx: PoolClient, tenantId: string): Promise<void> {
-  await tx.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
-    `docmind:documents:${tenantId}`,
-  ]);
 }
 
 export async function findByFingerprint(
@@ -2723,15 +3078,6 @@ export async function insertDocument(tx: PoolClient, doc: NewDocument): Promise<
   return rows[0] as DocumentRow;
 }
 
-/** Documents and bytes held by the transaction's tenant (row-level security does the scoping). */
-export async function usageOfTenant(tx: PoolClient): Promise<{ documents: number; bytes: number }> {
-  const { rows } = await tx.query<{ documents: number; bytes: string }>(
-    "SELECT count(*)::int AS documents, coalesce(sum(size_bytes), 0)::text AS bytes FROM documents",
-  );
-  const row = rows[0] as { documents: number; bytes: string };
-  return { documents: row.documents, bytes: Number(row.bytes) };
-}
-
 export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<DocumentDto> {
   return {
     id: row.id,
@@ -2741,7 +3087,10 @@ export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<
     sizeBytes: Number(row.size_bytes),
     status: row.status,
     error: row.error,
-    stats: row.stats == null ? null : DocumentStats.parse(row.stats),
+    stats:
+      row.stats_enc == null
+        ? null
+        : DocumentStats.parse(await cipher.open(statsBind(row.id), row.stats_enc)),
     summary:
       row.summary_enc == null
         ? null
@@ -2761,29 +3110,720 @@ Expected: PASS.
 export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
 git switch -c feat/server-documents-repo
 git add apps/server/app/documents
-git commit -m "feat(server): documents repository, DTO mapping and test harness
+git commit -m "feat(server): documents repository, DTO mapping and test harness basics
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 gh pr create --draft --title "feat(server): documents repository, DTO mapping and test harness" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
+Expected: gate green; about 190 changed lines, 3 files. `lockTenantForWrite` and `usageOfTenant` are Task 52b.
+
 ---
 
-### Task 52: `POST /api/documents` (upload with dedup) and server wiring
+### Task 52b: per-tenant write lock and usage counts
+
+**Files:**
+- Modify: `apps/server/app/documents/repo.ts` (add `lockTenantForWrite`, `usageOfTenant`)
+- Create: `apps/server/app/documents/repoTenant.pg.test.ts`
+
+**Interfaces:**
+- Consumes: Task 52a (`insertDocument`, `NewDocument`, the binds), Task 48 (`FieldCrypto`).
+- Produces:
+  - `lockTenantForWrite(tx, tenantId): Promise<void>`: `pg_advisory_xact_lock` on the tenant; held to commit.
+  - `usageOfTenant(tx): Promise<{ documents: number; bytes: number }>` (RLS limits it to the transaction's tenant)
+
+- [ ] **Step 1: Write the failing tests**
+
+`apps/server/app/documents/repoTenant.pg.test.ts`:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FieldCrypto } from "../crypto/fields";
+import { migrate, setAppRolePassword } from "../db/migrate";
+import { withTenant } from "../db/tenant";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { filenameBind, insertDocument, lockTenantForWrite, titleBind, usageOfTenant } from "./repo";
+import { T1, T2, U1, U1B, U2, seedUsers } from "./testHarness";
+
+const FP = (c: string) => c.repeat(64);
+
+describe.skipIf(!PG_URL)("tenant usage and write lock (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+  const fields = new FieldCrypto(new InMemoryKeyStore());
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    await seedUsers(db.owner);
+    app = new Pool({ connectionString: db.appUrl });
+  });
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  async function add(tenant: string, owner: string, fingerprint: string, size: number): Promise<void> {
+    const id = randomUUID();
+    const cipher = fields.forUser(owner);
+    await withTenant(app, tenant, async (tx) =>
+      insertDocument(tx, {
+        id,
+        tenantId: tenant,
+        ownerId: owner,
+        titleEnc: await cipher.seal(titleBind(id), "t"),
+        filenameEnc: await cipher.seal(filenameBind(id), "f"),
+        mime: "text/plain",
+        sizeBytes: size,
+        contentAddress: `hmac-sha256:${fingerprint}`,
+        fingerprint,
+      }),
+    );
+  }
+
+  it("counts a tenant's documents and bytes across its users, and nothing of other tenants", async () => {
+    await add(T1, U1, FP("1"), 1234);
+    await add(T1, U1, FP("2"), 10);
+    await add(T1, U1B, FP("3"), 100);
+    await add(T2, U2, FP("4"), 7);
+    expect(await withTenant(app, T1, (tx) => usageOfTenant(tx))).toEqual({ documents: 3, bytes: 1344 });
+    expect(await withTenant(app, T2, (tx) => usageOfTenant(tx))).toEqual({ documents: 1, bytes: 7 });
+  });
+
+  it("serialises two writers of one tenant on the advisory lock", async () => {
+    const order: string[] = [];
+    const first = withTenant(app, T1, async (tx) => {
+      await lockTenantForWrite(tx, T1);
+      order.push("first-has-lock");
+      await new Promise((r) => setImmediate(r));
+      order.push("first-done");
+    });
+    const second = withTenant(app, T1, async (tx) => {
+      await lockTenantForWrite(tx, T1);
+      order.push("second-has-lock");
+    });
+    await Promise.all([first, second]);
+    expect(order.indexOf("first-done")).toBeLessThan(order.indexOf("second-has-lock"));
+  });
+});
+```
+
+(The last test's `order` assertion holds only if `first` takes the lock first; if the scheduler starts `second` first, swap the labels — assert that **whichever acquired first finished before the other acquired**: record `[who-has-lock, who-done]` pairs and check no interleaving. The executor makes this symmetric when the first run shows which way it goes.)
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/repoTenant.pg.test.ts`
+Expected: FAIL (`lockTenantForWrite` and `usageOfTenant` are not exported).
+
+- [ ] **Step 3: Implement**
+
+Add to `apps/server/app/documents/repo.ts`:
+
+```ts
+/**
+ * Serialises writers of one tenant until the transaction ends: quota checks, the duplicate check
+ * and the delete's blob removal all run under it, so they cannot interleave. Held for the length
+ * of a transaction only (the file itself is staged before it is taken).
+ */
+export async function lockTenantForWrite(tx: PoolClient, tenantId: string): Promise<void> {
+  await tx.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
+    `docmind:documents:${tenantId}`,
+  ]);
+}
+
+/** Documents and bytes held by the transaction's tenant (row-level security does the scoping). */
+export async function usageOfTenant(tx: PoolClient): Promise<{ documents: number; bytes: number }> {
+  const { rows } = await tx.query<{ documents: number; bytes: string }>(
+    "SELECT count(*)::int AS documents, coalesce(sum(size_bytes), 0)::text AS bytes FROM documents",
+  );
+  const row = rows[0] as { documents: number; bytes: string };
+  return { documents: row.documents, bytes: Number(row.bytes) };
+}
+```
+
+- [ ] **Step 4: Run to verify it passes, gate, commit**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents`
+Expected: PASS.
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c feat/server-documents-tenant-usage
+git add apps/server/app/documents
+git commit -m "feat(server): per-tenant write lock and usage counts for documents
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "feat(server): per-tenant write lock and usage counts for documents" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 110 changed lines, 2 files.
+
+---
+
+### Task 53: the `ingest-document` stub flow, its grants, and the "ids only" proofs
+
+Owner decision 1: M2 starts the flow on upload. This task adds the flow itself; Task 54 adds the port that starts and cancels it, Task 56 calls it from the upload route.
+
+**Files:**
+- Create: `apps/server/app/flows/ingest-document/deps.ts`
+- Create: `apps/server/app/flows/ingest-document/flow.ts`
+- Create: `apps/server/app/flows/ingest-document/flow.test.ts`
+- Modify: `apps/server/app/security.ts` (one grant)
+- Modify: `apps/server/app/loom.gen.ts` (generated by `pnpm --filter @docmind/server gen`; not counted)
+- Modify: `apps/server/package.json` (add `"@loom/core": "*"` to `dependencies`) and root `package.json` (one `pnpm.overrides` line), `pnpm-lock.yaml` (not counted)
+
+**Interfaces:**
+- Consumes: M0/M1 `buildApp`, `executionIdFor`, `createDurableStorage`.
+- Produces (from `app/flows/ingest-document/`):
+  - `IngestStartInput` (zod, **strict**) `= { tenantId: uuid, userId: uuid, documentId: uuid }` and its type; `IngestOutput = { outcome: "accepted" | "document_gone" }`.
+  - `interface IngestDeps { documentExists(ref: IngestStartInput): Promise<boolean> }`, `setIngestDeps(deps: IngestDeps): void`, `resetIngestDeps(): void`, `ingestDeps(): IngestDeps` (throws `ingest dependencies are not configured` if unset). The holder is process-global because flows are static modules (Uncertain #6).
+  - `ingestBeginStep` (id `ingest-begin`) and `ingestDocumentFlow: RegisteredFlow` (id `ingest-document`, version `1.0.0`, one step). The step only asks `documentExists`; it **writes nothing**, so `documents.status` stays `uploaded`. A document that is gone ends the execution `completed` with `{ outcome: "document_gone" }` (a clean stop, not an error and not a retry).
+  - What M3 replaces: the `ingest-begin` step (see Deviation 7). The input schema, the execution-id convention, the grant mechanism and the guard stay.
+
+- [ ] **Step 1: Link `@loom/core`**
+
+Add `"@loom/core": "*"` to `dependencies` in `apps/server/package.json`, and this line to the root `package.json` `pnpm.overrides`, keeping the keys sorted:
+
+```json
+      "@loom/core": "link:../loom/packages/core",
+```
+
+Run: `pnpm install`
+Expected: success.
+
+- [ ] **Step 2: Write the failing tests**
+
+`apps/server/app/flows/ingest-document/flow.test.ts`:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
+import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildApp } from "../../config";
+import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
+import { executionIdFor } from "../../subject";
+import { resetIngestDeps, setIngestDeps } from "./deps";
+import { IngestOutput, IngestStartInput, ingestBeginStep, ingestDocumentFlow } from "./flow";
+
+const ids = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
+const run = (input: IngestStartInput, app = buildApp({ kind: "memory" })) =>
+  app.runtime.start(ingestDocumentFlow, input, {
+    executionId: executionIdFor(input.userId, `ingest-${input.documentId}`),
+    principal: { tenant: input.tenantId, actor: input.userId },
+  });
+
+afterEach(() => resetIngestDeps());
+
+describe("ingest-document stub flow", () => {
+  it("completes with 'accepted' while the document exists, and writes nothing else", async () => {
+    setIngestDeps({ documentExists: async () => true });
+    const app = buildApp({ kind: "memory" });
+    const state = await (await run(ids(), app)).waitForCompletion();
+    expect(state.status).toBe("completed");
+    expect(state.variables._output).toEqual({ outcome: "accepted" });
+    await app.close();
+  });
+
+  it("stops cleanly, not as a failure, when the document is gone", async () => {
+    setIngestDeps({ documentExists: async () => false });
+    const app = buildApp({ kind: "memory" });
+    const state = await (await run(ids(), app)).waitForCompletion();
+    expect(state.status).toBe("completed");
+    expect(state.variables._output).toEqual({ outcome: "document_gone" });
+    await app.close();
+  });
+
+  it("is start-once per document: the execution id is the idempotency key", async () => {
+    setIngestDeps({ documentExists: async () => true });
+    const app = buildApp({ kind: "memory" });
+    const input = ids();
+    await (await run(input, app)).waitForCompletion();
+    await expect(run(input, app)).rejects.toBeInstanceOf(ExecutionAlreadyExistsError);
+    await app.close();
+  });
+
+  it("is refused for a caller with no principal (the grants and owner policy are live)", async () => {
+    setIngestDeps({ documentExists: async () => true });
+    const app = buildApp({ kind: "memory" });
+    const input = ids();
+    await expect(
+      app.runtime.start(ingestDocumentFlow, input, { executionId: executionIdFor(input.userId, "ingest-x") }),
+    ).rejects.toThrow();
+    await app.close();
+  });
+});
+
+describe("what the flow may carry (owner decision 1: ids only)", () => {
+  it("accepts exactly three UUIDs as start input and refuses any other field", () => {
+    const input = ids();
+    expect(Object.keys(IngestStartInput.shape).sort()).toEqual(["documentId", "tenantId", "userId"]);
+    expect(IngestStartInput.safeParse(input).success).toBe(true);
+    for (const extra of ["filename", "title", "content", "text", "summary", "mime"]) {
+      expect(IngestStartInput.safeParse({ ...input, [extra]: "tax-return.pdf" }).success, extra).toBe(false);
+    }
+    expect(IngestStartInput.safeParse({ ...input, documentId: "tax-return.pdf" }).success).toBe(false);
+  });
+
+  it("produces only a two-value enum, which cannot hold content", () => {
+    expect(Object.keys(IngestOutput.shape)).toEqual(["outcome"]);
+    expect(IngestOutput.shape.outcome.options).toEqual(["accepted", "document_gone"]);
+  });
+
+  it("marks nothing sensitive, and so registers no event paths", () => {
+    expect(sensitivePathsFromSteps([ingestBeginStep])).toEqual({});
+    // If a content-bearing field is ever added to this flow, register it in the same PR and update
+    // this expectation: an event written before its path is registered stays readable forever.
+    expect(SENSITIVE_EVENT_PATHS).toEqual({});
+  });
+
+  it("keeps the execution id free of content: u_<user>:ingest-<document uuid> only", () => {
+    const input = ids();
+    expect(executionIdFor(input.userId, `ingest-${input.documentId}`)).toMatch(
+      /^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}$/,
+    );
+  });
+});
+```
+
+(An optional extra, if the executor wants it: a variant on `createDurableStorage` exactly as `storage.test.ts` does it, asserting that the raw log of the execution holds no free-text string, only UUIDs, the execution id and Loom's own structural fields.)
+
+- [ ] **Step 3: Run to verify they fail**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/flows`
+Expected: FAIL (modules not found).
+
+- [ ] **Step 4: Implement**
+
+`apps/server/app/flows/ingest-document/deps.ts`:
+
+```ts
+import type { IngestStartInput } from "./flow";
+
+/**
+ * What the flow's steps need from the outside world. Flows are static modules (`loom gen`), so the
+ * server composition root (`main.ts`, or a test harness) sets this once before the first start.
+ */
+export interface IngestDeps {
+  /** Is the document still there for its owner? Ids only: no filename, title or content. */
+  documentExists(ref: IngestStartInput): Promise<boolean>;
+}
+
+let current: IngestDeps | undefined;
+
+export function setIngestDeps(deps: IngestDeps): void {
+  current = deps;
+}
+
+export function resetIngestDeps(): void {
+  current = undefined;
+}
+
+export function ingestDeps(): IngestDeps {
+  if (!current) throw new Error("ingest dependencies are not configured");
+  return current;
+}
+```
+
+`apps/server/app/flows/ingest-document/flow.ts`:
+
+```ts
+import { flow$, handler$, step$ } from "@loom/core";
+import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { z } from "zod";
+import { ingestDeps } from "./deps";
+
+/**
+ * Start input: ids only (never a filename, title or text), and strict so a field added later fails
+ * loudly. The execution id is `executionIdFor(userId, "ingest-" + documentId)`, which is also the
+ * idempotency key: Loom starts a caller-chosen id once.
+ */
+export const IngestStartInput = z
+  .object({ tenantId: z.string().uuid(), userId: z.string().uuid(), documentId: z.string().uuid() })
+  .strict();
+export type IngestStartInput = z.infer<typeof IngestStartInput>;
+
+/** A two-value enum on purpose: it cannot carry user content. */
+export const IngestOutput = z.object({ outcome: z.enum(["accepted", "document_gone"]) });
+export type IngestOutput = z.infer<typeof IngestOutput>;
+
+/**
+ * The M2 skeleton of spec §5.2: confirm the document is still there and stop. It writes nothing,
+ * so the document stays `uploaded`. M3 item 14 replaces it with the parse/chunk/embed/analyze/
+ * summarize/finalize steps and reuses the same existence guard at the top of each.
+ */
+export const ingestBeginStep = step$({
+  id: "ingest-begin",
+  name: "IngestBegin",
+  inputSchema: IngestStartInput,
+  outputSchema: IngestOutput,
+  handler: handler$(
+    async (input: IngestStartInput): Promise<IngestOutput> => ({
+      outcome: (await ingestDeps().documentExists(input)) ? "accepted" : "document_gone",
+    }),
+  ),
+});
+
+const runner: FlowRunner<IngestStartInput, IngestOutput> = (ctx, input) =>
+  ctx.run(ingestBeginStep, input) as Promise<IngestOutput>;
+
+export const ingestDocumentFlow: RegisteredFlow = {
+  definition: flow$({
+    id: "ingest-document",
+    name: "IngestDocument",
+    version: "1.0.0",
+    inputSchema: IngestStartInput,
+    outputSchema: IngestOutput,
+    steps: [ingestBeginStep],
+  }),
+  runner: runner as FlowRunner<unknown, unknown>,
+};
+```
+
+In `apps/server/app/security.ts`, replace the empty grant table (a step id doubles as its tool id; the table is keyed by workflow id):
+
+```ts
+export const authorizer = new GrantTable({
+  "ingest-document": ["ingest-begin"],
+});
+```
+
+and update the comment above it to say that every flow added later lists its step ids here.
+
+Run `pnpm --filter @docmind/server gen` and commit the regenerated `apps/server/app/loom.gen.ts` (its `flowModules` now imports `./flows/ingest-document/flow`).
+
+- [ ] **Step 5: Run to verify they pass, gate, commit**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/flows app/config.test.ts`
+Expected: PASS. If the "refused for a caller with no principal" test passes for the wrong reason (for instance an input error), assert the specific Loom error it throws and keep the test.
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c feat/flow-ingest-document-stub
+git add apps/server package.json pnpm-lock.yaml
+git commit -m "feat(flow): ingest-document stub flow with ids-only input
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "feat(flow): ingest-document stub flow with ids-only input" --body "One step that checks the document still exists and writes nothing. Start input is three UUIDs, output a two-value enum; tests fail if a content-bearing field is added without registering its event path. Generated loom.gen.ts and the lockfile are not counted.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 170 changed lines (generated file and lockfile excluded), 7 files.
+
+---
+
+### Task 54: `IngestPort` (start-once, cancel-by-id) and the Postgres deps for the stub step
+
+**Files:**
+- Create: `apps/server/app/documents/ingest.ts`
+- Create: `apps/server/app/documents/ingest.test.ts`
+- Create: `apps/server/app/flows/ingest-document/pgDeps.ts`
+- Create: `apps/server/app/flows/ingest-document/pgDeps.pg.test.ts`
+
+**Interfaces:**
+- Consumes: Task 53 (`ingestDocumentFlow`, `IngestStartInput`, `setIngestDeps`), M1 `executionIdFor`, `Identity` from `@docmind/auth`, Task 47 (table; the pg test), Task 52a (`insertDocument`, `seedUsers`).
+- Produces:
+  - `ingestExecutionId(userId: string, documentId: string): string` = `executionIdFor(userId, "ingest-" + documentId)`.
+  - `ingestStartInput(identity: Identity, documentId: string): IngestStartInput` (the only place the start input is built).
+  - `interface IngestPort { start(identity: Identity, documentId: string): Promise<ExecutionHandle | null>; cancel(identity: Identity, documentId: string): Promise<void> }`. `start` returns `null` when the execution already exists (start-once); `cancel` is idempotent and treats an unknown or already finished execution as success.
+  - `loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): IngestPort`.
+  - `pgIngestDeps(pool: Pool): IngestDeps` (in `flows/ingest-document/pgDeps.ts`): `documentExists` runs `SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2` inside `withTenant(pool, tenantId, ...)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`apps/server/app/documents/ingest.test.ts`:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildApp } from "../config";
+import { resetIngestDeps, setIngestDeps } from "../flows/ingest-document/deps";
+import { IngestStartInput } from "../flows/ingest-document/flow";
+import { ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
+
+const identity = () => ({ tenantId: randomUUID(), userId: randomUUID() });
+afterEach(() => resetIngestDeps());
+
+describe("ingest start input", () => {
+  it("is exactly the three ids, validated, and names the execution without content", () => {
+    const who = identity();
+    const documentId = randomUUID();
+    const input = ingestStartInput(who, documentId);
+    expect(input).toEqual({ tenantId: who.tenantId, userId: who.userId, documentId });
+    expect(IngestStartInput.safeParse(input).success).toBe(true);
+    expect(ingestExecutionId(who.userId, documentId)).toBe(`u_${who.userId}:ingest-${documentId}`);
+  });
+});
+
+describe("loomIngest", () => {
+  it("starts an execution once per document and reports the second start as already started", async () => {
+    setIngestDeps({ documentExists: async () => true });
+    const app = buildApp({ kind: "memory" });
+    const port = loomIngest(app.runtime);
+    const who = identity();
+    const documentId = randomUUID();
+    const handle = await port.start(who, documentId);
+    expect(handle?.executionId).toBe(ingestExecutionId(who.userId, documentId));
+    expect((await handle?.waitForCompletion())?.status).toBe("completed");
+    expect(await port.start(who, documentId)).toBeNull();
+    await app.close();
+  });
+
+  it("cancels a flow that is still running; the step that was in flight then finds nothing to do", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    setIngestDeps({
+      documentExists: async () => {
+        await gate;
+        return false; // the document was deleted meanwhile
+      },
+    });
+    const app = buildApp({ kind: "memory" });
+    const port = loomIngest(app.runtime);
+    const who = identity();
+    const documentId = randomUUID();
+    const handle = await port.start(who, documentId);
+    await port.cancel(who, documentId);
+    release();
+    await expect(handle?.waitForCompletion()).rejects.toThrow();
+    expect(handle?.getState().status).toBe("cancelled");
+    await app.close();
+  });
+
+  it("treats cancel as idempotent: unknown execution, finished execution and repeated cancel all succeed", async () => {
+    setIngestDeps({ documentExists: async () => true });
+    const app = buildApp({ kind: "memory" });
+    const port = loomIngest(app.runtime);
+    const who = identity();
+    await expect(port.cancel(who, randomUUID())).resolves.toBeUndefined(); // never started
+    const documentId = randomUUID();
+    await (await port.start(who, documentId))?.waitForCompletion();
+    await expect(port.cancel(who, documentId)).resolves.toBeUndefined(); // already completed
+    await expect(port.cancel(who, documentId)).resolves.toBeUndefined(); // and again
+    await app.close();
+  });
+
+  it("does not let another user cancel the execution", async () => {
+    let release: () => void = () => {};
+    setIngestDeps({
+      documentExists: () =>
+        new Promise<boolean>((resolve) => {
+          release = () => resolve(true);
+        }),
+    });
+    const app = buildApp({ kind: "memory" });
+    const port = loomIngest(app.runtime);
+    const owner = identity();
+    const documentId = randomUUID();
+    const handle = await port.start(owner, documentId);
+    // The execution id embeds the owner's id, so a different user addresses a different (unknown) one;
+    // the owner policy covers the same-id case: a different actor cancelling the same id is refused.
+    await expect(
+      app.runtime.cancel(ingestExecutionId(owner.userId, documentId), "x", {
+        principal: { tenant: owner.tenantId, actor: randomUUID() },
+      }),
+    ).rejects.toThrow();
+    release();
+    expect((await handle?.waitForCompletion())?.status).toBe("completed");
+    await app.close();
+  });
+});
+```
+
+`apps/server/app/flows/ingest-document/pgDeps.pg.test.ts`:
+
+```ts
+import { randomUUID } from "node:crypto";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FieldCrypto } from "../../crypto/fields";
+import { migrate, setAppRolePassword } from "../../db/migrate";
+import { withTenant } from "../../db/tenant";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
+import { filenameBind, insertDocument, titleBind } from "../../documents/repo";
+import { T1, T2, U1, U1B, seedUsers } from "../../documents/testHarness";
+import { pgIngestDeps } from "./pgDeps";
+
+describe.skipIf(!PG_URL)("pgIngestDeps (needs DOCMIND_TEST_PG_URL)", () => {
+  let db: TestDb;
+  let app: Pool;
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    await seedUsers(db.owner);
+    app = new Pool({ connectionString: db.appUrl });
+  });
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  it("sees a document for its owner only, in its own tenant only", async () => {
+    const id = randomUUID();
+    const cipher = new FieldCrypto(new InMemoryKeyStore()).forUser(U1);
+    const fingerprint = "e".repeat(64);
+    await withTenant(app, T1, async (tx) =>
+      insertDocument(tx, {
+        id,
+        tenantId: T1,
+        ownerId: U1,
+        titleEnc: await cipher.seal(titleBind(id), "t"),
+        filenameEnc: await cipher.seal(filenameBind(id), "f"),
+        mime: "text/plain",
+        sizeBytes: 1,
+        contentAddress: `hmac-sha256:${fingerprint}`,
+        fingerprint,
+      }),
+    );
+    const deps = pgIngestDeps(app);
+    expect(await deps.documentExists({ tenantId: T1, userId: U1, documentId: id })).toBe(true);
+    expect(await deps.documentExists({ tenantId: T1, userId: U1B, documentId: id })).toBe(false); // colleague
+    expect(await deps.documentExists({ tenantId: T2, userId: U1, documentId: id })).toBe(false); // other tenant
+    expect(await deps.documentExists({ tenantId: T1, userId: U1, documentId: randomUUID() })).toBe(false);
+    await db.owner.query("DELETE FROM documents WHERE id = $1", [id]);
+    expect(await deps.documentExists({ tenantId: T1, userId: U1, documentId: id })).toBe(false); // gone
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/ingest.test.ts app/flows/ingest-document/pgDeps.pg.test.ts`
+Expected: FAIL (modules not found).
+
+- [ ] **Step 3: Implement**
+
+`apps/server/app/documents/ingest.ts`:
+
+```ts
+import type { Identity } from "@docmind/auth";
+import {
+  type ExecutionHandle,
+  ExecutionAlreadyExistsError,
+  type WorkflowRuntime,
+} from "@loom/workflow-runtime";
+import { type IngestStartInput, ingestDocumentFlow } from "../flows/ingest-document/flow";
+import { executionIdFor } from "../subject";
+
+/** The execution that ingests one document. `name` is a fixed prefix plus a UUID: no content. */
+export const ingestExecutionId = (userId: string, documentId: string): string =>
+  executionIdFor(userId, `ingest-${documentId}`);
+
+/** The only place the flow's start input is built: ids, nothing else. */
+export const ingestStartInput = (identity: Identity, documentId: string): IngestStartInput => ({
+  tenantId: identity.tenantId,
+  userId: identity.userId,
+  documentId,
+});
+
+/** What the document routes need from the flow engine. */
+export interface IngestPort {
+  /** Starts the document's ingest execution. `null`: it already exists (start-once). */
+  start(identity: Identity, documentId: string): Promise<ExecutionHandle | null>;
+  /** Cancels it. An unknown or already finished execution is not an error; safe to repeat. */
+  cancel(identity: Identity, documentId: string): Promise<void>;
+}
+
+const principalOf = (identity: Identity) => ({ tenant: identity.tenantId, actor: identity.userId });
+// A fixed reason: the cancel reason is recorded in the log, so it never names the document.
+const CANCEL_REASON = "document-deleted";
+
+export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): IngestPort {
+  return {
+    async start(identity, documentId) {
+      try {
+        return await runtime.start(ingestDocumentFlow, ingestStartInput(identity, documentId), {
+          executionId: ingestExecutionId(identity.userId, documentId),
+          principal: principalOf(identity),
+        });
+      } catch (err) {
+        if (err instanceof ExecutionAlreadyExistsError) return null;
+        throw err;
+      }
+    },
+    async cancel(identity, documentId) {
+      try {
+        await runtime.cancel(ingestExecutionId(identity.userId, documentId), CANCEL_REASON, {
+          principal: principalOf(identity),
+        });
+      } catch (err) {
+        // Never started (the start failed after the upload committed) or already gone: nothing to cancel.
+        if (err instanceof Error && err.message.startsWith("No execution found for id")) return;
+        throw err;
+      }
+    },
+  };
+}
+```
+
+`apps/server/app/flows/ingest-document/pgDeps.ts`:
+
+```ts
+import type { Pool } from "pg";
+import { withTenant } from "../../db/tenant";
+import type { IngestDeps } from "./deps";
+
+/** The stub step's database access: a tenant-scoped existence check, ids in, boolean out. */
+export function pgIngestDeps(pool: Pool): IngestDeps {
+  return {
+    documentExists: ({ tenantId, userId, documentId }) =>
+      withTenant(pool, tenantId, async (tx) => {
+        const { rowCount } = await tx.query("SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2", [
+          documentId,
+          userId,
+        ]);
+        return (rowCount ?? 0) > 0;
+      }),
+  };
+}
+```
+
+- [ ] **Step 4: Run to verify they pass, gate, commit**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/ingest.test.ts app/flows`
+Expected: PASS. If the "another actor" test does not throw (the owner policy keys on something other than `actor`), assert the refusal Loom actually gives and keep the test; this is Uncertain #5.
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c feat/server-ingest-port
+git add apps/server/app
+git commit -m "feat(server): IngestPort for starting and cancelling document ingestion
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "feat(server): IngestPort for starting and cancelling document ingestion" --body "Start-once by execution id, cancel by id (idempotent, tolerant of unknown executions), ids-only start input, and the Postgres existence check the stub step uses. Not wired into routes yet.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 175 changed lines, 4 files.
+
+---
+
+### Task 55a: `POST /api/documents` (upload with keyed dedup)
+
+Starting the ingest flow is Task 56; this task stores the document and is reachable only from tests until Task 56 wires it into `main.ts` (state that in the PR description). The dedup, cross-user and keyed-name tests are Task 55b.
 
 **Files:**
 - Create: `apps/server/app/documents/routes.ts`
 - Create: `apps/server/app/documents/upload.pg.test.ts`
 - Modify: `apps/server/app/documents/testHarness.ts` (add `startDocumentServer`)
-- Modify: `apps/server/app/main.ts`
 - Modify: `apps/server/package.json` (add `"@docmind/blob-store": "workspace:*"`) and `pnpm-lock.yaml`
 
 **Interfaces:**
-- Consumes: Task 44/45 (`EncryptedFsContentStore`, `BlobTooLargeError`, `removeStaleTemp`), 47 (`FieldCrypto`), 48 (`sniff`, `sanitizeFilename`, `titleFromFilename`, `SNIFF_BYTES`), 49 (`DocumentLimits`, `loadLimits`, `loadBlobRoot`, `peek`), 50 (`receiveFile`, `UploadTooLargeError`), 51 (repo functions), M1 `requireAuth`, `withTenant`.
+- Consumes: Task 45a (`EncryptedFsContentStore`, `BlobTooLargeError`), 48 (`FieldCrypto`), 49 (`sniff`, `sanitizeFilename`, `titleFromFilename`, `SNIFF_BYTES`), 50 (`DocumentLimits`, `peek`), 51 (`receiveFile`, `UploadTooLargeError`), 52 (repo functions), M1 `requireAuth`, `withTenant`.
 - Produces:
-  - `interface DocumentRoutesDeps { pool: Pool; authenticator: Authenticator; fields: FieldCrypto; blobs: (identity: Identity) => EncryptedFsContentStore; limits: DocumentLimits }`
-  - `documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler>` with `"POST /api/documents"` (Tasks 55 and 56 add the other routes to this same function).
-  - `startDocumentServer(overrides?: { limits?: Partial<DocumentLimits> }): Promise<DocumentHarness>` in the harness, where `DocumentHarness = { base: string; owner: Pool; app: Pool; root: string; keys: InMemoryKeyStore; upload(user: string, name: string, data: Uint8Array | string): Promise<Response>; close(): Promise<void> }`.
+  - `interface DocumentRoutesDeps { pool: Pool; authenticator: Authenticator; fields: FieldCrypto; blobs: (identity: Identity) => EncryptedFsContentStore; limits: DocumentLimits }` (Task 56 adds `ingest`)
+  - `documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler>` with `"POST /api/documents"` (Tasks 59 and 60 add the other routes to this same function).
+  - `startDocumentServer(overrides?: { limits?: Partial<DocumentLimits> }): Promise<DocumentHarness>` in the harness, where `DocumentHarness = { base: string; owner: Pool; app: Pool; root: string; keys: InMemoryKeyStore; upload(user: string, name: string, data: Uint8Array | string): Promise<Response>; fingerprint(user: string, data: Uint8Array | string): Promise<string>; close(): Promise<void> }`. `fingerprint` is what the server stores for those bytes for that harness user (it derives the user's keyed fingerprint from `keys`), so tests never hash with plain sha256.
 
 - [ ] **Step 1: Extend the harness and write the failing test**
 
@@ -2794,7 +3834,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EncryptedFsContentStore } from "@docmind/blob-store";
+import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { Pool as PgPool } from "pg";
 import { FieldCrypto } from "../crypto/fields";
@@ -2811,6 +3851,8 @@ export interface DocumentHarness {
   root: string;
   keys: InMemoryKeyStore;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
+  /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
+  fingerprint(user: string, data: Uint8Array | string): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -2849,6 +3891,12 @@ export async function startDocumentServer(
       form.append("file", new Blob([data]), name);
       return fetch(`${base}/api/documents`, { method: "POST", headers: { "x-test-user": user }, body: form });
     },
+    async fingerprint(user, data) {
+      const identity = BY_HEADER[user];
+      if (!identity) throw new Error("unknown harness user");
+      const dek = await keys.getOrCreate(identity.userId);
+      return fingerprintOf(deriveFingerprintKey(dek), typeof data === "string" ? Buffer.from(data) : data);
+    },
     async close() {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -2865,15 +3913,12 @@ export async function startDocumentServer(
 `apps/server/app/documents/upload.pg.test.ts`:
 
 ```ts
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { type DocumentHarness, PNG, T1, T2, TEXT, U1, U2, startDocumentServer } from "./testHarness";
-
-const hex = (b: Buffer) => createHash("sha256").update(b).digest("hex");
+import { type DocumentHarness, T1, TEXT, U1, startDocumentServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("POST /api/documents (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -2897,51 +3942,22 @@ describe.skipIf(!PG_URL)("POST /api/documents (needs DOCMIND_TEST_PG_URL)", () =
       sizeBytes: bytes.length,
       status: "uploaded",
       summary: null,
+      stats: null,
     });
 
+    const fp = await h.fingerprint("alice", bytes);
     const row = await h.owner.query(
-      "SELECT title_enc::text AS t, filename_enc::text AS f, fingerprint, content_address FROM documents WHERE id = $1",
+      "SELECT title_enc::text AS t, filename_enc::text AS f, fingerprint, content_address, stats_enc FROM documents WHERE id = $1",
       [body.document.id],
     );
     expect(row.rows[0].t + row.rows[0].f).not.toContain("Meeting");
-    expect(row.rows[0].fingerprint).toBe(hex(bytes));
-    expect(row.rows[0].content_address).toBe(`sha256:${hex(bytes)}`);
+    expect(row.rows[0].fingerprint).toBe(fp);
+    expect(row.rows[0].content_address).toBe(`hmac-sha256:${fp}`);
+    expect(row.rows[0].stats_enc).toBeNull();
 
-    const file = join(h.root, T1, U1, hex(bytes));
+    const file = join(h.root, T1, U1, fp);
     expect(readFileSync(file).includes("plain text")).toBe(false);
-    expect(readdirSync(join(h.root, T1, U1))).toEqual([hex(bytes)]); // no temp file left
-  });
-
-  it("decides the type from the bytes, not the extension", async () => {
-    const res = await h.upload("alice", "photo.txt", PNG("a"));
-    expect(res.status).toBe(201);
-    expect(((await res.json()) as UploadDocumentResponse).document.mime).toBe("image/png");
-  });
-
-  it("returns the existing document for identical bytes: 200, duplicate, one row, one file", async () => {
-    const bytes = TEXT("dup");
-    const first = (await (await h.upload("alice", "a.txt", bytes)).json()) as UploadDocumentResponse;
-    const again = await h.upload("alice", "renamed.txt", bytes);
-    expect(again.status).toBe(200);
-    const body = (await again.json()) as UploadDocumentResponse;
-    expect(body.duplicate).toBe(true);
-    expect(body.document.id).toBe(first.document.id);
-    expect(body.document.filename).toBe("a.txt"); // the first upload's name is kept
-    const rows = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1", [hex(bytes)]);
-    expect(rows.rows[0].n).toBe(1);
-    expect(readdirSync(join(h.root, T1, U1)).filter((f) => f === hex(bytes))).toHaveLength(1);
-  });
-
-  it("does not deduplicate across users: each keeps their own document and blob", async () => {
-    const bytes = TEXT("shared bytes");
-    const a = (await (await h.upload("alice", "x.txt", bytes)).json()) as UploadDocumentResponse;
-    const b = await h.upload("bob", "x.txt", bytes);
-    expect(b.status).toBe(201);
-    const bodyB = (await b.json()) as UploadDocumentResponse;
-    expect(bodyB.duplicate).toBe(false);
-    expect(bodyB.document.id).not.toBe(a.document.id);
-    expect(existsSync(join(h.root, T1, U1, hex(bytes)))).toBe(true);
-    expect(existsSync(join(h.root, T2, U2, hex(bytes)))).toBe(true);
+    expect(readdirSync(join(h.root, T1, U1))).toEqual([fp]); // no temp file left
   });
 
   it("answers 401 without a session and stores nothing", async () => {
@@ -2949,11 +3965,13 @@ describe.skipIf(!PG_URL)("POST /api/documents (needs DOCMIND_TEST_PG_URL)", () =
     form.append("file", new Blob([TEXT("anon")]), "a.txt");
     const res = await fetch(`${h.base}/api/documents`, { method: "POST", body: form });
     expect(res.status).toBe(401);
-    const rows = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1", [hex(TEXT("anon"))]);
+    const rows = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE size_bytes = $1", [TEXT("anon").length]);
     expect(rows.rows[0].n).toBe(0);
   });
 });
 ```
+
+(`BY_HEADER` is exported by Task 52a's `testHarness.ts`.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -2968,10 +3986,10 @@ Add `"@docmind/blob-store": "workspace:*"` to `apps/server/package.json` `depend
 
 ```ts
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Authenticator, Identity } from "@docmind/auth";
 import { BlobTooLargeError, type EncryptedFsContentStore, type StagedBlob } from "@docmind/blob-store";
 import type { UploadDocumentResponse } from "@docmind/contracts";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
@@ -3019,7 +4037,8 @@ async function register(
 ): Promise<Registered> {
   const cipher = deps.fields.forUser(identity.userId);
   const id = randomUUID();
-  const fingerprint = staged.ref.__loomContent.slice("sha256:".length);
+  // The keyed fingerprint (HMAC under a key derived from this user's data key), computed while streaming.
+  const fingerprint = staged.fingerprint;
   const titleEnc = await cipher.seal(titleBind(id), titleFromFilename(filename));
   const filenameEnc = await cipher.seal(filenameBind(id), filename);
   let committed: { created: boolean } | undefined;
@@ -3095,15 +4114,361 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
 }
 ```
 
-- [ ] **Step 4: Wire it into `main.ts`**
+- [ ] **Step 4: Run to verify it passes, gate, commit**
 
-In `apps/server/app/main.ts`: add imports
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents`
+Expected: PASS.
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c feat/api-document-upload
+git add apps/server pnpm-lock.yaml
+git commit -m "feat(api): POST /api/documents with magic-byte sniffing, encryption and keyed dedup
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "feat(api): POST /api/documents with magic-byte sniffing, encryption and keyed dedup" --body "The route is reachable only from tests until the next PR wires it into main.ts and starts the ingest flow. Quotas follow after that. Lockfile not counted.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 185 changed lines, 3 files (plus the lockfile).
+
+---
+
+### Task 55b: upload dedup, cross-user and keyed-name tests
+
+Test-only PR for Task 55a's behaviour: identical bytes from one user are stored once, two users never share a document or a fingerprint, the type comes from the bytes, and nothing is named by a plain sha256.
+
+**Files:**
+- Create: `apps/server/app/documents/upload.dedup.pg.test.ts`
+
+**Interfaces:**
+- Consumes: Task 55a (`startDocumentServer`, the route, `DocumentHarness.fingerprint`).
+- Produces: nothing (tests only).
+
+- [ ] **Step 1: Write the tests**
+
+`apps/server/app/documents/upload.dedup.pg.test.ts`:
+
+```ts
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import type { UploadDocumentResponse } from "@docmind/contracts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PG_URL } from "../db/testSupport";
+import { type DocumentHarness, PNG, T1, T2, TEXT, U1, U2, startDocumentServer } from "./testHarness";
+
+describe.skipIf(!PG_URL)("upload dedup and keyed names (needs DOCMIND_TEST_PG_URL)", () => {
+  let h: DocumentHarness;
+  beforeAll(async () => {
+    h = await startDocumentServer();
+  });
+  afterAll(async () => {
+    await h?.close();
+  });
+
+  it("never stores or names anything by the plain sha256 of the bytes", async () => {
+    const bytes = TEXT("keyed not plain");
+    await h.upload("alice", "k.txt", bytes);
+    const plain = createHash("sha256").update(bytes).digest("hex");
+    expect(existsSync(join(h.root, T1, U1, plain))).toBe(false);
+    const rows = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1 OR content_address LIKE $2", [
+      plain,
+      `%${plain}`,
+    ]);
+    expect(rows.rows[0].n).toBe(0);
+  });
+
+  it("decides the type from the bytes, not the extension", async () => {
+    const res = await h.upload("alice", "photo.txt", PNG("a"));
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as UploadDocumentResponse).document.mime).toBe("image/png");
+  });
+
+  it("returns the existing document for identical bytes: 200, duplicate, one row, one file", async () => {
+    const bytes = TEXT("dup");
+    const first = (await (await h.upload("alice", "a.txt", bytes)).json()) as UploadDocumentResponse;
+    const again = await h.upload("alice", "renamed.txt", bytes);
+    expect(again.status).toBe(200);
+    const body = (await again.json()) as UploadDocumentResponse;
+    expect(body.duplicate).toBe(true);
+    expect(body.document.id).toBe(first.document.id);
+    expect(body.document.filename).toBe("a.txt"); // the first upload's name is kept
+    const fp = await h.fingerprint("alice", bytes);
+    const rows = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1", [fp]);
+    expect(rows.rows[0].n).toBe(1);
+    expect(readdirSync(join(h.root, T1, U1)).filter((f) => f === fp)).toHaveLength(1);
+  });
+
+  it("does not deduplicate across users: each keeps their own document, fingerprint and blob", async () => {
+    const bytes = TEXT("shared bytes");
+    const a = (await (await h.upload("alice", "x.txt", bytes)).json()) as UploadDocumentResponse;
+    const b = await h.upload("bob", "x.txt", bytes);
+    expect(b.status).toBe(201);
+    const bodyB = (await b.json()) as UploadDocumentResponse;
+    expect(bodyB.duplicate).toBe(false);
+    expect(bodyB.document.id).not.toBe(a.document.id);
+    const fpAlice = await h.fingerprint("alice", bytes);
+    const fpBob = await h.fingerprint("bob", bytes);
+    expect(fpAlice).not.toBe(fpBob); // the same file looks different under each user's key
+    expect(existsSync(join(h.root, T1, U1, fpAlice))).toBe(true);
+    expect(existsSync(join(h.root, T2, U2, fpBob))).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Run, gate, commit**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/upload.dedup.pg.test.ts`
+Expected: PASS (no failing-first step: a failure is a Task 55a bug, fixed there).
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c test/api-upload-dedup
+git add apps/server/app/documents/upload.dedup.pg.test.ts
+git commit -m "test(api): upload dedup, cross-user and keyed-name tests
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "test(api): upload dedup, cross-user and keyed-name tests" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 75 changed lines, 1 file.
+
+---
+
+### Task 56: start `ingest-document` after the upload commits, and wire the routes into `main.ts`
+
+Owner decision 1 / spec §5.1 step 4. The start happens **after** `withTenant` has committed, never inside it; a failed start is logged by class and path only and never fails the upload.
+
+**Files:**
+- Modify: `apps/server/app/documents/routes.ts`
+- Modify: `apps/server/app/documents/testHarness.ts` (a real in-memory Loom app, the `ingest` probe)
+- Modify: `apps/server/app/main.ts`
+- Create: `apps/server/app/documents/ingestStart.pg.test.ts`
+
+**Interfaces:**
+- Consumes: Task 54 (`IngestPort`, `loomIngest`, `pgIngestDeps`, `setIngestDeps`), Task 55a (`documentRoutes`, `startDocumentServer`), M1 `buildApp`.
+- Produces:
+  - `DocumentRoutesDeps.ingest: IngestPort` (required).
+  - Upload behaviour: a **new** document (201) starts its execution once the transaction has committed. A **duplicate** (200) whose stored `status` is still `uploaded` re-attempts the start (start-once makes this safe), which is the only recovery for a crash between commit and start until the M3 sweep; a duplicate in any other status starts nothing. A start that throws is swallowed after `console.error(<class name>, <route>)`: the response is still 201/200.
+  - Harness: `DocumentHarness.ingest: IngestProbe` where `IngestProbe = { handles: Map<string, ExecutionHandle>; calls: string[]; hold(): void; release(): void; failNext(op: "start" | "cancel"): void }`. `calls` records `start:<documentId>` and `cancel:<documentId>` in order; `hold()` makes the stub step wait before it looks the document up, `release()` lets it go; `failNext` makes the next call of that kind throw. The harness builds `buildApp({ kind: "memory" })`, calls `setIngestDeps` with the held/released wrapper of `pgIngestDeps(app)`, and `close()` calls `resetIngestDeps()` and closes the Loom app. (Process-global deps: Uncertain #6.)
+
+- [ ] **Step 1: Extend the harness and write the failing tests**
+
+In `testHarness.ts`, add (imports: `type ExecutionHandle` from `@loom/workflow-runtime`, `buildApp` from `../config`, `resetIngestDeps`/`setIngestDeps` from `../flows/ingest-document/deps`, `pgIngestDeps` from `../flows/ingest-document/pgDeps`, `type IngestPort`/`loomIngest` from `./ingest`):
+
+```ts
+export interface IngestProbe {
+  /** The execution handle of every start that created an execution, by document id. */
+  handles: Map<string, ExecutionHandle>;
+  /** "start:<documentId>" and "cancel:<documentId>", in call order. */
+  calls: string[];
+  hold(): void;
+  release(): void;
+  failNext(op: "start" | "cancel"): void;
+}
+
+function makeIngest(app: PgPool): { port: IngestPort; probe: IngestProbe; close(): Promise<void> } {
+  const loom = buildApp({ kind: "memory" });
+  const real = pgIngestDeps(app);
+  let gate: Promise<void> | null = null;
+  let open: () => void = () => {};
+  setIngestDeps({
+    documentExists: async (ref) => {
+      await gate;
+      return real.documentExists(ref);
+    },
+  });
+  const inner = loomIngest(loom.runtime);
+  const failures = { start: 0, cancel: 0 };
+  const probe: IngestProbe = {
+    handles: new Map(),
+    calls: [],
+    hold() {
+      gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+    },
+    release() {
+      open();
+      gate = null;
+    },
+    failNext(op) {
+      failures[op]++;
+    },
+  };
+  const port: IngestPort = {
+    async start(identity, documentId) {
+      probe.calls.push(`start:${documentId}`);
+      if (failures.start > 0) {
+        failures.start--;
+        throw new Error("synthetic-start-error");
+      }
+      const handle = await inner.start(identity, documentId);
+      if (handle) probe.handles.set(documentId, handle);
+      return handle;
+    },
+    async cancel(identity, documentId) {
+      probe.calls.push(`cancel:${documentId}`);
+      if (failures.cancel > 0) {
+        failures.cancel--;
+        throw new Error("synthetic-cancel-error");
+      }
+      await inner.cancel(identity, documentId);
+    },
+  };
+  return {
+    port,
+    probe,
+    close: async () => {
+      probe.release();
+      resetIngestDeps();
+      await loom.close();
+    },
+  };
+}
+```
+
+In `startDocumentServer`: `const ingest = makeIngest(app);`, pass `ingest: ingest.port` to `documentRoutes`, add `ingest: IngestProbe` to `DocumentHarness`, return `ingest: ingest.probe`, and call `await ingest.close()` at the start of `close()`.
+
+`apps/server/app/documents/ingestStart.pg.test.ts`:
+
+```ts
+import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { PG_URL } from "../db/testSupport";
+import { ingestExecutionId } from "./ingest";
+import { type DocumentHarness, TEXT, U1, startDocumentServer } from "./testHarness";
+
+describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_URL)", () => {
+  let h: DocumentHarness;
+  beforeAll(async () => {
+    h = await startDocumentServer();
+  });
+  afterAll(async () => {
+    await h?.close();
+  });
+
+  const created = async (name: string, bytes: Buffer, user = "alice") => {
+    const res = await h.upload(user, name, bytes);
+    return { res, body: (await res.json()) as UploadDocumentResponse };
+  };
+
+  it("starts exactly one execution per new document, after the row is committed, with the owner's execution id", async () => {
+    const { res, body } = await created("a.txt", TEXT("starts once"));
+    expect(res.status).toBe(201);
+    const id = body.document.id;
+    expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(1);
+    const handle = h.ingest.handles.get(id);
+    expect(handle?.executionId).toBe(ingestExecutionId(U1, id));
+    const state = await handle?.waitForCompletion();
+    expect(state?.status).toBe("completed");
+    expect(state?.variables._output).toEqual({ outcome: "accepted" });
+    // The stub writes nothing: the document is still `uploaded`.
+    const row = await h.owner.query("SELECT status FROM documents WHERE id = $1", [id]);
+    expect(row.rows[0].status).toBe("uploaded");
+  });
+
+  it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {
+    const bytes = TEXT("dup flow");
+    const first = await created("a.txt", bytes);
+    const id = first.body.document.id;
+    const handle = h.ingest.handles.get(id);
+    await handle?.waitForCompletion();
+    const again = await created("again.txt", bytes);
+    expect(again.res.status).toBe(200);
+    // The re-attempt is made (the document is still `uploaded`) and answered "already started":
+    // two start calls, but one execution (the stored handle is the first one, not replaced).
+    expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(2);
+    expect(h.ingest.handles.get(id)).toBe(handle);
+  });
+
+  it("starts nothing for an upload that is refused", async () => {
+    const before = h.ingest.calls.length;
+    const res = await h.upload("alice", "tool.exe", Buffer.from("MZ\u0090\u0000\u0003"));
+    expect(res.status).toBe(415);
+    expect(h.ingest.calls.length).toBe(before);
+  });
+
+  it("answers 201 even when the start fails, logs only the class, and a later identical upload retries it", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.ingest.failNext("start");
+    const bytes = TEXT("start fails");
+    const first = await created("secret-name.txt", bytes);
+    expect(first.res.status).toBe(201);
+    expect(first.body.document.status).toBe("uploaded");
+    expect(h.ingest.handles.has(first.body.document.id)).toBe(false);
+    const logged = JSON.stringify(spy.mock.calls);
+    expect(logged).not.toContain("secret-name");
+    expect(logged).not.toContain("synthetic-start-error"); // the message could name anything; only the class is logged
+    spy.mockRestore();
+
+    const retry = await created("secret-name.txt", bytes);
+    expect(retry.res.status).toBe(200);
+    expect(retry.body.duplicate).toBe(true);
+    expect(h.ingest.handles.has(first.body.document.id)).toBe(true);
+  });
+
+  it("gives the execution only ids: the stub's start input has no filename, title or content", async () => {
+    const { body } = await created("Quarterly report.txt", TEXT("ids only"));
+    const handle = h.ingest.handles.get(body.document.id);
+    const state = JSON.stringify(handle?.getState());
+    expect(state).not.toContain("Quarterly");
+    expect(state).not.toContain("report");
+    expect((body.document as DocumentDto).filename).toBe("Quarterly report.txt");
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/ingestStart.pg.test.ts`
+Expected: FAIL (no execution is started: `calls` is empty; and `tsc` rejects `ingest` in the harness until `DocumentRoutesDeps.ingest` exists).
+
+- [ ] **Step 3: Implement**
+
+In `routes.ts`: import `type IngestPort` from `./ingest`; add to `DocumentRoutesDeps`:
+
+```ts
+  /** Starts and cancels document ingestion. */
+  ingest: IngestPort;
+```
+
+Change `Registered` to carry the status the start decision needs, and start after the transaction in `upload`:
+
+```ts
+type Registered = {
+  document: UploadDocumentResponse["document"];
+  duplicate: boolean;
+};
+```
+
+(`document.status` already tells whether a duplicate is still `uploaded`.) After the `uploadError`/`rejected` checks in `upload`, replace the final `json(...)` with:
+
+```ts
+  const { document, duplicate } = outcome.value.result;
+  // The row is committed. Only now start the flow: a rolled-back upload must never have an execution.
+  // A duplicate whose document never left `uploaded` re-attempts the start, which Loom makes start-once.
+  if (!duplicate || document.status === "uploaded") {
+    await deps.ingest.start(identity, document.id).catch((err: unknown) => {
+      // Class and route only: the message could carry anything.
+      console.error("ingest start failed:", err instanceof Error ? err.constructor.name : "unknown", "POST /api/documents");
+    });
+  }
+  json(res, duplicate ? 200 : 201, { document, duplicate } satisfies UploadDocumentResponse);
+```
+
+In `main.ts`: add imports
 
 ```ts
 import { EncryptedFsContentStore, removeStaleTemp } from "@docmind/blob-store";
 import { FieldCrypto } from "./crypto/fields";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { loomIngest } from "./documents/ingest";
 import { documentRoutes } from "./documents/routes";
+import { setIngestDeps } from "./flows/ingest-document/deps";
+import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 ```
 
 Load configuration next to `loadKeks()` (so a bad variable fails before any connection opens):
@@ -3120,7 +4485,15 @@ After `const keys = new PostgresKeyStore(pool, keks);` add:
   await removeStaleTemp(blobRoot, 60 * 60 * 1000);
 ```
 
-Replace the `createHttpServer(authRoutes({...}))` argument with a merge:
+After `const app = buildApp(durable.storage, durable.crypto);` add:
+
+```ts
+  // The flows are static modules; give the ingest-document stub step its database access.
+  setIngestDeps(pgIngestDeps(pool));
+  const ingest = loomIngest(app.runtime);
+```
+
+Replace the `createHttpServer(authRoutes({...}))` argument with a merge, declaring `const authenticator = new PasswordAuthenticator(store);` just above (the existing inline `new PasswordAuthenticator(store)` is replaced by this variable so both route sets share one instance):
 
 ```ts
   const server = createHttpServer({
@@ -3139,34 +4512,33 @@ Replace the `createHttpServer(authRoutes({...}))` argument with a merge:
       blobs: ({ tenantId, userId }) =>
         new EncryptedFsContentStore({ root: blobRoot, tenantId, userId, keys, maxBytes: limits.maxFileBytes }),
       limits,
+      ingest,
     }),
   });
 ```
 
-with `const authenticator = new PasswordAuthenticator(store);` declared just above (the existing inline `new PasswordAuthenticator(store)` is replaced by this variable so both route sets share one instance).
-
-- [ ] **Step 5: Run to verify it passes, gate, commit**
+- [ ] **Step 4: Run to verify it passes, gate, commit**
 
 Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents`
-Expected: PASS.
+Expected: PASS. (In the "does not start a flow for a duplicate" test the second `start:` call is the re-attempt, answered "already started"; if `runtime.start` does not reject a duplicate id as the plan expects, Uncertain #5 applies: fix `loomIngest.start`, not the test.)
 
 ```bash
 export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
-git switch -c feat/api-document-upload
-git add apps/server pnpm-lock.yaml
-git commit -m "feat(api): POST /api/documents with magic-byte sniffing, encryption and dedup
+git switch -c feat/api-upload-starts-ingest
+git add apps/server
+git commit -m "feat(api): start the ingest-document flow after upload commits and wire the routes
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-gh pr create --draft --title "feat(api): POST /api/documents with magic-byte sniffing, encryption and dedup" --body "Quotas and the in-flight cap follow in the next PR. Lockfile not counted.
+gh pr create --draft --title "feat(api): start the ingest-document flow after upload commits" --body "Spec 5.1 step 4. The start runs after COMMIT, once per new document, and never fails the upload; a duplicate that is still uploaded re-attempts it. Also wires the document routes, flow deps and stale temp cleanup into main.ts.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
-Expected: gate green; about 200 changed lines. If over 200, move the `main.ts` wiring and the `removeStaleTemp` call into the next PR (the route is then reachable only from tests until that PR, which is acceptable for one commit in a stack of drafts but must be stated in the PR description).
+Expected: gate green; about 180 changed lines, 5 files. If over, move the `main.ts` wiring and `removeStaleTemp` call into a PR of their own that follows this one.
 
 ---
 
-### Task 53: upload quotas, the per-user in-flight cap, and rejection/cleanup tests
+### Task 57: upload quotas, the per-user in-flight cap, and rejection/cleanup tests
 
 **Files:**
 - Create: `apps/server/app/documents/inFlight.ts`
@@ -3176,7 +4548,7 @@ Expected: gate green; about 200 changed lines. If over 200, move the `main.ts` w
 - Modify: `apps/server/app/documents/testHarness.ts` (expose the in-flight tracker)
 
 **Interfaces:**
-- Consumes: Task 52 (`documentRoutes`, `register`), Task 51 (`usageOfTenant`), Task 49 (`DocumentLimits`).
+- Consumes: Tasks 55a and 56 (`documentRoutes`, `register`, the start-after-commit block), Task 52b (`usageOfTenant`), Task 50 (`DocumentLimits`).
 - Produces:
   - `class InFlight { tryAcquire(key: string, max: number): (() => void) | null }`: returns a release function (idempotent) or `null` at the cap.
   - `DocumentRoutesDeps.inFlight?: InFlight` (default: a new `InFlight` per `documentRoutes` call); `DocumentHarness.inFlight: InFlight`.
@@ -3404,10 +4776,14 @@ with, after the `rejected` check:
     const message = result.reason === "documents" ? "document limit reached" : "storage limit reached";
     return uploadError(req, res, 403, "quota_exceeded", message);
   }
-  json(res, result.duplicate ? 200 : 201, { document: result.document, duplicate: result.duplicate } satisfies UploadDocumentResponse);
+  const { document, duplicate } = result;
+  // ...Task 56's start-after-commit block stays here, unchanged, using `document` and `duplicate`...
+  json(res, duplicate ? 200 : 201, { document, duplicate } satisfies UploadDocumentResponse);
 ```
 
 and `const defaultInFlight = new InFlight();` at module level. (Keep one tracker per process: when `deps.inFlight` is absent the module-level one is shared, which is what production wants.)
+
+(The quota tests open several harnesses at once; the process-global ingest deps (Uncertain #6) then belong to the last one opened, which only affects stub-flow outcomes that these tests do not assert.)
 
 In `testHarness.ts`: `import { InFlight } from "./inFlight";`, add `inFlight: InFlight` to `DocumentHarness`, create `const inFlight = new InFlight();` in `startDocumentServer`, pass `inFlight` to `documentRoutes` and return it.
 
@@ -3428,7 +4804,7 @@ gh pr create --draft --title "feat(api): upload quotas and a per-user concurrent
 
 ---
 
-### Task 54: path parameters in the router
+### Task 58: path parameters in the router
 
 **Files:**
 - Modify: `apps/server/app/http/respond.ts`
@@ -3615,7 +4991,7 @@ gh pr create --draft --title "feat(server): path parameters in the router" --bod
 
 ---
 
-### Task 55: `GET /api/documents` (paged) and `GET /api/documents/:id`
+### Task 59: `GET /api/documents` (paged) and `GET /api/documents/:id`
 
 **Files:**
 - Create: `apps/server/app/documents/cursor.ts`
@@ -3625,7 +5001,7 @@ gh pr create --draft --title "feat(server): path parameters in the router" --bod
 - Create: `apps/server/app/documents/read.pg.test.ts`
 
 **Interfaces:**
-- Consumes: Task 51 (`DOCUMENT_COLUMNS`, `DocumentRow`, `toDto`), Task 54 (`ctx.params`), contracts `ListDocumentsQuery`, `ListDocumentsResponse`, `Uuid`.
+- Consumes: Task 52a (`DOCUMENT_COLUMNS`, `DocumentRow`, `toDto`), Task 58 (`ctx.params`), contracts `ListDocumentsQuery`, `ListDocumentsResponse`, `Uuid`.
 - Produces:
   - `encodeCursor(row: { created_cursor: string; id: string }): string` and `decodeCursor(cursor: string): { t: string; i: string } | null` (opaque base64url JSON; strict validation of both fields).
   - `listDocuments(tx, ownerId, page: { cursor: { t: string; i: string } | null; limit: number }): Promise<{ rows: DocumentRow[]; next: { created_cursor: string; id: string } | null }>`: newest first by `(created_at, id)`, only `owner_id = ownerId`.
@@ -3892,7 +5268,9 @@ gh pr create --draft --title "feat(api): list and get document endpoints" --body
 
 ---
 
-### Task 56: `DELETE /api/documents/:id`, the upload/delete race, and the erasure shape
+### Task 60: `DELETE /api/documents/:id`: cancel the flow, then remove the row and the blob
+
+Owner decision 4: delete cancels the document's ingest execution first, then hard-deletes the row and the blob; a flow step that finds its document gone stops cleanly (Task 53). The upload/delete race test and the erasure-shape test are Task 61.
 
 **Files:**
 - Modify: `apps/server/app/documents/repo.ts` (add `deleteDocument`)
@@ -3900,27 +5278,22 @@ gh pr create --draft --title "feat(api): list and get document endpoints" --body
 - Create: `apps/server/app/documents/delete.pg.test.ts`
 
 **Interfaces:**
-- Consumes: Task 51 (`lockTenantForWrite`), Task 55 (`ctx.params`), Task 45 (`eraseUserBlobs`).
+- Consumes: Task 52b (`lockTenantForWrite`), Task 54 (`IngestPort.cancel`), Task 56 (`deps.ingest`, harness `ingest` probe), Task 58 (`ctx.params`), Task 59 (`getDocument`).
 - Produces:
   - `deleteDocument(tx, ownerId, id): Promise<{ contentAddress: string } | undefined>`: `DELETE ... RETURNING content_address`.
-  - Route `"DELETE /api/documents/:id"`: `204` on delete; `404 not_found` for a missing, foreign or malformed id (so a second delete is a `404`). Under the tenant lock, in one transaction: delete the row, delete the blob, then commit. Documents are deleted in any status (nothing runs against them in M2; M3 adds cancelling the flow).
+  - Route `"DELETE /api/documents/:id"`, in this order: (1) a non-UUID, missing, foreign or other-tenant id is `404 not_found` and nothing else happens (no cancel); (2) `deps.ingest.cancel(identity, id)` - if it throws, the answer is `500`, **the row and blob are untouched**, and the delete can simply be repeated; (3) in one transaction under the tenant lock: delete the row, delete the blob, commit; `204`. A delete in any status is allowed (a stuck document must be removable). A repeated delete after success is `404` and cancels nothing; a repeated delete after a failed attempt finishes the job.
 
 - [ ] **Step 1: Write the failing test**
 
 `apps/server/app/documents/delete.pg.test.ts`:
 
 ```ts
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { eraseUserBlobs } from "@docmind/blob-store";
 import type { DocumentDto } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type DocumentHarness, T1, TEXT, U1, startDocumentServer } from "./testHarness";
-
-const hex = (b: Buffer) => createHash("sha256").update(b).digest("hex");
-const blobPath = (h: DocumentHarness, b: Buffer) => join(h.root, T1, U1, hex(b));
 
 describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -3937,27 +5310,30 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
     ((await (await h.upload(user, name, bytes)).json()) as { document: DocumentDto }).document;
   const rows = async (id: string) =>
     (await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE id = $1", [id])).rows[0].n as number;
+  const blobPath = async (bytes: Buffer) => join(h.root, T1, U1, await h.fingerprint("alice", bytes));
 
   it("hard-deletes the row and the blob, then answers 404 the second time", async () => {
     const bytes = TEXT("delete me");
     const doc = await create("a.txt", bytes);
-    expect(existsSync(blobPath(h, bytes))).toBe(true);
+    expect(existsSync(await blobPath(bytes))).toBe(true);
     expect((await del(doc.id)).status).toBe(204);
     expect(await rows(doc.id)).toBe(0);
-    expect(existsSync(blobPath(h, bytes))).toBe(false);
+    expect(existsSync(await blobPath(bytes))).toBe(false);
     expect((await del(doc.id)).status).toBe(404);
   });
 
-  it("will not delete a colleague's or another tenant's document", async () => {
+  it("will not delete a colleague's or another tenant's document, and cancels nothing for them", async () => {
     const mine = await create("mine.txt", TEXT("colleague-owned"), "alice2");
+    const before = h.ingest.calls.length;
     expect((await del(mine.id, "alice")).status).toBe(404);
     expect((await del(mine.id, "bob")).status).toBe(404);
     expect(await rows(mine.id)).toBe(1);
     expect((await del("not-a-uuid")).status).toBe(404);
+    expect(h.ingest.calls.length).toBe(before); // no cancel was attempted for any of them
     expect((await fetch(`${h.base}/api/documents/${mine.id}`, { method: "DELETE" })).status).toBe(401);
   });
 
-  it("lets the same bytes be uploaded again afterwards as a new document", async () => {
+  it("lets the same bytes be uploaded again afterwards as a new document with its own execution", async () => {
     const bytes = TEXT("round trip");
     const first = await create("a.txt", bytes);
     await del(first.id);
@@ -3965,34 +5341,54 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
     expect(res.status).toBe(201);
     const second = ((await res.json()) as { document: DocumentDto }).document;
     expect(second.id).not.toBe(first.id);
-    expect(existsSync(blobPath(h, bytes))).toBe(true);
+    expect(existsSync(await blobPath(bytes))).toBe(true);
+    expect(h.ingest.handles.has(second.id)).toBe(true);
   });
 
-  it("never leaves a row without its blob when an upload of the same bytes races a delete", async () => {
-    for (let i = 0; i < 10; i++) {
-      const bytes = TEXT(`race ${i}`);
-      const doc = await create("r.txt", bytes);
-      const [, uploaded] = await Promise.all([del(doc.id), h.upload("alice", "r2.txt", bytes)]);
-      expect([200, 201]).toContain(uploaded.status);
-      const row = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1", [hex(bytes)]);
-      // Either order is legal, but a surviving row must have its blob and a missing row must not.
-      expect(existsSync(blobPath(h, bytes)), `iteration ${i}`).toBe(row.rows[0].n === 1);
-    }
-  });
+  it("cancels the flow first: a delete during an in-flight flow cancels it, and the step that was running finds nothing", async () => {
+    h.ingest.hold(); // the stub step waits before it looks the document up
+    const bytes = TEXT("in flight");
+    const doc = await create("busy.txt", bytes);
+    const handle = h.ingest.handles.get(doc.id);
+    expect(handle).toBeDefined();
 
-  it("is the shape erasure needs: deleting the user removes their rows, then their blobs go", async () => {
-    const bytes = TEXT("erase everything");
-    const doc = await create("e.txt", bytes, "alice2");
-    const blob = join(h.root, T1, "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2", hex(bytes));
-    expect(existsSync(blob)).toBe(true);
-
-    await h.owner.query("DELETE FROM users WHERE id = 'a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2'"); // cascades
+    expect((await del(doc.id)).status).toBe(204);
+    expect(h.ingest.calls.filter((c) => c === `cancel:${doc.id}`)).toHaveLength(1);
     expect(await rows(doc.id)).toBe(0);
-    await eraseUserBlobs(h.root, T1, "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2");
-    await eraseUserBlobs(h.root, T1, "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2"); // idempotent
-    expect(existsSync(blob)).toBe(false);
-    await h.keys.destroy("a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2"); // and then the key
-    expect(await h.keys.wasDestroyed("a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2")).toBe(true);
+    expect(existsSync(await blobPath(bytes))).toBe(false);
+
+    h.ingest.release(); // the in-flight step now runs, and the document is gone
+    await expect(handle?.waitForCompletion()).rejects.toThrow();
+    expect(handle?.getState().status).toBe("cancelled");
+  });
+
+  it("cancels before it deletes: if the cancel fails nothing is deleted, and repeating the delete finishes the job", async () => {
+    const bytes = TEXT("cancel fails once");
+    const doc = await create("c.txt", bytes);
+    h.ingest.failNext("cancel");
+    expect((await del(doc.id)).status).toBe(500);
+    expect(await rows(doc.id)).toBe(1);
+    expect(existsSync(await blobPath(bytes))).toBe(true);
+
+    expect((await del(doc.id)).status).toBe(204); // idempotent: the retry completes the delete
+    expect(await rows(doc.id)).toBe(0);
+    expect(existsSync(await blobPath(bytes))).toBe(false);
+    const cancels = h.ingest.calls.filter((c) => c === `cancel:${doc.id}`);
+    expect(cancels).toHaveLength(2); // the failed attempt and the retry
+    expect((await del(doc.id)).status).toBe(404); // and a third delete changes and cancels nothing
+    expect(h.ingest.calls.filter((c) => c === `cancel:${doc.id}`)).toHaveLength(2);
+  });
+
+  it("deletes a document whose flow already finished, and one whose flow never started", async () => {
+    const done = await create("done.txt", TEXT("finished flow"));
+    await h.ingest.handles.get(done.id)?.waitForCompletion();
+    expect((await del(done.id)).status).toBe(204);
+
+    h.ingest.failNext("start"); // upload commits, the flow never starts
+    const orphan = await create("never.txt", TEXT("never started"));
+    expect(h.ingest.handles.has(orphan.id)).toBe(false);
+    expect((await del(orphan.id)).status).toBe(204); // cancel of an unknown execution is not an error
+    expect(await rows(orphan.id)).toBe(0);
   });
 });
 ```
@@ -4021,50 +5417,152 @@ export async function deleteDocument(
 }
 ```
 
-Add to `documentRoutes` in `routes.ts` (import `deleteDocument`):
+Add to `documentRoutes` in `routes.ts` (import `deleteDocument`; `getDocument` and `Uuid` are already imported by Task 59):
 
 ```ts
     "DELETE /api/documents/:id": requireAuth(deps.authenticator, async (_req, res, identity, ctx) => {
       const id = Uuid.safeParse(ctx.params.id);
       if (!id.success) return sendError(res, 404, "not_found", "document not found");
+      const mine = await withTenant(deps.pool, identity.tenantId, (tx) =>
+        getDocument(tx, identity.userId, id.data),
+      );
+      if (!mine) return sendError(res, 404, "not_found", "document not found");
+
+      // 1. Cancel the document's ingest execution first (spec §5.2). If this throws, nothing has
+      //    been deleted and the whole delete can be repeated; a step still running when the cancel
+      //    lands finds its document gone and stops cleanly.
+      await deps.ingest.cancel(identity, id.data);
+
+      // 2. The row and the blob go under the tenant lock that uploads take before they decide to
+      //    reuse a blob, so an upload of the same bytes cannot slip between the two. If COMMIT then
+      //    fails the row survives without its blob; deleting again finishes the job.
       const store = deps.blobs(identity);
-      // The row and the blob go under the tenant lock that uploads take before they decide to reuse
-      // a blob, so an upload of the same bytes cannot slip between the two. If COMMIT then fails
-      // the row survives without its blob; deleting again finishes the job.
       const removed = await withTenant(deps.pool, identity.tenantId, async (tx) => {
         await lockTenantForWrite(tx, identity.tenantId);
         const gone = await deleteDocument(tx, identity.userId, id.data);
         if (gone) await store.delete({ __loomContent: gone.contentAddress });
         return gone;
       });
-      if (!removed) return sendError(res, 404, "not_found", "document not found");
+      if (!removed) return sendError(res, 404, "not_found", "document not found"); // a concurrent delete won
       res.writeHead(204);
       res.end();
     }),
 ```
 
-(`Uuid` is already imported by Task 55.)
-
 - [ ] **Step 4: Run to verify it passes, gate, commit**
 
 Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents`
-Expected: PASS.
+Expected: PASS. If the 500 for a failed cancel arrives as a dropped connection instead, check that the router's catch answers 500 for a thrown handler (M1 `server.ts`) and fix the test's expectation only if that is its documented behaviour.
 
 ```bash
 export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
 git switch -c feat/api-document-delete
 git add apps/server/app/documents
-git commit -m "feat(api): delete document endpoint
+git commit -m "feat(api): delete document endpoint that cancels the ingest flow first
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
-gh pr create --draft --title "feat(api): delete document endpoint" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+gh pr create --draft --title "feat(api): delete document endpoint that cancels the ingest flow first" --body "Cancel the ingest execution, then hard-delete the row and blob under the tenant lock. Tests: delete during an in-flight flow, a failed cancel leaves everything intact and a retry completes, repeated delete is 404 and cancels nothing.
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+```
+
+Expected: gate green; about 190 changed lines, 3 files. If over, the in-flight and repeated-delete tests become their own PR after this one.
+
+---
+
+### Task 61: upload/delete race and the erasure shape
+
+**Files:**
+- Create: `apps/server/app/documents/delete.race.pg.test.ts`
+
+**Interfaces:**
+- Consumes: Tasks 55a-60 (routes, harness, `eraseUserBlobs` from Task 46a).
+- Produces: nothing (tests only).
+
+- [ ] **Step 1: Write the tests**
+
+`apps/server/app/documents/delete.race.pg.test.ts`:
+
+```ts
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { eraseUserBlobs } from "@docmind/blob-store";
+import type { DocumentDto } from "@docmind/contracts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PG_URL } from "../db/testSupport";
+import { type DocumentHarness, T1, TEXT, U1B, startDocumentServer } from "./testHarness";
+
+describe.skipIf(!PG_URL)("delete races and the erasure shape (needs DOCMIND_TEST_PG_URL)", () => {
+  let h: DocumentHarness;
+  beforeAll(async () => {
+    h = await startDocumentServer();
+  });
+  afterAll(async () => {
+    await h?.close();
+  });
+
+  const create = async (name: string, bytes: Buffer, user = "alice") =>
+    ((await (await h.upload(user, name, bytes)).json()) as { document: DocumentDto }).document;
+
+  it("never leaves a row without its blob when an upload of the same bytes races a delete", async () => {
+    for (let i = 0; i < 10; i++) {
+      const bytes = TEXT(`race ${i}`);
+      const doc = await create("r.txt", bytes);
+      const fp = await h.fingerprint("alice", bytes);
+      const [, uploaded] = await Promise.all([
+        fetch(`${h.base}/api/documents/${doc.id}`, { method: "DELETE", headers: { "x-test-user": "alice" } }),
+        h.upload("alice", "r2.txt", bytes),
+      ]);
+      expect([200, 201]).toContain(uploaded.status);
+      const row = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE fingerprint = $1", [fp]);
+      // Either order is legal, but a surviving row must have its blob and a missing row must not.
+      expect(existsSync(join(h.root, T1, "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1", fp)), `iteration ${i}`).toBe(
+        row.rows[0].n === 1,
+      );
+    }
+  });
+
+  it("is the shape erasure needs: deleting the user removes their rows, then their blobs go, then the key", async () => {
+    const bytes = TEXT("erase everything");
+    const doc = await create("e.txt", bytes, "alice2");
+    const fp = await h.fingerprint("alice2", bytes);
+    const blob = join(h.root, T1, U1B, fp);
+    expect(existsSync(blob)).toBe(true);
+
+    await h.owner.query("DELETE FROM users WHERE id = $1", [U1B]); // cascades
+    const left = await h.owner.query("SELECT count(*)::int AS n FROM documents WHERE id = $1", [doc.id]);
+    expect(left.rows[0].n).toBe(0);
+    await eraseUserBlobs(h.root, T1, U1B);
+    await eraseUserBlobs(h.root, T1, U1B); // idempotent
+    expect(existsSync(blob)).toBe(false);
+    await h.keys.destroy(U1B); // and then the key
+    expect(await h.keys.wasDestroyed(U1B)).toBe(true);
+    // With the key gone the fingerprint of a known file can no longer be computed.
+    await expect(h.fingerprint("alice2", bytes)).rejects.toThrow();
+  });
+});
+```
+
+- [ ] **Step 2: Run, gate, commit**
+
+Run: `export DOCMIND_TEST_PG_URL=<superuser url> && pnpm --filter @docmind/server exec vitest run app/documents/delete.race.pg.test.ts`
+Expected: PASS (no failing-first step: this task adds no behaviour; if it fails, the fix belongs to Task 60, with a regression test there).
+
+```bash
+export DOCMIND_TEST_PG_URL=<superuser url> && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test
+git switch -c test/api-delete-race-erasure
+git add apps/server/app/documents/delete.race.pg.test.ts
+git commit -m "test(api): upload/delete race and the erasure shape
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+gh pr create --draft --title "test(api): upload/delete race and the erasure shape" --body "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 ```
 
 ---
 
-### Task 57: M2 acceptance test over real authentication
+### Task 62: M2 acceptance test over real authentication
 
-Proves the milestone's "runnable" claim end to end with the real `Authenticator`, session cookies and `PostgresKeyStore`, and that nothing readable is left in the database or on disk.
+Proves the milestone's "runnable" claim end to end with the real `Authenticator`, session cookies and `PostgresKeyStore`, that an upload starts the real stub flow and a delete cancels it, and that nothing readable (and no plain sha256) is left in the database or on disk.
 
 **Files:**
 - Create: `apps/server/app/documents/documents.e2e.pg.test.ts`
@@ -4078,7 +5576,7 @@ Proves the milestone's "runnable" claim end to end with the real `Authenticator`
 `apps/server/app/documents/documents.e2e.pg.test.ts`:
 
 ```ts
-import { createSecretKey, randomBytes } from "node:crypto";
+import { createHash, createSecretKey, randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -4087,15 +5585,20 @@ import { AuthService, PasswordAuthenticator } from "@docmind/auth";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import type { DocumentDto, ListDocumentsResponse, UploadDocumentResponse } from "@docmind/contracts";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
+import type { ExecutionHandle } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgAuthStore } from "../auth/pgAuthStore";
 import { PgThrottle } from "../auth/pgThrottle";
 import { authRoutes } from "../auth/routes";
+import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { resetIngestDeps, setIngestDeps } from "../flows/ingest-document/deps";
+import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
+import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS } from "./limits";
 import { documentRoutes } from "./routes";
 import { PDF, PNG, TEXT } from "./testHarness";
@@ -4108,6 +5611,9 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
   let server: ReturnType<typeof createHttpServer>;
   let base = "";
   let root = "";
+  let loom: ReturnType<typeof buildApp> | undefined;
+  const calls: string[] = [];
+  const handles = new Map<string, ExecutionHandle>();
 
   beforeAll(async () => {
     db = await createTestDb();
@@ -4118,6 +5624,22 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
     const keys = new PostgresKeyStore(app, [{ id: "kek-1", key: createSecretKey(randomBytes(32)) }]);
     const store = new PgAuthStore(app);
     const authenticator = new PasswordAuthenticator(store);
+    // The real stub flow on a real (in-memory) Loom app, recorded so the test can see start and cancel.
+    loom = buildApp({ kind: "memory" });
+    setIngestDeps(pgIngestDeps(app));
+    const real = loomIngest(loom.runtime);
+    const ingest: IngestPort = {
+      async start(identity, documentId) {
+        calls.push(`start:${documentId}`);
+        const handle = await real.start(identity, documentId);
+        if (handle) handles.set(documentId, handle);
+        return handle;
+      },
+      async cancel(identity, documentId) {
+        calls.push(`cancel:${documentId}`);
+        await real.cancel(identity, documentId);
+      },
+    };
     server = createHttpServer({
       ...authRoutes({
         service: new AuthService(store),
@@ -4133,6 +5655,7 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
         fields: new FieldCrypto(keys),
         blobs: ({ tenantId, userId }) => new EncryptedFsContentStore({ root, tenantId, userId, keys }),
         limits: DEFAULT_LIMITS,
+        ingest,
       }),
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -4146,6 +5669,8 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
         server.closeAllConnections();
       });
     }
+    resetIngestDeps();
+    await loom?.close();
     await app?.end();
     await db?.drop();
     if (root) rmSync(root, { recursive: true, force: true });
@@ -4183,6 +5708,13 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
     expect(g1.status).toBe(201);
     const graceDoc = ((await g1.json()) as UploadDocumentResponse).document;
 
+    // the upload started the real stub flow, with the owner's execution id and ids only
+    const started = handles.get(a1.document.id);
+    expect(started?.executionId).toMatch(/^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}$/);
+    const done = await started?.waitForCompletion();
+    expect(done?.variables._output).toEqual({ outcome: "accepted" });
+    expect(done?.status).toBe("completed");
+
     // list: each sees only their own
     const adaList = (await (await get(ada, "/api/documents")).json()) as ListDocumentsResponse;
     expect(adaList.items.map((d) => d.id).sort()).toEqual([a1.document.id, a2.document.id].sort());
@@ -4206,6 +5738,10 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
     }
     const files = readdirSync(root, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
     expect(files.length).toBe(3);
+    // file names are keyed fingerprints, never the plain sha256 of the bytes
+    const plain = createHash("sha256").update(`${secretText}\n`).digest("hex");
+    expect(files.map((f) => f.name)).not.toContain(plain);
+    expect(dump.rows.map((r) => r.j).join("")).not.toContain(plain);
     for (const f of files) {
       expect(readFileSync(join(f.parentPath ?? f.path, f.name)).includes(secretText)).toBe(false);
     }
@@ -4214,6 +5750,7 @@ describe.skipIf(!PG_URL)("M2 acceptance: upload, list, get, delete (needs DOCMIN
 
     // delete: row and blob are gone; the other user's document is untouched
     expect((await fetch(`${base}/api/documents/${a1.document.id}`, { method: "DELETE", headers: { cookie: ada } })).status).toBe(204);
+    expect(calls).toContain(`cancel:${a1.document.id}`); // the flow was cancelled first
     expect((await get(ada, `/api/documents/${a1.document.id}`)).status).toBe(404);
     const after = (await (await get(ada, "/api/documents")).json()) as ListDocumentsResponse;
     expect(after.items.map((d) => d.id)).toEqual([a2.document.id]);
@@ -4248,41 +5785,43 @@ gh pr create --draft --title "test(api): M2 acceptance test over real authentica
 
 | Spec requirement | Task |
 |---|---|
-| §9 item 9: `packages/blob-store`, encrypted filesystem `ContentStore`, path `<tenant>/<user>/<sha256>` | 43, 44, 45 |
-| §3.1 "each interface has one shared conformance test suite" (ContentStore) | 44 (Loom's `runContentStoreConformance`) |
-| §4.2 `documents` columns, `status` set, `UNIQUE(tenant_id, owner_id, fingerprint)`, `_enc` columns | 46, 47, 51 |
-| §4.3 RLS on every table, `docmind_app` owns nothing, raw-SQL isolation test | 46, 57 |
-| §4.3 quotas: 50 MB per file, total storage cap, document-count cap, "enforced at upload" | 49, 52, 53 |
-| §4.4 blobs envelope-encrypted under the user's DEK; `*_enc` AEAD under the user's DEK; dedup within a user only | 43, 44, 47, 52 |
-| §4.4 erasure order "rows, blobs, key", each step idempotent | 45 (`eraseUserBlobs`), 46 (cascade), 56 (shape test) |
-| §5.1 steps 1-3: size limits while streaming, magic-byte sniffing, sha256 fingerprint, duplicate returns existing | 48, 50, 52, 53 |
-| §5.1 step 4: encrypt and write blob, insert `uploaded` row, **start `ingest-document`** | 52 for blob and row; starting the flow is deferred to M3 PR 14 (Deviation 7, open question 1) |
-| §6.1 / §9 item 11: list, get, delete endpoints | 54, 55, 56 |
+| §9 item 9: `packages/blob-store`, encrypted filesystem `ContentStore`, path `<tenant>/<user>/<fingerprint>` | 43, 44, 45a, 45b, 46a, 46b |
+| §3.1 "each interface has one shared conformance test suite" (ContentStore) | 45a (Loom's `runContentStoreConformance`; passes with keyed addresses, see Verified facts) |
+| §4.2 `documents` columns, `status` set, `UNIQUE(tenant_id, owner_id, fingerprint)`, `_enc` columns | 47, 48, 52a (**deviation:** `stats_enc` instead of plaintext `stats jsonb`; fingerprint is keyed) |
+| §4.3 RLS on every table, `docmind_app` owns nothing, raw-SQL isolation test | 47, 62 |
+| §4.3 quotas: 50 MB per file, total storage cap, document-count cap, "enforced at upload" | 50, 55a, 57 |
+| §4.4 blobs envelope-encrypted under the user's DEK; `*_enc` AEAD under the user's DEK; dedup within a user only | 43, 45a, 48, 55a |
+| §4.4 erasure order "rows, blobs, key", each step idempotent; fingerprints die with the key | 46a (`eraseUserBlobs`), 46b (key-destroyed test), 47 (cascade), 61 (shape test) |
+| §5.1 steps 1-3: size limits while streaming, magic-byte sniffing, fingerprint, duplicate returns existing | 49, 51, 55a, 57 (**deviation:** keyed HMAC fingerprint, Deviation 1) |
+| §5.1 step 4: encrypt and write blob, insert `uploaded` row, **start `ingest-document` with idempotency key `documentId`** | 55a (blob and row), 53 and 54 (flow and port), 56 (start after commit) |
+| §5.2 "Deleting a document cancels its flow" | 54 (cancel), 60 (cancel first, in-flight and repeated-delete tests) |
+| §5.2 flow skeleton, M3 item 14 | 53 (stub) and Deviation 7: item 14 shrinks to the real steps, status projection, progress SSE and the `uploaded` sweep |
+| §6.1 / §9 item 11: list, get, delete endpoints | 58, 59, 60 |
 | §8 gates: integration tests when Postgres is available, no sleeps | every task's gate; Global Constraints |
-| §10 "parsing untrusted files: magic-byte sniffing, size caps" | 48, 50 |
-| M1 carry-forward 1 (sensitive event paths before the first user flow) | 42 (registry, rule, test; nothing to register because no flow starts) |
+| §10 "parsing untrusted files: magic-byte sniffing, size caps" | 49, 51 |
+| M1 carry-forward 1 (sensitive event paths before the first user flow) | 42 (registry and rule), 53 (the first user flow: ids only, nothing to register, tests that fail when that stops being true) |
 | M1 carry-forward 2 (`x:` seals/reads; child ids keep the user subject) | 42 |
-| M1 carry-forward 3 (`executionIdFor` on every start/fork) | 42 ratchet + Global Constraints |
+| M1 carry-forward 3 (`executionIdFor` on every start/fork) | 42 ratchet; 54 is the first start and uses it |
 | Standing rules: no filenames/titles/content in logs or errors, placeholders in `.env.example`, RLS via `withTenant`, draft stacked PRs ≤200 lines/10 files, gate command | Global Constraints; each task's close-out |
 | `docs/design/linked-retrieval.md` not blocked | Nothing in M2 touches chunks; `documents` rows keep `title_enc`/`filename_enc` so the M3 `reference` link kind can match titles after decryption; `owner_id`-scoped rows and per-user key match the `entities.name_key` design |
 
-Gap noted rather than hidden: spec §5.1 step 4 (starting the flow) and spec §4.4's "`documents.stats` plaintext" are called out in Deviations 7 and 9 for the owner.
+No spec gap is left open: the two earlier gaps (starting the flow; plaintext `stats`) were closed by the owner's decisions, and the fingerprint wording is a recorded deviation.
 
-**2. Placeholder scan.** No "TBD"/"TODO"/"similar to Task N". Three places deliberately tell the executor what to do on a specific, foreseeable failure (Task 44 optionals fallback, Task 50 `settle` ordering, Task 51 lock-order symmetry) because they hinge on library behaviour the plan could not run; each states the invariant to preserve. `<superuser url>` in commands is an environment value the owner supplies (Preconditions step 3), not an omission.
+**2. Placeholder scan.** No "TBD"/"TODO"/"similar to Task N". Places that deliberately tell the executor what to do on a specific, foreseeable failure, because they hinge on library behaviour the plan could not run, each stating the invariant to preserve: Task 45a optionals fallback, Task 51 `settle` ordering, Task 52b lock-order symmetry, Task 53 refusal-for-the-right-reason, Task 54 owner-policy refusal and the "No execution found" matcher, Task 56 `start` semantics, Task 60 the 500 shape. `<superuser url>` in commands is an environment value the owner supplies (Preconditions step 3), not an omission.
 
-**3. Type consistency.** Checked across tasks: `EncryptedFsContentStore.stage` -> `StagedBlob { ref, commit(): Promise<{created}>, discard() }` (44) is used with those names in 52; `BlobTooLargeError` (43) is mapped to `UploadTooLargeError` (50) in 52; `UserFieldCipher.seal/open/openText` (47) are called as `seal(bind, value)` / `openText(bind, env)` in 51 and 52; bind helpers `titleBind/filenameBind/summaryBind` (51) are the only bind strings used; `DocumentRow.created_cursor` (51) feeds `encodeCursor` (55); `DocumentLimits` field names (`maxFileBytes`, `tenantMaxBytes`, `tenantMaxDocuments`, `maxConcurrentUploadsPerUser`) are identical in 49, 52, 53 and the harness; `Handler`/`AuthedHandler` gain `ctx` in 54 and Tasks 55/56 use `ctx.params.id`; `Registered` is first defined as a plain object (52) and becomes a tagged union in 53 (the 53 edit lists every site that changes); `startDocumentServer`/`DocumentHarness` fields (`base, owner, app, root, keys, upload, close`, plus `inFlight` from 53) match every use in 52-56.
+**3. Type consistency.** Checked across tasks: `EncryptedFsContentStore.stage` -> `StagedBlob { ref, fingerprint, commit(): Promise<{created}>, discard() }` (45a) is used with those names in 55a; `deriveFingerprintKey`/`fingerprintOf` (44) are used by 45a, 45b, the hardening tests (46b) and the harness `fingerprint()` (55a); addresses are `hmac-sha256:<64 hex>` in 44, 45a, 47 (the CHECK), 52a (tests), 52b (tests) and 55a; `BlobTooLargeError` (43) is mapped to `UploadTooLargeError` (51) in 55a; `UserFieldCipher.seal/open/openText` (48) are called as `seal(bind, value)` / `openText(bind, env)` in 52a and 55a; bind helpers `titleBind/filenameBind/summaryBind/statsBind` (52a) are the only bind strings used; `DocumentRow.stats_enc` (52a) replaces `stats` everywhere; `DocumentRow.created_cursor` (52a) feeds `encodeCursor` (59); `DocumentLimits` field names (`maxFileBytes`, `tenantMaxBytes`, `tenantMaxDocuments`, `maxConcurrentUploadsPerUser`) are identical in 50, 55a, 57 and the harness; `IngestStartInput` (53) is built only by `ingestStartInput` (54); `IngestPort { start -> ExecutionHandle | null, cancel }` (54) is what `DocumentRoutesDeps.ingest` (56) and the harness probe (56) implement and what Task 60 calls; `executionIdFor(userId, "ingest-" + documentId)` appears only inside `ingestExecutionId` (54); `lockTenantForWrite`/`usageOfTenant` (52b) are used by 55a/57/60; `Handler`/`AuthedHandler` gain `ctx` in 58 and Tasks 59/60 use `ctx.params.id`; `Registered` is first defined as a plain object (55a) and becomes a tagged union in 57 (the 57 edit lists every site that changes); `startDocumentServer`/`DocumentHarness` fields (`base, owner, app, root, keys, upload, fingerprint, close` from 55a, `ingest` from 56, `inFlight` from 57) match every use in 55b-61.
 
 ---
 
-## Open questions for the owner
+## Decisions (owner, 2026-10-18)
 
-Each has a recommended default; the plan is written to the recommendation.
+The owner answered the plan's eight open questions. Each decision is applied in the tasks named.
 
-1. **Does M2 start a stub `ingest-document` flow, or is starting it deferred to M3 PR 14?** Spec §5.1 step 4 starts the flow on upload. Starting a stub now would force the flow module, grants, sensitive paths, `loom gen` output and a fair-scheduling story into M2 for no user-visible gain, and the stub's events would need the sensitive-path registry to be right before anything real exists. *Recommended: defer.* M2 inserts rows as `uploaded` and starts nothing; M3 PR 14 starts the flow with `executionIdFor(userId, "ingest-" + documentId)` and `{ documentId }` as its only input, and decides how documents already sitting in `uploaded` are picked up (a startup sweep is the simplest). The registry, the `x:`/child tests and the `executionIdFor` guard still land in M2 (Task 42).
-2. **Quota defaults.** Spec says "50 MB per file, a total storage cap and a document-count cap" without numbers. *Recommended:* 50 MiB per file, 1 GiB and 500 documents per tenant, 2 concurrent uploads per user, all overridable by environment variables and identical for every tenant (Deviation 6). Per-tenant overrides need a schema and an admin path and are not built.
-3. **Multipart library.** *Recommended: `busboy` ^1.6.0* (streaming, small, long-lived, explicit limits, used by most Node frameworks). The alternative is a hand-written parser, rejected because multipart parsing is exactly where untrusted-input bugs live. `@fastify/multipart`/`formidable` were not considered because they bring a framework or write to disk themselves.
-4. **Delete semantics while ingesting.** In M2 nothing ingests, so Task 56 deletes in any status, unconditionally. For M3 *recommended:* delete is always allowed and cancels the flow first (spec §5.2: "Deleting a document cancels its flow"), then removes the row and blob; a flow step that finds its document gone treats that as a clean stop, not a failure. The alternative (409 until the flow ends) would leave a user unable to remove a document that is stuck.
-5. **Plaintext sha256 as fingerprint, blob file name and `content_address`.** It lets anyone holding the disk or a backup test whether a known file was uploaded, and it survives in backups after erasure (rows) until retention ends. *Recommended: keep it as the spec says for v1* and record it as a known trade-off in the runbook (Deviation 9a). The alternative, an HMAC of the plaintext keyed from the user's data key, would still satisfy the ContentStore contract within one user and would be unreadable after the key is destroyed, at the cost of a different address format and a small change to Tasks 44 and 52; say so if you want it before M3 builds on the format.
-6. **`documents.stats` and `documents.error` are plaintext in spec §4.2.** `stats` (M3: outline, dates, numbers) is derived from content. *Recommended:* M3 stores it as `stats_enc` under the user's key (the contracts' `DocumentStats` is unchanged); `error` stays plaintext but only ever holds fixed messages. Needs a one-line spec edit in the M3 plan.
-7. **Where blobs live for deployment.** M2 uses a directory (`DOCMIND_BLOB_DIR`, default `./data/blobs`, git-ignored) and the server user must own it. *Recommended:* leave docker-compose untouched in M2 (the server runs on the host in local dev) and add the volume when the server gets a container; backups of the directory are covered by the same retention note as database backups.
-8. **Upload CSRF posture.** `multipart/form-data` is one of the three content types a cross-site HTML form can send, so the route relies on the session cookie being `SameSite=Lax` (which browsers do not send on cross-site POSTs) rather than a token. *Recommended: accept that for v1* (same-origin UI, Lax cookie, no CORS enabled) and revisit if the platform ever sets `SameSite=None` for embedding.
+1. **M2 starts the ingestion flow on upload** (spec §5.1 step 4). A stub `ingest-document` Loom flow exists in M2 (Task 53), started after the upload transaction commits (Task 56) with idempotency key = documentId (realised as the caller-chosen execution id, `executionIdFor(userId, "ingest-" + documentId)`, which Loom starts once; Task 54), and a start input of ids only (`{ tenantId, userId, documentId }`, strict). Its only step, `ingest-begin`, confirms the document still exists and writes nothing, so status stays `uploaded`. Because a real flow now runs, Task 42's sensitive-path registry is extended by rule and Task 53 proves that this flow needs no registered paths (ids in, two-value enum out) with tests that fail if a content-bearing field is added. **Reconciliation with the spec's M3 item 14:** M2 now owns flow registration, grants, start-after-commit, the id/idempotency convention, cancel-on-delete and the "document gone" stop; M3 item 14 shrinks to replacing `ingest-begin` with the §5.2 step skeleton (parse...finalize, empty bodies), the status projection, the progress SSE, and a sweep for documents stuck in `uploaded` (see Deviation 7).
+2. **Quotas accepted:** 50 MiB per file; 1 GiB and 500 documents per tenant; 2 concurrent uploads per user; every one overridable through the environment (Tasks 50 and 57).
+3. **busker -> `busboy` ^1.6.0 accepted** (Task 51; hand-written multipart parsing rejected as the place untrusted-input bugs live).
+4. **Delete cancels the flow first.** `DELETE /api/documents/:id` cancels the document's ingest execution (`runtime.cancel(executionId, reason, { principal })`, Task 54), then hard-deletes the row and blob under the tenant lock (Task 60); a flow step that finds its document gone ends with outcome `document_gone` (Task 53). Tests: delete during an in-flight flow, a failed cancel that leaves everything intact, a repeated delete (Task 60); the upload/delete race (Task 61).
+5. **The plaintext sha256 fingerprint is replaced by a keyed hash.** fingerprint = HMAC-SHA256 over the file bytes, keyed by an HKDF-SHA256 derivation of the user's DEK with the fixed label `docmind-fingerprint-v1`. Justification (Deviation 1): `KeyStore.getOrCreate` already exposes the raw DEK, so no extra key, table or destroy step is needed, and destroying the DEK destroys the fingerprint key, so fingerprints cannot be tested after erasure. It is used for `documents.fingerprint`, `content_address` (`hmac-sha256:<hex>`) and the blob path `<tenant>/<user>/<fingerprint>` (Tasks 44, 45a, 47, 55a). Dedup stays per user. `EncryptedFsContentStore` computes the keyed address itself; Loom's conformance kit only compares addresses with each other, so it still passes (Task 45a). **This is an intentional deviation from spec §5.1 step 3 and §4.1 ("sha256 fingerprint", path `<sha256>`).**
+6. **Stats are encrypted now:** the `documents` migration has `stats_enc` (jsonb envelope under the user's DEK, same `FieldCrypto` as the other `*_enc` columns) instead of plaintext `stats jsonb` (Tasks 47, 52). `error` stays plaintext with fixed, non-content messages only.
+7. **`DOCMIND_BLOB_DIR`, default `./data/blobs`, git-ignored:** accepted (Task 50; docker-compose untouched in M2).
+8. **CSRF:** rely on the `SameSite=Lax` session cookie, no token, no CORS: accepted for v1; revisit if the platform ever sets `SameSite=None`.
