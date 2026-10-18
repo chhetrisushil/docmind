@@ -120,3 +120,25 @@ export async function usageOfTenant(tx: PoolClient): Promise<{ documents: number
   const row = rows[0] as { documents: number; bytes: string };
   return { documents: row.documents, bytes: Number(row.bytes) };
 }
+
+export async function listDocuments(
+  tx: PoolClient,
+  ownerId: string,
+  page: { cursor: { t: string; i: string } | null; limit: number },
+): Promise<{ rows: DocumentRow[]; next: { created_cursor: string; id: string } | null }> {
+  const { rows } = await tx.query<DocumentRow>(
+    `SELECT ${DOCUMENT_COLUMNS} FROM documents
+      WHERE owner_id = $1
+        AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+      ORDER BY created_at DESC, id DESC
+      LIMIT $4`,
+    [ownerId, page.cursor?.t ?? null, page.cursor?.i ?? null, page.limit + 1],
+  );
+  const more = rows.length > page.limit;
+  const kept = more ? rows.slice(0, page.limit) : rows;
+  const last = kept[kept.length - 1];
+  return {
+    rows: kept,
+    next: more && last ? { created_cursor: last.created_cursor, id: last.id } : null,
+  };
+}

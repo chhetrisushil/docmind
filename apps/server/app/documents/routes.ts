@@ -6,7 +6,11 @@ import {
   type EncryptedFsContentStore,
   type StagedBlob,
 } from "@docmind/blob-store";
-import type { UploadDocumentResponse } from "@docmind/contracts";
+import {
+  ListDocumentsQuery,
+  type ListDocumentsResponse,
+  type UploadDocumentResponse,
+} from "@docmind/contracts";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
@@ -14,6 +18,7 @@ import { UploadTooLargeError, receiveFile } from "../http/multipart";
 import { peek } from "../http/peek";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
+import { decodeCursor, encodeCursor } from "./cursor";
 import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
@@ -21,6 +26,7 @@ import {
   filenameBind,
   findByFingerprint,
   insertDocument,
+  listDocuments,
   lockTenantForWrite,
   titleBind,
   toDto,
@@ -203,6 +209,26 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         if (res.headersSent) return void res.end();
         uploadError(req, res, 500, "internal", "internal error");
       }
+    }),
+
+    "GET /api/documents": requireAuth(deps.authenticator, async (req, res, identity) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const query = ListDocumentsQuery.safeParse(Object.fromEntries(url.searchParams));
+      if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
+      let cursor: { t: string; i: string } | null = null;
+      if (query.data.cursor !== undefined) {
+        cursor = decodeCursor(query.data.cursor);
+        if (!cursor) return sendError(res, 400, "invalid_cursor", "cursor is not valid");
+      }
+      // owner_id comes from the session; the cursor only positions within the caller's own rows.
+      const page = await withTenant(deps.pool, identity.tenantId, (tx) =>
+        listDocuments(tx, identity.userId, { cursor, limit: query.data.limit }),
+      );
+      const cipher = deps.fields.forUser(identity.userId);
+      json(res, 200, {
+        items: await Promise.all(page.rows.map((row) => toDto(row, cipher))),
+        nextCursor: page.next ? encodeCursor(page.next) : null,
+      } satisfies ListDocumentsResponse);
     }),
   };
 }
