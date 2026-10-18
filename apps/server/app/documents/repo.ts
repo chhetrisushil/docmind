@@ -102,7 +102,9 @@ export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<
 /**
  * Serialises writers of one tenant until the transaction ends: quota checks, the duplicate check
  * and the delete's blob removal all run under it, so they cannot interleave. Held for the length
- * of a transaction only (the file itself is staged before it is taken).
+ * of a transaction only (the file itself is staged before it is taken). Call it inside the
+ * `withTenant` transaction for the same tenant, before any read the decision depends on; outside a
+ * transaction it silently does nothing.
  */
 export async function lockTenantForWrite(tx: PoolClient, tenantId: string): Promise<void> {
   await tx.query("SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
