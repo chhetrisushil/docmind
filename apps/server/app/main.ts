@@ -1,18 +1,45 @@
 import { AuthService, PasswordAuthenticator, primeDecoy } from "@docmind/auth";
+import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
-import { app } from "./config";
+import { buildApp } from "./config";
 import { createAppPool } from "./db/pool";
 import { createHttpServer } from "./server";
 import { shutdown } from "./shutdown";
+import { openDurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
 
 async function main(): Promise<void> {
+  // Configuration first, so a missing or invalid variable fails before any connection opens. The
+  // errors name the variable and never include its value.
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is not set (the docmind_app connection string)");
+  const loomUrl = process.env.LOOM_DATABASE_URL;
+  if (!loomUrl)
+    throw new Error("LOOM_DATABASE_URL is not set (the docmind_loom connection string)");
+  const keks = loadKeks();
+
   const pool = await createAppPool(databaseUrl);
+
+  // Loom's stores connect as docmind_loom; check that role is unprivileged too before they start.
+  try {
+    await (await createAppPool(loomUrl)).end();
+  } catch (err) {
+    await pool.end();
+    throw new Error(`LOOM_DATABASE_URL: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const keys = new PostgresKeyStore(pool, keks);
+  let durable: Awaited<ReturnType<typeof openDurableStorage>>;
+  try {
+    durable = await openDurableStorage({ loomUrl, keys });
+  } catch (err) {
+    await pool.end();
+    throw err;
+  }
+  const app = buildApp(durable.storage, durable.crypto);
 
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
@@ -50,13 +77,15 @@ async function main(): Promise<void> {
 
   // One shutdown, shared by every signal: a second signal reuses the same promise instead of
   // calling server.close() again, which would reject with ERR_SERVER_NOT_RUNNING. The server
-  // drains first; the app closes before the pool it may read from.
+  // drains first; then the app closes (which closes the Loom stores), then the Loom pool, then
+  // the pool the key store reads from.
   let closing: Promise<void> | undefined;
   const stop = () => {
     clearInterval(sweepTimer);
     closing ??= shutdown(server, {
       close: async () => {
         await app.close();
+        await durable.close();
         await pool.end();
       },
     }).catch((err) => {
