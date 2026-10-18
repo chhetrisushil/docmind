@@ -154,3 +154,16 @@ export async function getDocument(
   );
   return rows[0];
 }
+
+/** Removes the row (RLS and the owner filter scope it). Returns what the blob store needs, or undefined. */
+export async function deleteDocument(
+  tx: PoolClient,
+  ownerId: string,
+  id: string,
+): Promise<{ contentAddress: string } | undefined> {
+  const { rows } = await tx.query<{ content_address: string }>(
+    "DELETE FROM documents WHERE id = $1 AND owner_id = $2 RETURNING content_address",
+    [id, ownerId],
+  );
+  return rows[0] ? { contentAddress: rows[0].content_address } : undefined;
+}
