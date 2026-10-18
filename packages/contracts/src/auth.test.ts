@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ErrorBody, LoginRequest, MeResponse, SignUpRequest } from "./index";
+import { ErrorBody, LoginRequest, MeResponse, SignUpRequest, SignUpResponse } from "./index";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 
@@ -32,5 +32,10 @@ describe("auth contracts", () => {
       true,
     );
     expect(ErrorBody.safeParse({ error: "no" }).success).toBe(false);
+  });
+
+  it("answers sign-up with the one accepted body", () => {
+    expect(SignUpResponse.parse({ status: "accepted" })).toEqual({ status: "accepted" });
+    expect(SignUpResponse.safeParse({ status: "exists" }).success).toBe(false);
   });
 });
