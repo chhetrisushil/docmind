@@ -34,6 +34,9 @@ importers:
       '@docmind/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@docmind/blob-store':
+        specifier: workspace:*
+        version: link:../../packages/blob-store
       '@docmind/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
