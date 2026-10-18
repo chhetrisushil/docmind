@@ -12,7 +12,7 @@ export class PgAuthStore implements AuthStore {
 
   async findLogin(email: string): Promise<LoginRecord | null> {
     const { rows } = await this.pool.query(
-      "SELECT user_id, tenant_id, password_hash FROM auth_find_login($1)",
+      "SELECT user_id, tenant_id, password_hash FROM public.auth_find_login($1)",
       [email],
     );
     const row = rows[0];
@@ -22,7 +22,7 @@ export class PgAuthStore implements AuthStore {
   }
 
   async createAccount(a: NewAccount): Promise<boolean> {
-    const { rows } = await this.pool.query("SELECT auth_sign_up($1, $2, $3, $4) AS ok", [
+    const { rows } = await this.pool.query("SELECT public.auth_sign_up($1, $2, $3, $4) AS ok", [
       a.tenantId,
       a.userId,
       a.email,
@@ -41,9 +41,10 @@ export class PgAuthStore implements AuthStore {
   }
 
   async findSession(tokenHash: string): Promise<Identity | null> {
-    const { rows } = await this.pool.query("SELECT user_id, tenant_id FROM auth_find_session($1)", [
-      tokenHash,
-    ]);
+    const { rows } = await this.pool.query(
+      "SELECT user_id, tenant_id FROM public.auth_find_session($1)",
+      [tokenHash],
+    );
     return rows[0] ? { userId: rows[0].user_id, tenantId: rows[0].tenant_id } : null;
   }
 
@@ -65,7 +66,7 @@ export class PgAuthStore implements AuthStore {
 
   /** Deletes every tenant's expired sessions; returns how many. */
   async purgeExpiredSessions(): Promise<number> {
-    const { rows } = await this.pool.query("SELECT auth_purge_expired_sessions() AS n");
+    const { rows } = await this.pool.query("SELECT public.auth_purge_expired_sessions() AS n");
     return Number(rows[0].n);
   }
 }

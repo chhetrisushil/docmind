@@ -44,14 +44,14 @@ describe.skipIf(!PG_URL)("PgAuthStore (needs DOCMIND_TEST_PG_URL)", () => {
         if (!withAccount.has(identity.userId)) {
           withAccount.add(identity.userId);
           const email = `${identity.userId}@x.test`;
-          await store.createAccount({ ...identity, email, passwordHash: "x" });
+          expect(await store.createAccount({ ...identity, email, passwordHash: "x" })).toBe(true);
         }
         const { token, tokenHash } = newSessionToken();
         owners.set(token, identity);
         await store.createSession({
           ...identity,
           tokenHash,
-          expiresAt: new Date(Date.now() + 60_000),
+          expiresAt: new Date(Date.now() + 60 * 60_000),
         });
         return cookieFor(token);
       },
@@ -90,9 +90,10 @@ describe.skipIf(!PG_URL)("PgAuthStore (needs DOCMIND_TEST_PG_URL)", () => {
   });
 
   it("cannot end another tenant's session", async () => {
-    const { service, started: a } = await signedUp();
+    const { started: a } = await signedUp();
     const { started: b } = await signedUp();
-    await service.logOut(b.identity, a.token);
+    const other = { tenantId: b.identity.tenantId, userId: a.identity.userId }; // only RLS stops it
+    await store.deleteSession(other, hashToken(a.token));
     const auth = new PasswordAuthenticator(store);
     const headers = { cookie: `${SESSION_COOKIE}=${a.token}` };
     expect(await auth.authenticate({ headers })).toEqual(a.identity);
@@ -101,7 +102,7 @@ describe.skipIf(!PG_URL)("PgAuthStore (needs DOCMIND_TEST_PG_URL)", () => {
   it("purges expired sessions and only those", async () => {
     const { started: user } = await signedUp();
     await db.owner.query(
-      "INSERT INTO auth_sessions VALUES ('stale', $1, $2, now() - interval '1 minute')",
+      "INSERT INTO auth_sessions (token_hash, tenant_id, user_id, expires_at) VALUES ('stale', $1, $2, now() - interval '1 minute')",
       [user.identity.tenantId, user.identity.userId],
     );
     expect(await store.purgeExpiredSessions()).toBe(1);

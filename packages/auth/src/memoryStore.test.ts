@@ -31,7 +31,7 @@ describe("MemoryAuthStore", () => {
   it("ends a session only for the user and tenant that own it", async () => {
     const store = new MemoryAuthStore();
     await store.createSession(session);
-    await store.deleteSession({ tenantId: "t2", userId: "u9" }, "h1");
+    await store.deleteSession({ tenantId: "t2", userId: alice.userId }, "h1");
     expect(await store.findSession("h1")).toEqual(alice);
     await store.deleteSession({ tenantId: alice.tenantId, userId: "u9" }, "h1");
     expect(await store.findSession("h1")).toEqual(alice);
