@@ -23,5 +23,13 @@ describe("clientIp", () => {
   it("writes an IPv4-mapped address as IPv4, and survives a missing address", () => {
     expect(clientIp(req("::ffff:203.0.113.9"), false)).toBe("203.0.113.9");
     expect(clientIp(req(undefined), false)).toBe("unknown");
+    expect(clientIp(req("::ffff:1234"), false)).toBe("::ffff:1234");
+  });
+
+  it("uses a trusted forwarded entry only if it is a bare IP, else the socket", () => {
+    expect(clientIp(req("10.0.0.2", "1.2.3.4,"), true)).toBe("10.0.0.2");
+    expect(clientIp(req("10.0.0.2", "  198.51.100.7  "), true)).toBe("198.51.100.7");
+    expect(clientIp(req("10.0.0.2", "not-an-ip"), true)).toBe("10.0.0.2");
+    expect(clientIp(req("10.0.0.2", "1.2.3.4:5678"), true)).toBe("1.2.3.4");
   });
 });
