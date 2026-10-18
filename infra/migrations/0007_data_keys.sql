@@ -42,8 +42,9 @@ BEGIN
 END
 $$;
 
--- Wipes the key material and records the destruction. Safe to repeat, and for a subject that never
--- had a key (it is then barred from getting one).
+-- Overwrites the live row and tombstones the subject (also one never seen, which is then barred from
+-- a key). Dead rows (until VACUUM), WAL and backups still hold the wrapped key: real shredding needs
+-- KEK rotation, then retiring the old KEK after the backup/WAL retention window.
 CREATE FUNCTION public.key_destroy(p_subject text)
   RETURNS void
   LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
