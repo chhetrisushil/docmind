@@ -87,6 +87,18 @@ describe.skipIf(!PG_URL)("createAppPool (needs DOCMIND_TEST_PG_URL)", () => {
       );
     });
 
+    it("refuses a role that can create roles", async () => {
+      const admin = await mk("cr", "LOGIN CREATEROLE");
+      await expect(createAppPool(urlFor(admin))).rejects.toThrow(/can create roles/);
+    });
+
+    it("refuses a member of any other role, even a harmless one", async () => {
+      const plain = await mk("pl", "NOLOGIN");
+      const member = await mk("pm");
+      await db.owner.query(`GRANT ${plain} TO ${member}`);
+      await expect(createAppPool(urlFor(member))).rejects.toThrow(/member of another role/);
+    });
+
     it("refuses a session whose current_user differs from its session_user", async () => {
       const inner = await mk("in", "NOLOGIN");
       const login = await mk("lg");

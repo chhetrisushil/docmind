@@ -71,6 +71,15 @@ describe("loadKek", () => {
     expect(both[1]?.key.export().toString("base64")).toBe(other);
   });
 
+  it("loadKeks fails fast on a previous KEK id with no previous key, naming variables only", () => {
+    expect(() => loadKeks({ DOCMIND_KEK: b64, DOCMIND_KEK_PREVIOUS_ID: "kek-1" })).toThrow(
+      /DOCMIND_KEK_PREVIOUS_ID is set but neither DOCMIND_KEK_PREVIOUS nor DOCMIND_KEK_PREVIOUS_FILE/,
+    );
+    expect(loadKeks({ DOCMIND_KEK: b64, DOCMIND_KEK_PREVIOUS_ID: "" }).map((k) => k.id)).toEqual([
+      "kek-1",
+    ]);
+  });
+
   it("loadKeks refuses a previous KEK without an id, or with the current one's id", () => {
     const other = randomBytes(32).toString("base64");
     expect(() => loadKeks({ DOCMIND_KEK: b64, DOCMIND_KEK_PREVIOUS: other })).toThrow(/_ID/);

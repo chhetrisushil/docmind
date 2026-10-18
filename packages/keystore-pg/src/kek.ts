@@ -49,7 +49,14 @@ export function loadKek(
  */
 export function loadKeks(env: NodeJS.ProcessEnv = process.env): readonly [Kek, ...Kek[]] {
   const current = loadKek(env);
-  if (!env.DOCMIND_KEK_PREVIOUS && !env.DOCMIND_KEK_PREVIOUS_FILE) return [current];
+  if (!env.DOCMIND_KEK_PREVIOUS && !env.DOCMIND_KEK_PREVIOUS_FILE) {
+    if (env.DOCMIND_KEK_PREVIOUS_ID) {
+      throw new Error(
+        "DOCMIND_KEK_PREVIOUS_ID is set but neither DOCMIND_KEK_PREVIOUS nor DOCMIND_KEK_PREVIOUS_FILE is; set the key or remove the id",
+      );
+    }
+    return [current];
+  }
   const previous = loadKek(env, "DOCMIND_KEK_PREVIOUS");
   if (previous.id === current.id) throw new Error("the previous KEK must have a different id");
   return [current, previous];

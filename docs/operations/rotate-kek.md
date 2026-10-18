@@ -19,9 +19,11 @@ Rotate on a schedule, when someone with access to the KEK leaves, and at once if
 2. **Run servers with both.** Set on every instance and restart:
    `DOCMIND_KEK=<new>`, `DOCMIND_KEK_ID=kek-2`, `DOCMIND_KEK_PREVIOUS=<old>`, `DOCMIND_KEK_PREVIOUS_ID=kek-1`.
    New users' keys are now wrapped by the new KEK, and old keys still open with the previous one.
+   Restart **all** instances together on the new set, or first load both KEKs on every instance before
+   any re-wrap: during a rolling restart an instance still on the old set cannot open keys the new
+   instances wrapped.
    Double-check that **both** `DOCMIND_KEK_PREVIOUS` and `DOCMIND_KEK_PREVIOUS_ID` are set: a stray
-   `DOCMIND_KEK_PREVIOUS_ID` without `DOCMIND_KEK_PREVIOUS` is silently ignored, and the old keys would then
-   not open.
+   `DOCMIND_KEK_PREVIOUS_ID` without `DOCMIND_KEK_PREVIOUS` makes the server refuse to start.
 3. **Re-wrap.** From a machine that can reach the database, with the same four variables set:
    ```bash
    DOCMIND_MIGRATE_URL=postgres://<owner>@<host>/docmind pnpm --filter @docmind/server keys:rotate

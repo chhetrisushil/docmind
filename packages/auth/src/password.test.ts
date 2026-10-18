@@ -21,8 +21,24 @@ describe("password hashing", () => {
     );
   });
 
-  it("treats a malformed stored hash as a mismatch", async () => {
-    expect(await verifyPassword("not-a-hash", "anything")).toBe(false);
+  it("treats a malformed stored hash as a mismatch, and logs only a label and the error name", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await verifyPassword("not-a-hash", "anything-secret")).toBe(false);
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = JSON.stringify(log.mock.calls[0]);
+    expect(line).toContain("argon2 verify failed:");
+    expect(line).not.toContain("anything-secret");
+    expect(line).not.toContain("not-a-hash");
+  });
+
+  it("returns false and logs when the argon2 binding itself is broken", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(argon2, "verify").mockRejectedValue(
+      Object.assign(new Error("secret detail"), { code: "ERR_DLOPEN_FAILED" }),
+    );
+    expect(await verifyPassword("$argon2id$whatever", "pw")).toBe(false);
+    expect(JSON.stringify(log.mock.calls[0])).toContain("ERR_DLOPEN_FAILED");
+    expect(JSON.stringify(log.mock.calls[0])).not.toContain("secret detail");
   });
 
   it("takes a decoy check without throwing, even for the decoy's own password", async () => {

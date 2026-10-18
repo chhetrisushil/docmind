@@ -1,6 +1,7 @@
 -- Failure counters behind login and sign-up throttling (packages/auth/src/throttle.ts). A key is
--- "<scope>-ip:<address>" or "<scope>-acct:<sha256 of the email>", so no address of a person is stored
--- and an email that does not exist is counted like one that does. The counters are in Postgres so
+-- "<scope>-ip:<address>" (the raw IPv4 address, or the /64 for IPv6) or "<scope>-acct:<sha256 of the
+-- email>", so the email is never stored but client IP addresses are, and an email that does not exist
+-- is counted like one that does. The counters are in Postgres so
 -- they survive restarts and are shared by every server instance.
 CREATE TABLE public.auth_throttle (
   key text PRIMARY KEY,

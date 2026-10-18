@@ -84,7 +84,7 @@ describe.skipIf(!PG_URL)("KEK rotation (needs DOCMIND_TEST_PG_URL)", () => {
         (client as { query: unknown }).query = (...args: unknown[]) => {
           if (
             typeof args[0] === "string" &&
-            args[0].startsWith("UPDATE data_keys") &&
+            args[0].startsWith("UPDATE public.data_keys") &&
             ++updates === 4
           ) {
             throw new Error("crash");
