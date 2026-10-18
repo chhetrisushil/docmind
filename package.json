@@ -27,6 +27,7 @@
       "@loom/cli": "link:../loom/tools/cli",
       "@loom/conformance": "link:../loom/packages/conformance",
       "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
+      "@loom/plugin-content": "link:../loom/plugins/content",
       "@loom/plugin-crypto": "link:../loom/plugins/crypto",
       "@loom/plugin-postgres": "link:../loom/plugins/postgres",
       "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"

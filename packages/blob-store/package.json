@@ -1,0 +1,23 @@
+{
+  "name": "@docmind/blob-store",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Encrypted filesystem ContentStore: per-user envelope encryption of document bytes.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@loom/plugin-content": "*",
+    "@loom/plugin-crypto": "*"
+  },
+  "devDependencies": {
+    "@loom/conformance": "*",
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}
