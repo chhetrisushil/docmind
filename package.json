@@ -25,7 +25,9 @@
     "overrides": {
       "@loom/app": "link:../loom/packages/app",
       "@loom/cli": "link:../loom/tools/cli",
+      "@loom/conformance": "link:../loom/packages/conformance",
       "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
+      "@loom/plugin-crypto": "link:../loom/plugins/crypto",
       "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
     }
   }
