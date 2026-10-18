@@ -33,6 +33,7 @@ export async function rotateKek(
 
   for (;;) {
     const client = await pool.connect();
+    let failure: Error | undefined;
     try {
       await client.query("BEGIN");
       const { rows } = await client.query<{
@@ -55,19 +56,22 @@ export async function rotateKek(
           failed.add(row.subject_id); // will not open under the KEK it names: report it, change nothing
           continue;
         }
-        await client.query(
-          "UPDATE data_keys SET wrapped_dek = $2, kek_id = $3 WHERE subject_id = $1",
-          [row.subject_id, rewrapped, target.id],
+        // Re-checks the SELECT's conditions (defence in depth beside FOR UPDATE and the CHECK constraint).
+        const updated = await client.query(
+          `UPDATE data_keys SET wrapped_dek = $2, kek_id = $3
+            WHERE subject_id = $1 AND kek_id = $4 AND wrapped_dek IS NOT NULL`,
+          [row.subject_id, rewrapped, target.id, row.kek_id],
         );
-        rotated++;
+        if (updated.rowCount === 1) rotated++;
       }
       await client.query("COMMIT");
       if (rows.length === 0) break;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => undefined);
+      failure = err instanceof Error ? err : new Error(String(err));
       throw err;
     } finally {
-      client.release();
+      client.release(failure); // an error makes the pool discard a connection that may be broken
     }
   }
 
