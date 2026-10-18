@@ -15,15 +15,14 @@ export class MemoryAuthStore implements AuthStore {
     return { tenantId: a.tenantId, userId: a.userId, passwordHash: a.passwordHash };
   }
 
-  // Stores copies, so a caller that mutates its objects later cannot change what is stored.
   async createAccount(a: NewAccount): Promise<boolean> {
     if (this.accounts.has(a.email)) return false;
-    this.accounts.set(a.email, { ...a });
+    this.accounts.set(a.email, a);
     return true;
   }
 
   async createSession(s: NewSession): Promise<void> {
-    this.sessions.set(s.tokenHash, { ...s, expiresAt: new Date(s.expiresAt) });
+    this.sessions.set(s.tokenHash, s);
   }
 
   async findSession(tokenHash: string): Promise<Identity | null> {

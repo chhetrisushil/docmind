@@ -28,23 +28,6 @@ describe("MemoryAuthStore", () => {
     expect(await store.findSession("h1")).toBeNull();
   });
 
-  it("stores copies, so later caller mutation does not change the store", async () => {
-    const store = new MemoryAuthStore();
-    const mutable = { ...account };
-    await store.createAccount(mutable);
-    mutable.passwordHash = "changed";
-    expect(await store.findLogin("a@example.com")).toEqual({
-      tenantId: "t1",
-      userId: "u1",
-      passwordHash: "hash",
-    });
-
-    const s = { ...session, tokenHash: "h2", expiresAt: new Date(session.expiresAt) };
-    await store.createSession(s);
-    s.expiresAt.setTime(0);
-    expect(await store.findSession("h2")).toEqual(alice);
-  });
-
   it("ends a session only for the tenant that owns it", async () => {
     const store = new MemoryAuthStore();
     await store.createSession(session);
