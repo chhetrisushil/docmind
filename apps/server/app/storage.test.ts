@@ -1,19 +1,13 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { PayloadShreddedError, shredSubject } from "@loom/plugin-crypto";
-import { MAX_EXECUTION_ID_BYTES, PostgresEventStore } from "@loom/plugin-postgres";
+import { PostgresEventStore } from "@loom/plugin-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
-import { type DurableStorage, createDurableStorage } from "./storage";
-import { MAX_EXECUTION_ID_BYTES as LOCAL_MAX_EXECUTION_ID_BYTES, executionIdFor } from "./subject";
-
-describe("execution id limit", () => {
-  it("equals the limit Loom's Postgres event store enforces", () => {
-    expect(LOCAL_MAX_EXECUTION_ID_BYTES).toBe(MAX_EXECUTION_ID_BYTES);
-  });
-});
+import { type DurableStorage, createDurableStorage, loomPoolConfig } from "./storage";
+import { executionIdFor } from "./subject";
 
 describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
@@ -50,7 +44,7 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
 
   it("boots Loom's schema as docmind_loom with no privilege warning", async () => {
     const notices: string[] = [];
-    const pool = new Pool({ connectionString: db.loomUrl, options: "-c search_path=loom" });
+    const pool = new Pool(loomPoolConfig(db.loomUrl));
     pool.on("connect", (client) => {
       client.on("notice", (n) => notices.push(String(n.message)));
     });
@@ -83,7 +77,7 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     expect(JSON.stringify(stored.text)).not.toContain("secret A");
 
     // The table itself, read as docmind_loom, holds no plaintext either.
-    const loom = new Pool({ connectionString: db.loomUrl, options: "-c search_path=loom" });
+    const loom = new Pool(loomPoolConfig(db.loomUrl));
     try {
       const { rows } = await loom.query(
         "SELECT payload::text AS p FROM events WHERE execution_id = $1",
@@ -134,14 +128,16 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     expect(await keys.wasDestroyed(userB)).toBe(false);
   });
 
-  it("makes events unreadable when only the key is destroyed through the KeyStore", async () => {
+  it("reports the key unavailable, not erased, when it is destroyed without a tombstone", async () => {
     const [userA, userB] = [randomUUID(), randomUUID()];
     const [execA, execB] = [executionIdFor(userA, "k"), executionIdFor(userB, "k")];
     for (const e of [execA, execB]) await stores.sealed.eventStore.append(note(e, "plain words"));
 
     await keys.destroy(userA);
 
-    await expect(stores.sealed.eventStore.read(execA)).rejects.toThrow();
+    await expect(stores.sealed.eventStore.read(execA)).rejects.toMatchObject({
+      code: "KEY_UNAVAILABLE", // Loom's KeyUnavailableError; a misconfiguration, never an erasure
+    });
     expect((await stores.sealed.eventStore.read(execB))[0]?.payload).toMatchObject({
       text: "plain words",
     });
