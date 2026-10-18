@@ -2,6 +2,7 @@ import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loom/plugin-crypto";
 import { postgresStorage } from "@loom/plugin-postgres";
 import { Pool } from "pg";
+import { SENSITIVE_EVENT_PATHS } from "./sensitive";
 import { subjectOfExecution } from "./subject";
 
 type CustomStorage = Extract<StorageConfig, { kind: "custom" }>;
@@ -14,6 +15,8 @@ export function loomPoolConfig(loomUrl: string): { connectionString: string; opt
 export interface DurableStorageOptions {
   loomUrl: string;
   keys: KeyStore;
+  /** Event paths to seal, per event type. Defaults to `SENSITIVE_EVENT_PATHS`. */
+  sensitive?: Readonly<Record<string, readonly string[]>>;
 }
 
 interface StorePair {
@@ -45,14 +48,18 @@ export interface DurableStorage {
  * Both wrappers share one KeyStore and `subjectOfExecution` (the crypto subject only, not
  * `compliance.subjectOf`), so one destroyed key erases a user's events and snapshots together.
  */
-export function createDurableStorage({ loomUrl, keys }: DurableStorageOptions): DurableStorage {
+export function createDurableStorage({
+  loomUrl,
+  keys,
+  sensitive = SENSITIVE_EVENT_PATHS,
+}: DurableStorageOptions): DurableStorage {
   // Built here, not by the preset, so a dropped idle connection is logged instead of crashing the
   // process. The stores borrow it; `close()` ends it.
   const pool = new Pool(loomPoolConfig(loomUrl));
   pool.on("error", (err) => console.error("idle Loom database connection failed:", err.message));
   const pg = postgresStorage({ url: pool as never }); // pg typings differ between the linked Loom and this repo
   const events = new EncryptingEventStore(pg.eventStore, keys, {
-    sensitive: {},
+    sensitive: { ...sensitive },
     subjectOf: subjectOfExecution,
   });
   const snapshots = new EncryptingSnapshotStore(pg.snapshotStore, keys, {

@@ -103,6 +103,70 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     expect(rows).toEqual([{ subject_id: userA }]);
   });
 
+  it("seals and reads an execution no user owns, under its own x: key", async () => {
+    const exec = `system-sweep-${randomUUID()}`;
+    await stores.sealed.eventStore.append(note(exec, "system secret"));
+
+    expect((await stores.sealed.eventStore.read(exec))[0]?.payload).toMatchObject({
+      text: "system secret",
+    });
+    const stored = (await stores.raw.eventStore.read(exec))[0]?.payload as { text: object };
+    expect(JSON.stringify(stored.text)).not.toContain("system secret");
+    const { rows } = await db.owner.query(
+      "SELECT subject_id FROM data_keys WHERE subject_id = $1",
+      [`x:${exec}`],
+    );
+    expect(rows).toEqual([{ subject_id: `x:${exec}` }]);
+  });
+
+  it("keeps a Loom child execution of a user's execution under that user's key", async () => {
+    const user = randomUUID();
+    const parent = executionIdFor(user, "ingest-1");
+    const child = `${parent}::step#0`;
+    await stores.sealed.eventStore.append(note(child, "child secret"));
+
+    expect((await stores.sealed.eventStore.read(child))[0]?.payload).toMatchObject({
+      text: "child secret",
+    });
+    const { rows } = await db.owner.query(
+      "SELECT subject_id FROM data_keys WHERE subject_id = ANY($1)",
+      [[user, `x:${child}`]],
+    );
+    expect(rows).toEqual([{ subject_id: user }]);
+
+    await shredSubject(keys, stores.raw.eventStore, child, {
+      subjectId: user,
+      executionIds: [child],
+      snapshotStore: stores.raw.snapshotStore,
+    });
+    await expect(stores.sealed.eventStore.read(child)).rejects.toBeInstanceOf(PayloadShreddedError);
+  });
+
+  it("seals the paths it is given at construction, not only those registered afterwards", async () => {
+    const custom = createDurableStorage({
+      loomUrl: db.loomUrl,
+      keys,
+      sensitive: { DOC_NAMED: ["filename"] },
+    });
+    try {
+      const exec = executionIdFor(randomUUID(), "named");
+      await custom.sealed.eventStore.append({
+        ...note(exec, "unused"),
+        eventType: "DOC_NAMED",
+        payload: { filename: "tax-return.pdf", documentId: "d1" },
+      });
+      const raw = (await custom.raw.eventStore.read(exec))[0]?.payload as {
+        filename: object;
+        documentId: string;
+      };
+      expect(JSON.stringify(raw.filename)).not.toContain("tax-return");
+      expect(raw.documentId).toBe("d1");
+    } finally {
+      await custom.storage.eventStore.close?.();
+      await custom.close();
+    }
+  });
+
   it("makes one user's events unreadable after their key is destroyed, and no one else's", async () => {
     const [userA, userB] = [randomUUID(), randomUUID()];
     const [execA1, execA2, execB] = [
