@@ -1,8 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Authenticator, Identity } from "@docmind/auth";
-import type { Pool } from "pg";
-import type { FieldCrypto } from "../crypto/fields";
+import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { Pool } from "pg";
+import { FieldCrypto } from "../crypto/fields";
+import { migrate, setAppRolePassword } from "../db/migrate";
+import { APP_PASSWORD, createTestDb } from "../db/testSupport";
+import { createHttpServer } from "../server";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { type NewDocument, filenameBind, titleBind } from "./repo";
+import { type DocumentRoutesDeps, documentRoutes } from "./routes";
 
 export const T1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const T2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -60,5 +71,90 @@ export async function newDocument(
     contentAddress: `hmac-sha256:${fingerprint}`,
     fingerprint,
     ...over,
+  };
+}
+
+export interface DocumentHarness {
+  base: string;
+  owner: Pool;
+  app: Pool;
+  root: string;
+  keys: InMemoryKeyStore;
+  upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
+  /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
+  fingerprint(user: string, data: Uint8Array | string): Promise<string>;
+  close(): Promise<void>;
+}
+
+/** A migrated database with two tenants, a blob directory and the document routes on 127.0.0.1. */
+export async function startDocumentServer(
+  overrides: {
+    limits?: Partial<DocumentLimits>;
+    /** Test seam: wraps the route dependencies, e.g. to inject a failure. */
+    deps?: (deps: DocumentRoutesDeps) => DocumentRoutesDeps;
+  } = {},
+): Promise<DocumentHarness> {
+  const db = await createTestDb();
+  await migrate(db.owner);
+  await setAppRolePassword(db.owner, APP_PASSWORD);
+  await seedUsers(db.owner);
+  const app = new Pool({ connectionString: db.appUrl });
+  const root = mkdtempSync(join(tmpdir(), "dm-docs-"));
+  const keys = new InMemoryKeyStore();
+  const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
+  const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
+  const server = createHttpServer(
+    documentRoutes(
+      wrap({
+        pool: app,
+        authenticator: testAuthenticator,
+        fields: new FieldCrypto(keys),
+        blobs: (id) =>
+          new EncryptedFsContentStore({
+            root,
+            tenantId: id.tenantId,
+            userId: id.userId,
+            keys,
+            maxBytes: limits.maxFileBytes,
+          }),
+        limits,
+      }),
+    ),
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  return {
+    base,
+    owner: db.owner,
+    app,
+    root,
+    keys,
+    upload(user, name, data) {
+      const form = new FormData();
+      form.append("file", new Blob([data]), name);
+      return fetch(`${base}/api/documents`, {
+        method: "POST",
+        headers: { "x-test-user": user },
+        body: form,
+      });
+    },
+    async fingerprint(user, data) {
+      const identity = BY_HEADER[user];
+      if (!identity) throw new Error("unknown harness user");
+      const dek = await keys.getOrCreate(identity.userId);
+      return fingerprintOf(
+        deriveFingerprintKey(dek),
+        typeof data === "string" ? Buffer.from(data) : data,
+      );
+    },
+    async close() {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+      await app.end();
+      await db.drop();
+      rmSync(root, { recursive: true, force: true });
+    },
   };
 }
