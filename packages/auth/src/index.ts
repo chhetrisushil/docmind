@@ -1,3 +1,4 @@
+export { AuthService, type StartedSession } from "./authService";
 export type { AuthRequest, Authenticator, Identity } from "./authenticator";
 export { SESSION_COOKIE, clearedSessionCookie, readSessionCookie, sessionCookie } from "./cookie";
 export { hashPassword, primeDecoy, verifyAgainstDecoy, verifyPassword } from "./password";
