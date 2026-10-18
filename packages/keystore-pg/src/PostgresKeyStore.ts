@@ -15,16 +15,18 @@ interface KeyRow {
  * the database never mints a key for a tombstoned subject.
  */
 export class PostgresKeyStore implements KeyStore {
-  /** The keys survive a restart: they live in the database. */
   readonly durable = true;
-  private readonly byId: Map<string, Kek>;
-
-  /** `keks[0]` wraps new keys; the others only unwrap keys written under them (rotation). */
+  private readonly byId = new Map<string, Kek>();
+  /** `keks[0]` wraps new keys; the others only unwrap (rotation). */
   constructor(
     private readonly pool: Pool,
     private readonly keks: readonly [Kek, ...Kek[]],
   ) {
-    this.byId = new Map(keks.map((k) => [k.id, k]));
+    if (keks.length === 0) throw new Error("at least one KEK is required");
+    for (const k of keks) {
+      if (this.byId.has(k.id)) throw new Error(`duplicate KEK id "${k.id}"`);
+      this.byId.set(k.id, k);
+    }
   }
 
   async getOrCreate(subjectId: string): Promise<Buffer> {
@@ -46,6 +48,7 @@ export class PostgresKeyStore implements KeyStore {
     return row ? this.open(subjectId, row) : null;
   }
 
+  /** Tombstones the subject; older copies (dead rows, WAL, backups) stay until the old KEK is retired. */
   async destroy(subjectId: string): Promise<void> {
     await this.pool.query("SELECT public.key_destroy($1)", [subjectId]);
   }
