@@ -34,7 +34,13 @@ const malformed = () => failure(400, "invalid_request", "malformed multipart req
 /**
  * Reads a `multipart/form-data` request whose first file part is named `file`. The file is handed
  * to `handle` while it streams in; nothing is buffered here. Parser limits (parts, header pairs,
- * name and field sizes) keep a hostile body from costing memory.
+ * name and field sizes) keep a hostile body from costing memory. Any part stream the handler did
+ * not consume is drained once the handler settles, so an early rejection never stalls the request.
+ *
+ * Without a Content-Length the total is still capped: past `maxFileBytes` plus envelope slack the
+ * result is 413 and the parser is torn down mid-body. The client may still be sending, so the
+ * caller MUST answer every non-2xx outcome with `connection: close`. A client that aborts mid-body
+ * settles the result as 400 and fails the handler's `body` iterator.
  */
 export function receiveFile<T>(
   req: IncomingMessage,
@@ -73,14 +79,26 @@ export function receiveFile<T>(
 
     let outcome: ReceiveResult<T> | undefined;
     let work: Promise<void> | undefined;
+    let handlerError: { error: unknown } | undefined;
     let sawFile = false;
+    let brokenBody = false;
     const settle = (result: ReceiveResult<T>) => {
       outcome ??= result;
     };
-
-    const broken = () => settle(malformed());
+    // Settle with `result`, stop reading the request and tear the parser down so every pending
+    // await (the handler's body iterator, the parser's `close`) finishes.
+    const abort = (result: ReceiveResult<T>) => {
+      settle(result);
+      req.unpipe(parser);
+      parser.destroy(new Error("multipart request aborted"));
+    };
+    const broken = () => {
+      brokenBody = true;
+      abort(malformed());
+    };
 
     parser.on("file", (name, stream, info) => {
+      stream.on("error", () => {}); // a destroyed part stream must not become an uncaught error
       if (sawFile) return void stream.resume(); // only the first file part counts
       sawFile = true;
       if (name !== "file") {
@@ -100,27 +118,44 @@ export function receiveFile<T>(
         }
         if (limited) throw new UploadTooLargeError();
       }
-      work = handle({ filename: info.filename ?? "", body: body() }).then(
-        (value) => settle({ ok: true, value }),
-        (err: unknown) => {
-          if (err instanceof UploadTooLargeError) {
-            return settle(failure(413, "payload_too_large", "file is too large"));
-          }
-          throw err;
-        },
-      );
-      // The rejection is surfaced when the parser closes; avoid an unhandled-rejection warning.
-      work.catch(() => {});
+      work = Promise.resolve()
+        .then(() => handle({ filename: info.filename ?? "", body: body() }))
+        .then(
+          (value) => settle({ ok: true, value }),
+          (err: unknown) => {
+            if (err instanceof UploadTooLargeError) {
+              return settle(failure(413, "payload_too_large", "file is too large"));
+            }
+            handlerError = { error: err };
+          },
+        );
+      // Whatever the handler left unread must still be consumed or the parser stalls.
+      work = work.finally(() => void stream.resume());
     });
     // Text fields are not used; busboy discards them (bounded by the limits above).
     parser.on("error", broken);
     parser.on("close", () => {
       (work ?? Promise.resolve()).then(() => {
+        // A handler that failed because the body was cut off is the client's fault, not ours.
+        if (handlerError && !brokenBody && !outcome) return reject(handlerError.error);
         if (!sawFile) settle(failure(400, "invalid_request", "no file was sent"));
         resolve(outcome as ReceiveResult<T>);
-      }, reject);
+      });
+    });
+    let received = 0;
+    req.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > options.maxFileBytes + ENVELOPE_SLACK) {
+        abort(failure(413, "payload_too_large", "request body is too large"));
+        // Discard what is still in flight so closing the socket after the response does not reset
+        // the connection before the client has read the 413.
+        req.resume();
+      }
     });
     req.on("error", broken);
+    req.on("close", () => {
+      if (!req.complete) broken();
+    });
     req.pipe(parser);
   });
 }

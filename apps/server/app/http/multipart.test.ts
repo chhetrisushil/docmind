@@ -1,14 +1,17 @@
-import { type Server, createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { UploadTooLargeError, receiveFile } from "./multipart";
+import { type Server, createServer, request } from "node:http";
+import { type AddressInfo, connect } from "node:net";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type ReceiveResult, UploadTooLargeError, receiveFile } from "./multipart";
 
 const MAX = 100;
+const BIG = 8 * 1024 * 1024;
 let seen: { filename: string; bytes: string }[] = [];
 
 const start = async (max: number) => {
   const server = createServer((req, res) => {
     receiveFile(req, { maxFileBytes: max }, async (file) => {
+      if (file.filename === "ignored.bin") return { filename: file.filename, bytes: "" };
+      if (file.filename === "rejected.bin") throw new UploadTooLargeError();
       const chunks: Buffer[] = [];
       for await (const c of file.body) chunks.push(Buffer.from(c));
       const got = { filename: file.filename, bytes: Buffer.concat(chunks).toString() };
@@ -39,11 +42,14 @@ const stop = (server: Server) =>
   });
 
 let small: { server: Server; base: string };
+let big: { server: Server; base: string };
 beforeAll(async () => {
   small = await start(MAX);
+  big = await start(BIG);
 });
 afterAll(async () => {
   await stop(small.server);
+  await stop(big.server);
 });
 
 const post = (form: FormData, base = small.base) =>
@@ -114,11 +120,107 @@ describe("receiveFile", () => {
     expect(res.status).toBe(400);
   });
 
+  it("answers 400, not 500, for a truncated multipart body", async () => {
+    const res = await fetch(`${small.base}/`, {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=zzz" },
+      body: '--zzz\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\n\r\ntruncated',
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects the request when the handler fails for any other reason", async () => {
     expect((await post(file("boom.txt", "x"))).status).toBe(500);
   });
 
   it("maps UploadTooLargeError thrown by the handler to 413", async () => {
     expect((await post(file("toolarge.txt", "x"))).status).toBe(413);
+  });
+
+  it("drains a >1 MiB file the handler never read, so an early answer does not stall", async () => {
+    const body = "x".repeat(2 * 1024 * 1024);
+    const ignored = await post(file("ignored.bin", body), big.base);
+    expect(ignored.status).toBe(200);
+    const rejected = await post(file("rejected.bin", body), big.base);
+    expect(rejected.status).toBe(413);
+  });
+
+  const head = (boundary: string) =>
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.bin"\r\n\r\n`;
+
+  it("settles with a 400-class result and fails the body when the client aborts mid-file", async () => {
+    let bodyError: unknown;
+    let result: Promise<ReceiveResult<string>> | undefined;
+    let started!: () => void;
+    const handlerStarted = new Promise<void>((r) => {
+      started = r;
+    });
+    const server = createServer((req) => {
+      result = receiveFile(req, { maxFileBytes: 1000 }, async (f) => {
+        started();
+        try {
+          for await (const _ of f.body) {
+            // consume until the abort surfaces
+          }
+        } catch (e) {
+          bodyError = e;
+          throw e;
+        }
+        return "done";
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const socket = connect((server.address() as AddressInfo).port, "127.0.0.1");
+    socket.write(
+      `POST / HTTP/1.1\r\nhost: x\r\ncontent-type: multipart/form-data; boundary=b\r\ncontent-length: 1000\r\n\r\n${head("b")}abc`,
+    );
+    await handlerStarted;
+    socket.destroy();
+    const settled = await result;
+    expect(settled).toMatchObject({ ok: false, status: 400 });
+    expect(bodyError).toBeInstanceOf(Error);
+    await stop(server);
+  });
+
+  it("maps a synchronous throw from the handler like a rejection", async () => {
+    let result: Promise<ReceiveResult<string>> | undefined;
+    const server = createServer((req) => {
+      result = receiveFile(req, { maxFileBytes: 100 }, () => {
+        throw new UploadTooLargeError();
+      });
+      result.then(
+        (r) => {
+          req.resume();
+          return r;
+        },
+        () => {},
+      );
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    const form = file("a.txt", "x");
+    fetch(`http://127.0.0.1:${port}/`, { method: "POST", body: form }).catch(() => {});
+    await vi.waitFor(() => expect(result).toBeDefined());
+    expect(await result).toMatchObject({ ok: false, status: 413 });
+    await stop(server);
+  });
+
+  it("answers 413 for a chunked body past the cap without waiting for the client to finish", async () => {
+    const res = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(
+        big.base.replace(/:\d+$/, `:${(small.server.address() as AddressInfo).port}`),
+        { method: "POST", headers: { "content-type": "multipart/form-data; boundary=b" } },
+        (r) => {
+          r.resume();
+          resolve(r.statusCode);
+          req.destroy();
+        },
+      );
+      req.on("error", (e) => {});
+      req.write(head("b"));
+      // Well past the cap, then stop: the body is never ended, so only the cap can end the request.
+      req.write(Buffer.alloc(256 * 1024, 120));
+    });
+    expect(res).toBe(413);
   });
 });
