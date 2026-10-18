@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import { AuthService, POLICIES, SESSION_TTL_MS } from "@docmind/auth";
+import { AuthService, POLICIES, PasswordAuthenticator, SESSION_TTL_MS } from "@docmind/auth";
 import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
 import { ErrorBody, MeResponse, SignUpResponse } from "@docmind/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,7 +19,16 @@ async function start(trustProxy = false, secureCookies = false) {
   const throttle = new MemoryThrottle();
   throttle.now = () => 1_000_000;
   const service = new AuthService(store);
-  const server = createHttpServer(authRoutes({ service, throttle, secureCookies, trustProxy }));
+  const server = createHttpServer(
+    authRoutes({
+      service,
+      authenticator: new PasswordAuthenticator(store),
+      store,
+      throttle,
+      secureCookies,
+      trustProxy,
+    }),
+  );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   closers.push(
     () =>
@@ -30,6 +39,7 @@ async function start(trustProxy = false, secureCookies = false) {
   );
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
+    base,
     store,
     service,
     throttle,
@@ -240,5 +250,42 @@ describe("login", () => {
     expect(spy.mock.calls.length).toBeLessThanOrEqual(POLICIES.loginAccount.free);
     expect(statuses.filter((s) => s === 401)).toHaveLength(spy.mock.calls.length);
     expect(statuses.filter((s) => s === 429)).toHaveLength(15 - spy.mock.calls.length);
+  });
+});
+
+/** `name=value` of the Set-Cookie header, as a browser would send it back. */
+const cookieOf = (res: Response) => (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+
+describe("session routes", () => {
+  const signedIn = async () => {
+    const api = await start();
+    await api.signUp("ada@example.com");
+    return { api, cookie: cookieOf(await api.logIn("ada@example.com")) };
+  };
+
+  it("answers /api/me for a live session, and 401 for none or a forged one", async () => {
+    const { api, cookie } = await signedIn();
+    const me = await fetch(`${api.base}/api/me`, { headers: { cookie } });
+    expect(MeResponse.parse(await me.json()).email).toBe("ada@example.com");
+    expect((await fetch(`${api.base}/api/me`)).status).toBe(401);
+    const forged = { cookie: `dm_session=${"A".repeat(43)}` };
+    expect((await fetch(`${api.base}/api/me`, { headers: forged })).status).toBe(401);
+  });
+
+  it("logs out: clears the cookie, ends only that session, and is safe to repeat", async () => {
+    const { api, cookie: one } = await signedIn();
+    const two = cookieOf(await api.logIn("ada@example.com"));
+    const logOut = (cookie: string) =>
+      fetch(`${api.base}/api/auth/logout`, {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: "{}",
+      });
+    const out = await logOut(one);
+    expect(out.status).toBe(204);
+    expect(out.headers.get("set-cookie")).toMatch(/^dm_session=; .*Max-Age=0/);
+    expect((await fetch(`${api.base}/api/me`, { headers: { cookie: one } })).status).toBe(401);
+    expect((await fetch(`${api.base}/api/me`, { headers: { cookie: two } })).status).toBe(200);
+    expect((await logOut(one)).status).toBe(204);
   });
 });
