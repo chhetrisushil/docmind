@@ -1,0 +1,100 @@
+import {
+  type DocumentDto,
+  DocumentStats,
+  type DocumentStatus,
+  DocumentSummary,
+} from "@docmind/contracts";
+import type { PoolClient } from "pg";
+import type { UserFieldCipher } from "../crypto/fields";
+
+export const titleBind = (id: string) => `document:${id}:title`;
+export const filenameBind = (id: string) => `document:${id}:filename`;
+export const statsBind = (id: string) => `document:${id}:stats`;
+export const summaryBind = (id: string) => `document:${id}:summary`;
+
+/** The SELECT/RETURNING list. `created_cursor` is the microsecond-exact keyset value. */
+export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, status, error, stats_enc,
+  summary_enc, created_at, updated_at,
+  to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor`;
+
+export interface DocumentRow {
+  id: string;
+  title_enc: unknown;
+  filename_enc: unknown;
+  mime: string;
+  size_bytes: string; // bigint arrives as text
+  status: DocumentStatus;
+  error: string | null;
+  stats_enc: unknown;
+  summary_enc: unknown;
+  created_at: Date;
+  updated_at: Date;
+  created_cursor: string;
+}
+
+export interface NewDocument {
+  id: string;
+  tenantId: string;
+  ownerId: string;
+  titleEnc: unknown;
+  filenameEnc: unknown;
+  mime: string;
+  sizeBytes: number;
+  contentAddress: string;
+  fingerprint: string;
+}
+
+export async function findByFingerprint(
+  tx: PoolClient,
+  ownerId: string,
+  fingerprint: string,
+): Promise<DocumentRow | undefined> {
+  const { rows } = await tx.query<DocumentRow>(
+    `SELECT ${DOCUMENT_COLUMNS} FROM documents WHERE owner_id = $1 AND fingerprint = $2`,
+    [ownerId, fingerprint],
+  );
+  return rows[0];
+}
+
+export async function insertDocument(tx: PoolClient, doc: NewDocument): Promise<DocumentRow> {
+  const { rows } = await tx.query<DocumentRow>(
+    `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
+                            content_address, fingerprint)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9)
+     RETURNING ${DOCUMENT_COLUMNS}`,
+    [
+      doc.id,
+      doc.tenantId,
+      doc.ownerId,
+      JSON.stringify(doc.titleEnc),
+      JSON.stringify(doc.filenameEnc),
+      doc.mime,
+      doc.sizeBytes,
+      doc.contentAddress,
+      doc.fingerprint,
+    ],
+  );
+  return rows[0] as DocumentRow;
+}
+
+export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<DocumentDto> {
+  return {
+    id: row.id,
+    title: await cipher.openText(titleBind(row.id), row.title_enc),
+    filename: await cipher.openText(filenameBind(row.id), row.filename_enc),
+    mime: row.mime,
+    sizeBytes: Number(row.size_bytes),
+    status: row.status,
+    error: row.error,
+    stats:
+      row.stats_enc == null
+        ? null
+        : DocumentStats.parse(await cipher.open(statsBind(row.id), row.stats_enc)),
+    summary:
+      row.summary_enc == null
+        ? null
+        : DocumentSummary.parse(await cipher.open(summaryBind(row.id), row.summary_enc)),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+  };
+}
