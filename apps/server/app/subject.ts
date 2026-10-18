@@ -1,5 +1,13 @@
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`, "i");
+const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
+const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
+
+/**
+ * Loom's `MAX_EXECUTION_ID_BYTES` (`@loom/plugin-postgres`, `PostgresEventStore.ts`). Copied, not
+ * imported, because this package does not depend on the Postgres plugin; Loom refuses a longer id at
+ * append time, so this check fails earlier and says why.
+ */
+const MAX_EXECUTION_ID_BYTES = 1024;
 
 /**
  * The execution id for something a user owns. Loom encrypts an execution's data under the key of
@@ -8,14 +16,25 @@ const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`, "i");
  * erases it all. Callers that start executions for a user use this to build the id.
  */
 export function executionIdFor(userId: string, name: string): string {
-  return `u_${userId}:${name}`;
+  if (!CANONICAL_USER_ID.test(userId)) {
+    throw new RangeError("userId must be a canonical lowercase UUID (8-4-4-4-12 hex digits)");
+  }
+  const executionId = `u_${userId}:${name}`;
+  const bytes = Buffer.byteLength(executionId, "utf8");
+  if (bytes > MAX_EXECUTION_ID_BYTES) {
+    throw new RangeError(
+      `execution id is ${bytes} bytes, over the ${MAX_EXECUTION_ID_BYTES}-byte limit; shorten the name`,
+    );
+  }
+  return executionId;
 }
 
 /**
- * The erasure subject of an execution: the owning user, or, for an execution no user owns (system
- * work), the execution itself, which is Loom's own default.
+ * The erasure subject of an execution: the owning user for `u_<uuid>[:...]`, lower-case only, and
+ * otherwise the execution itself. An execution that is not a user's data survives user erasure, so
+ * every user-owned execution must be started with `executionIdFor`.
  */
 export function subjectOfExecution(e: { executionId: string }): string {
   const match = USER_EXECUTION.exec(e.executionId);
-  return match?.[1]?.toLowerCase() ?? e.executionId;
+  return match?.[1] ?? e.executionId;
 }
