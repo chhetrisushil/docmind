@@ -1,6 +1,6 @@
 import { type IncomingMessage, request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type MockInstance, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHttpServer } from "./server";
 
 const server = createHttpServer();
@@ -47,12 +47,16 @@ describe("http server", () => {
 });
 
 describe("handler failures", () => {
+  const marked = new Error("secret detail");
   const failing = createHttpServer({
     "GET /rejects": async () => {
       throw new Error("boom");
     },
     "GET /throws": () => {
       throw new Error("boom");
+    },
+    "GET /marked": () => {
+      throw marked;
     },
     "GET /rejects-after-headers": async (_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
@@ -61,8 +65,10 @@ describe("handler failures", () => {
     },
   });
   let url = "";
+  let consoleError: MockInstance<typeof console.error>;
 
   beforeAll(async () => {
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     await new Promise<void>((resolve) => failing.listen(0, "127.0.0.1", resolve));
     url = `http://127.0.0.1:${(failing.address() as AddressInfo).port}`;
   });
@@ -72,6 +78,7 @@ describe("handler failures", () => {
       failing.close(() => resolve());
       failing.closeAllConnections();
     });
+    consoleError.mockRestore();
   });
 
   it.each(["/rejects", "/throws"])(
@@ -83,6 +90,15 @@ describe("handler failures", () => {
       expect((await fetch(`${url}/healthz`)).status).toBe(200);
     },
   );
+
+  it("logs the failure server-side and keeps the 500 body fixed", async () => {
+    const res = await fetch(`${url}/marked`);
+    expect(res.status).toBe(500);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: { code: "internal", message: "internal error" } });
+    expect(body).not.toContain("secret detail");
+    expect(consoleError).toHaveBeenCalledWith("handler failed", "GET", "/marked", marked);
+  });
 
   it("ends a response that already started instead of hanging or crashing", async () => {
     const res = await fetch(`${url}/rejects-after-headers`);
