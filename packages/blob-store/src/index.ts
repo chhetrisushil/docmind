@@ -15,3 +15,4 @@ export {
   parseAddress,
   sameFingerprint,
 } from "./address";
+export { eraseUserBlobs, removeStaleTemp } from "./maintenance";
