@@ -23,6 +23,9 @@ export type ReceiveResult<T> =
   | { ok: true; value: T }
   | { ok: false; status: number; code: string; message: string };
 
+// Multipart framing around the file (boundaries, the part's headers).
+const ENVELOPE_SLACK = 64 * 1024;
+
 const failure = (status: number, code: string, message: string) =>
   ({ ok: false, status, code, message }) as const;
 
@@ -42,6 +45,11 @@ export function receiveFile<T>(
   if (type !== "multipart/form-data") {
     return Promise.resolve(failure(415, "unsupported_media_type", "send multipart/form-data"));
   }
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > options.maxFileBytes + ENVELOPE_SLACK) {
+    return Promise.resolve(failure(413, "payload_too_large", "request body is too large"));
+  }
+
   return new Promise<ReceiveResult<T>>((resolve, reject) => {
     let parser: busboy.Busboy;
     try {
@@ -55,6 +63,7 @@ export function receiveFile<T>(
           fieldSize: 1024,
           fieldNameSize: 64,
           parts: 16,
+          fileSize: options.maxFileBytes + 1, // busboy's `limit` fires on reaching this: one byte over
           headerPairs: 16,
         },
       });
@@ -69,6 +78,8 @@ export function receiveFile<T>(
       outcome ??= result;
     };
 
+    const broken = () => settle(malformed());
+
     parser.on("file", (name, stream, info) => {
       if (sawFile) return void stream.resume(); // only the first file part counts
       sawFile = true;
@@ -76,9 +87,25 @@ export function receiveFile<T>(
         stream.resume();
         return settle(failure(400, "invalid_request", "send the document as a part named file"));
       }
-      work = handle({ filename: info.filename ?? "", body: stream }).then(
+      // Never destroy the part stream: the parser must keep consuming it to reach the end of the body.
+      let limited = false;
+      stream.on("limit", () => {
+        limited = true;
+      });
+      async function* body(): AsyncGenerator<Uint8Array> {
+        // Leaving early must not destroy the stream; it is drained once the handler settles.
+        for await (const chunk of stream.iterator({ destroyOnReturn: false })) {
+          if (limited) throw new UploadTooLargeError();
+          yield chunk as Uint8Array;
+        }
+        if (limited) throw new UploadTooLargeError();
+      }
+      work = handle({ filename: info.filename ?? "", body: body() }).then(
         (value) => settle({ ok: true, value }),
         (err: unknown) => {
+          if (err instanceof UploadTooLargeError) {
+            return settle(failure(413, "payload_too_large", "file is too large"));
+          }
           throw err;
         },
       );
@@ -86,14 +113,14 @@ export function receiveFile<T>(
       work.catch(() => {});
     });
     // Text fields are not used; busboy discards them (bounded by the limits above).
-    parser.on("error", () => settle(malformed()));
+    parser.on("error", broken);
     parser.on("close", () => {
       (work ?? Promise.resolve()).then(() => {
         if (!sawFile) settle(failure(400, "invalid_request", "no file was sent"));
         resolve(outcome as ReceiveResult<T>);
       }, reject);
     });
-    req.on("error", () => settle(malformed()));
+    req.on("error", broken);
     req.pipe(parser);
   });
 }
