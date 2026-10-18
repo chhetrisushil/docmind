@@ -1,6 +1,6 @@
 import { InMemoryKeyStore, type KeyStore, encryptValue } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
-import { FieldCrypto, FieldKeyUnavailableError } from "./fields";
+import { FieldCrypto, FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";
 
 const U1 = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const U2 = "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1";
@@ -93,5 +93,45 @@ describe("FieldCrypto", () => {
     await cipher.open("b", a);
     await cipher.open("b", a);
     expect(calls).toBe(2);
+  });
+
+  it("refuses an envelope with a truncated tag or iv, and a tampered body", async () => {
+    const cipher = new FieldCrypto(new InMemoryKeyStore()).forUser(U1);
+    const sealed = (await cipher.seal("b", "x")) as { tag: string; iv: string; data: string };
+    const shortTag = {
+      ...sealed,
+      tag: Buffer.from(sealed.tag, "base64").subarray(0, 4).toString("base64"),
+    };
+    await expect(cipher.open("b", shortTag)).rejects.toThrow(/envelope/);
+    const shortIv = {
+      ...sealed,
+      iv: Buffer.from(sealed.iv, "base64").subarray(0, 8).toString("base64"),
+    };
+    await expect(cipher.open("b", shortIv)).rejects.toThrow(/envelope/);
+    const sloppy = { ...sealed, tag: `${sealed.tag}\n` };
+    await expect(cipher.open("b", sloppy)).rejects.toThrow(/envelope/);
+    const body = Buffer.from(sealed.data, "base64");
+    body[0] = (body[0] ?? 0) ^ 1;
+    const flipped = { ...sealed, data: body.toString("base64") };
+    await expect(cipher.open("b", flipped)).rejects.toThrow(/authenticate/);
+  });
+
+  it("reports store failures as an id-free FieldKeyStoreError on seal and open", async () => {
+    const boom = (): Promise<never> => Promise.reject(new Error(`pg down for ${U1} kek k-1`));
+    const failing: KeyStore = {
+      durable: false,
+      getOrCreate: boom,
+      get: boom,
+      destroy: async () => {},
+    };
+    const cipher = new FieldCrypto(failing).forUser(U1);
+    const good = await new FieldCrypto(new InMemoryKeyStore()).forUser(U1).seal("b", "x");
+    for (const run of [() => cipher.seal("b", "x"), () => cipher.open("b", good)]) {
+      const err = await run().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FieldKeyStoreError);
+      expect(err).not.toBeInstanceOf(FieldKeyUnavailableError);
+      expect((err as Error).message).not.toContain(U1);
+      expect((err as Error).message).not.toContain("k-1");
+    }
   });
 });

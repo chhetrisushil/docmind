@@ -19,14 +19,32 @@ export interface UserFieldCipher {
   openText(bind: string, envelope: unknown): Promise<string>;
 }
 
+/** The key store failed for a reason other than the key being gone (outage, misconfiguration). */
+export class FieldKeyStoreError extends Error {
+  constructor() {
+    super("the key store failed");
+    this.name = "FieldKeyStoreError";
+  }
+}
+
+const GCM_IV_BYTES = 12;
+const GCM_TAG_BYTES = 16;
+
+/** Strict base64 that decodes to exactly `bytes` bytes (re-encodes to the same string). */
+const isBase64Of = (v: unknown, bytes: number): boolean => {
+  if (typeof v !== "string") return false;
+  const raw = Buffer.from(v, "base64");
+  return raw.length === bytes && raw.toString("base64") === v;
+};
+
 /** A field envelope: Loom's shape, sealed by this module (carries our AAD marker). */
 const isFieldEnvelope = (v: unknown): boolean => {
   if (typeof v !== "object" || v === null) return false;
   const e = v as Record<string, unknown>;
   return (
     e.__loomEnc === ENVELOPE_TAG &&
-    typeof e.iv === "string" &&
-    typeof e.tag === "string" &&
+    isBase64Of(e.iv, GCM_IV_BYTES) &&
+    isBase64Of(e.tag, GCM_TAG_BYTES) &&
     typeof e.data === "string" &&
     envelopeAad(v) === AAD_VERSION
   );
@@ -46,17 +64,24 @@ export class FieldCrypto {
     let sealKey: Promise<Buffer> | undefined;
     let openKey: Promise<Buffer> | undefined;
     const forSeal = (): Promise<Buffer> => {
-      // The store's own error names the subject (and a destroyed key must not be re-minted).
-      sealKey ??= keys.getOrCreate(userId).catch(() => {
-        throw new FieldKeyUnavailableError();
+      // The store's own errors name the subject/KEK, so they are never passed on. Only a
+      // destroyed key reads as unavailable; any other failure is a store failure.
+      sealKey ??= keys.getOrCreate(userId).catch(async () => {
+        const destroyed = (await keys.wasDestroyed?.(userId).catch(() => false)) === true;
+        throw destroyed ? new FieldKeyUnavailableError() : new FieldKeyStoreError();
       });
       return sealKey;
     };
     const forOpen = (): Promise<Buffer> => {
-      openKey ??= keys.get(userId).then((key) => {
-        if (!key) throw new FieldKeyUnavailableError();
-        return key;
-      });
+      openKey ??= keys.get(userId).then(
+        (key) => {
+          if (!key) throw new FieldKeyUnavailableError();
+          return key;
+        },
+        () => {
+          throw new FieldKeyStoreError();
+        },
+      );
       return openKey;
     };
     const context = (bind: string): string => `${userId}|${bind}`;
