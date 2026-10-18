@@ -68,7 +68,13 @@ describe.skipIf(!PG_URL)("tenant usage and write lock (needs DOCMIND_TEST_PG_URL
       // ...but another tenant's lock is independent.
       expect(await withTenant(app, T2, (tx2) => tryLock(tx2, T2))).toBe(true);
     });
-    // tx1 has committed: the lock is free again.
-    expect(await withTenant(app, T1, (tx2) => tryLock(tx2, T1))).toBe(true);
+    // tx1 has committed: the lock is free again. Probe from a second pool, so the connection cannot
+    // be tx1's own (advisory locks are re-entrant per session; a leaked session lock would pass on it).
+    const other = new Pool({ connectionString: db.appUrl });
+    try {
+      expect(await withTenant(other, T1, (tx2) => tryLock(tx2, T1))).toBe(true);
+    } finally {
+      await other.end();
+    }
   });
 });
