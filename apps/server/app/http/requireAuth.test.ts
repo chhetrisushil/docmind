@@ -25,6 +25,10 @@ const server = createHttpServer({
     handlerRuns++;
     json(res, 200, identity);
   }),
+  "GET /whoami/:name": requireAuth(authenticator, (_req, res, identity, ctx) => {
+    handlerRuns++;
+    json(res, 200, { name: ctx.params.name, ...identity });
+  }),
 });
 let base = "";
 let consoleError: MockInstance<typeof console.error>;
@@ -63,11 +67,14 @@ describe("requireAuth", () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: { code: "internal", message: "internal error" } });
     expect(handlerRuns).toBe(0);
-    expect(consoleError).toHaveBeenCalledWith(
-      "handler failed",
-      "GET",
-      "/whoami",
-      expect.any(Error),
-    );
+    expect(consoleError).toHaveBeenCalledWith("handler failed", "GET", "/whoami", "Error");
+  });
+
+  it("passes route parameters through to the handler, and not past a 401", async () => {
+    const ok = await fetch(`${base}/whoami/x`, { headers: { "x-test-user": "alice" } });
+    expect(await ok.json()).toEqual({ name: "x", ...ALICE });
+    handlerRuns = 0;
+    expect((await fetch(`${base}/whoami/x`)).status).toBe(401);
+    expect(handlerRuns).toBe(0);
   });
 });

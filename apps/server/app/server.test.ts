@@ -47,7 +47,7 @@ describe("http server", () => {
 });
 
 describe("handler failures", () => {
-  const marked = new Error("secret detail");
+  const marked = new Error("secret detail sk-live-1234");
   const failing = createHttpServer({
     "GET /rejects": async () => {
       throw new Error("boom");
@@ -97,7 +97,11 @@ describe("handler failures", () => {
     const body = await res.text();
     expect(JSON.parse(body)).toEqual({ error: { code: "internal", message: "internal error" } });
     expect(body).not.toContain("secret detail");
-    expect(consoleError).toHaveBeenCalledWith("handler failed", "GET", "/marked", marked);
+    // P11: class name, method and path only; never the error object or its message.
+    expect(consoleError).toHaveBeenCalledWith("handler failed", "GET", "/marked", "Error");
+    const logged = JSON.stringify(consoleError.mock.calls);
+    expect(logged).not.toContain("secret detail");
+    for (const call of consoleError.mock.calls) expect(call).not.toContain(marked);
   });
 
   it("ends a response that already started instead of hanging or crashing", async () => {
@@ -105,5 +109,58 @@ describe("handler failures", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("partial");
     expect((await fetch(`${url}/healthz`)).status).toBe(200);
+  });
+});
+
+describe("route parameters", () => {
+  const withParams = createHttpServer({
+    "GET /things/:id": (_req, res, ctx) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: ctx.params.id }));
+    },
+    "GET /things/new": (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ exact: true }));
+    },
+    "DELETE /things/:id/parts/:part": (_req, res, ctx) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(ctx.params));
+    },
+  });
+  let paramBase = "";
+
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => withParams.listen(0, "127.0.0.1", resolve));
+    paramBase = `http://127.0.0.1:${(withParams.address() as AddressInfo).port}`;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve) => withParams.close(() => resolve()));
+  });
+
+  it("passes a path segment as a parameter, decoded", async () => {
+    expect(await (await fetch(`${paramBase}/things/abc`)).json()).toEqual({ id: "abc" });
+    expect(await (await fetch(`${paramBase}/things/a%20b`)).json()).toEqual({ id: "a b" });
+  });
+
+  it("prefers an exact route to a parameterised one", async () => {
+    expect(await (await fetch(`${paramBase}/things/new`)).json()).toEqual({ exact: true });
+  });
+
+  it("supports several parameters and requires the method to match", async () => {
+    const del = await fetch(`${paramBase}/things/1/parts/2`, { method: "DELETE" });
+    expect(await del.json()).toEqual({ id: "1", part: "2" });
+    expect((await fetch(`${paramBase}/things/1/parts/2`)).status).toBe(404);
+  });
+
+  it("does not match an empty segment, an extra segment or a bad escape", async () => {
+    expect((await fetch(`${paramBase}/things/`)).status).toBe(404);
+    expect((await fetch(`${paramBase}/things/a/b`)).status).toBe(404);
+    expect((await fetch(`${paramBase}/things/%E0%A4%A`)).status).toBe(404);
+  });
+
+  it("treats a parameter named like an object prototype key as plain data", async () => {
+    expect(await (await fetch(`${paramBase}/things/__proto__`)).json()).toEqual({
+      id: "__proto__",
+    });
   });
 });

@@ -1,11 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Authenticator, Identity } from "@docmind/auth";
-import { type Handler, sendError } from "./respond";
+import { type Handler, type RouteContext, sendError } from "./respond";
 
 export type AuthedHandler = (
   req: IncomingMessage,
   res: ServerResponse,
   identity: Identity,
+  ctx: RouteContext,
 ) => void | Promise<void>;
 
 /**
@@ -15,9 +16,9 @@ export type AuthedHandler = (
  * check is never treated as a pass.
  */
 export function requireAuth(authenticator: Authenticator, handler: AuthedHandler): Handler {
-  return async (req, res) => {
+  return async (req, res, ctx) => {
     const identity = await authenticator.authenticate(req);
     if (!identity) return sendError(res, 401, "unauthorized", "authentication required");
-    await handler(req, res, identity);
+    await handler(req, res, identity, ctx);
   };
 }
