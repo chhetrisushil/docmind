@@ -142,3 +142,15 @@ export async function listDocuments(
     next: more && last ? { created_cursor: last.created_cursor, id: last.id } : null,
   };
 }
+
+export async function getDocument(
+  tx: PoolClient,
+  ownerId: string,
+  id: string,
+): Promise<DocumentRow | undefined> {
+  const { rows } = await tx.query<DocumentRow>(
+    `SELECT ${DOCUMENT_COLUMNS} FROM documents WHERE id = $1 AND owner_id = $2`,
+    [id, ownerId],
+  );
+  return rows[0];
+}
