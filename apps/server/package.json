@@ -17,6 +17,7 @@
     "@docmind/contracts": "workspace:*",
     "@docmind/keystore-pg": "workspace:*",
     "@loom/app": "*",
+    "@loom/core": "*",
     "@loom/effect-runtime": "*",
     "@loom/plugin-crypto": "*",
     "@loom/plugin-postgres": "*",

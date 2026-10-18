@@ -8,6 +8,7 @@ overrides:
   '@loom/app': link:../loom/packages/app
   '@loom/cli': link:../loom/tools/cli
   '@loom/conformance': link:../loom/packages/conformance
+  '@loom/core': link:../loom/packages/core
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
   '@loom/plugin-content': link:../loom/plugins/content
   '@loom/plugin-crypto': link:../loom/plugins/crypto
@@ -42,6 +43,9 @@ importers:
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
+      '@loom/core':
+        specifier: link:../../../loom/packages/core
+        version: link:../../../loom/packages/core
       '@loom/effect-runtime':
         specifier: link:../../../loom/packages/effect-runtime
         version: link:../../../loom/packages/effect-runtime
