@@ -18,6 +18,8 @@
     "@docmind/keystore-pg": "workspace:*",
     "@loom/app": "*",
     "@loom/effect-runtime": "*",
+    "@loom/plugin-crypto": "*",
+    "@loom/plugin-postgres": "*",
     "@loom/workflow-runtime": "*",
     "pg": "^8.13.0",
     "zod": "^3.23.8"
@@ -28,7 +30,6 @@
     "tsx": "^4.19.2",
     "vitest": "^2.1.8",
     "@types/pg": "^8.11.0",
-    "@loom/conformance": "*",
-    "@loom/plugin-crypto": "*"
+    "@loom/conformance": "*"
   }
 }
