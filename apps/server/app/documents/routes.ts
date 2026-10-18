@@ -14,6 +14,7 @@ import { UploadTooLargeError, receiveFile } from "../http/multipart";
 import { peek } from "../http/peek";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
+import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
 import {
@@ -36,7 +37,11 @@ export interface DocumentRoutesDeps {
   limits: DocumentLimits;
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
+  /** Uploads in progress per user; defaults to one tracker shared by this process. */
+  inFlight?: InFlight;
 }
+
+const defaultInFlight = new InFlight();
 
 /** An error answer on the upload route. The request body may be unread, so the connection closes. */
 function uploadError(
@@ -114,32 +119,47 @@ async function register(
   }
 }
 
+/** Streams the request's file into storage and the database. */
+function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Identity) {
+  return receiveFile(req, { maxFileBytes: deps.limits.maxFileBytes }, async (file) => {
+    const filename = sanitizeFilename(file.filename);
+    const { head, rest, close } = await peek(file.body, SNIFF_BYTES);
+    try {
+      const sniffed = sniff(head, filename);
+      if (!sniffed) return { rejected: true as const };
+      const store = deps.blobs(identity);
+      const staged = await store.stage(rest).catch((err: unknown) => {
+        throw err instanceof BlobTooLargeError ? new UploadTooLargeError() : err;
+      });
+      const result = await register(deps, identity, store, staged, filename, sniffed);
+      return { rejected: false as const, result };
+    } finally {
+      await close(); // idempotent; releases the body if it was never consumed
+    }
+  });
+}
+
 async function upload(
   deps: DocumentRoutesDeps,
   req: IncomingMessage,
   res: ServerResponse,
   identity: Identity,
 ): Promise<void> {
-  const outcome = await receiveFile(
-    req,
-    { maxFileBytes: deps.limits.maxFileBytes },
-    async (file) => {
-      const filename = sanitizeFilename(file.filename);
-      const { head, rest, close } = await peek(file.body, SNIFF_BYTES);
-      try {
-        const sniffed = sniff(head, filename);
-        if (!sniffed) return { rejected: true as const };
-        const store = deps.blobs(identity);
-        const staged = await store.stage(rest).catch((err: unknown) => {
-          throw err instanceof BlobTooLargeError ? new UploadTooLargeError() : err;
-        });
-        const result = await register(deps, identity, store, staged, filename, sniffed);
-        return { rejected: false as const, result };
-      } finally {
-        await close(); // idempotent; releases the body if it was never consumed
-      }
-    },
+  const release = (deps.inFlight ?? defaultInFlight).tryAcquire(
+    identity.userId,
+    deps.limits.maxConcurrentUploadsPerUser,
   );
+  if (!release) {
+    res.setHeader("retry-after", "5");
+    return uploadError(
+      req,
+      res,
+      429,
+      "too_many_uploads",
+      "too many uploads in progress; try again shortly",
+    );
+  }
+  const outcome = await receive(deps, req, identity).finally(release);
 
   if (!outcome.ok) return uploadError(req, res, outcome.status, outcome.code, outcome.message);
   if (outcome.value.rejected) {

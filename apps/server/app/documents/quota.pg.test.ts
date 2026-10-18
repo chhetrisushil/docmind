@@ -44,6 +44,19 @@ describe.skipIf(!PG_URL)("upload rejections and quotas (needs DOCMIND_TEST_PG_UR
     expect(filesOf(h, T1, U1)).toEqual([]);
   });
 
+  it("answers a large unsupported file promptly with 415 and connection: close", async () => {
+    const h = await harness();
+    const big = Buffer.concat([
+      Buffer.from("MZ\u0090\u0000\u0003"),
+      Buffer.alloc(3 * 1024 * 1024, 7),
+    ]);
+    const res = await h.upload("alice", "tool.exe", big);
+    expect(res.status).toBe(415);
+    expect(res.headers.get("connection")).toBe("close");
+    expect(await rowCount(h)).toBe(0);
+    expect(filesOf(h, T1, U1)).toEqual([]);
+  }, 10_000);
+
   it("refuses a request with no file, or not multipart, and a file over the limit", async () => {
     const h = await harness({ maxFileBytes: 64 });
     const none = await fetch(`${h.base}/api/documents`, {
@@ -100,5 +113,17 @@ describe.skipIf(!PG_URL)("upload rejections and quotas (needs DOCMIND_TEST_PG_UR
     expect([a.status, b.status].sort()).toEqual([201, 403]);
     expect(await rowCount(h)).toBe(1);
     expect(filesOf(h, T1, U1).length + filesOf(h, T1, U1B).length).toBe(1);
+  });
+
+  it("answers 429 with Retry-After when the user already has the maximum uploads in flight", async () => {
+    const h = await harness({ maxConcurrentUploadsPerUser: 1 });
+    const slot = h.inFlight.tryAcquire(U1, 1); // an upload that has not finished
+    const refused = await h.upload("alice", "a.txt", TEXT("a"));
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("retry-after")).toBe("5");
+    expect((await h.upload("bob", "b.txt", TEXT("b"))).status).toBe(201); // another user is fine
+    slot?.();
+    expect((await h.upload("alice", "a.txt", TEXT("a"))).status).toBe(201);
+    expect(await rowCount(h)).toBe(2);
   });
 });

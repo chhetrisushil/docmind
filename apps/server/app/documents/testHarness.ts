@@ -14,6 +14,7 @@ import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
+import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { type NewDocument, filenameBind, titleBind } from "./repo";
@@ -156,6 +157,7 @@ export interface DocumentHarness {
   root: string;
   keys: InMemoryKeyStore;
   ingest: IngestProbe;
+  inFlight: InFlight;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -179,6 +181,7 @@ export async function startDocumentServer(
   const keys = new InMemoryKeyStore();
   const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
   const ingest = makeIngest(app);
+  const inFlight = new InFlight();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
   const server = createHttpServer(
     documentRoutes(
@@ -196,6 +199,7 @@ export async function startDocumentServer(
           }),
         limits,
         ingest: ingest.port,
+        inFlight,
       }),
     ),
   );
@@ -208,6 +212,7 @@ export async function startDocumentServer(
     root,
     keys,
     ingest: ingest.probe,
+    inFlight,
     upload(user, name, data) {
       const form = new FormData();
       form.append("file", new Blob([data]), name);
