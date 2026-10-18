@@ -13,7 +13,9 @@ const MAX_EXECUTION_ID_BYTES = 1024;
  * The execution id for something a user owns. Loom encrypts an execution's data under the key of
  * its erasure subject and learns the subject from the execution id alone, so every execution a user
  * owns must carry the user's id: that puts all of their data under one key, and destroying the key
- * erases it all. Callers that start executions for a user use this to build the id.
+ * erases it all. Callers that start executions for a user use this to build the id. Every
+ * user-owned start AND every `runtime.fork` must pass an explicit `executionId` from `executionIdFor`
+ * for that user; otherwise Loom uses a ULID and the data falls outside the user's key.
  */
 export function executionIdFor(userId: string, name: string): string {
   if (!CANONICAL_USER_ID.test(userId)) {
@@ -30,11 +32,12 @@ export function executionIdFor(userId: string, name: string): string {
 }
 
 /**
- * The erasure subject of an execution: the owning user for `u_<uuid>[:...]`, lower-case only, and
- * otherwise the execution itself. An execution that is not a user's data survives user erasure, so
- * every user-owned execution must be started with `executionIdFor`.
+ * The erasure subject of an execution: the owning user for `u_<uuid>[:...]`, lower-case only. Any
+ * other id is an execution no user owns; it is keyed as `x:<id>`, outside the bare-UUID user
+ * namespace, and survives user erasure, so every user-owned execution must be started with
+ * `executionIdFor`.
  */
 export function subjectOfExecution(e: { executionId: string }): string {
   const match = USER_EXECUTION.exec(e.executionId);
-  return match?.[1] ?? e.executionId;
+  return match?.[1] ?? `x:${e.executionId}`;
 }

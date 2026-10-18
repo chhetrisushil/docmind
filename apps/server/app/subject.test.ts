@@ -10,21 +10,32 @@ describe("erasure subject of an execution", () => {
     expect(subjectOfExecution({ executionId: `u_${USER}` })).toBe(USER);
   });
 
-  it("is the execution itself when no user owns it", () => {
+  it("is an x: key, outside the user namespace, when no user owns it", () => {
     for (const executionId of [
       "system-sweep",
       `x_${USER}:a`,
       "u_not-a-uuid:a",
       `u_${USER}x:a`,
       `u_${USER.toUpperCase()}:x`,
-      `U_${USER}:x`,
     ]) {
-      expect(subjectOfExecution({ executionId })).toBe(executionId);
+      expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);
     }
   });
 
+  it("does not map an execution whose id is exactly a user's UUID to that user", () => {
+    expect(subjectOfExecution({ executionId: USER })).toBe(`x:${USER}`);
+  });
+
   it("does not map an uppercase u_ prefix to the user", () => {
-    expect(subjectOfExecution({ executionId: `U_${USER}:x` })).toBe(`U_${USER}:x`);
+    expect(subjectOfExecution({ executionId: `U_${USER}:x` })).toBe(`x:U_${USER}:x`);
+  });
+
+  it("anchors the match at the start: a prefixed id does not map to the user", () => {
+    expect(subjectOfExecution({ executionId: `sys:u_${USER}:x` })).toBe(`x:sys:u_${USER}:x`);
+  });
+
+  it("anchors the match at the start: a leading space does not map to the user", () => {
+    expect(subjectOfExecution({ executionId: ` u_${USER}:x` })).toBe(`x: u_${USER}:x`);
   });
 });
 
@@ -37,12 +48,22 @@ describe("executionIdFor", () => {
     expect(() => executionIdFor("not-a-uuid", "x")).toThrow(RangeError);
   });
 
+  it("throws on a userId with leading characters before a UUID", () => {
+    expect(() => executionIdFor(`zz${USER}`, "x")).toThrow(RangeError);
+  });
+
   it("throws on an uppercase UUID userId", () => {
     expect(() => executionIdFor(USER.toUpperCase(), "x")).toThrow(RangeError);
   });
 
   it("throws on a name that makes the id over 1024 bytes", () => {
     expect(() => executionIdFor(USER, "x".repeat(1100))).toThrow(RangeError);
+  });
+
+  it("throws on a name under 1024 characters but over 1024 UTF-8 bytes", () => {
+    const name = "é".repeat(600);
+    expect(name.length).toBeLessThan(1024);
+    expect(() => executionIdFor(USER, name)).toThrow(RangeError);
   });
 
   it("accepts a name that makes the id exactly 1024 bytes", () => {
