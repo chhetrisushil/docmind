@@ -10,6 +10,7 @@ import {
   ListDocumentsQuery,
   type ListDocumentsResponse,
   type UploadDocumentResponse,
+  Uuid,
 } from "@docmind/contracts";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
@@ -25,6 +26,7 @@ import type { DocumentLimits } from "./limits";
 import {
   filenameBind,
   findByFingerprint,
+  getDocument,
   insertDocument,
   listDocuments,
   lockTenantForWrite,
@@ -229,6 +231,19 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         items: await Promise.all(page.rows.map((row) => toDto(row, cipher))),
         nextCursor: page.next ? encodeCursor(page.next) : null,
       } satisfies ListDocumentsResponse);
+    }),
+
+    "GET /api/documents/:id": requireAuth(deps.authenticator, async (_req, res, identity, ctx) => {
+      const parsed = Uuid.safeParse(ctx.params.id);
+      // A malformed id answers exactly like a missing or foreign one.
+      const id = parsed.success ? parsed.data.toLowerCase() : null;
+      const row = id
+        ? await withTenant(deps.pool, identity.tenantId, (tx) =>
+            getDocument(tx, identity.userId, id),
+          )
+        : undefined;
+      if (!row) return sendError(res, 404, "not_found", "document not found");
+      json(res, 200, await toDto(row, deps.fields.forUser(identity.userId)));
     }),
   };
 }

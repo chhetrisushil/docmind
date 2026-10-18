@@ -104,13 +104,40 @@ describe.skipIf(!PG_URL)("reading documents (needs DOCMIND_TEST_PG_URL)", () => 
     expect(page.items.map((d) => d.id).sort()).toEqual([...mine].sort());
   });
 
-  it("requires a session", async () => {
-    expect((await fetch(`${h.base}/api/documents`)).status).toBe(401);
+  it("gets one document, and answers the same 404 for missing, foreign and malformed ids", async () => {
+    const ok = await get(`/api/documents/${mine[0]}`);
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as DocumentDto).id).toBe(mine[0]);
+
+    const bobsId = (
+      await h.owner.query(
+        "SELECT id FROM documents WHERE owner_id = 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'",
+      )
+    ).rows[0].id as string;
+    const missing = await get("/api/documents/00000000-0000-4000-8000-000000000000");
+    const otherTenant = await get(`/api/documents/${bobsId}`);
+    const malformed = await get("/api/documents/not-a-uuid");
+    for (const res of [missing, otherTenant, malformed]) expect(res.status).toBe(404);
+    const missingBody = await missing.text();
+    expect(await otherTenant.text()).toBe(missingBody);
+    expect(await malformed.text()).toBe(missingBody);
   });
 
-  it("does not list a colleague's document", async () => {
+  it("accepts an uppercase id and returns the canonical lowercase one", async () => {
+    const res = await get(`/api/documents/${(mine[0] as string).toUpperCase()}`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as DocumentDto).id).toBe(mine[0]);
+  });
+
+  it("requires a session on both routes", async () => {
+    expect((await fetch(`${h.base}/api/documents`)).status).toBe(401);
+    expect((await fetch(`${h.base}/api/documents/${mine[0]}`)).status).toBe(401);
+  });
+
+  it("shows a colleague's document to neither route", async () => {
     const res = await h.upload("alice2", "private.pdf", PDF("mine"));
     const id = ((await res.json()) as { document: DocumentDto }).document.id;
+    expect((await get(`/api/documents/${id}`, "alice")).status).toBe(404);
     const list = (await (await get("/api/documents?limit=100")).json()) as ListDocumentsResponse;
     expect(list.items.map((d) => d.id)).not.toContain(id);
   });
