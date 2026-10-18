@@ -7,9 +7,11 @@ import {
   signedResumeAuthenticator,
 } from "@loom/workflow-runtime";
 
-// What `security.strict` refuses to start without. M0 has no flows, so the grant table is empty;
-// every flow added later lists the tool ids it may run here (a step id doubles as its tool id).
-export const authorizer = new GrantTable({});
+// What `security.strict` refuses to start without. The table is keyed by workflow id; every flow
+// added later lists its step ids here (a step id doubles as its tool id).
+export const authorizer = new GrantTable({
+  "ingest-document": ["ingest-begin"],
+});
 
 // The actor that starts an execution owns it; only that actor, in the same tenant, may resume,
 // cancel or read it.
