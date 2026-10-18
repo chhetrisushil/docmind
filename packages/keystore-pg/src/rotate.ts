@@ -41,7 +41,7 @@ export async function rotateKek(
         wrapped_dek: Buffer;
         kek_id: string;
       }>(
-        `SELECT subject_id, wrapped_dek, kek_id FROM data_keys
+        `SELECT subject_id, wrapped_dek, kek_id FROM public.data_keys
           WHERE wrapped_dek IS NOT NULL AND kek_id <> $1 AND kek_id = ANY ($2::text[])
             AND subject_id <> ALL ($3::text[])
           ORDER BY subject_id LIMIT $4 FOR UPDATE SKIP LOCKED`,
@@ -58,7 +58,7 @@ export async function rotateKek(
         }
         // Re-checks the SELECT's conditions (defence in depth beside FOR UPDATE and the CHECK constraint).
         const updated = await client.query(
-          `UPDATE data_keys SET wrapped_dek = $2, kek_id = $3
+          `UPDATE public.data_keys SET wrapped_dek = $2, kek_id = $3
             WHERE subject_id = $1 AND kek_id = $4 AND wrapped_dek IS NOT NULL`,
           [row.subject_id, rewrapped, target.id, row.kek_id],
         );
@@ -76,7 +76,7 @@ export async function rotateKek(
   }
 
   const { rows } = await pool.query<{ kek_id: string; n: string }>(
-    `SELECT kek_id, count(*) AS n FROM data_keys
+    `SELECT kek_id, count(*) AS n FROM public.data_keys
       WHERE wrapped_dek IS NOT NULL AND kek_id <> $1 GROUP BY kek_id`,
     [target.id],
   );
@@ -99,7 +99,7 @@ export interface VerifyResult {
 /** Checks, with only `kek`, that every live key opens: what must hold before the old KEK is retired. */
 export async function verifyKeys(pool: Pool, kek: Kek): Promise<VerifyResult> {
   const { rows } = await pool.query<{ subject_id: string; wrapped_dek: Buffer; kek_id: string }>(
-    "SELECT subject_id, wrapped_dek, kek_id FROM data_keys WHERE wrapped_dek IS NOT NULL ORDER BY subject_id",
+    "SELECT subject_id, wrapped_dek, kek_id FROM public.data_keys WHERE wrapped_dek IS NOT NULL ORDER BY subject_id",
   );
   const result: VerifyResult = { verified: 0, wrongKek: 0, failed: [] };
   for (const row of rows) {

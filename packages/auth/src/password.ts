@@ -8,11 +8,18 @@ export function hashPassword(password: string): Promise<string> {
   return argon2.hash(password, PARAMS);
 }
 
-/** True only for a match. A malformed stored hash is a mismatch, not a crash. */
+/**
+ * True only for a match. Any failure is a mismatch, not a crash, but it is logged (error name and
+ * code only, never the hash or password) so a broken argon2 binding cannot turn every login into a
+ * silent 401. The library's errors for a malformed hash are not reliably told apart from a broken
+ * binding, so all of them are logged.
+ */
 export async function verifyPassword(hash: string, password: string): Promise<boolean> {
   try {
     return await argon2.verify(hash, password);
-  } catch {
+  } catch (err) {
+    const e = err as { name?: unknown; code?: unknown };
+    console.error("argon2 verify failed:", String(e?.name ?? "unknown"), String(e?.code ?? ""));
     return false;
   }
 }

@@ -6,7 +6,8 @@ import { Pool } from "pg";
  * refused when any of these holds: the session runs under a role other than the one it logged in
  * as (session_user differs from current_user, so RESET ROLE could widen it); the login or current
  * role is, or is a member of, a superuser or BYPASSRLS role; the current role owns, or is a member
- * of the owner of, any table with row-level security enabled. A server started with the wrong
+ * of the owner of, any table with row-level security enabled; the current role can create roles or
+ * is a member of any other role. A server started with the wrong
  * DATABASE_URL (the owner's, say) must not come up at all.
  */
 export async function assertUnprivilegedRole(pool: Pool): Promise<void> {
@@ -21,6 +22,11 @@ export async function assertUnprivilegedRole(pool: Pool): Promise<void> {
       WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relrowsecurity
           AND pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER'))
         THEN 'it owns, or is a member of the owner of, a table with row-level security'
+      WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = current_user AND r.rolcreaterole)
+        THEN 'it can create roles'
+      WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+          WHERE m.member = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user))
+        THEN 'it is a member of another role'
     END AS reason`);
   const role = rows[0];
   if (role?.reason) {
