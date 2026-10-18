@@ -13,6 +13,12 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
-    server: { deps: { external: [/@loom\//, /[\\/]loom[\\/]/] } },
+    server: {
+      deps: {
+        external: [/@loom\//, /[\\/]loom[\\/]/],
+        // Loom's conformance kits are ESM with extensionless imports, so Vite must load them.
+        inline: [/@loom\/conformance/, /[\\/]conformance[\\/]dist/],
+      },
+    },
   },
 });

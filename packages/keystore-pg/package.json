@@ -13,6 +13,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
     "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@loom/plugin-crypto": "*",
+    "pg": "^8.13.0"
   }
 }
