@@ -64,11 +64,16 @@ describe.skipIf(!PG_URL)("PostgresKeyStore (needs DOCMIND_TEST_PG_URL)", () => {
     expect(row.wrapped_dek.includes(key)).toBe(false);
   });
 
-  it("hands two racing creators the same key", async () => {
+  it("hands eight racing creators the same key and keeps one row", async () => {
     const subject = fresh();
     const store = new PostgresKeyStore(app, [kek]);
     const keys = await Promise.all(Array.from({ length: 8 }, () => store.getOrCreate(subject)));
     expect(new Set(keys.map((k) => k.toString("hex"))).size).toBe(1);
+    const { rows } = await db.owner.query(
+      "SELECT count(*)::int AS n FROM data_keys WHERE subject_id = $1",
+      [subject],
+    );
+    expect(rows[0].n).toBe(1);
   });
 
   it("leaves only a tombstone: the live row holds no key material after destroy", async () => {
@@ -99,9 +104,11 @@ describe.skipIf(!PG_URL)("PostgresKeyStore (needs DOCMIND_TEST_PG_URL)", () => {
       "UPDATE data_keys SET wrapped_dek = (SELECT wrapped_dek FROM data_keys WHERE subject_id = $1) WHERE subject_id = $2",
       [a, b],
     );
-    await expect(store.get(b)).rejects.toThrow();
+    await expect(store.get(b)).rejects.toThrow(/unable to authenticate/);
     const other: Kek = { id: "kek-1", key: createSecretKey(randomBytes(32)) };
-    await expect(new PostgresKeyStore(app, [other]).get(a)).rejects.toThrow();
+    await expect(new PostgresKeyStore(app, [other]).get(a)).rejects.toThrow(
+      /unable to authenticate/,
+    );
   });
 
   it("opens keys written under an earlier KEK after rotation, and names an unknown one", async () => {
@@ -117,5 +124,14 @@ describe.skipIf(!PG_URL)("PostgresKeyStore (needs DOCMIND_TEST_PG_URL)", () => {
   it("is a table the app role cannot read, only reach through the functions", async () => {
     await expect(app.query("SELECT * FROM data_keys")).rejects.toThrow(/permission denied/);
     await expect(app.query("DELETE FROM data_keys")).rejects.toThrow(/permission denied/);
+    await expect(
+      app.query(
+        "INSERT INTO data_keys (subject_id, wrapped_dek, kek_id) VALUES ($1, $2, 'kek-1')",
+        [fresh(), randomBytes(60)],
+      ),
+    ).rejects.toThrow(/permission denied/);
+    await expect(app.query("UPDATE data_keys SET kek_id = 'x'")).rejects.toThrow(
+      /permission denied/,
+    );
   });
 });
