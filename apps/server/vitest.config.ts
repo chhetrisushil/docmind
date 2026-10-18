@@ -13,6 +13,6 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
-    server: { deps: { external: [/@loom\//, /[\/]loom[\/]/] } },
+    server: { deps: { external: [/@loom\//, /[\\/]loom[\\/]/] } },
   },
 });
