@@ -25,7 +25,7 @@ export async function assertUnprivilegedRole(pool: Pool): Promise<void> {
   const role = rows[0];
   if (role?.reason) {
     throw new Error(
-      `database role "${role.name}" voids row-level security (${role.reason}): connect as docmind_app`,
+      `database role "${role.name}" voids row-level security (${role.reason}): connect as the application's unprivileged role`,
     );
   }
 }
