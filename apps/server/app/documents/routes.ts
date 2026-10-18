@@ -23,6 +23,7 @@ import {
   lockTenantForWrite,
   titleBind,
   toDto,
+  usageOfTenant,
 } from "./repo";
 import { SNIFF_BYTES, type Sniffed, sanitizeFilename, sniff, titleFromFilename } from "./sniff";
 
@@ -50,7 +51,9 @@ function uploadError(
   res.once("finish", () => req.destroy());
 }
 
-type Registered = { document: UploadDocumentResponse["document"]; duplicate: boolean };
+type Registered =
+  | { kind: "stored"; document: UploadDocumentResponse["document"]; duplicate: boolean }
+  | { kind: "quota"; reason: "documents" | "storage" };
 
 /** Inserts the row and commits the staged blob, or reports a duplicate. Runs inside one transaction. */
 async function register(
@@ -72,7 +75,16 @@ async function register(
       const existing = await findByFingerprint(tx, identity.userId, fingerprint);
       if (existing) {
         await staged.discard();
-        return { document: await toDto(existing, cipher), duplicate: true };
+        return { kind: "stored", document: await toDto(existing, cipher), duplicate: true };
+      }
+      const usage = await usageOfTenant(tx);
+      if (usage.documents + 1 > deps.limits.tenantMaxDocuments) {
+        await staged.discard();
+        return { kind: "quota", reason: "documents" };
+      }
+      if (usage.bytes + (staged.ref.size ?? 0) > deps.limits.tenantMaxBytes) {
+        await staged.discard();
+        return { kind: "quota", reason: "storage" };
       }
       const row = await insertDocument(tx, {
         id,
@@ -87,7 +99,7 @@ async function register(
       });
       const committed = await staged.commit();
       try {
-        return { document: await toDto(row, cipher), duplicate: false };
+        return { kind: "stored", document: await toDto(row, cipher), duplicate: false };
       } catch (err) {
         // Still under the tenant lock: take back a blob this upload created, so no concurrent
         // upload of the same bytes can have relied on it. A failure of COMMIT itself happens after
@@ -133,7 +145,13 @@ async function upload(
   if (outcome.value.rejected) {
     return uploadError(req, res, 415, "unsupported_type", "this file type is not supported");
   }
-  const { document, duplicate } = outcome.value.result;
+  const result = outcome.value.result;
+  if (result.kind === "quota") {
+    const message =
+      result.reason === "documents" ? "document limit reached" : "storage limit reached";
+    return uploadError(req, res, 403, "quota_exceeded", message);
+  }
+  const { document, duplicate } = result;
   // The row is committed. Only now start the flow: a rolled-back upload must never have an execution.
   // A duplicate whose document never left `uploaded` re-attempts the start, which Loom makes start-once.
   if (!duplicate || document.status === "uploaded") {
