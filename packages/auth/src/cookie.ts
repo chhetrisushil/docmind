@@ -2,11 +2,16 @@ import type { IncomingHttpHeaders } from "node:http";
 
 export const SESSION_COOKIE = "dm_session";
 
-/** The value of the session cookie, or undefined. A cookie can only be sent by its own site's origin. */
+/**
+ * The value of the session cookie, or undefined. A cookie can only be sent by its own site's origin.
+ * The first `dm_session` wins; malformed parts are skipped; an empty value counts as absent.
+ */
 export function readSessionCookie(headers: IncomingHttpHeaders): string | undefined {
   for (const part of (headers.cookie ?? "").split(";")) {
     const eq = part.indexOf("=");
-    if (eq > 0 && part.slice(0, eq).trim() === SESSION_COOKIE) return part.slice(eq + 1).trim();
+    if (eq > 0 && part.slice(0, eq).trim() === SESSION_COOKIE) {
+      return part.slice(eq + 1).trim() || undefined;
+    }
   }
   return undefined;
 }

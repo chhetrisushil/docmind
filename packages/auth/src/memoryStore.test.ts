@@ -10,7 +10,11 @@ describe("MemoryAuthStore", () => {
     const store = new MemoryAuthStore();
     expect(await store.createAccount(account)).toBe(true);
     expect(await store.createAccount({ ...account, userId: "u2" })).toBe(false);
-    expect(await store.findLogin("a@example.com")).toEqual(account);
+    expect(await store.findLogin("a@example.com")).toEqual({
+      tenantId: "t1",
+      userId: "u1",
+      passwordHash: "hash",
+    });
     expect(await store.findLogin("b@example.com")).toBeNull();
     expect(await store.findEmail(alice)).toBe("a@example.com");
     expect(await store.findEmail({ ...alice, tenantId: "t2" })).toBeNull();
@@ -22,6 +26,23 @@ describe("MemoryAuthStore", () => {
     expect(await store.findSession("h1")).toEqual(alice);
     store.now = () => new Date(session.expiresAt.getTime() + 1);
     expect(await store.findSession("h1")).toBeNull();
+  });
+
+  it("stores copies, so later caller mutation does not change the store", async () => {
+    const store = new MemoryAuthStore();
+    const mutable = { ...account };
+    await store.createAccount(mutable);
+    mutable.passwordHash = "changed";
+    expect(await store.findLogin("a@example.com")).toEqual({
+      tenantId: "t1",
+      userId: "u1",
+      passwordHash: "hash",
+    });
+
+    const s = { ...session, tokenHash: "h2", expiresAt: new Date(session.expiresAt) };
+    await store.createSession(s);
+    s.expiresAt.setTime(0);
+    expect(await store.findSession("h2")).toEqual(alice);
   });
 
   it("ends a session only for the tenant that owns it", async () => {
