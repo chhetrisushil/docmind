@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import { AuthService } from "@docmind/auth";
+import { AuthService, POLICIES } from "@docmind/auth";
 import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
 import { ErrorBody, SignUpResponse } from "@docmind/contracts";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,12 +74,14 @@ describe("sign-up", () => {
 
   it("rejects a short password with 400, before anything is counted", async () => {
     const api = await start();
+    for (let i = 0; i < 7; i++) await api.signUp("b@example.com", "short");
     expect((await api.signUp("b@example.com", "short")).status).toBe(400);
+    expect((await api.signUp("b@example.com")).status).toBe(202);
   });
 
   it("limits sign-ups per address, then answers 429 with Retry-After", async () => {
     const api = await start();
-    for (let i = 0; i < 6; i++) await api.signUp(`user${i}@example.com`);
+    for (let i = 0; i < POLICIES.signUpIp.free; i++) await api.signUp(`user${i}@example.com`);
     const res = await api.signUp("next@example.com");
     expect(res.status).toBe(429);
     expect(Number(res.headers.get("retry-after"))).toBeGreaterThan(0);
@@ -88,13 +90,34 @@ describe("sign-up", () => {
 
   it("limits sign-ups per email, whether or not it is registered", async () => {
     const api = await start();
-    for (let i = 0; i < 4; i++) await api.signUp("same@example.com");
+    for (let i = 0; i < POLICIES.signUpAccount.free; i++) await api.signUp("same@example.com");
     expect((await api.signUp("same@example.com")).status).toBe(429);
+  });
+
+  it("answers 429 identically for a registered and a never-registered email", async () => {
+    const lockedOut = async (registered: boolean) => {
+      const api = await start();
+      if (!registered) api.store.createAccount = async () => true;
+      for (let i = 0; i < POLICIES.signUpAccount.free; i++) await api.signUp("e@example.com");
+      const res = await api.signUp("e@example.com");
+      expect(res.status).toBe(429);
+      return wire(res);
+    };
+    expect(await lockedOut(false)).toEqual(await lockedOut(true));
+  });
+
+  it("holds a parallel burst from one address to the limit", async () => {
+    const api = await start();
+    const sent = Array.from({ length: 20 }, (_, i) => api.signUp(`burst${i}@example.com`));
+    const statuses = (await Promise.all(sent)).map((r) => r.status);
+    const accepted = statuses.filter((s) => s === 202).length;
+    expect(accepted).toBeLessThanOrEqual(POLICIES.signUpIp.free);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(20 - accepted);
   });
 
   it("ignores X-Forwarded-For unless the proxy is trusted", async () => {
     const spoofed = await start(false);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < POLICIES.signUpIp.free; i++) {
       await spoofed.signUp(`u${i}@example.com`, PASSWORD, { "x-forwarded-for": `10.0.0.${i}` });
     }
     const blocked = await spoofed.signUp("v@example.com", PASSWORD, {
@@ -103,7 +126,7 @@ describe("sign-up", () => {
     expect(blocked.status).toBe(429);
 
     const proxied = await start(true);
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < POLICIES.signUpIp.free + 2; i++) {
       const res = await proxied.signUp(`u${i}@example.com`, PASSWORD, {
         "x-forwarded-for": `10.0.0.${i}`,
       });
