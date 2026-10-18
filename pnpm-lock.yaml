@@ -26,6 +26,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@docmind/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
