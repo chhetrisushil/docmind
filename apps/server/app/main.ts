@@ -1,17 +1,9 @@
-import { AuthService, PasswordAuthenticator, primeDecoy } from "@docmind/auth";
-import { EncryptedFsContentStore, removeStaleTemp } from "@docmind/blob-store";
+import { primeDecoy } from "@docmind/auth";
+import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
-import { PgAuthStore } from "./auth/pgAuthStore";
-import { PgThrottle } from "./auth/pgThrottle";
-import { authRoutes } from "./auth/routes";
-import { buildApp } from "./config";
-import { FieldCrypto } from "./crypto/fields";
+import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
-import { loomIngest } from "./documents/ingest";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
-import { documentRoutes } from "./documents/routes";
-import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
-import { createHttpServer } from "./server";
 import { shutdown } from "./shutdown";
 import { openDurableStorage } from "./storage";
 
@@ -58,36 +50,15 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const app = buildApp(durable.storage, durable.crypto, { ingest: pgIngestDeps(pool) });
-  const ingest = loomIngest(app.runtime);
-
-  const store = new PgAuthStore(pool);
-  const throttle = new PgThrottle(pool);
-  const authenticator = new PasswordAuthenticator(store);
-  const server = createHttpServer({
-    ...authRoutes({
-      service: new AuthService(store),
-      authenticator,
-      store,
-      throttle,
-      secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
-      trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
-    }),
-    ...documentRoutes({
-      pool,
-      authenticator,
-      fields: new FieldCrypto(keys),
-      blobs: ({ tenantId, userId }) =>
-        new EncryptedFsContentStore({
-          root: blobRoot,
-          tenantId,
-          userId,
-          keys,
-          maxBytes: limits.maxFileBytes,
-        }),
-      limits,
-      ingest,
-    }),
+  const { app, server, store, throttle } = buildServer({
+    pool,
+    keys,
+    storage: durable.storage,
+    crypto: durable.crypto,
+    limits,
+    blobRoot,
+    secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
+    trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
   });
 
   const sweep = () =>
