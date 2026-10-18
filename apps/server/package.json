@@ -17,7 +17,8 @@
     "@loom/app": "*",
     "@loom/effect-runtime": "*",
     "@loom/workflow-runtime": "*",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@loom/cli": "*",
