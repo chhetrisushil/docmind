@@ -1,15 +1,23 @@
 import { AuthService, PasswordAuthenticator, primeDecoy } from "@docmind/auth";
+import { EncryptedFsContentStore, removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { buildApp } from "./config";
+import { FieldCrypto } from "./crypto/fields";
 import { createAppPool } from "./db/pool";
+import { loomIngest } from "./documents/ingest";
+import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { documentRoutes } from "./documents/routes";
+import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
 import { shutdown } from "./shutdown";
 import { openDurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
+// Uploads older than this that never finished are leftovers of a crash.
+const STALE_TEMP_MS = HOUR_MS;
 
 async function main(): Promise<void> {
   // Configuration first, so a missing or invalid variable fails before any connection opens. The
@@ -20,6 +28,8 @@ async function main(): Promise<void> {
   if (!loomUrl)
     throw new Error("LOOM_DATABASE_URL is not set (the docmind_loom connection string)");
   const keks = loadKeks();
+  const limits = loadLimits();
+  const blobRoot = loadBlobRoot();
 
   const pool = await createAppPool(databaseUrl);
 
@@ -32,6 +42,14 @@ async function main(): Promise<void> {
   }
 
   const keys = new PostgresKeyStore(pool, keks);
+  // A crash can leave half-written uploads behind; they are never referenced, so just clear them.
+  // The error may carry a path, so only its class is logged, and the server still starts.
+  await removeStaleTemp(blobRoot, STALE_TEMP_MS).catch((err: unknown) =>
+    console.error(
+      "stale temp cleanup failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    ),
+  );
   let durable: Awaited<ReturnType<typeof openDurableStorage>>;
   try {
     durable = await openDurableStorage({ loomUrl, keys });
@@ -39,20 +57,38 @@ async function main(): Promise<void> {
     await pool.end();
     throw err;
   }
-  const app = buildApp(durable.storage, durable.crypto);
+  // The flows are static modules; the ingest step gets its database access as a registered effect.
+  const app = buildApp(durable.storage, durable.crypto, { ingest: pgIngestDeps(pool) });
+  const ingest = loomIngest(app.runtime);
 
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
-  const server = createHttpServer(
-    authRoutes({
+  const authenticator = new PasswordAuthenticator(store);
+  const server = createHttpServer({
+    ...authRoutes({
       service: new AuthService(store),
-      authenticator: new PasswordAuthenticator(store),
+      authenticator,
       store,
       throttle,
       secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
       trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
     }),
-  );
+    ...documentRoutes({
+      pool,
+      authenticator,
+      fields: new FieldCrypto(keys),
+      blobs: ({ tenantId, userId }) =>
+        new EncryptedFsContentStore({
+          root: blobRoot,
+          tenantId,
+          userId,
+          keys,
+          maxBytes: limits.maxFileBytes,
+        }),
+      limits,
+      ingest,
+    }),
+  });
 
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
