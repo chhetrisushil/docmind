@@ -1,5 +1,6 @@
 import { app } from "./config";
 import { createHttpServer } from "./server";
+import { shutdown } from "./shutdown";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -9,7 +10,9 @@ server.listen(port, host, () => console.log(`docmind server listening on http://
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    server.close();
-    void app.close();
+    shutdown(server, app).catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    });
   });
 }

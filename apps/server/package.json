@@ -12,6 +12,7 @@
     "db:migrate": "tsx app/db/migrate.ts"
   },
   "dependencies": {
+    "@docmind/auth": "workspace:*",
     "@docmind/contracts": "workspace:*",
     "@loom/app": "*",
     "@loom/effect-runtime": "*",

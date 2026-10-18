@@ -26,6 +26,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@docmind/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@docmind/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
