@@ -24,6 +24,7 @@ import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
 import {
+  deleteDocument,
   filenameBind,
   findByFingerprint,
   getDocument,
@@ -245,5 +246,41 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       if (!row) return sendError(res, 404, "not_found", "document not found");
       json(res, 200, await toDto(row, deps.fields.forUser(identity.userId)));
     }),
+
+    "DELETE /api/documents/:id": requireAuth(
+      deps.authenticator,
+      async (_req, res, identity, ctx) => {
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const id = parsed.success ? parsed.data.toLowerCase() : null;
+        const mine = id
+          ? await withTenant(deps.pool, identity.tenantId, (tx) =>
+              getDocument(tx, identity.userId, id),
+            )
+          : undefined;
+        if (!mine) return sendError(res, 404, "not_found", "document not found");
+
+        // 1. Cancel the ingest execution first, outside any transaction. If this throws nothing has
+        //    been deleted and the delete can be repeated; a step still running when the cancel lands
+        //    finds its document gone and stops cleanly.
+        await deps.ingest.cancel(identity, mine.id);
+
+        // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
+        //    upload of the same bytes cannot slip between the two (the store's contract). If COMMIT
+        //    fails the row survives without its blob; deleting again finishes the job.
+        const store = deps.blobs(identity);
+        const removed = await withTenant(deps.pool, identity.tenantId, async (tx) => {
+          await lockTenantForWrite(tx, identity.tenantId);
+          const current = await getDocument(tx, identity.userId, mine.id);
+          if (!current) return false; // a concurrent delete won
+          const gone = await deleteDocument(tx, identity.userId, current.id);
+          if (!gone) return false;
+          await store.delete({ __loomContent: gone.contentAddress });
+          return true;
+        });
+        if (!removed) return sendError(res, 404, "not_found", "document not found");
+        res.writeHead(204);
+        res.end();
+      },
+    ),
   };
 }
