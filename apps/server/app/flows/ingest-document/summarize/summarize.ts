@@ -59,6 +59,12 @@ export async function summarizeDocument(
     options.groupChars ?? SUMMARY_GROUP_CHARS,
   );
   if (groups.length === 0) return null;
+  const ac = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, ac.signal]) : ac.signal;
+  const concurrency =
+    Number.isFinite(options.concurrency) && (options.concurrency as number) >= 1
+      ? Math.floor(options.concurrency as number)
+      : MAP_CONCURRENCY;
   const ask = async <T>(
     system: string,
     text: string,
@@ -78,20 +84,21 @@ export async function summarizeDocument(
       ],
       temperature: 0,
     });
-    const res = await provider.complete({
-      ...request,
-      ...(options.signal && { signal: options.signal }),
-    });
+    const res = await provider.complete({ ...request, signal });
     if (res.stopReason === "max_tokens") throw new LlmOutputError(); // a truncated JSON answer
     return jsonAnswer(res.content, schema);
   };
-  const maps = await pool(groups, options.concurrency ?? MAP_CONCURRENCY, (g) =>
-    ask(MAP_SYSTEM, g.text, MAP_INSTRUCTION, MapAnswer),
-  );
-  const joined = maps.map((m, i) => `Part ${i + 1}: ${m.summary}`).join("\n\n");
-  const summary = await ask(REDUCE_SYSTEM, joined, REDUCE_INSTRUCTION, ReduceAnswer);
-  return {
-    summary,
-    groups: groups.map((g, i) => ({ sections: g.sections, entities: maps[i]?.entities ?? [] })),
-  };
+  try {
+    const maps = await pool(groups, concurrency, (g) =>
+      ask(MAP_SYSTEM, g.text, MAP_INSTRUCTION, MapAnswer),
+    );
+    const joined = maps.map((m, i) => `Part ${i + 1}: ${m.summary}`).join("\n\n");
+    const summary = await ask(REDUCE_SYSTEM, joined, REDUCE_INSTRUCTION, ReduceAnswer);
+    return {
+      summary,
+      groups: groups.map((g, i) => ({ sections: g.sections, entities: maps[i]?.entities ?? [] })),
+    };
+  } finally {
+    ac.abort(); // cancels any still-running request after a failure; a no-op once all have settled
+  }
 }

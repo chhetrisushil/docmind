@@ -21,7 +21,10 @@ function cutAt(text: string, max: number): number {
   return cut;
 }
 
-/** Packs consecutive sections into groups of at most `groupChars`, reading at most `maxChars` of section text. */
+/**
+ * Packs consecutive sections into groups holding at most `groupChars` of body text (plus the heading
+ * prefix and separators). `maxChars` bounds the body text read; heading prefixes are not counted.
+ */
 export function packGroups(
   sections: ParsedSection[],
   maxChars: number,
