@@ -23,6 +23,11 @@ export class EmbeddingAbortedError extends Error {
 
 export interface OllamaOptions {
   baseUrl: string;
+  /**
+   * The Ollama model name. Pin an explicit tag (`nomic-embed-text:v1.5`, not `:latest`):
+   * `modelId` is `ollama/<model>` and does not change when a tag is re-pulled, so a moved tag would
+   * silently mix incomparable vectors under one id.
+   */
   model: string;
   dimensions: number;
   maxBatchSize?: number;
@@ -66,6 +71,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   private readonly endpoint: string;
   constructor(private readonly options: OllamaOptions) {
     this.endpoint = embedUrl(options.baseUrl);
+    if (!options.model) throw new EmbeddingError("DOCMIND_EMBED_MODEL must be non-empty");
     positive(options.dimensions, "DOCMIND_EMBED_DIMENSIONS must be a positive integer");
     positive(options.timeoutMs, "DOCMIND_EMBED_TIMEOUT_MS must be a positive integer");
     positive(options.maxBatchSize, "maxBatchSize must be a positive integer");
@@ -96,7 +102,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
-        redirect: "error", // a hostile redirect must not carry document text elsewhere
+        redirect: "manual", // never follow: a hostile redirect must not carry document text elsewhere
         signal: merged,
       });
     } catch {
@@ -104,6 +110,10 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => {}); // never leave the body open
+      if (response.status >= 300 && response.status < 400) {
+        // A misconfigured URL (http to https, an auth proxy): retrying cannot fix it.
+        throw new EmbeddingError("the embedding service redirected the request");
+      }
       if (response.status === 429 || response.status >= 500) throw new EmbeddingUnavailableError();
       throw new EmbeddingError(
         `the embedding service refused the request (HTTP ${response.status})`,
