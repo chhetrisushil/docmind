@@ -169,11 +169,12 @@ describe("the chunk step", () => {
     expect(await run(d)).toEqual({ outcome: "done", count: 1 });
   });
 
-  it("a step that never settles is a transient failure with the fixed message", async () => {
+  it("a step that never settles fails with the fixed message and is not retried over its zombie", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { d } = deps({
       parsed: parsedPort(() => new Promise(() => {})),
       stepTimeoutMs: 1,
+      attemptSettleMs: 1,
     });
     await expect(run(d)).rejects.toThrow(/^ingest step failed: chunk$/);
   });
