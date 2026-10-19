@@ -45,8 +45,11 @@ const logClass = (err: unknown) =>
 
 /** What the document routes need from the status model. */
 export interface DocumentStatusReads {
-  forPage(identity: Identity, documentIds: readonly string[]): Promise<Map<string, StatusView>>;
-  forDocument(identity: Identity, documentId: string): Promise<StatusView>;
+  forPage(
+    identity: Identity,
+    documents: readonly { id: string; generation: number }[],
+  ): Promise<Map<string, StatusView>>;
+  forDocument(identity: Identity, documentId: string, generation: number): Promise<StatusView>;
   /** The document is being deleted: tombstone its rows (call after the delete commits and the flow is cancelled). */
   forgetDocument(identity: Identity, documentId: string): Promise<void>;
 }
@@ -93,52 +96,59 @@ export class IngestStatus implements DocumentStatusReads {
       .catch((err) => this.report(err));
   };
 
-  /** One query for one page of documents, under the caller's tenant: absent documents are simply missing. */
+  /**
+   * One query for one page of documents, under the caller's tenant: absent documents are simply
+   * missing. Only the row of each document's current generation counts (D1): an older one is
+   * history, and a newer one cannot exist before the column moves.
+   */
   async forPage(
     identity: Identity,
-    documentIds: readonly string[],
+    documents: readonly { id: string; generation: number }[],
   ): Promise<Map<string, StatusView>> {
     const views = new Map<string, StatusView>();
-    if (documentIds.length === 0) return views;
+    if (documents.length === 0) return views;
     // Stored keys are lowercase (routes lowercase ids too); answer under the caller's spelling.
-    const spelled = new Map<string, string[]>();
-    for (const id of documentIds) {
-      const key = id.toLowerCase();
-      spelled.set(key, [...(spelled.get(key) ?? []), id]);
+    const wanted = new Map<string, { caller: string; generation: number }[]>();
+    for (const d of documents) {
+      const key = d.id.toLowerCase();
+      wanted.set(key, [...(wanted.get(key) ?? []), { caller: d.id, generation: d.generation }]);
     }
     const reader = this.o.readerFor(identity);
     if (reader.getFoldedByKey === undefined)
       throw new TypeError("the status reader store has no folded-state support");
-    const best = new Map<string, number>();
     for (const row of foldedStates(
-      await reader.getFoldedByKey(INGEST_STATUS_MODEL, [...spelled.keys()]),
+      await reader.getFoldedByKey(INGEST_STATUS_MODEL, [...wanted.keys()]),
     )) {
       // Reader RLS is tenant-wide: owner scoping happens here (scope is the user id).
       if (row.key === null || ingestScopeOf(row.executionId) !== identity.userId) continue;
       const generation = generationOf(row.executionId);
-      // Highest generation wins (generation 1 is the bare id; `.1` is never emitted, Task 74b ruling).
-      if (generation === undefined || generation < (best.get(row.key) ?? 0)) continue;
-      const callers = spelled.get(row.key);
-      if (callers === undefined) continue;
-      best.set(row.key, generation);
-      const view = viewOf(row.state as IngestStatusState);
-      for (const caller of callers) views.set(caller, view);
+      // Generation 1 is the bare id; `.1` is never emitted (Task 74b ruling).
+      for (const w of wanted.get(row.key) ?? []) {
+        if (w.generation === generation)
+          views.set(w.caller, viewOf(row.state as IngestStatusState));
+      }
     }
     return views;
   }
 
   /**
    * The document a request just touched: fold its log tail first (one read of the log, ADR 0132 D8),
-   * then read it like a page. A document with no row is `uploaded`.
+   * then read it like a page. A document with no row for its generation is `uploaded`.
    */
-  async forDocument(identity: Identity, documentId: string): Promise<StatusView> {
+  async forDocument(
+    identity: Identity,
+    documentId: string,
+    generation: number,
+  ): Promise<StatusView> {
     // The writer refreshes (read-repair by execution id: a document with no row has no key to find); the reader reads.
     await this.service.refresh(
       INGEST_STATUS_MODEL,
-      [ingestExecutionId(identity.userId, documentId)],
+      [ingestExecutionId(identity.userId, documentId, generation)],
       [this.o.source],
     );
-    return (await this.forPage(identity, [documentId])).get(documentId) ?? UPLOADED;
+    return (
+      (await this.forPage(identity, [{ id: documentId, generation }])).get(documentId) ?? UPLOADED
+    );
   }
 
   /**

@@ -16,6 +16,7 @@ import { createIngestWiring } from "../flows/ingest-document/limits";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
 import { STATUS_MESSAGES } from "./model";
+import { atDefault } from "./testing";
 
 const root = mkdtempSync(join(tmpdir(), "dm-compose-status-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -84,7 +85,7 @@ describe("buildServer and the ingest-status model", () => {
     await composed.status.boot();
     const { identity, documentId } = await runFailingIngest(composed);
     await composed.status.close();
-    const views = await composed.status.forPage(identity, [documentId]);
+    const views = await composed.status.forPage(identity, atDefault(documentId));
     expect(views.get(documentId)).toMatchObject({
       status: "failed",
       error: STATUS_MESSAGES.internal,
@@ -98,7 +99,7 @@ describe("buildServer and the ingest-status model", () => {
     composed.detachStatusFeed();
     const { identity, documentId } = await runFailingIngest(composed);
     await composed.status.close();
-    expect((await composed.status.forPage(identity, [documentId])).size).toBe(0);
+    expect((await composed.status.forPage(identity, atDefault(documentId))).size).toBe(0);
     await composed.app.close();
   });
 

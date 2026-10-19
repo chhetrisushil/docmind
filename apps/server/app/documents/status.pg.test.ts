@@ -4,7 +4,7 @@ import { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { INGEST_STATUS_MODEL, STATUS_MESSAGES } from "../status/model";
-import { ingestRun } from "../status/testing";
+import { atDefault, ingestRun } from "../status/testing";
 import { insertDocument } from "./repo";
 import {
   ALICE,
@@ -115,7 +115,7 @@ describe.skipIf(!PG_URL)(
       expect((await del(id)).status).toBe(204);
       const [row] = await h.statusStore.getFolded(INGEST_STATUS_MODEL, [`u_${U1}:ingest-${id}.2`]);
       expect(row).toMatchObject({ erased: true, state: null });
-      expect((await h.status.forPage(ALICE, [id])).size).toBe(0);
+      expect((await h.status.forPage(ALICE, atDefault(id))).size).toBe(0);
     });
 
     it("answers 204 and leaves no document when forgetting its status fails after the delete committed (F18)", async () => {

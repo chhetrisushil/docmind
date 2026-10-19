@@ -4,12 +4,13 @@ import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { ingestExecutionId } from "../documents/ingest";
 import { InMemoryProgressBus } from "../documents/progress";
 import { ALICE, ALICE2, BOB, T1, U1, U1B, U2, seedUsers } from "../documents/testHarness";
 import { IngestStatus } from "./ingestStatus";
 import { INGEST_STATUS_MODEL } from "./model";
 import { pgStatusReaderFor, pgStatusWriter } from "./pgStores";
-import { MemoryLog, ingestRun } from "./testing";
+import { MemoryLog, atDefault, ingestRun } from "./testing";
 
 describe.skipIf(!PG_URL)(
   "IngestStatus over Postgres with the real roles (needs DOCMIND_TEST_PG_URL)",
@@ -19,7 +20,7 @@ describe.skipIf(!PG_URL)(
     let loom: Pool;
     let status: IngestStatus;
     const [D1, D2, D3] = [randomUUID(), randomUUID(), randomUUID()];
-    const exec = (user: string, doc: string) => `u_${user}:ingest-${doc}`;
+    const exec = (user: string, doc: string) => ingestExecutionId(user, doc);
     const statements: string[] = [];
     const D4 = randomUUID();
 
@@ -67,10 +68,12 @@ describe.skipIf(!PG_URL)(
     });
 
     it("forPage returns only the caller's own documents, end to end, and never runs DDL on the app role's connections", async () => {
-      expect([...(await status.forPage(ALICE, [D1, D2, D3])).keys()]).toEqual([D1]);
-      expect([...(await status.forPage(ALICE2, [D1, D2, D3])).keys()]).toEqual([D2]);
-      expect([...(await status.forPage(BOB, [D1, D2, D3])).keys()].sort()).toEqual([D1, D3].sort());
-      expect((await status.forPage(ALICE, [D1])).get(D1)?.status).toBe("parsing");
+      expect([...(await status.forPage(ALICE, atDefault(D1, D2, D3))).keys()]).toEqual([D1]);
+      expect([...(await status.forPage(ALICE2, atDefault(D1, D2, D3))).keys()]).toEqual([D2]);
+      expect([...(await status.forPage(BOB, atDefault(D1, D2, D3))).keys()].sort()).toEqual(
+        [D1, D3].sort(),
+      );
+      expect((await status.forPage(ALICE, atDefault(D1))).get(D1)?.status).toBe("parsing");
       expect(statements.some((q) => /read_model_state/.test(q))).toBe(true); // the spy sees the reads
       expect(statements.filter((q) => /^\s*(CREATE|ALTER|DROP)/i.test(q))).toEqual([]);
     });
@@ -107,9 +110,9 @@ describe.skipIf(!PG_URL)(
 
     it("forgetDocument tombstones only the caller's row for a shared key, and a later event cannot revive it", async () => {
       await status.forgetDocument(ALICE, D1);
-      expect((await status.forPage(ALICE, [D1])).size).toBe(0);
-      expect((await status.forPage(BOB, [D1])).get(D1)?.status).toBe("parsing"); // same key, other tenant
-      expect((await status.forPage(ALICE, [D4])).size).toBe(1);
+      expect((await status.forPage(ALICE, atDefault(D1))).size).toBe(0);
+      expect((await status.forPage(BOB, atDefault(D1))).get(D1)?.status).toBe("parsing"); // same key, other tenant
+      expect((await status.forPage(ALICE, atDefault(D4))).size).toBe(1);
       const row = () =>
         db.owner.query(
           "SELECT erased, state, scope, sequence FROM read_model_state WHERE execution_id = $1",
@@ -124,14 +127,14 @@ describe.skipIf(!PG_URL)(
       const after = (await row()).rows[0];
       expect(after).toMatchObject({ erased: true, state: null });
       expect(Number(after.sequence)).toBeGreaterThan(Number(before.sequence));
-      expect((await status.forPage(ALICE, [D1])).size).toBe(0);
+      expect((await status.forPage(ALICE, atDefault(D1))).size).toBe(0);
     });
 
     it("forgetUser tombstones one user's rows and leaves another user of the same tenant and other tenants alone", async () => {
       expect(await status.forgetUser(U1)).toBe(1); // D4 (D1 is already erased); the chat row has no scope
-      expect((await status.forPage(ALICE, [D4])).size).toBe(0);
-      expect((await status.forPage(ALICE2, [D2])).size).toBe(1);
-      expect((await status.forPage(BOB, [D3])).size).toBe(1);
+      expect((await status.forPage(ALICE, atDefault(D4))).size).toBe(0);
+      expect((await status.forPage(ALICE2, atDefault(D2))).size).toBe(1);
+      expect((await status.forPage(BOB, atDefault(D3))).size).toBe(1);
     });
   },
 );
