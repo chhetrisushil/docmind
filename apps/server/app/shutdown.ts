@@ -54,6 +54,14 @@ export async function runAll(...steps: (() => Promise<unknown>)[]): Promise<void
 export const FORCE_EXIT_MS = 5_000;
 
 /**
+ * The overall deadline of a shutdown, armed when the signal arrives. It must exceed the sum of the
+ * bounded close steps (two SHUTDOWN_DRAIN_MS waits, two 10 s pool ends: 40 s) and stay under a
+ * supervisor's kill timeout (systemd defaults to 90 s), so a slow in-flight request (Node's request
+ * timeout is 300 s) cannot hold the process until SIGKILL, which would skip the lease release.
+ */
+export const FORCE_EXIT_DEADLINE_MS = 60_000;
+
+/**
  * Schedules an unref'd forced exit: it never keeps a cleanly stopped process alive, and it ends one
  * that a stuck socket or pool client would otherwise hold open. Call it after the close sequence,
  * whether it succeeded or failed; `exit` receives the exit code the process was going to have.
