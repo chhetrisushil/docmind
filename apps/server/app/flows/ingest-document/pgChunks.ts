@@ -16,6 +16,8 @@ export interface ChunkStore {
   replace(ref: IngestStartInput, chunks: Chunk[], signal?: AbortSignal): Promise<number>;
   count(ref: IngestStartInput): Promise<number>;
   read(ref: IngestStartInput, ids: string[]): Promise<{ id: string; text: string }[]>;
+  /** Each chunk's id and section, in ordinal order; owner-scoped, nothing decrypted. */
+  sectionsOf(ref: IngestStartInput): Promise<{ id: string; sectionOrdinal: number }[]>;
 }
 
 const OWNED = "EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2)";
@@ -83,6 +85,22 @@ export class PgChunkStore implements ChunkStore {
     });
     if (!row?.owned) throw new DocumentGoneError();
     return row.n;
+  }
+
+  async sectionsOf(ref: IngestStartInput): Promise<{ id: string; sectionOrdinal: number }[]> {
+    const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      const res = await tx.query<{ owned: boolean; id: string | null; section_ordinal: number }>(
+        `SELECT o.owned, c.id, c.section_ordinal FROM (SELECT ${OWNED} AS owned) o
+           LEFT JOIN chunks c ON o.owned AND c.document_id = $1
+          ORDER BY c.ordinal`,
+        [ref.documentId, ref.userId],
+      );
+      return res.rows;
+    });
+    if (!rows[0]?.owned) throw new DocumentGoneError();
+    return rows
+      .filter((r): r is typeof r & { id: string } => r.id !== null)
+      .map((r) => ({ id: r.id, sectionOrdinal: r.section_ordinal }));
   }
 
   async read(ref: IngestStartInput, ids: string[]): Promise<{ id: string; text: string }[]> {

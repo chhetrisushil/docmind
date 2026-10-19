@@ -1,4 +1,5 @@
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import type { FieldCrypto } from "../../crypto/fields";
@@ -10,6 +11,7 @@ const env = { DOCMIND_EMBED_MODEL: "a", DOCMIND_EMBED_DIMENSIONS: "8" };
 const args = (wiring: ReturnType<typeof createIngestWiring>, vectors: InMemoryChunkVectors) => ({
   pool: {} as Pool,
   fields: {} as FieldCrypto,
+  keys: new InMemoryKeyStore(),
   blobs: () => ({ get: async () => null }),
   wiring,
   vectors,

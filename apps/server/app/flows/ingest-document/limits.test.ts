@@ -8,6 +8,7 @@ import {
   loadGateLimits,
   loadLlmConfig,
   loadParseLimits,
+  loadSummaryMaxChars,
   parseStepTimeoutMs,
 } from "./limits";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
@@ -220,6 +221,19 @@ describe("LLM config and providers", () => {
     );
     expect(() => createIngestWiring({ ANTHROPIC_API_KEY: "bad\nkey" })).toThrow(
       /^ANTHROPIC_API_KEY must be a header-safe string$/,
+    );
+  });
+});
+
+describe("loadSummaryMaxChars", () => {
+  it("defaults to 400000, accepts the maximum, and is built into the wiring", () => {
+    expect(loadSummaryMaxChars({})).toBe(400_000);
+    expect(loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: "5000000" })).toBe(5_000_000);
+    expect(createIngestWiring({ DOCMIND_SUMMARY_MAX_CHARS: "1000" }).summaryMaxChars).toBe(1_000);
+  });
+  it.each(["abc", "0", "5000001"])("rejects %s naming the variable", (value) => {
+    expect(() => loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: value })).toThrow(
+      /DOCMIND_SUMMARY_MAX_CHARS/,
     );
   });
 });

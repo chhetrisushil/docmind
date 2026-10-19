@@ -23,6 +23,7 @@ const store = (count: () => Promise<number>) => ({
   replace: async () => 0,
   count,
   read: async () => [],
+  sectionsOf: async () => [],
 });
 
 describe("placeholders", () => {

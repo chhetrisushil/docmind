@@ -24,6 +24,8 @@ export interface IngestWiring {
   /** The parse limits the runner was built with; parse's attempt timeout derives from them. */
   runnerLimits: ParseLimits;
   /** Claude providers; both are undefined without ANTHROPIC_API_KEY (summaries skipped, images fail as vision_unavailable). */
+  /** The most document text a summary reads. */
+  summaryMaxChars: number;
   llm: { summary?: LlmProvider; vision?: LlmProvider; config: LlmConfig };
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -149,6 +151,12 @@ function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
   };
 }
 
+const MAX_SUMMARY_CHARS = 5_000_000;
+
+/** The most document text one summary reads (the reduce prompt grows with it); an invalid variable throws an error naming it. */
+export const loadSummaryMaxChars = (env: NodeJS.ProcessEnv = process.env): number =>
+  positiveInt(env, "DOCMIND_SUMMARY_MAX_CHARS", 400_000, MAX_SUMMARY_CHARS);
+
 const MAX_INGEST_CONCURRENCY = 64;
 
 /** Gate limits from the environment; an invalid variable throws an error naming it, never its value. */
@@ -183,5 +191,6 @@ export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): Ingest
     shutdown: new AbortController(),
     gate: new IngestGate(loadGateLimits(env)),
     llm: createLlm(env),
+    summaryMaxChars: loadSummaryMaxChars(env),
   };
 }

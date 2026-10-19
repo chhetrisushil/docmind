@@ -78,7 +78,7 @@ export function buildServer(options: ComposeOptions) {
       dimensions: embedder.dimensions,
     });
   const app = buildApp(options.storage, options.crypto, {
-    ingest: pgIngestDeps({ pool, fields, blobs, wiring: options.ingest, vectors }),
+    ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
     onEvent: (event) => feed.onEvent?.(event),
   });
   const status = new IngestStatus({

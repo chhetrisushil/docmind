@@ -1,4 +1,5 @@
 import type { ChunkVectorStore } from "@docmind/vector-pg";
+import type { KeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../../crypto/fields";
 import type { IngestDeps } from "./deps";
@@ -14,6 +15,8 @@ import { VisionReader } from "./vision";
 export interface PgIngestArgs {
   pool: Pool;
   fields: FieldCrypto;
+  /** The per-user data keys; entity names are keyed (HMAC) under a key derived from them. */
+  keys: KeyStore;
   /** The per-identity blob store the document routes use. */
   blobs: (identity: { tenantId: string; userId: string }) => {
     get(ref: { __loomContent: string }): Promise<Uint8Array | null>;

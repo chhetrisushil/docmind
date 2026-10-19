@@ -129,4 +129,31 @@ describe.skipIf(!PG_URL)("PgChunkStore read (needs DOCMIND_TEST_PG_URL)", () => 
     expect((err as Error).cause).toBeUndefined();
     expect(JSON.stringify(err)).not.toContain(secret);
   });
+
+  it("sectionsOf lists ids and section ordinals in order, owner-scoped, and is gone for a stranger", async () => {
+    const ref = await fresh();
+    const store = new PgChunkStore(f.app, f.fields);
+    const two = sample(1);
+    const parsed: ParsedDocument = {
+      ...two,
+      sections: [...two.sections, ...two.sections.map((x) => ({ ...x, headingPath: ["Next"] }))],
+    };
+    const chunks = chunkDocument(parsed);
+    await store.replace(ref, chunks);
+    expect(await store.sectionsOf(ref)).toEqual(
+      chunks.map((c) => ({
+        id: chunkIdFor(ref.documentId, c.ordinal),
+        sectionOrdinal: c.sectionOrdinal,
+      })),
+    );
+    expect(new Set(chunks.map((c) => c.sectionOrdinal)).size).toBe(2);
+    await expect(store.sectionsOf({ ...ref, userId: U1B })).rejects.toBeInstanceOf(
+      DocumentGoneError,
+    );
+    await expect(store.sectionsOf({ ...ref, tenantId: T2 })).rejects.toBeInstanceOf(
+      DocumentGoneError,
+    );
+    const empty = await fresh();
+    expect(await store.sectionsOf(empty)).toEqual([]);
+  });
 });

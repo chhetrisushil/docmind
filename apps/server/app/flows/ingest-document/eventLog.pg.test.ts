@@ -93,6 +93,7 @@ describe.skipIf(!PG_URL)(
       const base = pgIngestDeps({
         pool: f.app,
         fields: f.fields,
+        keys: f.keys,
         blobs,
         wiring,
         vectors: twinOverPgChunks(f.app, wiring),
@@ -381,6 +382,7 @@ describe.skipIf(!PG_URL)(
       const base = pgIngestDeps({
         pool: f.app,
         fields: f.fields,
+        keys: f.keys,
         blobs,
         wiring,
         vectors: twinOverPgChunks(f.app, wiring),

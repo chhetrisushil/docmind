@@ -77,6 +77,7 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
       },
       count: (r) => real.count(r),
       read: (r, ids) => real.read(r, ids),
+      sectionsOf: (r) => real.sectionsOf(r),
     };
     await store.put(ref, parsed);
     const run = () =>
@@ -108,6 +109,7 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
       },
       count: (r) => real.count(r),
       read: (r, ids) => real.read(r, ids),
+      sectionsOf: (r) => real.sectionsOf(r),
     };
     const run = () =>
       chunkEffect({ guard: new PgStepGuard(f.app), parsed: store, chunks }).execute(
@@ -142,6 +144,7 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
       ...real,
       count: (r) => real.count(r),
       read: (r, ids) => real.read(r, ids),
+      sectionsOf: (r) => real.sectionsOf(r),
       replace: async (r, c, signal) => {
         if (++calls > 1) return real.replace(r, c, signal);
         first = signal;

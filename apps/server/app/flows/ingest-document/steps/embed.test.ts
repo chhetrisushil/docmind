@@ -44,6 +44,7 @@ function harness(n: number) {
       replace: async () => n,
       count: async () => n,
       read: async (_r, ids) => ids.map((id) => ({ id, text: `t-${id}` })),
+      sectionsOf: async () => [],
     },
     vectors: new InMemoryChunkVectors({
       modelId: embedder.modelId,

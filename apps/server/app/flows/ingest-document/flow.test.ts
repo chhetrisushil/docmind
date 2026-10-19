@@ -131,6 +131,7 @@ describe("ingest-document flow v2", () => {
         return 0;
       },
       read: async () => [],
+      sectionsOf: async () => [],
     };
     const { output, status } = await runLogged(fakeDeps({ guard, chunks }).deps);
     expect(output).toEqual({ outcome: "failed", code: "corrupt_content" });
@@ -183,6 +184,7 @@ describe("ingest-document flow v2", () => {
         replace: async (_r, c) => c.length,
         count: async () => 1,
         read: async (_r, rows) => rows.map((id) => ({ id, text: "t" })),
+        sectionsOf: async () => [],
       },
     });
     const app = buildApp({ kind: "memory" }, undefined, { ingest: deps });
