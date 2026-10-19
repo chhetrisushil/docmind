@@ -1,4 +1,8 @@
-import { type ParsedDocument, ParsedDocument as ParsedDocumentSchema } from "@docmind/parsers";
+import {
+  ParseAbortedError,
+  type ParsedDocument,
+  ParsedDocument as ParsedDocumentSchema,
+} from "@docmind/parsers";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
@@ -10,7 +14,8 @@ export const parsedBind = (documentId: string) => `document:${documentId}:parsed
 export interface ParsedStore {
   put(ref: IngestStartInput, parsed: ParsedDocument): Promise<void>;
   take(ref: IngestStartInput): Promise<ParsedDocument | undefined>;
-  drop(ref: IngestStartInput): Promise<void>;
+  /** An aborted `signal` rolls the drop back instead of committing it (see ChunkStore.replace). */
+  drop(ref: IngestStartInput, signal?: AbortSignal): Promise<void>;
 }
 
 const OWNED = "EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2)";
@@ -53,7 +58,7 @@ export class PgParsedStore implements ParsedStore {
     return result.data;
   }
 
-  async drop(ref: IngestStartInput): Promise<void> {
+  async drop(ref: IngestStartInput, signal?: AbortSignal): Promise<void> {
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       const { rows } = await tx.query<{ owned: boolean }>(
         `WITH gone AS (DELETE FROM parsed_documents p USING documents d
@@ -62,6 +67,7 @@ export class PgParsedStore implements ParsedStore {
         [ref.documentId, ref.userId],
       );
       if (!rows[0]?.owned) throw new DocumentGoneError();
+      if (signal?.aborted) throw new ParseAbortedError();
     });
   }
 }

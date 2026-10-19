@@ -39,13 +39,14 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
   return stepEffect(
     "chunk",
     deps.guard,
-    async (ref) => {
+    async (ref, signal) => {
       const parsed = await deps.parsed.take(ref);
+      signal?.throwIfAborted(); // an abandoned attempt does not go on to write
       // No parsed row for a document that exists: an earlier run stored the chunks and dropped it,
       // and crashed before its STEP_COMPLETED was appended. The chunks are the result.
       if (!parsed) return { count: await deps.chunks.count(ref) };
-      const count = await deps.chunks.replace(ref, chunkDocument(parsed)); // deterministic ids: a re-run overwrites
-      await deps.parsed.drop(ref); // after the chunks exist, never before
+      const count = await deps.chunks.replace(ref, chunkDocument(parsed), signal); // deterministic ids: a re-run overwrites
+      await deps.parsed.drop(ref, signal); // after the chunks exist, never before
       return { count };
     },
     {
