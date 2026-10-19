@@ -6,6 +6,7 @@ import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
+import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle, starts } = buildServer({
+  const { app, server, store, throttle, starts, status } = buildServer({
     pool,
     keys,
     storage: durable.storage,
@@ -62,7 +63,23 @@ async function main(): Promise<void> {
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
     trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
     ingest,
+    // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
+    status: {
+      writer: pgStatusWriter(durable.pool),
+      readerFor: pgStatusReaderFor(pool),
+      source: durable.storage.eventStore,
+    },
   });
+
+  // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
+  try {
+    await status.boot();
+  } catch (err) {
+    await app.close();
+    await durable.close();
+    await pool.end();
+    throw err;
+  }
 
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
@@ -98,6 +115,7 @@ async function main(): Promise<void> {
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(
           () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
+          () => status.close(),
           () => app.close(),
           () => durable.close(),
           () => pool.end(),
