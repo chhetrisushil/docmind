@@ -191,7 +191,7 @@ describe.skipIf(!PG_URL)(
       const left = await f.db.owner.query("SELECT 1 FROM parsed_documents WHERE document_id = $1", [
         ref.documentId,
       ]);
-      expect(left.rowCount).toBe(0); // the parsed row is dropped once the chunks exist
+      expect(left.rowCount).toBe(0); // finalize dropped the parsed row (the flow is ready)
       const row = await f.db.owner.query(
         "SELECT id, text_enc FROM chunks WHERE document_id = $1 ORDER BY ordinal",
         [ref.documentId],

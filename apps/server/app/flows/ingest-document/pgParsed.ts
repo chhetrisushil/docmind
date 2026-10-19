@@ -14,6 +14,8 @@ export const parsedBind = (documentId: string) => `document:${documentId}:parsed
 export interface ParsedStore {
   put(ref: IngestStartInput, parsed: ParsedDocument): Promise<void>;
   take(ref: IngestStartInput): Promise<ParsedDocument | undefined>;
+  /** Is a parsed document stored? Owner-scoped; a gone document is DocumentGoneError. */
+  has(ref: IngestStartInput): Promise<boolean>;
   /** An aborted `signal` rolls the drop back instead of committing it (see ChunkStore.replace). */
   drop(ref: IngestStartInput, signal?: AbortSignal): Promise<void>;
 }
@@ -56,6 +58,19 @@ export class PgParsedStore implements ParsedStore {
     const result = ParsedDocumentSchema.safeParse(opened);
     if (!result.success) throw new Error("the stored parsed document has an invalid shape");
     return result.data;
+  }
+
+  async has(ref: IngestStartInput): Promise<boolean> {
+    const row = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      const { rows } = await tx.query<{ owned: boolean; present: boolean }>(
+        `SELECT ${OWNED} AS owned,
+                EXISTS (SELECT 1 FROM parsed_documents p WHERE p.document_id = $1) AS present`,
+        [ref.documentId, ref.userId],
+      );
+      return rows[0];
+    });
+    if (!row?.owned) throw new DocumentGoneError();
+    return row.present;
   }
 
   async drop(ref: IngestStartInput, signal?: AbortSignal): Promise<void> {

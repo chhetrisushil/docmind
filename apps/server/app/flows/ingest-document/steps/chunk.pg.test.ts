@@ -50,6 +50,7 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
         await gate;
         return out;
       },
+      has: (r) => real.has(r),
       drop: (r) => real.drop(r),
     };
     const pending = chunkEffect({
@@ -64,59 +65,35 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
     expect(await rows("chunks", ref.documentId)).toBe(0);
   });
 
-  it("crash window 1 (chunks stored, parsed not dropped): a re-run replaces the chunks and drops parsed", async () => {
+  it("a re-run after the chunks were stored skips the work, keeps the parsed row, and does not re-chunk", async () => {
     const ref = await f.doc("d".repeat(64));
     const store = new PgParsedStore(f.app, f.fields);
-    const chunks = new PgChunkStore(f.app, f.fields);
-    await store.put(ref, parsed);
-    let crash = true;
-    const crashing: ParsedStore = {
-      put: (r, p) => store.put(r, p),
-      take: (r) => store.take(r),
-      drop: async (r) => {
-        if (crash) throw new Error("process died");
-        return store.drop(r);
+    const real = new PgChunkStore(f.app, f.fields);
+    let replaces = 0;
+    const chunks: ChunkStore = {
+      replace: (r, c, s) => {
+        replaces++;
+        return real.replace(r, c, s);
       },
+      count: (r) => real.count(r),
+      read: (r, ids) => real.read(r, ids),
     };
-    const effect = (p: ParsedStore) =>
-      chunkEffect({
-        guard: new PgStepGuard(f.app),
-        parsed: p,
-        chunks,
-        sleep: async () => {},
-        stepTimeoutMs: 5_000,
-      });
-    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(effect(crashing).execute(ref, {} as never)).rejects.toThrow(
-      /^ingest step failed: chunk$/,
-    );
-    quiet.mockRestore();
+    await store.put(ref, parsed);
+    const run = () =>
+      chunkEffect({ guard: new PgStepGuard(f.app), parsed: store, chunks }).execute(
+        ref,
+        {} as never,
+      );
+    expect(await run()).toEqual({ outcome: "done", count: 1 });
+    expect(await rows("parsed_documents", ref.documentId)).toBe(1); // kept for analyze and summarize
+    expect(await run()).toEqual({ outcome: "done", count: 1 });
+    expect(replaces).toBe(1);
     expect(await rows("chunks", ref.documentId)).toBe(1);
     expect(await rows("parsed_documents", ref.documentId)).toBe(1);
-    crash = false;
-    expect(await effect(store).execute(ref, {} as never)).toEqual({ outcome: "done", count: 1 });
-    expect(await rows("chunks", ref.documentId)).toBe(1);
-    expect(await rows("parsed_documents", ref.documentId)).toBe(0);
     const [{ id }] = (
       await f.db.owner.query("SELECT id FROM chunks WHERE document_id = $1", [ref.documentId])
     ).rows;
-    expect((await chunks.read(ref, [id]))[0]?.text).toContain("Hello world.");
-  });
-
-  it("crash window 2 (parsed dropped, event not appended): a re-run does not fail and reports the stored chunks", async () => {
-    const ref = await f.doc("e".repeat(64));
-    const store = new PgParsedStore(f.app, f.fields);
-    const run = () =>
-      chunkEffect({
-        guard: new PgStepGuard(f.app),
-        parsed: store,
-        chunks: new PgChunkStore(f.app, f.fields),
-      }).execute(ref, {} as never);
-    await store.put(ref, parsed);
-    expect(await run()).toEqual({ outcome: "done", count: 1 });
-    expect(await rows("parsed_documents", ref.documentId)).toBe(0);
-    expect(await run()).toEqual({ outcome: "done", count: 1 });
-    expect(await rows("chunks", ref.documentId)).toBe(1);
+    expect((await real.read(ref, [id]))[0]?.text).toContain("Hello world.");
   });
 
   it("an attempt that hangs past its bound never commits, and the next attempt waits for it to settle", async () => {

@@ -21,7 +21,7 @@ const ref = (): IngestStartInput => ({
   userId: randomUUID(),
   documentId: randomUUID(),
 });
-function deps(over: Partial<ChunkDeps> = {}) {
+function deps(over: Partial<ChunkDeps> = {}, counts: number[] = [0]) {
   const calls: string[] = [];
   const d: ChunkDeps = {
     guard: { begin: async (_r, s) => void calls.push(`begin:${s}`) },
@@ -31,6 +31,7 @@ function deps(over: Partial<ChunkDeps> = {}) {
         calls.push("take");
         return parsed as never;
       },
+      has: async () => true,
       drop: async () => void calls.push("drop"),
     },
     chunks: {
@@ -40,7 +41,7 @@ function deps(over: Partial<ChunkDeps> = {}) {
       },
       count: async () => {
         calls.push("count");
-        return 7;
+        return counts.shift() ?? 0;
       },
       read: async () => [],
     },
@@ -53,51 +54,37 @@ const run = (d: ChunkDeps) => chunkEffect(d).execute(ref(), {} as never);
 const parsedPort = (take: () => Promise<unknown>, drop: () => Promise<void> = async () => {}) => ({
   put: async () => {},
   take: take as never,
+  has: async () => true,
   drop,
 });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("the chunk step", () => {
-  it("chunks the parsed document, stores the chunks, then drops the parsed row, in that order", async () => {
+  it("chunks the parsed document and stores the chunks, keeping the parsed row", async () => {
     const { d, calls } = deps();
     expect(await run(d)).toEqual({ outcome: "done", count: 1 });
-    expect(calls).toEqual(["begin:chunk", "take", "replace:1", "drop"]);
+    expect(calls).toEqual(["begin:chunk", "count", "take", "replace:1"]);
   });
 
-  it("after a crash between the drop and the event, finds no parsed row and reports the chunks that exist", async () => {
-    const { d, calls } = deps({ parsed: parsedPort(async () => undefined) });
+  it("skips when chunks already exist, reading no parsed row and storing nothing", async () => {
+    const { d, calls } = deps({}, [7]);
     expect(await run(d)).toEqual({ outcome: "done", count: 7 });
     expect(calls).toEqual(["begin:chunk", "count"]);
   });
 
-  it("when the drop fails after the chunks were stored, the retry stores them again and drops", async () => {
+  it("fails with the fixed message when there is neither a parsed row nor chunks", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    let drops = 0;
-    const { d, calls } = deps();
-    d.parsed.drop = async () => {
-      calls.push("drop");
-      if (++drops === 1) throw new Error("connection reset");
-    };
-    expect(await run(d)).toEqual({ outcome: "done", count: 1 });
-    expect(calls).toEqual([
-      "begin:chunk",
-      "take",
-      "replace:1",
-      "drop",
-      "begin:chunk",
-      "take",
-      "replace:1",
-      "drop",
-    ]);
+    const { d } = deps({ parsed: parsedPort(async () => undefined) });
+    await expect(run(d)).rejects.toThrow(/^ingest step failed: chunk$/);
   });
 
-  it("an empty document yields zero chunks and still drops the parsed row", async () => {
+  it("an empty document yields zero chunks", async () => {
     const empty = { text: "", sections: [], media: [] };
     const { d, calls } = deps();
     d.parsed.take = async () => empty as never;
     expect(await run(d)).toEqual({ outcome: "done", count: 0 });
-    expect(calls).toEqual(["begin:chunk", "replace:0", "drop"]);
+    expect(calls).toEqual(["begin:chunk", "count", "replace:0"]);
   });
 
   it("returns a count only: no text reaches the result", async () => {
@@ -129,17 +116,6 @@ describe("the chunk step", () => {
           count: async () => 0,
           read: async () => [],
         },
-      },
-    ],
-    [
-      "the parsed drop",
-      {
-        parsed: parsedPort(
-          async () => parsed,
-          async () => {
-            throw new DocumentGoneError();
-          },
-        ),
       },
     ],
     [
@@ -218,7 +194,7 @@ describe("the chunk step", () => {
     await expect(chunkEffect(d).execute(ref(), { signal: cancel.signal } as never)).rejects.toThrow(
       /^ingest step failed: chunk$/,
     );
-    expect(calls).toEqual(["begin:chunk"]);
+    expect(calls).toEqual(["begin:chunk", "count"]);
     expect(logged).not.toHaveBeenCalled();
   });
 });

@@ -45,6 +45,7 @@ function deps(over: Partial<ParseDeps> = {}) {
     parsed: {
       put: async (_r, p) => void stored.push(p),
       take: async () => undefined,
+      has: async () => false,
       drop: async () => {},
     },
     registry: new ParserRegistry(createDefaultParsers()),
@@ -72,6 +73,14 @@ describe("parse step", () => {
     expect(await run(d)).toEqual({ outcome: "done", count: 3 });
     expect(calls).toEqual(["begin:parse", "read", "run:txt"]);
     expect(stored).toEqual([parsedDoc]);
+  });
+
+  it("skips the parser when an earlier generation already stored the parsed document", async () => {
+    const { d, calls, stored } = deps();
+    d.parsed.has = async () => true;
+    expect(await run(d)).toEqual({ outcome: "done" });
+    expect(calls).toEqual(["begin:parse"]); // no read, no child run
+    expect(stored).toEqual([]);
   });
 
   it("fails permanently as unsupported_content when no parser accepts the mime, before reading the blob", async () => {
@@ -218,6 +227,7 @@ describe("parse step", () => {
           });
         },
         take: async () => undefined,
+        has: async () => false,
         drop: async () => {},
       },
     });

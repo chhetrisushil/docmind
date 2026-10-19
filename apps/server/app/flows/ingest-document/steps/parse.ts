@@ -46,6 +46,9 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
     "parse",
     deps.guard,
     async (ref, signal) => {
+      // D2: a retry under a new generation resumes. The parsed row outlives a failure (finalize drops
+      // it), so its presence means parse already succeeded for these bytes.
+      if (await deps.parsed.has(ref)) return undefined; // no count: opening the body only to count it is not worth it
       const { mime, contentAddress } = await deps.source.meta(ref);
       const parser = select(deps.registry, mime);
       let bytes: Uint8Array;
