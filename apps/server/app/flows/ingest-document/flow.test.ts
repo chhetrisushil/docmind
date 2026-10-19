@@ -87,18 +87,20 @@ describe("ingest-document flow v2", () => {
     });
   });
 
-  it("a user delete during embed cancels the execution and aborts the embedder call", async () => {
+  it("a cancel during embed (what the delete route issues) cancels the execution and aborts the embedder call", async () => {
     let inEmbed: () => void = () => {};
     const entered = new Promise<void>((resolve) => {
       inEmbed = resolve;
     });
     let aborted = false;
+    let embedCalls = 0;
     const input = ids();
     const embedder = {
       modelId: "m",
       dimensions: 8,
       embed: (_texts: string[], options?: { signal?: AbortSignal }) =>
         new Promise<number[][]>((_, reject) => {
+          embedCalls++;
           inEmbed();
           options?.signal?.addEventListener("abort", () => {
             aborted = true;
@@ -106,13 +108,15 @@ describe("ingest-document flow v2", () => {
           });
         }),
     };
+    const vectors = new InMemoryChunkVectors({
+      modelId: "m",
+      dimensions: 8,
+      chunkIds: async () => ["c1"],
+    });
+    const upsert = vi.spyOn(vectors, "upsert");
     const { deps } = fakeDeps({
       embedder,
-      vectors: new InMemoryChunkVectors({
-        modelId: "m",
-        dimensions: 8,
-        chunkIds: async () => ["c1"],
-      }),
+      vectors,
       chunks: {
         replace: async (_r, c) => c.length,
         count: async () => 1,
@@ -127,7 +131,10 @@ describe("ingest-document flow v2", () => {
       input.documentId,
     );
     await vi.waitFor(() => expect(handle.getState().status).toBe("cancelled"));
-    expect(aborted).toBe(true); // a cancel is neither retried nor a failure
+    expect(aborted).toBe(true);
+    expect(embedCalls).toBe(1); // a cancel is not retried
+    expect(upsert).not.toHaveBeenCalled(); // and nothing was written
+    expect(handle.getState().status).toBe("cancelled"); // not a failure
     await app.close();
   });
 
