@@ -1,4 +1,4 @@
-import type { ExecutionEnumerable } from "@loom/event-runtime";
+import type { ExecutionEnumerable, LeaseStore } from "@loom/event-runtime";
 import {
   FlowCodeMismatchError,
   type WorkflowRuntime,
@@ -31,6 +31,11 @@ export interface RecoverOptions {
   graceMs: number;
   maxRecoveries?: number;
   now?: () => number;
+  /**
+   * Scan only the expired leases (a crash leaves them) instead of every execution. The boot pass
+   * scans everything, because a graceful shutdown releases (deletes) its leases.
+   */
+  leases?: { store: LeaseStore; owner: string };
 }
 
 /**
@@ -51,7 +56,7 @@ export interface RecoverOptions {
 export async function recoverIngest(
   runtime: WorkflowRuntime,
   source: ExecutionEnumerable,
-  { graceMs, maxRecoveries = MAX_RECOVERIES, now = Date.now }: RecoverOptions,
+  { graceMs, maxRecoveries = MAX_RECOVERIES, now = Date.now, leases }: RecoverOptions,
 ) {
   const ending: Promise<unknown>[] = [];
   const giveUp = (executionId: string, reason: string) => {
@@ -62,7 +67,7 @@ export async function recoverIngest(
     );
   };
   const summary = await recoverAbandoned(runtime, {
-    source,
+    ...(leases ? { leases } : { source }),
     maxRecoveries,
     isAbandoned: (c) => isIngestExecution(c.executionId) && now() - c.updatedAt >= graceMs,
     onExhausted: (id) => giveUp(id, RECOVERY_EXHAUSTED_REASON),
@@ -90,13 +95,21 @@ export interface Recovery {
 export function startRecovery(
   runtime: WorkflowRuntime,
   source: ExecutionEnumerable,
-  { intervalMs = RECOVERY_INTERVAL_MS, now }: { intervalMs?: number; now?: () => number } = {},
+  {
+    intervalMs = RECOVERY_INTERVAL_MS,
+    now,
+    leases,
+  }: { intervalMs?: number; now?: () => number; leases?: RecoverOptions["leases"] } = {},
 ): Recovery {
   let running: Promise<void> | undefined;
   let stopped = false;
-  const pass = (graceMs: number) => {
+  const pass = (graceMs: number, scan?: RecoverOptions["leases"]) => {
     if (stopped || running) return;
-    running = recoverIngest(runtime, source, { graceMs, ...(now && { now }) })
+    running = recoverIngest(runtime, source, {
+      graceMs,
+      ...(now && { now }),
+      ...(scan && { leases: scan }),
+    })
       .then(() => undefined)
       .catch((err: unknown) => console.error("ingest recovery failed", errorClass(err)))
       .finally(() => {
@@ -104,7 +117,7 @@ export function startRecovery(
       });
   };
   pass(0);
-  const timer = setInterval(() => pass(ABANDON_GRACE_MS), intervalMs);
+  const timer = setInterval(() => pass(ABANDON_GRACE_MS, leases), intervalMs);
   timer.unref();
   return {
     stop: () => {
