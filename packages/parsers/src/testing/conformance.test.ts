@@ -77,4 +77,59 @@ describe("the kit catches broken parsers", () => {
     const p = broken({ parse: () => ({ text: `t${n++}`, sections: [], media: [] }) });
     expect(await CHECKS["is deterministic"]?.(p, fixtures)).toBe("plain: two parses differ");
   });
+  it("empty fixtures", async () => {
+    const check = CHECKS["has valid and rejected fixtures"];
+    expect(await check?.(good, { valid: [], rejected: fixtures.rejected })).toBe(
+      "no valid fixtures",
+    );
+    expect(await check?.(good, { valid: fixtures.valid, rejected: [] })).toBe(
+      "no rejected fixtures",
+    );
+  });
+  it("a section whose locator kind is not in the schema", async () => {
+    const p = broken({
+      parse: () =>
+        ({
+          text: "a",
+          sections: [{ headingPath: [], text: "a", locator: { kind: "bogus" } }],
+          media: [],
+        }) as never,
+    });
+    expect(await CHECKS["produces a valid ParsedDocument"]?.(p, fixtures)).toBe(
+      "plain: output fails the ParsedDocument schema",
+    );
+  });
+  it("an empty id", async () => {
+    expect(await CHECKS["has a non-empty id"]?.(broken({ id: "" }), fixtures)).toBe("empty id");
+  });
+  it("an extension match that is case sensitive", async () => {
+    const p = broken({ accepts: (m, e) => m === "text/plain" || e === "toy" });
+    expect(await CHECKS["accepts its own types and not others"]?.(p, fixtures)).toBe(
+      "plain: extension match is case sensitive",
+    );
+  });
+  it("a parser that accepts any extension", async () => {
+    const p = broken({ accepts: (m, e) => m === "text/plain" || e !== undefined });
+    expect(await CHECKS["accepts its own types and not others"]?.(p, fixtures)).toBe(
+      "accepts an unknown mime with an unknown extension",
+    );
+  });
+  it("an error message that carries the rejected content", async () => {
+    const text = "secret document text";
+    class Leaky extends ParseRejectedError {
+      constructor() {
+        super("corrupt_content");
+        this.message = text;
+      }
+    }
+    const p = broken({
+      parse: () => {
+        throw new Leaky();
+      },
+    });
+    const f = { valid: fixtures.valid, rejected: [{ name: "leak", bytes: bytes(text) }] };
+    expect(await CHECKS["rejects what it cannot read with ParseRejectedError"]?.(p, f)).toBe(
+      "leak: the error message carries the content",
+    );
+  });
 });

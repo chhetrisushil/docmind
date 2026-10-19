@@ -17,6 +17,11 @@ const copy = (b: Uint8Array) => Uint8Array.from(b);
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 export const CHECKS: Record<string, Check> = {
+  "has valid and rejected fixtures": async (_p, f) => {
+    if (f.valid.length === 0) return "no valid fixtures";
+    return f.rejected.length === 0 ? "no rejected fixtures" : undefined;
+  },
+
   "has a non-empty id": async (p) => (p.id.length > 0 ? undefined : "empty id"),
 
   "accepts its own types and not others": async (p, f) => {
@@ -26,8 +31,9 @@ export const CHECKS: Record<string, Check> = {
         return `${v.name}: extension match is case sensitive`;
       }
     }
-    return p.accepts("application/x-docmind-unknown")
-      ? "accepts application/x-docmind-unknown"
+    if (p.accepts("application/x-docmind-unknown")) return "accepts application/x-docmind-unknown";
+    return p.accepts("application/x-docmind-unknown", "docmind-unknown")
+      ? "accepts an unknown mime with an unknown extension"
       : undefined;
   },
 
@@ -39,6 +45,7 @@ export const CHECKS: Record<string, Check> = {
     return undefined;
   },
 
+  // Only `chars` locators address `text`; the other kinds are bounded by the ParsedDocument schema.
   "section locators slice the text": async (p, f) => {
     for (const v of f.valid) {
       const doc = await p.parse(copy(v.bytes));
@@ -79,6 +86,9 @@ export const CHECKS: Record<string, Check> = {
           return `${r.name}: threw ${err instanceof Error ? err.constructor.name : typeof err}, not ParseRejectedError`;
         }
         if (!PARSE_REJECT_CODES.includes(err.code)) return `${r.name}: unknown code`;
+        const content = new TextDecoder().decode(r.bytes);
+        if (content.length >= 12 && err.message.includes(content))
+          return `${r.name}: the error message carries the content`;
       }
     }
     return undefined;
