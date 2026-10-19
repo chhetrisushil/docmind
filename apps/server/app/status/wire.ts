@@ -14,7 +14,7 @@ export const flowSteps = (): readonly StepDefinition[] =>
  * (`EXECUTION_STARTED` `principal.identity.*`, `OUTCOME_RECORDED.recordedBy`) been registered.
  */
 export const statusSensitive = (
-  steps: readonly StepDefinition[],
+  steps: readonly Pick<StepDefinition, "outputSchema">[],
   store: Pick<EventStore, "sealingCapability">,
 ): SensitiveMap =>
   mergeSensitive(
