@@ -58,4 +58,22 @@ describe("startRecovery", () => {
     });
     expect(state?.status).toBe("completed");
   });
+
+  it("periodic passes scan expired leases, not the whole log; only the boot pass scans the log", async () => {
+    vi.useFakeTimers();
+    const listed = vi.fn(async () => []);
+    const expired = vi.fn(async () => []);
+    const leases = { store: { expired } as never, owner: "node-1" };
+    const recovery = startRecovery(
+      boot(keptLog(), fakeIngestDeps()).runtime,
+      { listExecutions: listed } as never,
+      { intervalMs: 1000, leases },
+    );
+    await recovery.idle();
+    expect([listed.mock.calls.length, expired.mock.calls.length]).toEqual([1, 0]);
+    await vi.advanceTimersByTimeAsync(1000);
+    await recovery.idle();
+    expect([listed.mock.calls.length, expired.mock.calls.length]).toEqual([1, 1]);
+    recovery.stop();
+  });
 });

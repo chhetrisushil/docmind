@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { primeDecoy } from "@docmind/auth";
 import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
@@ -87,7 +88,12 @@ async function main(): Promise<void> {
 
   // Resume what the last process left running (a crash, or a shutdown that released its leases), then keep
   // looking. Not awaited: a pass settles each step it re-drives, and the server must not wait to listen.
-  const recovery = startRecovery(app.runtime, durable.storage.eventStore);
+  const recovery = startRecovery(app.runtime, durable.storage.eventStore, {
+    // After the boot scan, a crash is found through its expired lease, not by reading every execution.
+    ...(durable.storage.leaseStore && {
+      leases: { store: durable.storage.leaseStore, owner: randomUUID() },
+    }),
+  });
 
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
