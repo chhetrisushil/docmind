@@ -20,7 +20,13 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { ParseCrashedError, ParseLimitError, ParseRunner, ParseTimeoutError } from "./ParseRunner";
+import {
+  ParseCrashedError,
+  ParseLimitError,
+  ParseMemoryError,
+  ParseRunner,
+  ParseTimeoutError,
+} from "./ParseRunner";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256, maxInputBytes: 1024, maxChars: 500 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
@@ -131,7 +137,7 @@ describe("ParseRunner", () => {
     expect(spawned[0]?.signalCode).toBe("SIGKILL");
   });
 
-  it.each(["exit", "signal", "oom"])(
+  it.each(["exit", "signal"])(
     "a child that dies without a reply (%s) is a prompt crash",
     async (id) => {
       await expect(runner().run(id, bytes("x"))).rejects.toMatchObject({
@@ -141,6 +147,16 @@ describe("ParseRunner", () => {
       released();
     },
   );
+
+  it("a parser that exhausts its heap is ParseMemoryError with a fixed message", async () => {
+    const r = limited({ memoryMb: 32 });
+    await expect(r.run("oom", bytes("x"))).rejects.toMatchObject({
+      name: "ParseMemoryError",
+      message: "parse ran out of memory",
+    });
+    released();
+    expect(r.active()).toBe(0);
+  });
 
   it("a child that exits 0 without writing a reply is a crash, not a hang", async () => {
     await expect(runner().run("exit0", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
@@ -257,6 +273,23 @@ describe("ParseRunner", () => {
     expect(r.active()).toBe(0);
     expect(spawned[0]?.stdout).toBeNull();
     expect(spawned[0]?.stderr).toBeNull();
+    released();
+  });
+
+  it("denies the child the filesystem, child processes and the parent's environment", async () => {
+    process.env.DOCMIND_PROBE_SECRET = "must-not-reach-the-child";
+    try {
+      const out = JSON.parse((await runner().run("probe", bytes("x"))).text);
+      expect(out).toEqual({
+        read: "ERR_ACCESS_DENIED",
+        write: "ERR_ACCESS_DENIED",
+        spawn: "ERR_ACCESS_DENIED",
+        env: [],
+      });
+    } finally {
+      // biome-ignore lint/performance/noDelete: assigning undefined would leave the string "undefined"
+      delete process.env.DOCMIND_PROBE_SECRET;
+    }
     released();
   });
 });
