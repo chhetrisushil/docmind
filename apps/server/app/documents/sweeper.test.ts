@@ -53,4 +53,35 @@ describe("startSweeper", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it("purges orphan status rows on the first tick and then only every 60th", async () => {
+    const forget = vi.fn(async () => {});
+    const query = vi.fn(async (sql: string) => ({
+      rows: sql.includes("docmind_orphan_statuses") ? [{ execution_id: "x" }] : [],
+    }));
+    const starts = new StartScheduler({ start: async () => null, cancel: async () => {} });
+    const pool = { query } as unknown as Pool;
+    const sweeper = startSweeper(
+      {
+        pool,
+        starts,
+        olderThanMs: 1,
+        lookbackMs: 2,
+        limit: 3,
+        status: { forgetExecution: forget },
+      },
+      10,
+    );
+    const orphanRuns = () => query.mock.calls.filter((c) => String(c[0]).includes("orphan")).length;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(orphanRuns()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10 * 59);
+    expect(query).toHaveBeenCalledTimes(60 + 1);
+    expect(orphanRuns()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(orphanRuns()).toBe(2);
+    expect(forget).toHaveBeenCalledTimes(2);
+    expect(forget).toHaveBeenCalledWith("x");
+    await sweeper.stop();
+  });
 });

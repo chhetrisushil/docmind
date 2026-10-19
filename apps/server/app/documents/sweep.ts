@@ -6,6 +6,8 @@ export const STALE_UPLOAD_MS = 120_000;
 export const SWEEP_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 export const SWEEP_EVERY_MS = 60_000;
 export const SWEEP_BATCH = 100;
+/** The orphan status scan runs on every Nth sweep tick (about hourly), not every minute. */
+export const SWEEP_ORPHAN_EVERY_TICKS = 60;
 
 // The label a failed sweep-fired start is logged under (not an HTTP route).
 const SWEEP_LABEL = "stale upload sweep";

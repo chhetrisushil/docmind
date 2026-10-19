@@ -137,6 +137,7 @@ async function main(): Promise<void> {
   const uploadSweeper = startSweeper({
     pool,
     starts,
+    status,
     olderThanMs: STALE_UPLOAD_MS,
     lookbackMs: SWEEP_LOOKBACK_MS,
     limit: SWEEP_BATCH,
