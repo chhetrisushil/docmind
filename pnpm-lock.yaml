@@ -50,6 +50,9 @@ importers:
       '@docmind/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
+      '@docmind/vector-pg':
+        specifier: workspace:*
+        version: link:../../packages/vector-pg
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
@@ -206,6 +209,10 @@ importers:
         version: 2.1.9(@types/node@22.20.5)
 
   packages/vector-pg:
+    dependencies:
+      pg:
+        specifier: ^8.13.0
+        version: 8.23.1
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
