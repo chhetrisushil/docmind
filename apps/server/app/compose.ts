@@ -1,5 +1,6 @@
 import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
+import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import type { EventStore } from "@loom/event-runtime";
 import type { KeyStore } from "@loom/plugin-crypto";
@@ -10,6 +11,7 @@ import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
+import { withTenant } from "./db/tenant";
 import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
@@ -42,6 +44,8 @@ export interface ComposeOptions {
   ingest: IngestWiring;
   /** The ingest-status model's stores. */
   status: StatusStores;
+  /** Test seam: the vector store. Defaults to the Pg store over `withTenant` on the app pool (never the Loom pool). */
+  vectors?: ChunkVectorStore & { verify?(tenantId: string): Promise<void> };
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
 }
@@ -64,8 +68,16 @@ export function buildServer(options: ComposeOptions) {
       keys,
       maxBytes: limits.maxFileBytes,
     });
+  const { embedder } = options.ingest;
+  const vectors =
+    options.vectors ??
+    new PgChunkVectorStore({
+      tenant: (tenantId, fn) => withTenant(pool, tenantId, fn),
+      modelId: embedder.modelId,
+      dimensions: embedder.dimensions,
+    });
   const app = buildApp(options.storage, options.crypto, {
-    ingest: pgIngestDeps({ pool, fields, blobs, wiring: options.ingest }),
+    ingest: pgIngestDeps({ pool, fields, blobs, wiring: options.ingest, vectors }),
     onEvent: (event) => feed.onEvent?.(event),
   });
   const status = new IngestStatus({
@@ -110,6 +122,7 @@ export function buildServer(options: ComposeOptions) {
     throttle,
     starts,
     ingestWiring: options.ingest,
+    vectors,
     bus: options.ingest.bus,
     status,
     /** Stops feeding the model; shutdown calls it before `status.close()` so a late event is not folded onto closing pools. */
