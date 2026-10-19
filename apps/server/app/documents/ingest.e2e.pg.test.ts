@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import type {
   DocumentDto,
   ListDocumentsResponse,
@@ -236,6 +237,30 @@ describe.skipIf(!PG_URL)(
         { tenantId: user.tenantId, userId: user.userId, documentId: id },
         st.composed.ingestWiring.embedder.modelId,
       );
+
+    const filesOf = (userId: string) =>
+      readdirSync(st.root, { recursive: true, withFileTypes: true }).filter(
+        (e) => e.isFile() && (e.parentPath ?? "").includes(userId),
+      );
+    const del = (cookie: string, id: string) =>
+      fetch(`${st.base}/api/documents/${id}`, { method: "DELETE", headers: { cookie } });
+    // The status rows of a deleted document are tombstoned: erased, state gone, ids kept.
+    const expectTombstoned = async (id: string) => {
+      const rows = (
+        await st.db.owner.query("SELECT erased, state FROM read_model_state WHERE app_key = $1", [
+          id,
+        ])
+      ).rows;
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.erased === true && r.state === null)).toBe(true);
+    };
+    const countOf = async (table: string, id: string) =>
+      (
+        await st.db.owner.query(
+          `SELECT 1 FROM ${table} WHERE ${table === "documents" ? "id" : "document_id"} = $1`,
+          [id],
+        )
+      ).rowCount;
     const idOf = async (res: Response) =>
       ((await res.json()) as UploadDocumentResponse).document.id;
     const getDoc = async (cookie: string, id: string) =>
@@ -322,6 +347,61 @@ describe.skipIf(!PG_URL)(
         expect(st.fake.batches.length).toBe(before); // the one request was the failure; nothing was retried into an answer
         const doc = await getDoc(user.cookie, id);
         expect([doc.status, doc.error]).toEqual(["failed", STATUS_MESSAGES.internal]);
+        await assertLogContentFree(user, id);
+      },
+      WAIT,
+    );
+
+    it(
+      "deleting a ready document removes its chunks, vectors, parse and blob, and tombstones its status",
+      async () => {
+        const user = await st.signUpAndLogIn("delete@example.com");
+        const stream = await st.events(user.cookie);
+        const id = await idOf(await st.upload(user.cookie, "gone.txt", textOf("Vanishing")));
+        await st.until(stream, id, (s) => s === "ready");
+        stream.close();
+        expect(await countOf("chunks", id)).toBeGreaterThan(1);
+        expect(filesOf(user.userId).length).toBe(1);
+        expect((await del(user.cookie, id)).status).toBe(204);
+        for (const table of ["documents", "chunks", "parsed_documents"])
+          expect(await countOf(table, id)).toBe(0); // embeddings live in chunks
+        expect(filesOf(user.userId)).toEqual([]);
+        await expectTombstoned(id);
+        expect((await getDoc(user.cookie, id)) as unknown).toMatchObject({
+          error: { code: "not_found" },
+        });
+        await assertLogContentFree(user, id);
+      },
+      WAIT,
+    );
+
+    it(
+      "a delete while the embed step is in flight cancels the execution and leaves no rows or vectors behind",
+      async () => {
+        const user = await st.signUpAndLogIn("race@example.com");
+        const arrived = st.fake.hold(); // the next embed request parks at the gate
+        const id = await idOf(await st.upload(user.cookie, "race.txt", textOf("Racing")));
+        await arrived; // the embed step is now waiting on the embedder, its chunks already written
+        expect(await countOf("chunks", id)).toBeGreaterThan(1);
+        expect((await del(user.cookie, id)).status).toBe(204);
+        st.fake.release();
+        // Loom reaches `cancelled` after the step in flight returns and offers no hook to await; the
+        // poll is bounded by the test timeout and is a condition, never a sleep.
+        await vi.waitFor(async () => {
+          const state = await st.composed.app.runtime.loadState(
+            ingestExecutionId(user.userId, id),
+            {
+              principal: { tenant: user.tenantId, actor: user.userId },
+            },
+          );
+          expect(state?.status).toBe("cancelled");
+        });
+        for (const table of ["documents", "chunks", "parsed_documents"])
+          expect(await countOf(table, id)).toBe(0);
+        expect(filesOf(user.userId)).toEqual([]);
+        await expectTombstoned(id);
+        const log = await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id));
+        expect(log.map((e) => e.eventType)).not.toContain("EXECUTION_COMPLETED"); // never ready
         await assertLogContentFree(user, id);
       },
       WAIT,
