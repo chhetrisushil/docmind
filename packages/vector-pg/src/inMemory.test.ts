@@ -99,4 +99,18 @@ describe("InMemoryChunkVectors", () => {
     expect(await next.missing(SCOPE, "d", 10)).toEqual(["c1", "c2"]);
     expect(await old.missing(SCOPE, "d", 10)).toEqual(ids);
   });
+
+  it("forgets the vectors of chunks its lister no longer lists", async () => {
+    const live = ["c0", "c1"];
+    const s = twin({ chunkIds: async () => live.slice() });
+    await s.upsert(SCOPE, "d", [
+      { chunkId: "c0", vector: [1, 0, 0] },
+      { chunkId: "c1", vector: [1, 0, 0] },
+    ]);
+    live.splice(0, live.length, "c1");
+    expect((await s.search(SCOPE, [1, 0, 0], 5)).map((h) => h.chunkId)).toEqual(["c1"]);
+    live.push("c0"); // the same id coming back is a new row: it has no vector
+    expect(await s.missing(SCOPE, "d", 10)).toEqual(["c0"]);
+    expect((await s.search(SCOPE, [1, 0, 0], 5)).map((h) => h.chunkId)).toEqual(["c1"]);
+  });
 });
