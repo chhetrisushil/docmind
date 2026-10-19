@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
-import { createIngestWiring, loadEmbedConfig, loadGateLimits, loadParseLimits } from "./limits";
+import {
+  createIngestWiring,
+  loadEmbedConfig,
+  loadGateLimits,
+  loadParseLimits,
+  parseStepTimeoutMs,
+} from "./limits";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
 
 describe("loadParseLimits", () => {
@@ -166,5 +172,11 @@ describe("loadGateLimits", () => {
   });
   it("is built into the wiring", () => {
     expect(createIngestWiring({}).gate.active).toBe(0);
+  });
+});
+
+describe("parseStepTimeoutMs", () => {
+  it("covers a slot wait, the run itself, and 30s of slack", () => {
+    expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 })).toBe(90_000);
   });
 });

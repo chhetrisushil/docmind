@@ -12,7 +12,8 @@ import type { IngestStartInput } from "./flow";
 export const parsedBind = (documentId: string) => `document:${documentId}:parsed`;
 
 export interface ParsedStore {
-  put(ref: IngestStartInput, parsed: ParsedDocument): Promise<void>;
+  /** An aborted `signal` rolls the put back instead of committing it: a timed-out attempt's late put must not clear what a later attempt wrote. */
+  put(ref: IngestStartInput, parsed: ParsedDocument, signal?: AbortSignal): Promise<void>;
   take(ref: IngestStartInput): Promise<ParsedDocument | undefined>;
   /** Is a parsed document stored? Owner-scoped; a gone document is DocumentGoneError. */
   has(ref: IngestStartInput): Promise<boolean>;
@@ -35,7 +36,7 @@ export class PgParsedStore implements ParsedStore {
    * rows go with them) and clears the summary in the same transaction. Chunk and summarize skip when
    * their output exists; without this a re-parse could pair a new parsed row with stale chunks.
    */
-  async put(ref: IngestStartInput, parsed: ParsedDocument): Promise<void> {
+  async put(ref: IngestStartInput, parsed: ParsedDocument, signal?: AbortSignal): Promise<void> {
     const sealed = await this.fields.forUser(ref.userId).seal(parsedBind(ref.documentId), parsed);
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       // INSERT ... SELECT: a document that is not this owner's inserts nothing. The FK covers a delete race.
@@ -51,6 +52,7 @@ export class PgParsedStore implements ParsedStore {
         ref.documentId,
         ref.userId,
       ]);
+      if (signal?.aborted) throw new ParseAbortedError(); // last statement before COMMIT
     });
   }
 

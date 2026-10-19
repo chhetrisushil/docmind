@@ -19,9 +19,14 @@ export interface IngestWiring {
   shutdown: AbortController;
   /** Fair sharing of ingest work across tenants; every step attempt waits on it. */
   gate: IngestGate;
+  /** The parse limits the runner was built with; parse's attempt timeout derives from them. */
+  runnerLimits: ParseLimits;
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
+
+/** One parse attempt: a wait for a runner slot, its own run, and database and blob slack. */
+export const parseStepTimeoutMs = (limits: ParseLimits): number => 2 * limits.wallClockMs + 30_000;
 
 /** The one way to stop ingest: signals the steps first, then kills the in-flight parses. */
 export function closeIngest(wiring: IngestWiring): Promise<void> {
@@ -106,6 +111,7 @@ export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): Ingest
   return {
     registry: new ParserRegistry(createDefaultParsers()),
     runner: new ParseRunner({ limits, maxConcurrent }),
+    runnerLimits: limits,
     bus: new InMemoryProgressBus(),
     embedder: createEmbedder(env),
     shutdown: new AbortController(),
