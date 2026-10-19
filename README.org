@@ -150,6 +150,22 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
 
 Backup and erasure runbooks are listed in the spec as M7 work and do not exist yet.
 
+** Deployment notes (v1)
+
+- One server (one flow engine) per database. Recovery after a restart assumes no second process is
+  driving the same executions; running several nodes needs fencing work first.
+- Cap host memory (a container or cgroup limit, or systemd =MemoryMax=). The parser's
+  =--max-old-space-size= bounds only the V8 heap, not Buffers or other native memory.
+- Run the server so that stopping it kills its whole process group: systemd =KillMode=control-group=
+  (the default), or a container. Parser children are killed on a clean shutdown, but after a crash
+  or =SIGKILL= of the server only the group kill reliably ends them.
+- A reverse proxy must forward =Host= unchanged, or browser writes without Fetch Metadata are
+  refused with 403. See the comments in [[file:.env.example][.env.example]] (=DOCMIND_COOKIE_SECURE=,
+  =DOCMIND_TRUST_PROXY=).
+- The =vector= (pgvector) extension must be created by a superuser or the DBA before migrating:
+  the migration runner refuses to continue without it. After a pgvector upgrade, the app role needs
+  EXECUTE on the new extension functions again, so ship a grant migration with the upgrade.
+
 * Documentation map
 
 - [[file:docs/specs/2026-10-18-docmind-design.md][Design spec]] (draft): goals, data model, tenancy, crypto-shredding, ingestion, chat, roadmap.
