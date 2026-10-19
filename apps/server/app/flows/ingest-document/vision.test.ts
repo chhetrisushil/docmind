@@ -3,7 +3,7 @@ import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/t
 import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pngBytes } from "./imageFixtures";
-import { VisionReader } from "./vision";
+import { VISION_PDF_MAX_BYTES, VisionReader } from "./vision";
 
 let fake: FakeAnthropic;
 let reader: VisionReader;
@@ -59,6 +59,41 @@ describe("VisionReader.readImage", () => {
     await expect(reader.readImage(new Uint8Array(3_932_161), "image/png")).rejects.toThrow(
       /^image exceeds the size limit$/,
     );
+    expect(fake.requests.length).toBe(before);
+  });
+});
+
+describe("VisionReader.readPdfPages", () => {
+  const PDF_BYTES = new TextEncoder().encode("%PDF-1.4 fake");
+
+  it("sends the pdf once as an untrusted document part and keeps only the pages it asked for", async () => {
+    fake.reply(() => ({
+      text: '[{"page":2,"text":"scanned two"},{"page":9,"text":"not asked"},{"page":4,"text":""}]',
+    }));
+    const out = await reader.readPdfPages(PDF_BYTES, [2, 4]);
+    expect([...out]).toEqual([
+      [2, "scanned two"],
+      [4, ""],
+    ]);
+    const body = fake.requests.at(-1)?.body as never as {
+      messages: { content: { type: string }[] }[];
+    };
+    const content = body.messages[0]?.content ?? [];
+    expect(content.filter((b) => b.type === "document")).toHaveLength(1);
+    expect(JSON.stringify(content)).toContain("[2,4]");
+    expect(JSON.stringify(content)).toContain("untrusted-input");
+  });
+
+  it("caps each page at 100,000 characters", async () => {
+    fake.reply(() => ({ text: JSON.stringify([{ page: 1, text: "t".repeat(150_000) }]) }));
+    expect((await reader.readPdfPages(PDF_BYTES, [1])).get(1)?.length).toBe(100_000);
+  });
+
+  it("refuses a pdf over the raw size limit, without sending a request", async () => {
+    const before = fake.requests.length;
+    await expect(
+      reader.readPdfPages(new Uint8Array(VISION_PDF_MAX_BYTES + 1), [1]),
+    ).rejects.toThrow(/^pdf exceeds the size limit$/);
     expect(fake.requests.length).toBe(before);
   });
 });

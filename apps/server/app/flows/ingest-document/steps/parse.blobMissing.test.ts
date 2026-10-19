@@ -27,6 +27,7 @@ function deps(over: Partial<ParseDeps> & { guardGone?: { after: number } } = {})
       has: async () => false,
       drop: async () => {},
     } as never,
+    maxChars: 1_000_000,
     registry: { select: () => parser } as never,
     runner: { run: async () => ({ text: "", sections: [], media: [] }) } as never,
     sleep: async () => {},

@@ -50,6 +50,7 @@ function deps(over: Partial<ParseDeps> = {}) {
       has: async () => false,
       drop: async () => {},
     },
+    maxChars: 1_000_000,
     registry: new ParserRegistry(createDefaultParsers()),
     runner: {
       run: async (id) => {
@@ -279,7 +280,10 @@ describe("parse step: images", () => {
   const region = { kind: "region", page: 1, x: 0, y: 0, w: 640, h: 480 };
 
   it("reads an image with vision into two region sections and never calls the parser runner", async () => {
-    const vision = { readImage: vi.fn(async () => ({ text: "HELLO", description: "A sign." })) };
+    const vision = {
+      readPdfPages: vi.fn(),
+      readImage: vi.fn(async () => ({ text: "HELLO", description: "A sign." })),
+    };
     const { d, calls, stored } = deps({ source: imageSource(png(640, 480), "image/png"), vision });
     expect(await run(d)).toEqual({ outcome: "done", count: 2 });
     expect(calls).toEqual(["begin:parse"]);
@@ -291,7 +295,10 @@ describe("parse step: images", () => {
 
   it("allows an image whose base64 is exactly 5 MiB and just under it", async () => {
     for (const n of [3_932_160, 3_932_159]) {
-      const vision = { readImage: vi.fn(async () => ({ text: "t", description: "d" })) };
+      const vision = {
+        readPdfPages: vi.fn(),
+        readImage: vi.fn(async () => ({ text: "t", description: "d" })),
+      };
       const { d } = deps({ source: imageSource(png(10, 10, n), "image/png"), vision });
       expect(await run(d)).toEqual({ outcome: "done", count: 2 });
     }
@@ -303,7 +310,7 @@ describe("parse step: images", () => {
   });
 
   it("fails as too_large over 5 MiB or 8000 px, and corrupt_content when the header does not parse", async () => {
-    const vision = { readImage: vi.fn() };
+    const vision = { readPdfPages: vi.fn(), readImage: vi.fn() };
     const failed = async (bytes: Uint8Array) =>
       run(deps({ source: imageSource(bytes, "image/png"), vision }).d);
     // base64 crosses 5 MiB at 3,932,160 raw bytes (exactly 5,242,880 encoded): that is allowed.
@@ -317,6 +324,7 @@ describe("parse step: images", () => {
   it("maps a refusal to unsupported_content and a rejected request to corrupt_content; an outage is retried", async () => {
     const source = imageSource(png(640, 480), "image/png");
     const refuse = {
+      readPdfPages: vi.fn(),
       readImage: vi.fn(async () => {
         throw new LlmRefusalError();
       }),
@@ -325,6 +333,7 @@ describe("parse step: images", () => {
       code: "unsupported_content",
     });
     const bad = {
+      readPdfPages: vi.fn(),
       readImage: vi.fn(async () => {
         throw new LlmRequestError(400);
       }),
@@ -332,6 +341,7 @@ describe("parse step: images", () => {
     expect(await run(deps({ source, vision: bad }).d)).toMatchObject({ code: "corrupt_content" });
     let n = 0;
     const flaky = {
+      readPdfPages: vi.fn(),
       readImage: vi.fn(async () => {
         if (n++ === 0) throw new LlmUnavailableError(529);
         return { text: "t", description: "d" };
@@ -340,5 +350,115 @@ describe("parse step: images", () => {
     const sleep = async () => {};
     expect((await run(deps({ source, vision: flaky, sleep }).d)).outcome).toBe("done");
     expect(flaky.readImage).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("parse step: scanned pdf pages", () => {
+  const page = (n: number, text: string) => ({
+    headingPath: [],
+    text,
+    locator: { kind: "page" as const, page: n },
+  });
+  const scanned = (n: number) => ({
+    mime: "application/pdf",
+    locator: { kind: "page" as const, page: n },
+  });
+  const pdfSource = (bytes = new Uint8Array([37, 80, 68, 70])) => ({
+    meta: async () => ({ mime: "application/pdf", contentAddress: "a" }),
+    read: async () => bytes,
+  });
+  const pdfDeps = (runnerResult: object, over: Partial<ParseDeps> = {}) =>
+    deps({
+      source: pdfSource(),
+      runner: { run: async () => runnerResult as never },
+      ...over,
+    });
+
+  it("adds vision text for textless pages, in page order", async () => {
+    const parsed = {
+      text: "one\n\nthree",
+      media: [scanned(2)],
+      sections: [page(1, "one"), page(3, "three")],
+    };
+    const vision = { readImage: vi.fn(), readPdfPages: vi.fn(async () => new Map([[2, "two"]])) };
+    const { d, stored } = pdfDeps(parsed, { vision });
+    expect(await run(d)).toEqual({ outcome: "done", count: 3 });
+    const out = stored[0] as { text: string; media: unknown[]; sections: { text: string }[] };
+    expect(out.sections.map((s) => s.text)).toEqual(["one", "two", "three"]);
+    expect(out.text).toBe("one\n\ntwo\n\nthree");
+    expect(out.media).toEqual([]);
+  });
+
+  it("keeps the text pages without vision, and fails a pdf with no text at all as vision_unavailable", async () => {
+    const mixed = { text: "one", sections: [page(1, "one")], media: [scanned(2)] };
+    expect(await run(pdfDeps(mixed).d)).toEqual({ outcome: "done", count: 1 });
+    const none = { text: "", sections: [], media: [scanned(1)] };
+    expect(await run(pdfDeps(none).d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
+  });
+
+  it("sends at most 20 scanned pages and skips vision for a pdf over 100 pages or 22 MiB", async () => {
+    const vision = {
+      readImage: vi.fn(),
+      readPdfPages: vi.fn(
+        async (_b: Uint8Array, pages: number[]) => new Map(pages.map((p) => [p, `p${p}`])),
+      ),
+    };
+    const many = {
+      text: "",
+      sections: [],
+      media: Array.from({ length: 30 }, (_, i) => scanned(i + 1)),
+    };
+    await run(pdfDeps(many, { vision }).d);
+    expect(vision.readPdfPages.mock.calls[0]?.[1]).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 1),
+    );
+    const huge = {
+      text: "x",
+      sections: [page(1, "x")],
+      media: Array.from({ length: 100 }, (_, i) => scanned(i + 2)),
+    }; // 101 pages
+    vision.readPdfPages.mockClear();
+    expect((await run(pdfDeps(huge, { vision }).d)).outcome).toBe("done");
+    const one = { text: "x", sections: [page(1, "x")], media: [scanned(2)] };
+    const big = pdfDeps(one, { vision, source: pdfSource(new Uint8Array(22 * 1024 * 1024 + 1)) });
+    expect((await run(big.d)).outcome).toBe("done");
+    expect(vision.readPdfPages).not.toHaveBeenCalled();
+    const onlyBig = { text: "", sections: [], media: [scanned(1)] };
+    const tooBig = pdfDeps(onlyBig, {
+      vision,
+      source: pdfSource(new Uint8Array(22 * 1024 * 1024 + 1)),
+    });
+    expect(await run(tooBig.d)).toEqual({ outcome: "failed", code: "too_large" });
+  });
+
+  it("fails as too_large when the merged text exceeds maxChars", async () => {
+    const vision = {
+      readImage: vi.fn(),
+      readPdfPages: vi.fn(async () => new Map([[1, "y".repeat(50)]])),
+    };
+    const out = await run(
+      pdfDeps({ text: "", sections: [], media: [scanned(1)] }, { vision, maxChars: 10 }).d,
+    );
+    expect(out).toEqual({ outcome: "failed", code: "too_large" });
+  });
+
+  it("maps a refusal and a rejected request on a pdf like an image's", async () => {
+    const none = { text: "", sections: [], media: [scanned(1)] };
+    const refuse = {
+      readImage: vi.fn(),
+      readPdfPages: vi.fn(async () => {
+        throw new LlmRefusalError();
+      }),
+    };
+    expect(await run(pdfDeps(none, { vision: refuse }).d)).toMatchObject({
+      code: "unsupported_content",
+    });
+    const bad = {
+      readImage: vi.fn(),
+      readPdfPages: vi.fn(async () => {
+        throw new LlmRequestError(400);
+      }),
+    };
+    expect(await run(pdfDeps(none, { vision: bad }).d)).toMatchObject({ code: "corrupt_content" });
   });
 });

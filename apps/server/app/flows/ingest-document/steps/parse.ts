@@ -1,5 +1,11 @@
 import { LlmRefusalError, LlmRequestError } from "@docmind/llm-anthropic";
-import type { DocumentParser, ParseRunner, ParserRegistry } from "@docmind/parsers";
+import type {
+  DocumentParser,
+  ParseRunner,
+  ParsedDocument,
+  ParsedSection,
+  ParserRegistry,
+} from "@docmind/parsers";
 import type { Effect } from "@loom/effect-runtime";
 import { BlobMissingError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
@@ -13,7 +19,15 @@ import {
   ingestStepOptions,
   stepEffect,
 } from "../stepEffect";
-import { VISION_MAX_BYTES, VISION_MAX_SIDE, type VisionReader, base64Length } from "../vision";
+import {
+  VISION_MAX_BYTES,
+  VISION_MAX_SIDE,
+  VISION_PDF_MAX_BYTES,
+  VISION_PDF_MAX_PAGES,
+  VISION_PDF_MAX_SCANNED,
+  type VisionReader,
+  base64Length,
+} from "../vision";
 
 export interface ParseDeps extends StepSeams {
   guard: StepGuard;
@@ -21,8 +35,10 @@ export interface ParseDeps extends StepSeams {
   parsed: ParsedStore;
   registry: ParserRegistry;
   runner: Pick<ParseRunner, "run">;
-  /** Reads image documents with Claude; absent without an API key (images then fail as vision_unavailable). */
-  vision?: Pick<VisionReader, "readImage">;
+  /** Reads images and textless PDF pages with Claude; absent without an API key (images then fail as vision_unavailable). */
+  vision?: Pick<VisionReader, "readImage" | "readPdfPages">;
+  /** The parsed text bound (limits.ts maxChars); vision text is added after the runner's own check. */
+  maxChars: number;
   /**
    * Parse's own attempt bound. The deps object is shared by every step, so this is not the generic
    * `stepTimeoutMs`: parse must outlast a runner slot wait and its own run (see parseStepTimeoutMs).
@@ -46,6 +62,18 @@ const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 type ParsedResult = Awaited<ReturnType<ParseRunner["run"]>>;
 
+/** Maps a vision failure to its fixed code; unavailable and output errors are retried, other request errors are fatal (isFatal). */
+async function visionCall<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (err instanceof LlmRefusalError) throw new PermanentIngestError("unsupported_content");
+    if (err instanceof LlmRequestError && err.status === 400)
+      throw new PermanentIngestError("corrupt_content");
+    throw err;
+  }
+}
+
 /** D8: images are read by Claude, in this process, from the original bytes; nothing decodes them here. */
 async function readImageDocument(
   deps: ParseDeps,
@@ -59,20 +87,46 @@ async function readImageDocument(
   if (!size) throw new PermanentIngestError("corrupt_content");
   if (size.width > VISION_MAX_SIDE || size.height > VISION_MAX_SIDE)
     throw new PermanentIngestError("too_large");
-  let out: { text: string; description: string };
-  try {
-    out = await deps.vision.readImage(bytes, mime, signal);
-  } catch (err) {
-    if (err instanceof LlmRefusalError) throw new PermanentIngestError("unsupported_content");
-    if (err instanceof LlmRequestError && err.status === 400)
-      throw new PermanentIngestError("corrupt_content");
-    throw err; // unavailable and output errors are retried; other request errors are fatal (isFatal)
-  }
+  const out = await visionCall(() =>
+    (deps.vision as NonNullable<typeof deps.vision>).readImage(bytes, mime, signal),
+  );
   const locator = { kind: "region" as const, page: 1, x: 0, y: 0, w: size.width, h: size.height };
   const sections = [
     { headingPath: ["Text in the image"], text: out.text.trim(), locator },
     { headingPath: ["Description"], text: out.description.trim(), locator },
   ].filter((s) => s.text !== "");
+  return { text: sections.map((s) => s.text).join("\n\n"), sections, media: [] };
+}
+
+/** D8: pages the pdf parser listed as textless (media of type application/pdf) are read by vision, within bounds. */
+async function withScannedPages(
+  deps: ParseDeps,
+  bytes: Uint8Array,
+  parsed: ParsedDocument,
+  signal?: AbortSignal,
+): Promise<ParsedDocument> {
+  const scanned = parsed.media
+    .filter((m) => m.mime === "application/pdf" && m.locator.kind === "page")
+    .map((m) => (m.locator as { page: number }).page);
+  if (scanned.length === 0) return parsed;
+  const vision = deps.vision;
+  const totalPages = parsed.sections.length + scanned.length;
+  if (!vision || bytes.length > VISION_PDF_MAX_BYTES || totalPages > VISION_PDF_MAX_PAGES) {
+    if (parsed.sections.length > 0) return { ...parsed, media: [] };
+    throw new PermanentIngestError(vision ? "too_large" : "vision_unavailable");
+  }
+  const read = await visionCall(() =>
+    vision.readPdfPages(bytes, scanned.slice(0, VISION_PDF_MAX_SCANNED), signal),
+  );
+  const pageOf = (s: ParsedSection) => (s.locator.kind === "page" ? s.locator.page : 0);
+  const added: ParsedSection[] = [...read]
+    .filter(([, text]) => text.trim() !== "")
+    .map(([page, text]) => ({
+      headingPath: [],
+      text: text.trim(),
+      locator: { kind: "page" as const, page },
+    }));
+  const sections = [...parsed.sections, ...added].sort((a, b) => pageOf(a) - pageOf(b));
   return { text: sections.map((s) => s.text).join("\n\n"), sections, media: [] };
 }
 
@@ -103,8 +157,10 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
       const parsed = parser
         ? await deps.runner.run(parser.id, bytes, signal ? { signal } : undefined)
         : await readImageDocument(deps, bytes, mime, signal);
-      await deps.parsed.put(ref, parsed, signal);
-      return { count: parsed.sections.length };
+      const merged = parser ? await withScannedPages(deps, bytes, parsed, signal) : parsed;
+      if (merged.text.length > deps.maxChars) throw new PermanentIngestError("too_large");
+      await deps.parsed.put(ref, merged, signal);
+      return { count: merged.sections.length };
     },
     ingestStepOptions({
       ...deps,
