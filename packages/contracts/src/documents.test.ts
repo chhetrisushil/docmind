@@ -5,6 +5,7 @@ import {
   IngestStep,
   ListDocumentsQuery,
   Locator,
+  RetryDocumentResponse,
 } from "./index";
 
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -31,6 +32,11 @@ describe("document contracts", () => {
   it("rejects an unknown status and a negative size", () => {
     expect(DocumentDto.safeParse({ ...doc, status: "done" }).success).toBe(false);
     expect(DocumentDto.safeParse({ ...doc, sizeBytes: -1 }).success).toBe(false);
+  });
+
+  it("parses a retry response and refuses one without a document", () => {
+    expect(RetryDocumentResponse.parse({ document: doc })).toEqual({ document: doc });
+    expect(RetryDocumentResponse.safeParse({}).success).toBe(false);
   });
 
   it("coerces list query strings and defaults the page size to 50", () => {

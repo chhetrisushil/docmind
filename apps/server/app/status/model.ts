@@ -30,7 +30,7 @@ export const STATUS_MESSAGES: Record<StatusCode, string> = {
   unsupported_content: "This file's content is not a supported document.",
   corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
   too_large: "This document is too large to process.",
-  internal: "Processing failed. Delete the document and upload it again.",
+  internal: "Processing failed. Try again.",
 };
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";

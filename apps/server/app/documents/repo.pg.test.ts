@@ -9,6 +9,7 @@ import { UPLOADED } from "../status/model";
 import {
   DOCUMENT_COLUMNS,
   type DocumentRow,
+  bumpGeneration,
   findByFingerprint,
   insertDocument,
   statsBind,
@@ -115,5 +116,16 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
       doc.id,
     ]);
     expect(raw.rows[0].s).not.toContain("Secret heading");
+  });
+
+  it("bumpGeneration is a compare-and-set on the owner's row", async () => {
+    const doc = await newDoc(T1, U1, FP("b"));
+    await withTenant(app, T1, (tx) => insertDocument(tx, doc));
+    const first = await withTenant(app, T1, (tx) => bumpGeneration(tx, doc.id, U1, 2));
+    expect(first?.ingest_generation).toBe(3);
+    // The same expected value again loses: someone already moved it.
+    expect(await withTenant(app, T1, (tx) => bumpGeneration(tx, doc.id, U1, 2))).toBeNull();
+    // Another user of the same tenant cannot bump it.
+    expect(await withTenant(app, T1, (tx) => bumpGeneration(tx, doc.id, U1B, 3))).toBeNull();
   });
 });

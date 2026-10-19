@@ -157,7 +157,7 @@ describe("execution id generations", () => {
     expect(calls.starts).toEqual([ingestExecutionId(IDENTITY.userId, DOC)]);
   });
 
-  it("cancels every generation, tolerating one that never existed, and still throws a real failure", async () => {
+  it("cancels the previous and current generation, tolerating one that never existed, and still throws a real failure", async () => {
     const { runtime, calls } = fakeRuntime({
       unknown: [ingestExecutionId(IDENTITY.userId, DOC, 1)],
     });
@@ -183,14 +183,12 @@ describe("execution id generations", () => {
     expect(calls.starts).toEqual([ingestExecutionId(IDENTITY.userId, DOC, 5)]);
   });
 
-  it("cancels every generation up to the one it is given, ignoring ones that never existed", async () => {
+  it("cancels only the given generation and the one before it, ignoring one that never existed", async () => {
     const { runtime, calls } = fakeRuntime({
       unknown: [ingestExecutionId(IDENTITY.userId, DOC, 3)],
     });
     await loomIngest(runtime).cancel(IDENTITY, DOC, 4);
-    expect(calls.cancels).toEqual(
-      [1, 2, 3, 4].map((g) => ingestExecutionId(IDENTITY.userId, DOC, g)),
-    );
+    expect(calls.cancels).toEqual([3, 4].map((g) => ingestExecutionId(IDENTITY.userId, DOC, g)));
   });
 
   it("refuses a generation that is not an integer from 1 to 999999999", async () => {
