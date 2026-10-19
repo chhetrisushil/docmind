@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { loadLimits } from "../../documents/limits";
 import { createIngestWiring, loadParseLimits } from "./limits";
 
 describe("loadParseLimits", () => {
@@ -26,13 +27,23 @@ describe("loadParseLimits", () => {
     );
   });
   it.each([
-    ["DOCMIND_PARSE_TIMEOUT_MS", "2147483648", 2147483647],
-    ["DOCMIND_PARSE_MEMORY_MB", "999999", 65536],
+    ["DOCMIND_PARSE_TIMEOUT_MS", "600001", 600000],
+    ["DOCMIND_PARSE_MEMORY_MB", "8193", 8192],
     ["DOCMIND_PARSE_MAX_CHARS", "100000001", 100000000],
-    ["DOCMIND_MAX_UPLOAD_BYTES", "268435457", 268435456],
   ])("rejects %s=%s over its bound without echoing the value", (name, value, max) => {
     expect(() => loadParseLimits({ [name]: value })).toThrow(
       new RegExp(`^${name} must be at most ${max}$`),
+    );
+  });
+});
+
+describe("maxInputBytes", () => {
+  it.each([{}, { DOCMIND_MAX_UPLOAD_BYTES: "1234567" }])("equals the upload limit (%j)", (env) => {
+    expect(loadParseLimits(env).maxInputBytes).toBe(loadLimits(env).maxFileBytes);
+  });
+  it("refuses an upload limit over the ceiling with the upload loader's message", () => {
+    expect(() => loadParseLimits({ DOCMIND_MAX_UPLOAD_BYTES: "268435457" })).toThrow(
+      /^DOCMIND_MAX_UPLOAD_BYTES must be at most 268435456/,
     );
   });
 });
@@ -54,8 +65,8 @@ describe("createIngestWiring", () => {
   );
 
   it("rejects DOCMIND_PARSE_CONCURRENCY over its bound", () => {
-    expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: "65" })).toThrow(
-      /^DOCMIND_PARSE_CONCURRENCY must be at most 64$/,
+    expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: "17" })).toThrow(
+      /^DOCMIND_PARSE_CONCURRENCY must be at most 16$/,
     );
   });
 });

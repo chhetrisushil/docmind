@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { shutdown } from "./shutdown";
+import { drainWithin, runAll, shutdown } from "./shutdown";
 
 describe("shutdown", () => {
   it("lets the in-flight request finish before it closes the app", async () => {
@@ -38,7 +38,7 @@ describe("shutdown", () => {
     expect(order).toEqual(["response sent", "app closed"]);
   });
 
-  it("does not close the app when the server fails to close", async () => {
+  it("still closes the app when the server fails to close, and rethrows that error", async () => {
     const server = createServer(); // never listened: close() reports ERR_SERVER_NOT_RUNNING
     let closed = false;
     await expect(
@@ -47,7 +47,38 @@ describe("shutdown", () => {
           closed = true;
         },
       }),
-    ).rejects.toThrow();
-    expect(closed).toBe(false);
+    ).rejects.toMatchObject({ code: "ERR_SERVER_NOT_RUNNING" });
+    expect(closed).toBe(true);
+  });
+});
+
+describe("drainWithin", () => {
+  it("returns at the deadline when the work never settles", async () => {
+    await expect(drainWithin(new Promise(() => undefined), 5)).resolves.toBeUndefined();
+  });
+  it("returns when the work settles, even by rejecting", async () => {
+    await expect(drainWithin(Promise.reject(new Error("x")), 60_000)).resolves.toBeUndefined();
+  });
+});
+
+describe("runAll", () => {
+  it("runs every step after a failure and rethrows the first error", async () => {
+    const ran: string[] = [];
+    await expect(
+      runAll(
+        async () => {
+          ran.push("a");
+          throw new RangeError("first");
+        },
+        async () => {
+          ran.push("b");
+          throw new TypeError("second");
+        },
+        async () => {
+          ran.push("c");
+        },
+      ),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(ran).toEqual(["a", "b", "c"]);
   });
 });
