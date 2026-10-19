@@ -9,7 +9,7 @@ import {
   IngestStartInput as IngestStartInputSchema,
   ingestDocumentFlow,
 } from "../flows/ingest-document/flow";
-import { executionIdFor } from "../subject";
+import { type UserExecutionId, executionIdFor } from "../subject";
 
 /**
  * The one value everything about an ingest start derives from: the start input, the principal and
@@ -24,7 +24,7 @@ export const ingestStartInput = (identity: Identity, documentId: string): Ingest
   });
 
 /** The execution that ingests one document. `name` is a fixed prefix plus a UUID: no content. */
-export const ingestExecutionId = (userId: string, documentId: string): string =>
+export const ingestExecutionId = (userId: string, documentId: string): UserExecutionId =>
   executionIdFor(userId, `ingest-${documentId.toLowerCase()}`);
 
 /** What the document routes need from the flow engine. */
