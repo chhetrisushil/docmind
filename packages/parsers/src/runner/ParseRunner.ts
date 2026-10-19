@@ -91,9 +91,9 @@ export class ParseRunner {
     if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes < 1) {
       throw new RangeError("limits.maxInputBytes must be a positive integer");
     }
-    // The reply frame length is a uint32: 700M chars * 6 + 1 MiB still fits.
-    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 700_000_000) {
-      throw new RangeError("limits.maxChars must be a positive integer of at most 700000000");
+    // The reply frame length is a uint32: 100M chars * 12 + 8 MiB still fits.
+    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 100_000_000) {
+      throw new RangeError("limits.maxChars must be a positive integer of at most 100000000");
     }
     if (!Number.isInteger(wallClockMs) || wallClockMs < 1 || wallClockMs > 2147483647) {
       throw new RangeError("limits.wallClockMs must be an integer in 1..2147483647");
@@ -157,6 +157,7 @@ export class ParseRunner {
   private exchange(child: ChildProcess, request: ChildRequest): Promise<ParsedDocument> {
     return new Promise((resolve, reject) => {
       const out = child.stdio[3] as Readable;
+      const cap = maxReplyBytes(this.options.limits.maxChars);
       const parts: Buffer[] = [];
       let have = 0;
       let settled = false;
@@ -194,7 +195,7 @@ export class ParseRunner {
         if (have < 4) return;
         const head = parts.length === 1 ? (parts[0] as Buffer) : Buffer.concat(parts);
         const len = head.readUInt32BE(0);
-        if (len > maxReplyBytes(this.options.limits.maxChars) || have > 4 + len) return crash(); // oversized or extra bytes
+        if (len > cap || have > 4 + len) return crash(); // oversized or extra bytes
         if (have < 4 + len) return; // keep chunks; concatenate once, when complete
         finish(head.subarray(4));
       });

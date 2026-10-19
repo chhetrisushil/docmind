@@ -15,8 +15,12 @@ export type ChildReply =
   | { ok: false; kind: "rejected"; code: ParseRejectCode }
   | { ok: false; kind: "failed" };
 
-/** Largest reply frame body for a character cap: JSON escapes cost up to 6 bytes a character, plus 1 MiB for sections and media. */
-export const maxReplyBytes = (maxChars: number): number => maxChars * 6 + 1024 * 1024;
+/**
+ * Largest reply frame body for a character cap. Assumption: the reply carries the text at most
+ * twice (the text and the sections that slice it) and JSON escapes a UTF-16 unit as up to 6 bytes
+ * (\uXXXX), so 12 bytes a character, plus 8 MiB for locators, media and framing.
+ */
+export const maxReplyBytes = (maxChars: number): number => maxChars * 12 + 8 * 1024 * 1024;
 
 /** Frame = 4-byte big-endian length + UTF-8 JSON body. */
 export const encodeFrame = (value: unknown): Buffer => {
