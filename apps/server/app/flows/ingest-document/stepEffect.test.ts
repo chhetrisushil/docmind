@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BlobKeyUnavailableError } from "@docmind/blob-store";
+import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import {
   ParseAbortedError,
   ParseCrashedError,
@@ -8,6 +9,7 @@ import {
   ParseRejectedError,
   ParseTimeoutError,
 } from "@docmind/parsers";
+import { EmbeddingError } from "@loom/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../../crypto/fields";
 import {
@@ -122,6 +124,43 @@ describe("stepEffect", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("ingest step failed: chunk");
     expect((err as Error).cause).toBeUndefined();
+  });
+
+  it("maps a permanent embedder error to unsupported_content", async () => {
+    const { port } = guard();
+    expect(
+      await run(
+        throwing(() => new EmbeddingError("bad request")),
+        port,
+      ),
+    ).toEqual({
+      outcome: "failed",
+      code: "unsupported_content",
+    });
+  });
+
+  it("treats an embedding abort like a parse abort: no retry, no log, fixed message", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const work = vi.fn(throwing(() => new EmbeddingAbortedError()));
+    const effect = stepEffect("embed", guard().port, work, {
+      retry: { maxAttempts: 3, backoffMs: 0, backoffMultiplier: 1 },
+      sleep: async () => {},
+    });
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("retries an embedder outage", async () => {
+    const work = vi
+      .fn()
+      .mockRejectedValueOnce(new EmbeddingUnavailableError())
+      .mockResolvedValue({ count: 1 });
+    const effect = stepEffect("embed", guard().port, work, {
+      retry: { maxAttempts: 3, backoffMs: 0, backoffMultiplier: 1 },
+      sleep: async () => {},
+    });
+    expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "done", count: 1 });
   });
 
   it("rethrows anything else with a fixed message that names the step only, and logs the class", async () => {

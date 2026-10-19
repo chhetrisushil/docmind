@@ -44,6 +44,9 @@ importers:
       '@docmind/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@docmind/embeddings':
+        specifier: workspace:*
+        version: link:../../packages/embeddings
       '@docmind/keystore-pg':
         specifier: workspace:*
         version: link:../../packages/keystore-pg
@@ -62,6 +65,9 @@ importers:
       '@loom/effect-runtime':
         specifier: link:../../../loom/packages/effect-runtime
         version: link:../../../loom/packages/effect-runtime
+      '@loom/memory':
+        specifier: link:../../../loom/packages/memory
+        version: link:../../../loom/packages/memory
       '@loom/plugin-crypto':
         specifier: link:../../../loom/plugins/crypto
         version: link:../../../loom/plugins/crypto
