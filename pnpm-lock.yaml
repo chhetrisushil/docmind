@@ -43,6 +43,9 @@ importers:
       '@docmind/keystore-pg':
         specifier: workspace:*
         version: link:../../packages/keystore-pg
+      '@docmind/parsers':
+        specifier: workspace:*
+        version: link:../../packages/parsers
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
