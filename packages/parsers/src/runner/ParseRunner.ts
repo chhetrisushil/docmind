@@ -308,13 +308,14 @@ export class ParseRunner {
           if (doc.text.length > this.options.limits.maxChars)
             throw new ParseRejectedError("too_large");
           // Sections slice the text, so their text and count are bounded by it: without this a
-          // reply within the byte cap can carry about 12 times maxChars of section text.
-          let sectionChars = 0;
-          for (const s of doc.sections) sectionChars += s.text.length;
-          if (
-            sectionChars > this.options.limits.maxChars ||
-            doc.sections.length > this.options.limits.maxChars
-          )
+          // reply within the byte cap can carry about 12 times maxChars of section text. Heading
+          // text is content too (depth and segment length are bounded by the schema), so it counts
+          // in the same budget; the media count shares the section bound.
+          const { maxChars } = this.options.limits;
+          let budget = 0;
+          for (const s of doc.sections)
+            budget += s.text.length + s.headingPath.reduce((n, h) => n + h.length, 0);
+          if (budget > maxChars || doc.sections.length > maxChars || doc.media.length > maxChars)
             throw new ParseLimitError("output");
           resolve(doc);
         } catch (err) {
