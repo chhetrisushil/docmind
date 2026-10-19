@@ -2,7 +2,7 @@ import { LlmOutputError } from "@docmind/llm-anthropic";
 import type { z } from "zod";
 
 /** The model's reply as JSON: tolerates one ```json fence; anything else is LlmOutputError. */
-export function jsonAnswer<T>(content: string, schema: z.ZodType<T>): T {
+export function jsonAnswer<T>(content: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): T {
   const raw = content
     .trim()
     .replace(/^```(?:json)?\s*\n?/, "")
