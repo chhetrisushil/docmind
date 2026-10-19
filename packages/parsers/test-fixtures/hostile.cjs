@@ -70,6 +70,16 @@ exports.parsers.push(
     accepts: () => true,
     parse: () => new Promise(() => setInterval(() => {}, 1000)), // alive, but never answers
   },
+  { id: "xcpu", accepts: () => true, parse: () => process.kill(process.pid, "SIGXCPU") },
+  {
+    id: "patched-hang",
+    accepts: () => true,
+    parse: () => {
+      process.exit = () => {};
+      process.kill = () => {};
+      return new Promise(() => setInterval(() => {}, 1000));
+    },
+  },
   { id: "exit", accepts: () => true, parse: () => process.exit(3) },
   { id: "exit0", accepts: () => true, parse: () => process.exit(0) },
   { id: "signal", accepts: () => true, parse: () => process.kill(process.pid, "SIGKILL") },

@@ -13,8 +13,34 @@ export interface ChildRequest {
 }
 /** Slack past the parent's wall clock before an orphaned child ends itself. */
 export const CHILD_GRACE_MS = 2_000;
-/** Exit code of a child that hit its own deadline. */
-export const CHILD_DEADLINE_EXIT = 124;
+
+/**
+ * The command that starts a child under a kernel CPU limit (POSIX only: the server targets Linux
+ * and macOS). The soft limit (SIGXCPU) is N seconds, the hard limit (SIGKILL, not catchable) N + 1,
+ * with N = ceil((wallClockMs + CHILD_GRACE_MS) / 1000). The kernel enforces it with no parent alive
+ * and no JavaScript can undo it, so a parser in a synchronous loop cannot outlive its deadline.
+ * Every value is a positional argument of the script, never interpolated into it; `exec` keeps the
+ * pid, and `env -i` removes the PWD/SHLVL/_ the shell adds, so the child's environment stays empty. A child idle without using CPU (Atomics.wait) is not reaped by this.
+ */
+export const limitedSpawn = (
+  wallClockMs: number,
+  execPath: string,
+  args: string[],
+): { command: string; args: string[] } => {
+  const soft = Math.ceil((wallClockMs + CHILD_GRACE_MS) / 1000);
+  return {
+    command: "/bin/sh",
+    args: [
+      "-c",
+      'ulimit -S -t "$1" && ulimit -H -t "$2" && shift 2 && exec /usr/bin/env -i "$@"',
+      "sh",
+      String(soft),
+      String(soft + 1),
+      execPath,
+      ...args,
+    ],
+  };
+};
 /** Child to parent, as one frame on fd 3. Nothing but a document, a rejection code or "failed". */
 export type ChildReply =
   | { ok: true; doc: ParsedDocument }

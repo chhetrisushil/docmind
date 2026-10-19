@@ -9,7 +9,13 @@ import {
   ParsedDocument,
 } from "../types";
 import { runnerInternals } from "./internals";
-import { type ChildReply, type ChildRequest, encodeFrame, maxReplyBytes } from "./protocol";
+import {
+  type ChildReply,
+  type ChildRequest,
+  encodeFrame,
+  limitedSpawn,
+  maxReplyBytes,
+} from "./protocol";
 
 export interface ParseLimits {
   wallClockMs: number;
@@ -231,7 +237,8 @@ export class ParseRunner {
       entry,
       JSON.stringify(map),
     ];
-    const child = spawn(process.execPath, args, {
+    const launch = limitedSpawn(limits.wallClockMs, process.execPath, args);
+    const child = spawn(launch.command, launch.args, {
       stdio: ["pipe", "ignore", "ignore", "pipe"],
       env: {},
       cwd: dirname(entry),
@@ -312,7 +319,9 @@ export class ParseRunner {
           settle(
             child.signalCode === "SIGABRT" || child.exitCode === 134
               ? new ParseMemoryError()
-              : new ParseCrashedError(),
+              : child.signalCode === "SIGXCPU" // the kernel CPU limit (limitedSpawn)
+                ? new ParseTimeoutError()
+                : new ParseCrashedError(),
           );
         if (child.exitCode !== null || child.signalCode !== null) decide();
         else {
