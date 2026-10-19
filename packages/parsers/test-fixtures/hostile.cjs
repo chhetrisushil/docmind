@@ -43,17 +43,27 @@ exports.parsers.push(
     accepts: () => true,
     parse: () => {
       const fs = require("node:fs");
-      const root = require("node:path").resolve(process.cwd(), "../../contracts");
-      const denied = (f) => {
+      const pkgs = require("node:path").resolve(process.cwd(), "../..", "..");
+      const lex = `${pkgs}/parsers/node_modules/@docmind/contracts`;
+      const denied = (f, op) => {
         try {
-          fs.readFileSync(f);
+          fs[op](f);
           return false;
         } catch (e) {
           return e.code === "ERR_ACCESS_DENIED";
         }
       };
-      const ok = denied(`${root}/src/index.ts`);
+      const ok =
+        denied(`${pkgs}/contracts/src/index.ts`, "readFileSync") &&
+        denied(`${lex}/src/index.ts`, "readFileSync") &&
+        denied(lex, "readdirSync") &&
+        denied(`${pkgs}/parsers/node_modules`, "readdirSync");
       return { text: ok ? "denied" : "READ", sections: [], media: [] };
     },
+  },
+  {
+    id: "bare",
+    accepts: () => true,
+    parse: () => ({ text: String(require("fs-extra")), sections: [], media: [] }),
   },
 );

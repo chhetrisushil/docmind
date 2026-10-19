@@ -1,32 +1,21 @@
-import { createWriteStream } from "node:fs";
-import { createDefaultParsers } from "../defaults";
-import { ParserRegistry } from "../registry";
-import { type DocumentParser, ParseRejectedError } from "../types";
-import { type ChildReply, type ChildRequest, encodeFrame } from "./protocol";
+// Process entry. Bare specifiers never resolve through node_modules in the child: the parent
+// passes a specifier -> real built file map (argv[2]); anything else bare is refused. Must run
+// before anything else is required.
+import Module from "node:module";
+import { isAbsolute } from "node:path";
 
-const reply = (message: ChildReply) => {
-  createWriteStream("", { fd: 3 }).end(encodeFrame(message), () => process.exit(0));
+const map = JSON.parse(process.argv[2] ?? "{}") as Record<string, string>;
+const mod = Module as unknown as {
+  _resolveFilename: (request: string, ...rest: unknown[]) => string;
+};
+const original = mod._resolveFilename;
+mod._resolveFilename = function (request, ...rest) {
+  if (request.startsWith(".") || isAbsolute(request) || Module.isBuiltin(request)) {
+    return original.call(this, request, ...rest);
+  }
+  const file = map[request];
+  if (!file) throw new Error("bare specifier not allowed");
+  return file;
 };
 
-async function main(): Promise<void> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const frame = Buffer.concat(chunks);
-  const request = JSON.parse(frame.subarray(4).toString("utf8")) as ChildRequest;
-  const parsers: DocumentParser[] = request.module
-    ? (require(request.module) as { parsers: DocumentParser[] }).parsers
-    : createDefaultParsers();
-  // By id, never accepts(): a parser whose accepts() throws cannot crash a run here.
-  const parser = new ParserRegistry(parsers).byId(request.parserId);
-  if (!parser) return reply({ ok: false, kind: "failed" });
-  const bytes = new Uint8Array(Buffer.from(request.bytes, "base64"));
-  reply({ ok: true, doc: await parser.parse(bytes) });
-}
-
-main().catch((err) =>
-  reply(
-    err instanceof ParseRejectedError
-      ? { ok: false, kind: "rejected", code: err.code }
-      : { ok: false, kind: "failed" },
-  ),
-);
+require("./childMain");

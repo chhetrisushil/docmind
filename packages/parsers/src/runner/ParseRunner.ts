@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import {
@@ -28,25 +28,21 @@ export class ParseCrashedError extends Error {
     this.name = "ParseCrashedError";
   }
 }
-const pkgJsonDir = (name: string): string => dirname(require.resolve(`${name}/package.json`));
-/** Own built files, contracts' dist + package.json, zod as resolved: never src, .turbo or node_modules. */
-const readablePaths = (entry: string): string[] => {
+/** Bare specifiers the child's built code imports, resolved by the parent to real files. */
+const BARE_SPECIFIERS = ["@docmind/contracts", "zod"] as const;
+const real = (p: string): string => realpathSync(p);
+const specifierMap = (): Record<string, string> =>
+  Object.fromEntries(BARE_SPECIFIERS.map((name) => [name, real(require.resolve(name))]));
+/** Own built files and the real dirs of the two dependencies: no node_modules path, no src. */
+const readablePaths = (entry: string, map: Record<string, string>): string[] => {
   const distDir = dirname(dirname(entry));
-  const nm = join(dirname(distDir), "node_modules");
-  const contracts = pkgJsonDir("@docmind/contracts");
-  const zod = pkgJsonDir("zod");
+  const contractsPkg = real(require.resolve("@docmind/contracts/package.json"));
   return [
     distDir,
     join(dirname(distDir), "package.json"),
-    join(contracts, "dist"),
-    join(contracts, "package.json"),
-    zod,
-    // The resolver reads the symlinked spellings first.
-    join(nm, "@docmind/contracts"),
-    join(nm, "@docmind/contracts/dist"),
-    join(nm, "@docmind/contracts/package.json"),
-    join(nm, "zod"),
-    join(contracts, "node_modules/zod"),
+    dirname(map["@docmind/contracts"] as string), // contracts' dist
+    contractsPkg,
+    dirname(real(require.resolve("zod/package.json"))),
   ];
 };
 
@@ -70,13 +66,15 @@ export class ParseRunner {
   async run(parserId: string, bytes: Uint8Array): Promise<ParsedDocument> {
     const { limits } = this.options;
     const entry = this.options.childEntry ?? defaultEntry();
-    const readable = readablePaths(entry);
+    const map = specifierMap();
+    const readable = readablePaths(entry, map);
     if (this.options.parserModule) readable.push(dirname(this.options.parserModule));
     const args = [
       "--permission",
       ...readable.map((p) => `--allow-fs-read=${p}`),
       `--max-old-space-size=${limits.memoryMb}`,
       entry,
+      JSON.stringify(map),
     ];
     const child = spawn(process.execPath, args, {
       stdio: ["pipe", "ignore", "ignore", "pipe"],
@@ -122,13 +120,15 @@ export class ParseRunner {
       out.on("error", crash);
       out.on("close", crash); // a truncated or empty frame
       out.on("data", (chunk: Buffer) => {
+        if (settled) return;
         parts.push(chunk);
         have += chunk.length;
         if (have < 4) return;
-        const all = Buffer.concat(parts);
-        const len = all.readUInt32BE(0);
+        const head = parts.length === 1 ? (parts[0] as Buffer) : Buffer.concat(parts);
+        const len = head.readUInt32BE(0);
         if (len > MAX_REPLY_BYTES || have > 4 + len) return crash(); // oversized or extra bytes
-        if (have === 4 + len) finish(all.subarray(4));
+        if (have < 4 + len) return; // keep chunks; concatenate once, when complete
+        finish(head.subarray(4));
       });
       child.stdin?.on("error", crash);
       child.stdin?.end(encodeFrame(request));

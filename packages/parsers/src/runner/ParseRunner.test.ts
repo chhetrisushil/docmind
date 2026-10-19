@@ -108,4 +108,9 @@ describe("ParseRunner", () => {
     expect((await runner().run("readsrc", bytes("x"))).text).toBe("denied");
     released();
   });
+
+  it("refuses a bare import the parent did not map (no node_modules resolution)", async () => {
+    await expect(runner().run("bare", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    released();
+  });
 });
