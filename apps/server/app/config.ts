@@ -42,7 +42,12 @@ export function buildApp(
     observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
     // The status model folds each ingest execution's log from its first event, so compaction must never
     // remove an ingest execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
-    durability: { retention: { compactionExempt: isIngestExecution } },
+    // Eager heartbeat leases: an ingest runs for seconds, so Loom's default lazy lease (taken only after a
+    // run has gone TTL/3 unleased) would leave a fresh execution unvetoed against recovery on another node.
+    durability: {
+      retention: { compactionExempt: isIngestExecution },
+      heartbeat: { acquire: "eager" },
+    },
     execution: {
       registerEffects: (effects) => {
         if (!deps.ingest) return;

@@ -71,3 +71,45 @@ export async function recoverIngest(
   await Promise.all(ending);
   return summary;
 }
+
+export interface Recovery {
+  /** Stops the periodic pass. A pass in flight is not awaited: it can be waiting on a re-driven step. */
+  stop(): void;
+  /** Settles when the pass now running (if any) has. */
+  idle(): Promise<void>;
+}
+
+/**
+ * Starts the boot pass (not awaited: a pass settles each execution it re-drives, which can take a
+ * whole parse, and the server must not wait to listen) and then one pass per `intervalMs` on an
+ * unref'd timer. Passes never overlap, and a pass that throws is logged by class and forgotten.
+ */
+export function startRecovery(
+  runtime: WorkflowRuntime,
+  source: ExecutionEnumerable,
+  { intervalMs = RECOVERY_INTERVAL_MS, now }: { intervalMs?: number; now?: () => number } = {},
+): Recovery {
+  let running: Promise<void> | undefined;
+  let stopped = false;
+  const pass = (graceMs: number) => {
+    if (stopped || running) return;
+    running = recoverIngest(runtime, source, { graceMs, ...(now && { now }) })
+      .then(() => undefined)
+      .catch((err: unknown) => console.error("ingest recovery failed", errorClass(err)))
+      .finally(() => {
+        running = undefined;
+      });
+  };
+  pass(0);
+  const timer = setInterval(() => pass(ABANDON_GRACE_MS), intervalMs);
+  timer.unref();
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    idle: async () => {
+      await running;
+    },
+  };
+}

@@ -5,6 +5,7 @@ import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
+import { startRecovery } from "./flows/ingest-document/recovery";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
@@ -84,6 +85,10 @@ async function main(): Promise<void> {
     () => pool.end(),
   ]);
 
+  // Resume what the last process left running (a crash, or a shutdown that released its leases), then keep
+  // looking. Not awaited: a pass settles each step it re-drives, and the server must not wait to listen.
+  const recovery = startRecovery(app.runtime, durable.storage.eventStore);
+
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
       console.error(
@@ -115,6 +120,7 @@ async function main(): Promise<void> {
   let closing: Promise<void> | undefined;
   const stop = () => {
     clearInterval(sweepTimer);
+    recovery.stop();
     closing ??= shutdown(server, {
       close: async () => {
         // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
@@ -122,6 +128,9 @@ async function main(): Promise<void> {
         await runAll(
           () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
           () => closeIngest(ingest), // signals the steps, then aborts in-flight parses and kills their children, before any pool ends
+          // Releases every execution lease this node holds, so the next boot recovers what was interrupted
+          // at once instead of waiting out the lease. After the steps are interrupted, before the stores close.
+          () => app.runtime.closeHeartbeat(),
           async () => {
             detachStatusFeed(); // a step still running must not fold onto stores about to close
             await status.close();
