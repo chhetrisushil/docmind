@@ -15,6 +15,10 @@ export default defineConfig({
         replacement: resolve(__dirname, "../../packages/auth/src/testing.ts"),
       },
       {
+        find: "@docmind/embeddings/testing",
+        replacement: resolve(__dirname, "../../packages/embeddings/src/testing/fakeOllama.ts"),
+      },
+      {
         find: "@docmind/vector-pg/testing",
         replacement: resolve(__dirname, "../../packages/vector-pg/src/testing/conformance.ts"),
       },
