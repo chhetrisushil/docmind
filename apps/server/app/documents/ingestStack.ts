@@ -51,6 +51,8 @@ export interface IngestStack {
     documentId: string,
     done: (status: string) => boolean,
   ): Promise<IngestEvent[]>;
+  /** Makes the next ingest start (an upload's or the sweep's) throw before it creates an execution. */
+  failNextStart(): void;
   close(): Promise<void>;
 }
 
@@ -86,7 +88,18 @@ export async function startIngestStack(): Promise<IngestStack> {
     // The retry policy's backoff is the one timer a test must not wait on: attempts still run, back to back.
     wiring.sleep = async () => {};
     cleanups.unshift(() => closeIngest(wiring));
+    let failStarts = 0;
     const composed = buildServer({
+      wrapIngest: (port) => ({
+        cancel: (identity, documentId) => port.cancel(identity, documentId),
+        async start(identity, documentId) {
+          if (failStarts > 0) {
+            failStarts--;
+            throw new Error("synthetic-start-error");
+          }
+          return port.start(identity, documentId);
+        },
+      }),
       pool: app,
       keys,
       storage: durable.storage,
@@ -182,6 +195,9 @@ export async function startIngestStack(): Promise<IngestStack> {
       upload,
       events: openEvents,
       until,
+      failNextStart: () => {
+        failStarts++;
+      },
       async close() {
         // main's stop(): timers, then open streams, then the server drain, then the close sequence.
         recovery.stop();
