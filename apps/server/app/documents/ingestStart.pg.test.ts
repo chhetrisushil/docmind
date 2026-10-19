@@ -1,8 +1,9 @@
 import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
+import { STATUS_MESSAGES } from "../status/model";
 import { ingestExecutionId } from "./ingest";
-import { ALICE, type DocumentHarness, TEXT, U1, startDocumentServer } from "./testHarness";
+import { ALICE, type DocumentHarness, PDF, TEXT, U1, startDocumentServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -39,6 +40,29 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
       [id],
     );
     expect(chunks.rows[0].n).toBeGreaterThan(0);
+  });
+
+  it("ends a pdf as failed with the fixed unsupported_content message (no pdf parser until part 2)", async () => {
+    const { body } = await created("report.pdf", PDF("pdf flow"));
+    await h.starts.idle();
+    await h.ingest.handles.get(body.document.id)?.waitForCompletion();
+    expect(await h.status.forDocument(ALICE, body.document.id)).toEqual({
+      status: "failed",
+      step: "parse",
+      error: STATUS_MESSAGES.unsupported_content,
+    });
+  });
+
+  it("ends a binary file named .txt as failed with corrupt_content, never ready", async () => {
+    const bytes = Buffer.from([0xff, 0xfe, 0x41, 0x00, 0xff, 0xff, 0x00, 0xd8]); // UTF-16 BOM, a noncharacter, a lone surrogate
+    const { body } = await created("data.txt", bytes);
+    await h.starts.idle();
+    await h.ingest.handles.get(body.document.id)?.waitForCompletion();
+    expect(await h.status.forDocument(ALICE, body.document.id)).toEqual({
+      status: "failed",
+      step: "parse",
+      error: STATUS_MESSAGES.corrupt_content,
+    });
   });
 
   it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {
