@@ -30,6 +30,14 @@ export class BlobMissingError extends Error {
   }
 }
 
+/** A step's wait for an ingest slot was aborted (a cancel or a shutdown). Neither retried nor a failure. */
+export class IngestAbortedError extends Error {
+  constructor() {
+    super("the ingest wait was aborted");
+    this.name = "IngestAbortedError";
+  }
+}
+
 export const FAILURE_CODES = ["unsupported_content", "corrupt_content", "too_large"] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
@@ -64,7 +72,9 @@ const isDocumentFkViolation = (err: unknown): boolean => {
 
 /** A caller abort (a cancel, a shutdown, an abandoned attempt): neither retried nor a failure. */
 export const isAbort = (err: unknown): boolean =>
-  err instanceof ParseAbortedError || err instanceof EmbeddingAbortedError;
+  err instanceof ParseAbortedError ||
+  err instanceof EmbeddingAbortedError ||
+  err instanceof IngestAbortedError;
 
 /** Deployment misconfiguration (embedder and vector store disagree): deterministic, never retried. Names no values. */
 /** A step produced a result outside StepResult (an extra or malformed field): a programming fault, fatal, never retried. */

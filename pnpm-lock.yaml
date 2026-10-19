@@ -12,6 +12,7 @@ overrides:
   '@loom/core': link:../loom/packages/core
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
   '@loom/event-runtime': link:../loom/packages/event-runtime
+  '@loom/fair-scheduler': link:../loom/packages/fair-scheduler
   '@loom/memory': link:../loom/packages/memory
   '@loom/plugin-content': link:../loom/plugins/content
   '@loom/plugin-crypto': link:../loom/plugins/crypto
@@ -65,6 +66,9 @@ importers:
       '@loom/effect-runtime':
         specifier: link:../../../loom/packages/effect-runtime
         version: link:../../../loom/packages/effect-runtime
+      '@loom/fair-scheduler':
+        specifier: link:../../../loom/packages/fair-scheduler
+        version: link:../../../loom/packages/fair-scheduler
       '@loom/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
