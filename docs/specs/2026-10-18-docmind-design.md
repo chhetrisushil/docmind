@@ -119,7 +119,7 @@ Each interface has **one shared conformance test suite** that every implementati
 | Data | Store |
 |---|---|
 | Chat messages and citations | Loom event log (`@loom/conversation`). Never copied elsewhere. |
-| Ingestion progress | Loom event log (ingest flow). `documents.status` is a projection of it. |
+| Ingestion progress | Loom event log (ingest flow). A document's status is the `ingest-status` folded read model's state (a document with no row is `uploaded`); there is no `documents.status` column. |
 | Original files | `ContentStore`, path `<tenant>/<user>/<sha256>`, encrypted |
 | Everything else | Postgres tables (§4.2) |
 
@@ -132,8 +132,8 @@ Every table carries `tenant_id`, except the two folded-state tables of the inges
   argon2id.
 - **`auth_sessions`** `(token_hash, tenant_id, user_id, expires_at)`. Only a hash of the cookie token is stored.
 - **`documents`** `(id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
-  content_address, fingerprint, status, error, stats jsonb, summary_enc, created_at, updated_at)`
-  - `status` is one of `uploaded | parsing | embedding | ready | failed`.
+  content_address, fingerprint, stats jsonb, summary_enc, created_at, updated_at)`
+  - Status (`uploaded | parsing | embedding | ready | failed`) is the `ingest-status` model's, not a column; the failure message is derived from its code at read time.
   - `UNIQUE(tenant_id, owner_id, fingerprint)`: re-uploading identical bytes returns the existing
     document.
 - **`chunks`** `(id, tenant_id, document_id → ON DELETE CASCADE, ordinal, section_ordinal, text_enc, locator jsonb,
