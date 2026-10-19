@@ -381,7 +381,8 @@ auth, sessions, chat, documents. Stores never touch the DOM.
 - Every `POST`, `PUT`, `PATCH` and `DELETE` is refused with 403 `cross_origin_request` unless `Sec-Fetch-Site` is
   `same-origin` or `none`, or, when that header is absent, `Origin` equals the server's own origin (or is
   absent). This guard sits in the HTTP router, in front of every route, as SameSite=Lax does not stop
-  same-site, cross-origin pages.
+  same-site, cross-origin pages. Behind a reverse proxy, forward `Host` unchanged (nginx:
+  `proxy_set_header Host $host`), or browser writes without Fetch Metadata are refused with 403.
 - Assistant answers and extracted document text are untrusted. Markdown is rendered, then sanitized
   with DOMPurify.
 - The streaming answer region is `aria-live="polite"`.

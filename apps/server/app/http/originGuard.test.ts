@@ -45,7 +45,12 @@ afterAll(async () => {
 });
 
 /** Raw request, so headers such as Origin and Host are sent exactly as given. */
-function send(method: string, path: string, headers: Record<string, string> = {}, p = port) {
+function send(
+  method: string,
+  path: string,
+  headers: Record<string, string | string[]> = {},
+  p = port,
+) {
   return new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port: p, method, path, headers }, async (res) => {
       let body = "";
@@ -96,8 +101,22 @@ describe("origin guard", () => {
     expect(res.status).toBe(403);
   });
 
+  it("refuses a Sec-Fetch-Site that is not exactly same-origin or none", async () => {
+    for (const site of ["", "SAME-ORIGIN", "bogus", ["same-origin", "same-origin"]]) {
+      expect((await send("POST", "/t", { "sec-fetch-site": site })).status).toBe(403);
+    }
+  });
+
   it("refuses a foreign Origin when Sec-Fetch-Site is absent", async () => {
-    for (const origin of ["http://evil.example", "null", `http://127.0.0.1:${port + 1}`]) {
+    for (const origin of [
+      "http://evil.example",
+      "null",
+      `http://127.0.0.1:${port + 1}`,
+      `http://127.0.0.1:${port}.evil.example`,
+      `http://127.0.0.1:${port}0`,
+      `http://127.0.0.1:${port}/`,
+      `HTTP://127.0.0.1:${port}`,
+    ]) {
       expect((await send("POST", "/t", { origin })).status).toBe(403);
     }
   });
@@ -123,12 +142,17 @@ describe("origin guard", () => {
   });
 
   it("never blocks GET, HEAD or OPTIONS", async () => {
-    for (const method of ["GET", "HEAD", "OPTIONS"]) {
+    // Only GET has a route here; HEAD and OPTIONS reach the router's own 404, not the guard's 403.
+    for (const [method, status] of [
+      ["GET", 200],
+      ["HEAD", 404],
+      ["OPTIONS", 404],
+    ] as const) {
       const res = await send(method, "/t", {
         "sec-fetch-site": "cross-site",
         origin: "http://evil.example",
       });
-      expect(res.status).not.toBe(403);
+      expect(res.status).toBe(status);
     }
   });
 });
