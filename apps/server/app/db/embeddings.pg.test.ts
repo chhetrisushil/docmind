@@ -17,7 +17,7 @@ const APP_EXECUTABLE = [
   "auth_purge_expired_sessions()",
   "auth_sign_up(uuid,uuid,text,text)",
   "docmind_orphan_statuses(integer)",
-  "docmind_stale_uploads(interval,interval,integer,integer)",
+  "docmind_stale_uploads_v2(interval,interval,integer)",
   "key_destroy(text)",
   "key_get(text)",
   "key_put(text,bytea,text)",
