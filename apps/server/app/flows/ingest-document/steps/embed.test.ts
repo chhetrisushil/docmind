@@ -132,14 +132,24 @@ describe("embedEffect", () => {
     expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "EmbeddingUnavailableError");
   });
 
-  it("maps a permanent embedder error to a code, keeps finished batches, and resumes", async () => {
+  it("fails a permanent embedder error at once, logs the class, keeps finished batches", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = harness(100);
-    h.failFrom(2, new EmbeddingError("bad request"));
-    expect(await run(h.deps)).toEqual({ outcome: "failed", code: "unsupported_content" });
+    h.failFrom(2, new EmbeddingError("bad request"), 99);
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "EmbeddingError");
+    expect(h.embedCalls).toEqual([64]); // not retried
     expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(36);
-    h.embedCalls.length = 0;
-    expect(await run(h.deps)).toMatchObject({ outcome: "done", count: 100 });
-    expect(h.embedCalls).toEqual([36]);
+  });
+
+  it("fails when the embedder returns the wrong number of vectors", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(3);
+    const real = h.deps.embedder.embed.bind(h.deps.embedder);
+    h.deps.embedder.embed = async (t, o) => (await real(t, o)).slice(1);
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "Error");
+    expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(3);
   });
 
   it("treats an embedder abort as a cancel: not retried, not logged", async () => {
@@ -216,11 +226,19 @@ describe("embedEffect", () => {
     expect(h.embedCalls).toHaveLength(3); // one batch per attempt: the bound stops the second
   });
 
-  it("fails with the fixed message when the embedder and the vector store disagree on the model", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const h = harness(2);
-    h.deps.embedder = { ...h.deps.embedder, modelId: "other-model" };
-    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
-    expect(h.embedCalls).toEqual([]);
-  });
+  it.each([
+    ["model", { modelId: "other-model" }],
+    ["dimensions", { dimensions: 16 }],
+  ])(
+    "fails at once with the config error when the %s differs from the vector store's",
+    async (_n, over) => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const h = harness(2);
+      h.deps.embedder = { ...h.deps.embedder, ...over };
+      await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+      expect(spy).toHaveBeenCalledTimes(1); // one attempt
+      expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "IngestConfigError");
+      expect(h.embedCalls).toEqual([]);
+    },
+  );
 });

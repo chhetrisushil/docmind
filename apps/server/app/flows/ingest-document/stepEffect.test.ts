@@ -16,6 +16,7 @@ import {
   DOCUMENT_FKEY_CONSTRAINTS,
   DocumentGoneError,
   FAILURE_CODES,
+  IngestConfigError,
   PermanentIngestError,
 } from "./errors";
 import type { IngestStartInput } from "./flow";
@@ -126,17 +127,27 @@ describe("stepEffect", () => {
     expect((err as Error).cause).toBeUndefined();
   });
 
-  it("maps a permanent embedder error to unsupported_content", async () => {
-    const { port } = guard();
-    expect(
-      await run(
-        throwing(() => new EmbeddingError("bad request")),
-        port,
-      ),
-    ).toEqual({
-      outcome: "failed",
-      code: "unsupported_content",
+  it("fails a permanent embedder error at once, logs the class, records no code", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const work = vi.fn(throwing(() => new EmbeddingError("bad request")));
+    const effect = stepEffect("embed", guard().port, work, {
+      retry: { maxAttempts: 3, backoffMs: 0, backoffMultiplier: 1 },
+      sleep: async () => {},
     });
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "EmbeddingError");
+  });
+
+  it("fails a config error at once", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const work = vi.fn(throwing(() => new IngestConfigError()));
+    const effect = stepEffect("embed", guard().port, work, {
+      retry: { maxAttempts: 3, backoffMs: 0, backoffMultiplier: 1 },
+      sleep: async () => {},
+    });
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(work).toHaveBeenCalledTimes(1);
   });
 
   it("treats an embedding abort like a parse abort: no retry, no log, fixed message", async () => {
