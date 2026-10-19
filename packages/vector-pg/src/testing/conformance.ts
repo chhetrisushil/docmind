@@ -8,8 +8,8 @@ export interface VectorHarness {
    * Makes `ids` exist as the chunk rows of `documentId` (ordinals in array order) for this
    * scope, and no others: the kit reuses the document across cases, so seed REPLACES the
    * document's chunks. Seeding fewer ids is how the kit deletes a chunk, and it must drop the
-   * removed chunks' vectors (Postgres: delete the document's chunks first, the cascade removes
-   * the vectors; Task 89, F02). No separate delete method exists on the harness.
+   * removed chunks' vectors and keep the vectors of surviving ids (Postgres: delete the chunks not in
+   * `ids`, the cascade removes their vectors, and update the survivors' ordinals; Task 89, F02). No separate delete method exists on the harness.
    */
   seed(scope: VectorScope, documentId: string, ids: string[]): Promise<void>;
   /** A second store over the same rows with another model id. */
@@ -31,6 +31,7 @@ export const C: VectorScope = {
 }; // other tenant
 export const DOC_A = "d1d1d1d1-d1d1-4d1d-8d1d-d1d1d1d1d1d1";
 export const DOC_B = "d2d2d2d2-d2d2-4d2d-8d2d-d2d2d2d2d2d2";
+export const DOC_A2 = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4"; // a second document of owner A
 export const DOC_C = "d3d3d3d3-d3d3-4d3d-8d3d-d3d3d3d3d3d3";
 
 const basis = (d: number, i: number): number[] => {
@@ -191,6 +192,41 @@ export function runChunkVectorStoreConformance(
       ]);
       expect(ids(await store.search(A, basis(d, 0), 10, -1))).toEqual([real]);
       expect(await store.search(A, new Array(d).fill(0), 10, -1)).toEqual([]);
+    });
+
+    test("a value beyond float4 range rejects with VectorDimensionError, in a vector and in a query", async ({
+      store,
+      seed,
+    }) => {
+      const [id] = uuids(1) as [string];
+      await seed(A, DOC_A, [id]);
+      const d = store.dimensions;
+      for (const big of [1e39, -1e39]) {
+        const bad = basis(d, 0);
+        bad[1] = big;
+        await expect(store.upsert(A, DOC_A, [{ chunkId: id, vector: bad }])).rejects.toBeInstanceOf(
+          VectorDimensionError,
+        );
+        await expect(store.search(A, bad, 5)).rejects.toBeInstanceOf(VectorDimensionError);
+      }
+      expect(await store.missing(A, DOC_A, 10)).toEqual([id]);
+    });
+
+    test("a chunk id of the same owner's other document is missing for this document and is not written", async ({
+      store,
+      seed,
+    }) => {
+      const [mine] = uuids(1) as [string];
+      const [other] = uuids(1) as [string];
+      await seed(A, DOC_A, [mine]);
+      await seed(A, DOC_A2, [other]);
+      const d = store.dimensions;
+      expect(await store.upsert(A, DOC_A, [{ chunkId: other, vector: basis(d, 0) }])).toEqual({
+        written: 0,
+        missing: [other],
+      });
+      expect(await store.missing(A, DOC_A2, 10)).toEqual([other]);
+      expect(await store.search(A, basis(d, 0), 10)).toEqual([]);
     });
 
     test("a query of the wrong dimension or with a non-finite value rejects with VectorDimensionError", async ({

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/conformance.d.ts",
+      "default": "./dist/testing/conformance.js"
     }
   },
   "engines": {
@@ -19,9 +23,6 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.test.json"
-  },
-  "dependencies": {
-    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

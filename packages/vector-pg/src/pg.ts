@@ -1,11 +1,26 @@
 import type { PoolClient } from "pg";
-import { type ChunkVectorStore, VectorDimensionError, type VectorScope } from "./types";
+import {
+  type ChunkVectorStore,
+  VectorDimensionError,
+  type VectorScope,
+  isValidVector,
+} from "./types";
 
 export interface PgVectorOptions {
   tenant: <T>(tenantId: string, fn: (tx: PoolClient) => Promise<T>) => Promise<T>;
   modelId: string;
   dimensions: number;
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Fixed message naming the variable, never its value (Postgres would echo a bad uuid). */
+const uuid = (name: string, v: string): void => {
+  if (!UUID.test(v)) throw new Error(`PgChunkVectorStore: ${name} must be a uuid`);
+};
+const scoped = (scope: VectorScope): void => {
+  uuid("tenantId", scope.tenantId);
+  uuid("ownerId", scope.ownerId);
+};
 
 /** pgvector's text form. Always sent as a bind parameter, never interpolated. */
 const literal = (v: readonly number[]) => `[${v.join(",")}]`;
@@ -25,7 +40,7 @@ export class PgChunkVectorStore implements ChunkVectorStore {
   }
 
   private check(v: readonly number[]): void {
-    if (v.length !== this.dimensions || !v.every(Number.isFinite)) throw new VectorDimensionError();
+    if (!isValidVector(v, this.dimensions)) throw new VectorDimensionError();
   }
 
   async upsert(
@@ -33,7 +48,12 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     documentId: string,
     items: { chunkId: string; vector: readonly number[] }[],
   ): Promise<{ written: number; missing: string[] }> {
-    for (const item of items) this.check(item.vector);
+    scoped(scope);
+    uuid("documentId", documentId);
+    for (const item of items) {
+      uuid("chunkId", item.chunkId);
+      this.check(item.vector);
+    }
     // One row per id (the last vector wins): UPDATE ... FROM with a repeated key picks arbitrarily.
     const last = new Map<string, readonly number[]>();
     for (const item of items) last.set(item.chunkId, item.vector);
@@ -54,8 +74,10 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     });
   }
 
-  missing(scope: VectorScope, documentId: string, limit: number): Promise<string[]> {
-    if (limit <= 0) return Promise.resolve([]);
+  async missing(scope: VectorScope, documentId: string, limit: number): Promise<string[]> {
+    scoped(scope);
+    uuid("documentId", documentId);
+    if (limit <= 0) return [];
     return this.options.tenant(scope.tenantId, async (tx) => {
       const { rows } = await tx.query<{ id: string }>(
         `SELECT c.id FROM chunks c ${JOIN_OWNER}
@@ -74,9 +96,11 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     limit: number,
     minScore?: number,
   ): Promise<{ chunkId: string; score: number }[]> {
+    scoped(scope);
     this.check(query);
     // Cosine distance of a zero vector is NaN, which Postgres sorts above every number.
     if (limit <= 0 || query.every((x) => x === 0)) return [];
+    // Exact scan of the tenant's rows by design until M4 (the HNSW index is not used by this SQL).
     return this.options.tenant(scope.tenantId, async (tx) => {
       const { rows } = await tx.query<{ id: string; score: number }>(
         `SELECT c.id, 1 - (c.embedding <=> $1::vector) AS score FROM chunks c ${JOIN_OWNER}
