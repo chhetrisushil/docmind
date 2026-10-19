@@ -50,6 +50,9 @@ export class MemoryLog implements ReadModelEventSource {
       this.byExecution.set(e.executionId, list);
     }
   }
+  events(): EventEnvelope[] {
+    return [...this.byExecution.values()].flat();
+  }
   async listExecutions(): Promise<string[]> {
     return [...this.byExecution.keys()];
   }
