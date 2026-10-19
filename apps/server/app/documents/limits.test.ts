@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { describe, expect, it } from "vitest";
+import { StartupConfigError } from "../startupError";
 import { DEFAULT_LIMITS, loadBlobRoot, loadLimits } from "./limits";
 
 describe("loadLimits", () => {
@@ -23,6 +24,10 @@ describe("loadLimits", () => {
       tenantMaxDocuments: 3,
       maxConcurrentUploadsPerUser: 1,
     });
+  });
+
+  it("throws a StartupConfigError, which main may print", () => {
+    expect(() => loadLimits({ DOCMIND_TENANT_MAX_BYTES: "0" })).toThrow(StartupConfigError);
   });
 
   it("names the variable, never the value, when one is invalid", () => {

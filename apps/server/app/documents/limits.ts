@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { StartupConfigError } from "../startupError";
 
 export interface DocumentLimits {
   /** Largest single file (spec §4.3: 50 MB). */
@@ -32,9 +33,9 @@ export function positiveInt(
   const value = Number(raw);
   // The message names the variable only: the value could be anything the operator typed.
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${name} must be a positive integer`);
+    throw new StartupConfigError(`${name} must be a positive integer`);
   }
-  if (value > max) throw new Error(`${name} must be at most ${max}`);
+  if (value > max) throw new StartupConfigError(`${name} must be at most ${max}`);
   return value;
 }
 
@@ -55,7 +56,7 @@ export function loadLimits(env: NodeJS.ProcessEnv = process.env): DocumentLimits
     ),
   };
   if (limits.maxFileBytes > MAX_FILE_CEILING) {
-    throw new Error("DOCMIND_MAX_UPLOAD_BYTES must be at most 268435456 (256 MiB)");
+    throw new StartupConfigError("DOCMIND_MAX_UPLOAD_BYTES must be at most 268435456 (256 MiB)");
   }
   return limits;
 }
