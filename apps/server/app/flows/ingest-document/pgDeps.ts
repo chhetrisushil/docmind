@@ -1,11 +1,13 @@
 import type { ChunkVectorStore } from "@docmind/vector-pg";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
+import { EntityKeys } from "../../crypto/entityKeys";
 import type { FieldCrypto } from "../../crypto/fields";
 import type { IngestDeps } from "./deps";
 import { IngestConfigError } from "./errors";
 import { type IngestWiring, parseStepTimeoutMs } from "./limits";
 import { PgChunkStore } from "./pgChunks";
+import { PgEntityStore } from "./pgEntities";
 import { PgStepGuard } from "./pgGuard";
 import { PgParsedStore } from "./pgParsed";
 import { PgDocumentResults } from "./pgResults";
@@ -26,7 +28,14 @@ export interface PgIngestArgs {
   vectors: ChunkVectorStore;
 }
 
-export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestArgs): IngestDeps {
+export function pgIngestDeps({
+  pool,
+  fields,
+  keys,
+  blobs,
+  wiring,
+  vectors,
+}: PgIngestArgs): IngestDeps {
   // A deployment fault: refuse to compose rather than embed vectors the store cannot compare.
   if (
     vectors.modelId !== wiring.embedder.modelId ||
@@ -40,6 +49,9 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     parsed: new PgParsedStore(pool, fields),
     chunks: new PgChunkStore(pool, fields),
     results: new PgDocumentResults(pool, fields),
+    entities: new PgEntityStore(pool, fields, new EntityKeys(keys)),
+    summaryMaxChars: wiring.summaryMaxChars,
+    ...(wiring.llm.summary && { llm: wiring.llm.summary }),
     registry: wiring.registry,
     vectors,
     embedder: wiring.embedder,
