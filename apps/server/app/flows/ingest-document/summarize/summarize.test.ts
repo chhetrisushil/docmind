@@ -140,11 +140,81 @@ describe("summarizeDocument", () => {
     );
   });
 
-  it("forwards the signal to every request", async () => {
-    const { provider, requests } = scripted();
-    const signal = new AbortController().signal;
-    await summarizeDocument(provider, doc(["a", "b"]), { maxChars: 1_000, groupChars: 1, signal });
-    expect(requests).toHaveLength(3);
-    for (const r of requests) expect(r.signal).toBe(signal);
+  it("aborts the other in-flight requests when one map fails", async () => {
+    const signals: AbortSignal[] = [];
+    let release: (() => void) | undefined;
+    const heldStarted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const provider: LlmProvider = {
+      complete: async (r) => {
+        const n = calls++;
+        signals.push(r.signal as AbortSignal);
+        if (n === 0) {
+          await heldStarted; // wait until the second request is in flight
+          return { content: "not json", stopReason: "end_turn" };
+        }
+        release?.();
+        await new Promise<void>((resolve) => r.signal?.addEventListener("abort", () => resolve()));
+        return { content: "{}", stopReason: "end_turn" };
+      },
+    };
+    await expect(
+      summarizeDocument(provider, doc(["a", "b"]), {
+        maxChars: 100,
+        groupChars: 1,
+        concurrency: 2,
+      }),
+    ).rejects.toBeInstanceOf(LlmOutputError);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  it("propagates an outer abort to every request", async () => {
+    const outer = new AbortController();
+    const signals: AbortSignal[] = [];
+    const provider: LlmProvider = {
+      complete: async (r) => {
+        signals.push(r.signal as AbortSignal);
+        return {
+          content: isReduce(r) ? REDUCE : JSON.stringify({ summary: "s", entities: [] }),
+          stopReason: "end_turn",
+        };
+      },
+    };
+    const run = summarizeDocument(provider, doc(["a", "b"]), {
+      maxChars: 1_000,
+      groupChars: 1,
+      signal: outer.signal,
+    });
+    await run;
+    expect(signals).toHaveLength(3);
+    // the request signals follow the outer one
+    const probe = new AbortController();
+    const fresh: AbortSignal[] = [];
+    const hold: LlmProvider = {
+      complete: async (r) => {
+        fresh.push(r.signal as AbortSignal);
+        probe.abort();
+        return { content: "{}", stopReason: "end_turn" };
+      },
+    };
+    await expect(
+      summarizeDocument(hold, doc(["a"]), { maxChars: 100, signal: probe.signal }),
+    ).rejects.toBeInstanceOf(LlmOutputError);
+    expect(fresh[0]?.aborted).toBe(true);
+  });
+
+  it("falls back to the default concurrency for NaN or non-positive values", async () => {
+    for (const concurrency of [Number.NaN, 0, -3]) {
+      const { provider, requests } = scripted();
+      await summarizeDocument(provider, doc(["a", "b"]), {
+        maxChars: 100,
+        groupChars: 1,
+        concurrency,
+      });
+      expect(requests).toHaveLength(3);
+    }
   });
 });
