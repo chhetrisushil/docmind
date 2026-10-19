@@ -22,7 +22,12 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       meta: async () => ({ mime: "text/plain", contentAddress: "a" }),
       read: async () => new Uint8Array([104]),
     },
-    parsed: { put: async () => {}, take: async () => PARSED, drop: async () => {} },
+    parsed: {
+      put: async () => {},
+      take: async () => PARSED,
+      has: async () => false,
+      drop: async () => {},
+    },
     chunks: { replace: async (_r, c) => c.length, count: async () => 0, read: async () => [] },
     vectors: new InMemoryChunkVectors({
       modelId: EMBEDDER.modelId,

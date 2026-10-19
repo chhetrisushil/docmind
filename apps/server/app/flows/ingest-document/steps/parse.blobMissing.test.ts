@@ -21,7 +21,12 @@ function deps(over: Partial<ParseDeps> & { guardGone?: { after: number } } = {})
         throw new BlobMissingError();
       },
     },
-    parsed: { put: async () => {}, take: async () => null, drop: async () => {} } as never,
+    parsed: {
+      put: async () => {},
+      take: async () => null,
+      has: async () => false,
+      drop: async () => {},
+    } as never,
     registry: { select: () => parser } as never,
     runner: { run: async () => ({ text: "", sections: [], media: [] }) } as never,
     sleep: async () => {},

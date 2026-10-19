@@ -27,12 +27,10 @@ export interface ChunkDeps {
 }
 
 /**
- * Chunk step: guard first, read the sealed parsed document, chunk it, store the sealed chunks, then
- * drop the parsed row. Safe to run twice (at-least-once), in both crash windows:
- * - after the chunks are stored but before the drop: the re-run reads the parsed row again and
- *   `replace` overwrites the same deterministic chunk ids, then drops;
- * - after the drop but before STEP_COMPLETED is appended: the re-run finds no parsed row and reports
- *   the chunks that exist.
+ * Chunk step: guard first, skip when chunks already exist (D2), else read the sealed parsed
+ * document, chunk it and store the sealed chunks. The parsed row is kept: analyze and summarize read
+ * it, and finalize drops it. Safe to run twice (at-least-once): chunks are stored in one transaction,
+ * so after a crash between the store and STEP_COMPLETED the re-run finds the chunks and skips.
  * The result is a count only: neither the parsed text nor a chunk's text leaves this function.
  */
 export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResult> {
@@ -40,13 +38,12 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
     "chunk",
     deps.guard,
     async (ref, signal) => {
+      const existing = await deps.chunks.count(ref);
+      if (existing > 0) return { count: existing };
       const parsed = await deps.parsed.take(ref);
       if (signal?.aborted) throw new ParseAbortedError(); // an abandoned attempt does not go on to write
-      // No parsed row for a document that exists: an earlier run stored the chunks and dropped it,
-      // and crashed before its STEP_COMPLETED was appended. The chunks are the result.
-      if (!parsed) return { count: await deps.chunks.count(ref) };
-      const count = await deps.chunks.replace(ref, chunkDocument(parsed), signal); // deterministic ids: a re-run overwrites
-      await deps.parsed.drop(ref, signal); // after the chunks exist, never before
+      if (!parsed) throw new Error("no parsed document to chunk"); // parse always stores one: an invariant break
+      const count = await deps.chunks.replace(ref, chunkDocument(parsed), signal); // deterministic ids
       return { count };
     },
     ingestStepOptions(deps),

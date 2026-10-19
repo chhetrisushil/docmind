@@ -90,7 +90,8 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
     const two = await boot({
       parsed: {
         put: async (ref) => void parsedFor.push(ref.documentId),
-        take: async () => undefined,
+        take: async () => ({ text: "", sections: [], media: [] }),
+        has: async () => false,
         drop: async () => {},
       },
     });

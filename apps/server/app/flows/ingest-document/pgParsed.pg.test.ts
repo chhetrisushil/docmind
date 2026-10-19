@@ -66,7 +66,19 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
     expect(await store.take(ref)).toBeUndefined();
   });
 
-  it.each(["put", "take", "drop"] as const)(
+  it("has is false before put, true after, and false after drop", async () => {
+    const ref = await f.doc("c3".repeat(32));
+    const store = new PgParsedStore(f.app, f.fields);
+    expect(await store.has(ref)).toBe(false);
+    await store.put(ref, parsed);
+    expect(await store.has(ref)).toBe(true);
+    await store.take(ref); // take reads without deleting
+    expect(await store.has(ref)).toBe(true);
+    await store.drop(ref);
+    expect(await store.has(ref)).toBe(false);
+  });
+
+  it.each(["put", "take", "has", "drop"] as const)(
     "%s throws DocumentGoneError for another owner's document and for a deleted one",
     async (op) => {
       const ref = await f.doc(randomUUID().replaceAll("-", "").repeat(2));
@@ -74,7 +86,13 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
       await store.put(ref, parsed);
       const before = await rawBody(ref.documentId);
       const call = (r: typeof ref) =>
-        op === "put" ? store.put(r, parsed) : op === "take" ? store.take(r) : store.drop(r);
+        op === "put"
+          ? store.put(r, parsed)
+          : op === "take"
+            ? store.take(r)
+            : op === "has"
+              ? store.has(r)
+              : store.drop(r);
       await expect(call({ ...ref, userId: U1B })).rejects.toBeInstanceOf(DocumentGoneError);
       // The refused call changed nothing: the owner's row is intact.
       expect(await rawBody(ref.documentId)).toEqual(before);
