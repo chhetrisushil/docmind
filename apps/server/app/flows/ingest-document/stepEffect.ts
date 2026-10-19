@@ -1,5 +1,6 @@
 import type { IngestStep } from "@docmind/contracts";
 import { ParseAbortedError } from "@docmind/parsers";
+import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
 import { FAILURE_CODES, isDocumentGone, permanentCode } from "./errors";
@@ -25,6 +26,42 @@ export interface StepGuard {
   begin(ref: IngestStartInput, step: IngestStep): Promise<void>;
 }
 
+/**
+ * The parse step's retry policy. Loom records a step's `retry` as declared metadata (it is part of
+ * the flow's identity) and enforces nothing itself, so `stepEffect` applies it: a transient failure
+ * (a parser crash, a key store outage) is re-run in memory, with exponential backoff, up to
+ * `maxAttempts` attempts in all. Permanent outcomes and cancellations are never retried.
+ */
+export const PARSE_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
+
+export interface StepOptions {
+  retry?: RetryPolicy;
+  /** Injectable wait between attempts; must reject if `signal` aborts. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new ParseAbortedError());
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new ParseAbortedError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
+/**
+ * A shutdown (`runner.close()`) aborts an in-flight parse while the execution's own signal is
+ * quiet. That is neither a failure nor an attempt: the step must stay un-completed in the log, as
+ * after a crash, so recovery re-runs it. Loom turns any rejection into STEP_FAILED and a failed
+ * execution is final, so the effect does not settle: the process is about to exit.
+ */
+const INTERRUPTED: Promise<never> = new Promise<never>(() => {});
+
 export function stepEffect(
   step: IngestStep,
   guard: StepGuard,
@@ -32,18 +69,34 @@ export function stepEffect(
     ref: IngestStartInput,
     signal?: AbortSignal,
   ) => Promise<{ count?: number; model?: string } | undefined>,
+  options: StepOptions = {},
 ): Effect<IngestStartInput, StepResult> {
+  const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
+  const sleep = options.sleep ?? defaultSleep;
   return {
     kind: "tool",
     execute: async (ref, ctx) => {
-      try {
-        await guard.begin(ref, step);
-        return { outcome: "done", ...((await work(ref, ctx?.signal)) ?? {}) };
-      } catch (err) {
-        if (isDocumentGone(err)) return { outcome: "document_gone" };
-        const code = permanentCode(err);
-        if (code) return { outcome: "failed", code };
-        throw failure(step, err);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await guard.begin(ref, step);
+          return { outcome: "done", ...((await work(ref, ctx?.signal)) ?? {}) };
+        } catch (err) {
+          if (isDocumentGone(err)) return { outcome: "document_gone" };
+          const code = permanentCode(err);
+          if (code) return { outcome: "failed", code };
+          const cancelled = ctx?.signal?.aborted === true;
+          if (err instanceof ParseAbortedError && !cancelled) return INTERRUPTED;
+          if (err instanceof ParseAbortedError || attempt >= maxAttempts) throw failure(step, err);
+          try {
+            const base = options.retry?.backoffMs ?? 0;
+            await sleep(
+              base * (options.retry?.backoffMultiplier ?? 1) ** (attempt - 1),
+              ctx?.signal,
+            );
+          } catch {
+            throw failure(step, err); // cancelled while waiting
+          }
+        }
       }
     },
   };

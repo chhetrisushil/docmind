@@ -96,7 +96,6 @@ describe("stepEffect", () => {
 
   it.each([
     ["a crash", () => new ParseCrashedError()],
-    ["a cancellation", () => new ParseAbortedError()],
     ["a key store outage", () => new FieldKeyStoreError()],
     [
       "a foreign-key violation on another constraint",
@@ -136,6 +135,74 @@ describe("stepEffect", () => {
     ).rejects.toThrow(/^ingest step failed: chunk$/);
     expect(spy).toHaveBeenCalledWith("ingest step failed", "chunk", "TypeError");
     expect(JSON.stringify(spy.mock.calls)).not.toContain("secret");
+  });
+
+  it("rethrows an abort of a cancelled execution with the fixed message", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    const cancelled = { signal: AbortSignal.abort() } as never;
+    await expect(
+      stepEffect(
+        "chunk",
+        port,
+        throwing(() => new ParseAbortedError()),
+      ).execute(ref(), cancelled),
+    ).rejects.toThrow(/^ingest step failed: chunk$/);
+  });
+
+  it("leaves a shutdown abort un-completed: no result, no failure, no retry", async () => {
+    const { port, calls } = guard();
+    const sleep = vi.fn();
+    const settled = vi.fn();
+    stepEffect(
+      "chunk",
+      port,
+      throwing(() => new ParseAbortedError()),
+      {
+        retry: { maxAttempts: 3 },
+        sleep,
+      },
+    )
+      .execute(ref(), { signal: new AbortController().signal } as never)
+      .then(settled, settled);
+    await vi.waitFor(() => expect(calls).toEqual(["begin:chunk"]));
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient failure with exponential backoff up to maxAttempts, never a permanent one", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    const waits: number[] = [];
+    const opts = {
+      retry: { maxAttempts: 3, backoffMs: 10, backoffMultiplier: 2 },
+      sleep: async (ms: number) => void waits.push(ms),
+    };
+    let tries = 0;
+    await expect(
+      stepEffect(
+        "chunk",
+        port,
+        async () => {
+          tries++;
+          throw new ParseCrashedError();
+        },
+        opts,
+      ).execute(ref(), {} as never),
+    ).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect([tries, waits]).toEqual([3, [10, 20]]);
+    tries = 0;
+    await stepEffect(
+      "chunk",
+      port,
+      async () => {
+        tries++;
+        throw new PermanentIngestError("corrupt_content");
+      },
+      opts,
+    ).execute(ref(), {} as never);
+    expect(tries).toBe(1);
   });
 
   it("keeps StepResult strict", () => {
