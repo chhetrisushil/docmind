@@ -54,7 +54,7 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle, starts, status } = buildServer({
+  const { app, server, store, throttle, starts, status, detachStatusFeed } = buildServer({
     pool,
     keys,
     storage: durable.storage,
@@ -109,7 +109,10 @@ async function main(): Promise<void> {
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(
           () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
-          () => status.close(),
+          async () => {
+            detachStatusFeed(); // a step still running must not fold onto stores about to close
+            await status.close();
+          },
           () => app.close(),
           () => durable.close(),
           () => pool.end(),

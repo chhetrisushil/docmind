@@ -108,5 +108,9 @@ export function buildServer(options: ComposeOptions) {
     ingestWiring: options.ingest,
     bus: options.ingest.bus,
     status,
+    /** Stops feeding the model; shutdown calls it before `status.close()` so a late event is not folded onto closing pools. */
+    detachStatusFeed: () => {
+      feed.onEvent = undefined;
+    },
   };
 }
