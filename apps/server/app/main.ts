@@ -6,10 +6,12 @@ import { closeSequence } from "./closeSequence";
 import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
+import { startSweeper } from "./documents/sweeper";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
-import { runAll, scheduleForceExit, shutdown } from "./shutdown";
+import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, scheduleForceExit, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
@@ -130,6 +132,16 @@ async function main(): Promise<void> {
     console.log(`docmind server listening on http://${host}:${port}`),
   );
 
+  // Starts the documents whose upload committed but whose flow never started. One sweep at a time,
+  // an error is logged by class and never escapes, and the timer does not keep the process alive.
+  const uploadSweeper = startSweeper({
+    pool,
+    starts,
+    olderThanMs: STALE_UPLOAD_MS,
+    lookbackMs: SWEEP_LOOKBACK_MS,
+    limit: SWEEP_BATCH,
+  });
+
   // One shutdown, shared by every signal: a second signal reuses the same promise instead of
   // calling server.close() again, which would reject with ERR_SERVER_NOT_RUNNING. The server
   // drains first; then the app closes (which closes the Loom stores), then the Loom pool, then
@@ -140,6 +152,8 @@ async function main(): Promise<void> {
     recovery.stop();
     closing ??= shutdown(server, {
       close: async () => {
+        // No sweep may fire a start once the drain below begins: stop the timer and let a run finish.
+        await drainWithin(uploadSweeper.stop(), SHUTDOWN_DRAIN_MS);
         // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(

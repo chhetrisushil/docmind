@@ -10,6 +10,9 @@ export const SWEEP_BATCH = 100;
 // The label a failed sweep-fired start is logged under (not an HTTP route).
 const SWEEP_LABEL = "stale upload sweep";
 
+// The SQL function never returns more than this, whatever limit is asked for.
+const MAX_BATCH = 500;
+
 const className = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
 export interface SweepArgs {
@@ -36,6 +39,9 @@ export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
       [olderThanMs / 1000, lookbackMs / 1000, INGEST_GENERATION, limit],
     );
     if (signal?.aborted) return 0;
+    // A full batch may hide older strays behind it (the scan has no cursor): say so, by count only.
+    if (rows.length >= Math.min(limit, MAX_BATCH))
+      console.warn("stale upload sweep batch was full", rows.length);
     for (const r of rows)
       starts.fire({ tenantId: r.tenant_id, userId: r.owner_id }, r.id, SWEEP_LABEL);
     return rows.length;

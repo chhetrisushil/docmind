@@ -38,6 +38,20 @@ describe.skipIf(!PG_URL)("sweepStaleUploads (needs DOCMIND_TEST_PG_URL)", () => 
 });
 
 describe("sweepStaleUploads failures", () => {
+  it("warns by count only when the batch comes back full", async () => {
+    const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rows = [1, 2].map((n) => ({ tenant_id: "t", owner_id: "u", id: `secret-${n}` }));
+    const pool = { query: async () => ({ rows }) } as unknown as Pool;
+    const start = vi.fn(async () => null);
+    const starts = new StartScheduler({ start, cancel: async () => {} });
+    const args = { pool, starts, olderThanMs: 0, lookbackMs: 1 };
+    await sweepStaleUploads({ ...args, limit: 3 });
+    expect(spy).not.toHaveBeenCalled();
+    await sweepStaleUploads({ ...args, limit: 2 });
+    expect(spy.mock.calls).toEqual([["stale upload sweep batch was full", 2]]);
+    spy.mockRestore();
+  });
+
   it("a failing query is logged by class only and does not throw", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const broken = {
