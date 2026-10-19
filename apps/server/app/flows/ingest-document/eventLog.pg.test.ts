@@ -20,7 +20,7 @@ import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
 import {
-  type INGEST_STEPS,
+  INGEST_STEPS,
   IngestOutput,
   type IngestStartInput,
   ingestChunkStep,
@@ -45,12 +45,10 @@ const CLEAN_RUN = [
   "EXECUTION_COMPLETED",
 ];
 const DONE_STEP = ["STEP_STARTED", "RESOURCE_METERED", "STEP_COMPLETED"];
-/** Parse, chunk, then embed, all done. */
+/** Parse, chunk, embed, analyze, summarize, link and finalize, all done. */
 const FULL_RUN = [
   "EXECUTION_STARTED",
-  ...DONE_STEP,
-  ...DONE_STEP,
-  ...DONE_STEP,
+  ...INGEST_STEPS.flatMap(() => DONE_STEP),
   "EXECUTION_COMPLETED",
 ];
 
@@ -157,7 +155,7 @@ describe.skipIf(!PG_URL)(
     };
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
 
-    it("a successful parse, chunk and embed: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
+    it("a successful run to ready: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
       const ref = await seedTxt("a".repeat(64));
       const raw = proven(await run(ref), ref);
       expect(types(raw)).toEqual(FULL_RUN);
@@ -173,7 +171,17 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "done", count: 1, model: "ollama/fake-embed" },
         stepId: "ingest-embed",
       });
-      expect(foldIngestStatus(raw)).toEqual({ status: "embedding", step: "embed", code: null }); // the model's handlers match the kernel's real events
+      for (const [i, id] of ["analyze", "summarize", "link"].entries()) {
+        expect(raw[12 + i * 3]?.payload).toEqual({
+          output: { outcome: "done" },
+          stepId: `ingest-${id}`,
+        });
+      }
+      expect(raw[21]?.payload).toEqual({
+        output: { outcome: "done", count: 1 },
+        stepId: "ingest-finalize",
+      });
+      expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null }); // the model's handlers match the kernel's real events
       const chunked = await f.db.owner.query(
         "SELECT count(*)::int AS n FROM chunks WHERE document_id = $1",
         [ref.documentId],
@@ -477,9 +485,7 @@ describe.skipIf(!PG_URL)(
         "EXECUTION_STARTED",
         "STEP_STARTED",
         "EXECUTION_RECOVERED",
-        ...DONE_STEP,
-        ...DONE_STEP,
-        ...DONE_STEP,
+        ...INGEST_STEPS.flatMap(() => DONE_STEP),
         "EXECUTION_COMPLETED",
       ]);
     });

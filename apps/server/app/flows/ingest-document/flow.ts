@@ -45,8 +45,50 @@ export const ingestEmbedStep = step$({
   retry: STEP_RETRY,
 });
 
-/** Spec 5.2 order. Later tasks append analyze, summarize, link and finalize. */
-export const INGEST_STEPS = [ingestParseStep, ingestChunkStep, ingestEmbedStep];
+// analyze, summarize and link are placeholders in part 1 (guard only); part 2 swaps their effects.
+export const ingestAnalyzeStep = step$({
+  id: "ingest-analyze",
+  name: "IngestAnalyze",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY,
+});
+
+export const ingestSummarizeStep = step$({
+  id: "ingest-summarize",
+  name: "IngestSummarize",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY,
+});
+
+export const ingestLinkStep = step$({
+  id: "ingest-link",
+  name: "IngestLink",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY,
+});
+
+/** Completing it with `outcome: "done"` is what the ingest-status model folds to `ready`. */
+export const ingestFinalizeStep = step$({
+  id: "ingest-finalize",
+  name: "IngestFinalize",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY,
+});
+
+/** Spec 5.2 order. */
+export const INGEST_STEPS = [
+  ingestParseStep,
+  ingestChunkStep,
+  ingestEmbedStep,
+  ingestAnalyzeStep,
+  ingestSummarizeStep,
+  ingestLinkStep,
+  ingestFinalizeStep,
+];
 
 /** Runs each step in order; a `document_gone` or `failed` outcome ends the flow, later steps never run. */
 export const runIngestSteps =
@@ -65,7 +107,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
   definition: flow$({
     id: "ingest-document",
     name: "IngestDocument",
-    version: "2.1.0", // Loom refuses a changed flow under an old version: the step list gained embed
+    version: "2.2.0", // Loom refuses a changed flow under an old version: the step list gained analyze, summarize, link and finalize
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,
     steps: INGEST_STEPS,

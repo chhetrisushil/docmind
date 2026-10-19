@@ -29,10 +29,16 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const state = await handle?.waitForCompletion();
     expect(state?.status).toBe("completed");
     expect(state?.variables._output).toEqual({ outcome: "done" });
-    // Step-agnostic until Task 92: later tasks append steps, so the status moves with them.
-    const view = await h.status.forDocument(ALICE, id);
-    expect(["parsing", "embedding"]).toContain(view.status);
-    expect(view.error).toBeNull();
+    expect(await h.status.forDocument(ALICE, id)).toEqual({
+      status: "ready",
+      step: "finalize",
+      error: null,
+    });
+    const chunks = await h.owner.query(
+      "SELECT count(*)::int AS n FROM chunks WHERE document_id = $1",
+      [id],
+    );
+    expect(chunks.rows[0].n).toBeGreaterThan(0);
   });
 
   it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {
