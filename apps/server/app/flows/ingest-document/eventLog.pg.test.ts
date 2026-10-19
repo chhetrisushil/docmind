@@ -178,12 +178,12 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "done", count: expect.any(Number) },
         stepId: "ingest-analyze",
       });
-      for (const [i, id] of ["summarize", "link"].entries()) {
-        expect(raw[15 + i * 3]?.payload).toEqual({
-          output: { outcome: "done" },
-          stepId: `ingest-${id}`,
-        });
-      }
+      // no ANTHROPIC_API_KEY here: summarize is skipped and says so (D7)
+      expect(raw[15]?.payload).toEqual({
+        output: { outcome: "done", model: "none" },
+        stepId: "ingest-summarize",
+      });
+      expect(raw[18]?.payload).toEqual({ output: { outcome: "done" }, stepId: "ingest-link" });
       const statsRow = await f.db.owner.query("SELECT stats_enc FROM documents WHERE id = $1", [
         ref.documentId,
       ]);

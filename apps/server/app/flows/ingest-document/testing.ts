@@ -53,6 +53,8 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       read: async () => [],
       sectionsOf: async () => [],
     },
+    entities: { replaceForDocument: async () => 0, sharedWith: async () => [] },
+    summaryMaxChars: 400_000,
     vectors: new InMemoryChunkVectors({
       modelId: EMBEDDER.modelId,
       dimensions: EMBEDDER.dimensions,
@@ -119,11 +121,11 @@ const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
   code: { optional: oneOf("unsupported_content", "corrupt_content", "too_large") },
 };
-/** Embed's `model` is exactly the configured provider's id: a closed value, never a free pattern. */
+/** `model` is exactly the configured provider's id, or "none" (summarize without a key): a closed value, never a free pattern. */
 const stepOutput = (modelId: string | undefined): Shape => ({
   ...flowOutput,
   count: { optional: count },
-  model: { optional: (v) => modelId !== undefined && v === modelId },
+  model: { optional: (v) => v === "none" || (modelId !== undefined && v === modelId) },
 });
 
 /** The payload of every event type, per key the only values it may hold; an unlisted type or key fails. */
