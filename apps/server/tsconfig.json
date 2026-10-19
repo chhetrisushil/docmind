@@ -2,5 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": ".", "types": ["node"] },
   "include": ["app/**/*", "loom.config.ts"],
-  "exclude": ["**/*.test.ts", "**/testing.ts", "**/pgFixture.ts", "**/ingestStack.ts", "dist"]
+  "exclude": [
+    "**/*.test.ts",
+    "**/testing.ts",
+    "**/testSupport.ts",
+    "**/testHarness.ts",
+    "**/recoveryHarness.ts",
+    "**/pgFixture.ts",
+    "**/ingestStack.ts",
+    "dist"
+  ]
 }
