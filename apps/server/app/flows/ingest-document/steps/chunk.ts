@@ -22,6 +22,8 @@ export interface ChunkDeps {
   shutdown?: AbortSignal;
   /** Test seam: the wall-clock bound of one attempt (default STEP_TIMEOUT_MS). */
   stepTimeoutMs?: number;
+  /** Test seam: how long a timed-out attempt may take to settle before the step fails (default ATTEMPT_SETTLE_MS). */
+  attemptSettleMs?: number;
 }
 
 /**
@@ -49,6 +51,7 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
     {
       retry: PARSE_RETRY,
       timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
+      ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
       ...(deps.sleep && { sleep: deps.sleep }),
       ...(deps.shutdown && { shutdown: deps.shutdown }),
     },

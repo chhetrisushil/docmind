@@ -17,7 +17,7 @@ import {
   PermanentIngestError,
 } from "./errors";
 import type { IngestStartInput } from "./flow";
-import { STEP_TIMEOUT_MS, type StepGuard, StepResult, stepEffect } from "./stepEffect";
+import { type StepGuard, StepResult, stepEffect } from "./stepEffect";
 
 const ref = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -297,15 +297,16 @@ describe("stepEffect", () => {
 
 describe("stepEffect per-attempt wall clock", () => {
   const never = () => new Promise<never>(() => {});
-
-  it("has a generous default bound for the steps that use it", () => {
-    expect(STEP_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
-  });
+  /** An attempt that gives up when its signal aborts (so it settles right after the bound). */
+  const cooperative = (_r: unknown, signal?: AbortSignal) =>
+    new Promise<never>((_, reject) =>
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+    );
 
   it("treats a hit as transient: it is retried, then fails with the fixed message", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { port, calls } = guard();
-    const effect = stepEffect("chunk", port, never, {
+    const effect = stepEffect("chunk", port, cooperative, {
       timeoutMs: 1,
       retry: { maxAttempts: 2 },
       sleep: async () => {},
@@ -317,11 +318,16 @@ describe("stepEffect per-attempt wall clock", () => {
   it("recovers when a later attempt settles in time", async () => {
     const { port } = guard();
     let n = 0;
-    const effect = stepEffect("chunk", port, async () => (++n === 1 ? never() : { count: 2 }), {
-      timeoutMs: 20,
-      retry: { maxAttempts: 2 },
-      sleep: async () => {},
-    });
+    const effect = stepEffect(
+      "chunk",
+      port,
+      async (_r, signal) => (++n === 1 ? cooperative(0, signal) : { count: 2 }),
+      {
+        timeoutMs: 20,
+        retry: { maxAttempts: 2 },
+        sleep: async () => {},
+      },
+    );
     expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "done", count: 2 });
   });
 
@@ -336,7 +342,7 @@ describe("stepEffect per-attempt wall clock", () => {
         seen = signal;
         return never();
       },
-      { timeoutMs: 1 },
+      { timeoutMs: 1, settleMs: 1 },
     );
     await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
     expect(seen?.aborted).toBe(true);
@@ -353,5 +359,57 @@ describe("stepEffect per-attempt wall clock", () => {
       },
     );
     expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "document_gone" });
+  });
+
+  it("does not start the next attempt until the timed-out one settles", async () => {
+    const { port, calls } = guard();
+    let release: () => void = () => {};
+    const hung = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let n = 0;
+    let first: AbortSignal | undefined;
+    const sleptAfter: string[] = [];
+    const effect = stepEffect(
+      "chunk",
+      port,
+      async (_r, signal) => {
+        n++;
+        if (n === 1) {
+          first = signal;
+          await hung;
+          calls.push("attempt1-settled");
+          return { count: 1 };
+        }
+        calls.push("attempt2-work");
+        return { count: 2 };
+      },
+      {
+        timeoutMs: 1,
+        retry: { maxAttempts: 2 },
+        sleep: async () => void sleptAfter.push("slept"),
+        settleMs: 60_000,
+      },
+    );
+    const pending = effect.execute(ref(), {} as never);
+    await vi.waitFor(() => expect(first?.aborted).toBe(true)); // attempt 1 is past its bound
+    expect(sleptAfter).toEqual([]); // and attempt 2 waits for it
+    expect(calls).toEqual(["begin:chunk"]);
+    release();
+    expect(await pending).toEqual({ outcome: "done", count: 2 });
+    expect(calls).toEqual(["begin:chunk", "attempt1-settled", "begin:chunk", "attempt2-work"]);
+  });
+
+  it("when the timed-out attempt never settles within the bound, fails with no further attempt", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port, calls } = guard();
+    const effect = stepEffect("chunk", port, never, {
+      timeoutMs: 1,
+      retry: { maxAttempts: 3 },
+      sleep: async () => {},
+      settleMs: 1,
+    });
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(calls).toEqual(["begin:chunk"]);
   });
 });

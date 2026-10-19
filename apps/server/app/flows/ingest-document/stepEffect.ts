@@ -46,13 +46,23 @@ export const STEP_TIMEOUT_MS = 120_000;
 
 /** An attempt hit its wall clock: transient (retried by the policy), never a permanent code. */
 export class StepTimeoutError extends Error {
-  constructor() {
+  /** Resolves when the timed-out attempt finally settles (either way); it may never. */
+  constructor(readonly settled: Promise<void> = Promise.resolve()) {
     super("the step attempt timed out");
     this.name = "StepTimeoutError";
   }
 }
 
+/**
+ * After a timeout the next attempt waits for the timed-out one to settle, at most this long: two
+ * attempts of one step never overlap (a late write could land after its successor finished). If it
+ * is still alive after the wait, the step fails with no further attempt.
+ */
+export const ATTEMPT_SETTLE_MS = 30_000;
+
 export interface StepOptions {
+  /** Test seam: the settle wait after a timed-out attempt (default ATTEMPT_SETTLE_MS). */
+  settleMs?: number;
   retry?: RetryPolicy;
   /** Wall-clock bound of each attempt (guard, work and all); a hit is a transient failure. Unset: no bound. */
   timeoutMs?: number;
@@ -95,6 +105,7 @@ export function stepEffect(
 ): Effect<IngestStartInput, StepResult> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const sleep = options.sleep ?? defaultSleep;
+  const settleMs = options.settleMs ?? ATTEMPT_SETTLE_MS;
   const attemptOnce = async (
     ref: IngestStartInput,
     signal: AbortSignal | undefined,
@@ -107,13 +118,16 @@ export function stepEffect(
     if (bound === undefined) return run(signal);
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), bound);
+    const pending = run(signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal);
+    const settled = pending.then(
+      () => {},
+      () => {}, // a late rejection after the bound is not unhandled
+    );
     const expired = new Promise<never>((_, reject) =>
-      timeout.signal.addEventListener("abort", () => reject(new StepTimeoutError()), {
+      timeout.signal.addEventListener("abort", () => reject(new StepTimeoutError(settled)), {
         once: true,
       }),
     );
-    const pending = run(signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal);
-    pending.catch(() => {}); // a late rejection after the bound is not unhandled
     try {
       return await Promise.race([pending, expired]);
     } finally {
@@ -135,6 +149,9 @@ export function stepEffect(
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
           if (err instanceof ParseAbortedError || attempt >= maxAttempts) throw failure(step, err);
+          if (err instanceof StepTimeoutError && !(await settledWithin(err.settled, settleMs))) {
+            throw failure(step, err); // a zombie is still running: no attempt may overlap it
+          }
           try {
             const base = options.retry?.backoffMs ?? 0;
             await sleep(
@@ -149,6 +166,18 @@ export function stepEffect(
       }
     },
   };
+}
+
+async function settledWithin(settled: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([settled.then(() => true), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** A step failure's message is written to the event log: fixed text; only the class goes to the process log. */
