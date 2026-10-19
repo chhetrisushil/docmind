@@ -12,6 +12,7 @@ import {
 import { EmbeddingError } from "@loom/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../../crypto/fields";
+import { ingestExecutionId } from "../../documents/ingest";
 import {
   DOCUMENT_FKEY_CONSTRAINTS,
   DocumentGoneError,
@@ -630,5 +631,30 @@ describe("stepEffect progress-aware attempts", () => {
     );
     await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
     expect(attempts).toBe(10);
+  });
+});
+
+describe("stepEffect generation", () => {
+  it("passes the generation of the execution id to the guard", async () => {
+    const seen: (number | undefined)[] = [];
+    const port: StepGuard = { begin: async (_r, _s, g) => void seen.push(g) };
+    const r = ref();
+    const effect = stepEffect("parse", port, async () => ({ count: 1 }));
+    await effect.execute(r, { executionId: ingestExecutionId(r.userId, r.documentId, 3) } as never);
+    await effect.execute(r, {} as never);
+    expect(seen).toEqual([3, undefined]);
+  });
+
+  it("ends as document_gone when the guard reports a superseded generation", async () => {
+    const port: StepGuard = {
+      begin: async () => {
+        throw new DocumentGoneError();
+      },
+    };
+    const r = ref();
+    const out = await stepEffect("chunk", port, async () => ({ count: 1 })).execute(r, {
+      executionId: ingestExecutionId(r.userId, r.documentId, 2),
+    } as never);
+    expect(out).toEqual({ outcome: "document_gone" });
   });
 });
