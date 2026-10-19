@@ -1,7 +1,7 @@
 import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import { ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
-import type { IngestStartInput } from "./flow";
+import { INGEST_STEPS, type IngestStartInput } from "./flow";
 
 const PARSED = {
   text: "h",
@@ -52,7 +52,15 @@ const exactly =
   (v) =>
     v === want;
 const count: Leaf = (v) => Number.isInteger(v) && (v as number) >= 0;
-/** Loom's sealed field: ciphertext, so it is allowed where Loom sealed it, and nothing else is. */
+const isBase64 = (v: unknown, bytes?: number): boolean => {
+  if (typeof v !== "string" || v.length === 0) return false;
+  const raw = Buffer.from(v, "base64");
+  return raw.toString("base64") === v && (bytes === undefined || raw.length === bytes);
+};
+/**
+ * Loom's sealed field: ciphertext, so it is allowed where Loom sealed it, and nothing else is. Its
+ * leaves are FieldCrypto's real encoding: strict base64, a 12-byte IV and a 16-byte GCM tag.
+ */
 const sealed: Leaf = (v) => {
   const o = v as Record<string, unknown> | null;
   return (
@@ -60,11 +68,17 @@ const sealed: Leaf = (v) => {
     o !== null &&
     Object.keys(o).sort().join() === "__loomEnc,data,iv,tag" &&
     o.__loomEnc === "loom/aes-256-gcm" &&
-    Object.values(o).every((x) => typeof x === "string")
+    isBase64(o.data) &&
+    isBase64(o.iv, 12) &&
+    isBase64(o.tag, 16)
   );
 };
-const fixedFailure = matches(/^Error: ingest step failed: [a-z]+$/);
-const stepId = matches(/^ingest-[a-z]+$/);
+/** The closed set of step ids: a step added to the flow is allowed here by being in INGEST_STEPS. */
+const STEP_IDS: readonly string[] = INGEST_STEPS.map((s) => s.id);
+const STEP_NAMES = STEP_IDS.map((id) => id.replace(/^ingest-/, ""));
+const fixedFailure: Leaf = (v) =>
+  typeof v === "string" && STEP_NAMES.some((name) => v === `Error: ingest step failed: ${name}`);
+const stepId = oneOf(...STEP_IDS);
 const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
   code: { optional: oneOf("unsupported_content", "corrupt_content", "too_large") },
