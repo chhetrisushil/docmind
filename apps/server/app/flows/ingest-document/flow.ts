@@ -1,7 +1,7 @@
 import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
-import { PARSE_RETRY, StepResult } from "./stepEffect";
+import { STEP_RETRY, StepResult } from "./stepEffect";
 
 /**
  * Start input: ids only (never a filename, title or text), and strict so a field added later fails
@@ -25,8 +25,8 @@ export const ingestParseStep = step$({
   name: "IngestParse",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  // Declared policy; stepEffect enforces it (PARSE_RETRY).
-  retry: PARSE_RETRY,
+  // Declared policy; stepEffect enforces it (STEP_RETRY).
+  retry: STEP_RETRY,
 });
 
 export const ingestChunkStep = step$({
@@ -34,7 +34,7 @@ export const ingestChunkStep = step$({
   name: "IngestChunk",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  retry: PARSE_RETRY,
+  retry: STEP_RETRY,
 });
 
 /** Spec 5.2 order. Later tasks append embed, analyze, summarize, link and finalize. */

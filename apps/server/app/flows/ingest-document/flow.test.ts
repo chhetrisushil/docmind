@@ -19,7 +19,7 @@ import {
   runIngestSteps,
 } from "./flow";
 import { type IngestWiring, closeIngest } from "./limits";
-import { PARSE_RETRY, StepResult } from "./stepEffect";
+import { STEP_RETRY, StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
 
 afterEach(() => vi.restoreAllMocks());
@@ -147,8 +147,8 @@ describe("the step runner", () => {
 
 describe("the parse step's failures and restarts", () => {
   it("declares the retry policy on the step and keeps it small", () => {
-    expect(ingestParseStep.retry).toBe(PARSE_RETRY);
-    expect(PARSE_RETRY.maxAttempts).toBe(3);
+    expect(ingestParseStep.retry).toBe(STEP_RETRY);
+    expect(STEP_RETRY.maxAttempts).toBe(3);
   });
 
   it("ends a deterministic crash after maxAttempts attempts and does not loop", async () => {
@@ -164,7 +164,7 @@ describe("the parse step's failures and restarts", () => {
     await expect((await run(ids(), app)).waitForCompletion()).rejects.toThrow(
       /ingest step failed: parse/,
     );
-    expect(calls).toBe(PARSE_RETRY.maxAttempts);
+    expect(calls).toBe(STEP_RETRY.maxAttempts);
     await app.close();
   });
 
