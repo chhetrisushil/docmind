@@ -44,6 +44,14 @@ export const isValidVector = (vector: readonly number[], dimensions: number): bo
   vector.length === dimensions &&
   vector.every((x) => Number.isFinite(x) && Math.abs(x) <= FLOAT4_MAX);
 
+/** The `chunks.embedding` column is not `vector(<dimensions>)`: a deployment fault. The message carries configuration only, never data. */
+export class VectorSchemaError extends Error {
+  constructor(dimensions: number) {
+    super(`chunks.embedding is not vector(${dimensions})`);
+    this.name = "VectorSchemaError";
+  }
+}
+
 export class VectorDimensionError extends Error {
   constructor() {
     super("vector has the wrong size or a non-finite value");

@@ -1,3 +1,4 @@
+import { VectorSchemaError } from "@docmind/vector-pg";
 import { describe, expect, it, vi } from "vitest";
 import { StartupConfigError } from "../../startupError";
 import { NIL_TENANT, VECTOR_MISMATCH, verifyVectors } from "./verifyVectors";
@@ -18,12 +19,21 @@ describe("verifyVectors", () => {
   it("turns a dimension mismatch into a value-free StartupConfigError after cleanup", async () => {
     const cleanup = vi.fn(async () => {});
     const verify = async () => {
-      throw new Error("chunks.embedding is not vector(768)");
+      throw new VectorSchemaError(768);
     };
     const err = await verifyVectors({ verify }, [cleanup]).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(StartupConfigError);
     expect((err as Error).message).toBe(VECTOR_MISMATCH);
     expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not map a plain Error that merely carries the same text", async () => {
+    const plain = new Error("chunks.embedding is not vector(768)");
+    const err = await verifyVectors({ verify: async () => Promise.reject(plain) }, []).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBe(plain);
+    expect(err).not.toBeInstanceOf(StartupConfigError);
   });
 
   it("keeps any other failure as it is (class-only reporting) after cleanup", async () => {
