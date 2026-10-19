@@ -504,3 +504,70 @@ describe("stepEffect per-attempt wall clock", () => {
     }
   });
 });
+
+describe("stepEffect progress-aware attempts", () => {
+  const cooperative = (signal?: AbortSignal) =>
+    new Promise<never>((_, reject) =>
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
+    );
+  const opts = {
+    retry: { maxAttempts: 3, backoffMs: 0, backoffMultiplier: 1 },
+    sleep: async () => {},
+    timeoutMs: 1,
+    settleMs: 1000,
+  };
+
+  it("completes a step that commits one unit per timed-out attempt, within units + maxAttempts attempts", async () => {
+    const units = 5;
+    let done = 0;
+    let attempts = 0;
+    const effect = stepEffect(
+      "embed",
+      guard().port,
+      async (_r, signal, progress) => {
+        attempts++;
+        if (done === units) return { count: units };
+        done++;
+        progress?.(); // one unit committed, then the attempt runs out of time
+        return cooperative(signal);
+      },
+      opts,
+    );
+    expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "done", count: units });
+    expect(attempts).toBe(units + 1);
+    expect(attempts).toBeLessThanOrEqual(units + opts.retry.maxAttempts);
+  });
+
+  it("still exhausts the normal attempts when no attempt reports progress", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempts = 0;
+    const effect = stepEffect(
+      "embed",
+      guard().port,
+      async (_r, signal) => {
+        attempts++;
+        return cooperative(signal);
+      },
+      opts,
+    );
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(attempts).toBe(opts.retry.maxAttempts);
+  });
+
+  it("does not reset the budget for progress followed by an ordinary error", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempts = 0;
+    const effect = stepEffect(
+      "embed",
+      guard().port,
+      async (_r, _s, progress) => {
+        attempts++;
+        progress?.();
+        throw new Error("boom");
+      },
+      opts,
+    );
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(attempts).toBe(opts.retry.maxAttempts);
+  });
+});
