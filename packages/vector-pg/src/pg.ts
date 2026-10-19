@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import {
   type ChunkVectorStore,
   VectorDimensionError,
+  VectorSchemaError,
   type VectorScope,
   isValidVector,
 } from "./types";
@@ -122,7 +123,7 @@ export class PgChunkVectorStore implements ChunkVectorStore {
       return rows[0]?.t;
     });
     if (found !== `vector(${this.dimensions})`) {
-      throw new Error(`chunks.embedding is not vector(${this.dimensions})`);
+      throw new VectorSchemaError(this.dimensions);
     }
   }
 }

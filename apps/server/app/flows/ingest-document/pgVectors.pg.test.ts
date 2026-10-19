@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { PgChunkVectorStore } from "@docmind/vector-pg";
+import { PgChunkVectorStore, VectorSchemaError } from "@docmind/vector-pg";
 import {
   A,
   B,
@@ -122,9 +122,11 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
 
   it("verify() accepts the column it was built for and rejects another size", async () => {
     await expect(make("m").verify(randomUUID())).resolves.toBeUndefined();
-    await expect(make("m", 8).verify(randomUUID())).rejects.toThrow(
-      /^chunks\.embedding is not vector\(8\)$/,
-    );
+    const err = await make("m", 8)
+      .verify(randomUUID())
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VectorSchemaError);
+    expect((err as Error).message).toMatch(/^chunks\.embedding is not vector\(8\)$/);
   });
 
   it("a malformed id is refused before any transaction with a fixed message that omits the value", async () => {
