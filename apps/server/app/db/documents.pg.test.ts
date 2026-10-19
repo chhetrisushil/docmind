@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getDocument } from "../documents/repo";
 import { migrate, setAppRolePassword } from "./migrate";
 import { withTenant } from "./tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
@@ -151,5 +152,52 @@ describe.skipIf(!PG_URL)("documents table (needs DOCMIND_TEST_PG_URL)", () => {
       "SELECT 1 FROM pg_tables WHERE tablename = 'documents' AND tableowner = 'docmind_app'",
     );
     expect(owned.rowCount).toBe(0);
+  });
+});
+
+describe.skipIf(!PG_URL)("documents.ingest_generation (0018)", () => {
+  let db: TestDb;
+  let app: Pool;
+  const DOC = "30000000-0000-4000-8000-000000000001";
+
+  beforeAll(async () => {
+    db = await createTestDb();
+    await migrate(db.owner);
+    await setAppRolePassword(db.owner, APP_PASSWORD);
+    await db.owner.query(`
+      INSERT INTO tenants (id, name) VALUES ('${A}', 'A'), ('${B}', 'B');
+      INSERT INTO users (id, tenant_id, email, password_hash) VALUES
+        ('${USER_A}', '${A}', 'a@example.com', 'x'), ('${USER_B}', '${B}', 'b@example.com', 'x');`);
+    app = new Pool({ connectionString: db.appUrl, max: 1 });
+    await withTenant(app, A, (tx) => insert(tx, DOC, A, USER_A, HEX("c")));
+  });
+
+  afterAll(async () => {
+    await app?.end();
+    await db?.drop();
+  });
+
+  it("defaults to 2 for a new row and is returned in DocumentRow", async () => {
+    const row = await withTenant(app, A, (tx) => getDocument(tx, USER_A, DOC));
+    expect(row?.ingest_generation).toBe(2);
+  });
+
+  it("refuses a generation below 2 or above 999999999", async () => {
+    for (const bad of [1, 1_000_000_000]) {
+      await expect(
+        db.owner.query("UPDATE documents SET ingest_generation = $1 WHERE id = $2", [bad, DOC]),
+      ).rejects.toMatchObject({ constraint: "documents_ingest_generation_check" });
+    }
+  });
+
+  it("lets the app role bump it under RLS, for its own tenant only", async () => {
+    const bump = (tenant: string) =>
+      withTenant(app, tenant, (tx) =>
+        tx.query("UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1", [
+          DOC,
+        ]),
+      );
+    expect((await bump(B)).rowCount).toBe(0);
+    expect((await bump(A)).rowCount).toBe(1);
   });
 });

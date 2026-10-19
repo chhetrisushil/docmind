@@ -9,12 +9,13 @@ export const statsBind = (id: string) => `document:${id}:stats`;
 export const summaryBind = (id: string) => `document:${id}:summary`;
 
 /** The SELECT/RETURNING list. `created_cursor` is the microsecond-exact keyset value. */
-export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, stats_enc,
+export const DOCUMENT_COLUMNS = `id, ingest_generation, title_enc, filename_enc, mime, size_bytes, stats_enc,
   summary_enc, created_at, updated_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor`;
 
 export interface DocumentRow {
   id: string;
+  ingest_generation: number; // the current ingest generation (D1)
   title_enc: unknown;
   filename_enc: unknown;
   mime: string;
