@@ -30,7 +30,7 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
 
 type Leaf = (v: unknown) => boolean;
 interface Shape {
-  [key: string]: Leaf | Shape | { optional: Leaf };
+  [key: string]: Leaf | Shape | { optional: Leaf | Shape };
 }
 const oneOf =
   (...values: string[]): Leaf =>
@@ -84,6 +84,12 @@ const payloads = (ref: IngestStartInput): Record<string, Shape> => {
     RESOURCE_METERED: { ms: count, tokens: count },
     EXECUTION_COMPLETED: { output: flowOutput },
     EXECUTION_FAILED: { error: fixedFailure },
+    // The delete route's reason, and the two reasons recovery gives an execution up with.
+    EXECUTION_CANCELLED: {
+      reason: oneOf("document-deleted", "ingest-recovery-exhausted", "ingest-flow-mismatch"),
+    },
+    STEP_CANCELLED: { stepId },
+    EXECUTION_RECOVERED: {},
   };
 };
 
@@ -103,14 +109,9 @@ function checkShape(value: unknown, shape: Shape, path: string): void {
       if (optional) continue;
       throw new Error(`missing key ${here}`);
     }
-    const leaf =
-      typeof rule === "function"
-        ? rule
-        : optional
-          ? (rule as { optional: Leaf }).optional
-          : undefined;
-    if (!leaf) checkShape(record[key], rule as Shape, here);
-    else if (!leaf(record[key])) throw new Error(`${here} is not an id, count, code or enum`);
+    const inner = optional ? (rule as { optional: Leaf | Shape }).optional : rule;
+    if (typeof inner !== "function") checkShape(record[key], inner as Shape, here);
+    else if (!inner(record[key])) throw new Error(`${here} is not an id, count, code or enum`);
   }
 }
 
@@ -153,7 +154,12 @@ export function assertEventsAreContentFree(events: RawEvent[], ref: IngestStartI
     checkShape(e, envelope, at);
     checkShape(e.payload, types[e.eventType] as Shape, `${at}.payload`);
     if (e.metadata !== undefined) {
-      checkShape(e.metadata, { seal: SEAL }, `${at}.metadata`);
+      // `seal` lists the sealed paths of the start; `fence` is the counter of a cancel.
+      checkShape(
+        e.metadata,
+        { seal: { optional: SEAL }, fence: { optional: count } },
+        `${at}.metadata`,
+      );
     }
   }
 }
