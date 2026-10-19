@@ -46,9 +46,11 @@ export class PgParsedStore implements ParsedStore {
       return rows[0].body_enc;
     });
     if (body == null) return undefined;
-    return ParsedDocumentSchema.parse(
-      await this.fields.forUser(ref.userId).open(parsedBind(ref.documentId), body),
-    );
+    const opened = await this.fields.forUser(ref.userId).open(parsedBind(ref.documentId), body);
+    // safeParse and a fixed message: a ZodError can carry decrypted content in its issues.
+    const result = ParsedDocumentSchema.safeParse(opened);
+    if (!result.success) throw new Error("the stored parsed document has an invalid shape");
+    return result.data;
   }
 
   async drop(ref: IngestStartInput): Promise<void> {
