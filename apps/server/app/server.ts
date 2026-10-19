@@ -73,7 +73,8 @@ export function createHttpServer(
     const method = req.method ?? "GET";
     // The one place a state-changing request is checked, before routing, so no route can skip it.
     if (!isSameOriginRequest(req, guard)) {
-      console.error("cross-origin request refused", method, path);
+      // The method only: the path of an unauthenticated, attacker-driven request can carry a document id.
+      console.error("cross-origin request refused", method);
       req.resume();
       res.setHeader("connection", "close");
       return json(res, 403, { error: { code: "cross_origin_request" } });

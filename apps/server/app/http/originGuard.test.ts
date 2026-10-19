@@ -80,12 +80,21 @@ describe("origin guard", () => {
         const spy = vi.spyOn(console, "error").mockImplementation(() => {});
         const res = await send(method, path, { "sec-fetch-site": site });
         expect(res).toEqual({ status: 403, body: REFUSED });
-        // Method and path only; never a header value.
-        expect(spy).toHaveBeenCalledWith("cross-origin request refused", method, path);
+        // The method only; never a header value or the path.
+        expect(spy.mock.calls).toEqual([["cross-origin request refused", method]]);
         spy.mockRestore();
       });
     }
   }
+
+  it("does not log the raw path, which can carry a document id", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const id = "0b9c1d2e-3f40-4a51-8b62-73849a5b6c7d";
+    const res = await send("DELETE", `/api/documents/${id}`, { "sec-fetch-site": "cross-site" });
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain(id);
+    spy.mockRestore();
+  });
 
   it.each(["same-origin", "none"])("lets Sec-Fetch-Site %s through", async (site) => {
     expect((await send("POST", "/t", { "sec-fetch-site": site })).status).toBe(200);
