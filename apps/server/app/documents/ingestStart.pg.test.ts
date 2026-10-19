@@ -42,14 +42,14 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     expect(chunks.rows[0].n).toBeGreaterThan(0);
   });
 
-  it("ends a pdf as failed with the fixed unsupported_content message (no pdf parser until part 2)", async () => {
+  it("ends a pdf header with no body as failed with the fixed corrupt_content message", async () => {
     const { body } = await created("report.pdf", PDF("pdf flow"));
     await h.starts.idle();
     await h.ingest.handles.get(body.document.id)?.waitForCompletion();
     expect(await h.status.forDocument(ALICE, body.document.id, INGEST_GENERATION)).toEqual({
       status: "failed",
       step: "parse",
-      error: STATUS_MESSAGES.unsupported_content,
+      error: STATUS_MESSAGES.corrupt_content,
     });
   });
 

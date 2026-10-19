@@ -31,7 +31,8 @@ describe.skipIf(!PG_URL)("sweepStaleUploads (needs DOCMIND_TEST_PG_URL)", () => 
       await h.starts.idle();
       expect([...h.ingest.handles.values()]).toEqual(handles);
       expect(h.ingest.calls.filter((c) => c.startsWith("start:"))).toHaveLength(4); // asked twice, executed once
-      await Promise.all(handles.map((handle) => handle.waitForCompletion()));
+      // The seeded rows have no blob, so their runs may fail at parse; only draining matters here.
+      await Promise.allSettled(handles.map((handle) => handle.waitForCompletion()));
     } finally {
       await h.close();
     }
