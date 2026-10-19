@@ -184,4 +184,46 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
     expect(await store.get?.(ghost)).toBeNull();
     expect(await store.get?.(live)).not.toBeNull();
   });
+
+  it("a full pass collects ghosts behind more than 100 expired orphans, and a lease-mode pass never runs the GC", async () => {
+    const mk = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
+    // Process 1 starts 105 executions and hangs in each: real streams, so their expired leases are orphans.
+    const one = await boot({ guard: { begin: () => new Promise<never>(() => {}) } });
+    const orphans: string[] = [];
+    for (let i = 0; i < 105; i++) {
+      const ids = mk();
+      const executionId = ingestExecutionId(ids.userId, ids.documentId);
+      orphans.push(executionId);
+      await one.app.runtime.start(ingestDocumentFlow, ids, {
+        executionId,
+        principal: { tenant: ids.tenantId, actor: ids.userId },
+      });
+    }
+    const ghosts = [
+      ingestExecutionId(randomUUID(), randomUUID()),
+      ingestExecutionId(randomUUID(), randomUUID()),
+    ];
+    const two = await boot();
+    const store = two.durable.storage.leaseStore as LeaseStore;
+    for (const g of ghosts) await store.acquire(g, "node-dead", 60_000);
+    // Soonest-expired first: the orphans fill the first 100-row window, the ghosts sit behind it.
+    await db.owner.query("UPDATE loom.leases SET expires_at = 1 WHERE execution_id = ANY($1)", [
+      orphans,
+    ]);
+    await db.owner.query("UPDATE loom.leases SET expires_at = 2 WHERE execution_id = ANY($1)", [
+      ghosts,
+    ]);
+    const source = two.durable.storage.eventStore;
+    const idle = { graceMs: 3_600_000_000 }; // nothing is re-driven: only the GC is under test
+
+    await recoverIngest(two.app.runtime, source, {
+      ...idle,
+      leases: { store, owner: "node-2" },
+    });
+    for (const g of ghosts) expect(await store.get?.(g)).not.toBeNull(); // lease mode leaves them
+
+    await recoverIngest(two.app.runtime, source, idle);
+    for (const g of ghosts) expect(await store.get?.(g)).toBeNull();
+    for (const o of orphans.slice(0, 3)) expect(await store.get?.(o)).not.toBeNull(); // orphans stay
+  }, 60_000);
 });

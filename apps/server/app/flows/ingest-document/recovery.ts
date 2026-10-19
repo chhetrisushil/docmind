@@ -32,9 +32,13 @@ export const ABANDON_GRACE_MS = 60_000;
  */
 export const FULL_SCAN_EVERY = 60;
 
-/** Loom's ghost-lease GC examines this many expired leases per call; a pass repeats while it collects. */
+/**
+ * Loom's ghost-lease GC examines this many expired leases per call and rotates its window one page
+ * per call that collects nothing, so a ghost behind many expired orphans takes one call per page.
+ */
 const GHOST_GC_BATCH = 100;
-const GHOST_GC_MAX_ROUNDS = 20;
+/** Loom's rotation is at most 64 pages deep; the pass never runs more rounds than this. */
+const GHOST_GC_MAX_ROUNDS = 140;
 
 const errorClass = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
@@ -74,8 +78,15 @@ export async function recoverIngest(
     // have no stream, so no pass would ever re-drive or remove them, and lease mode lists them forever.
     // Loom's own GC runs only from TimerService, which this server does not run.
     try {
-      for (let i = 0; i < GHOST_GC_MAX_ROUNDS; i++)
-        if ((await collectGhostLeases(runtime, { limit: GHOST_GC_BATCH })) === 0) break;
+      const store = runtime.leaseKeeper?.leaseStore;
+      // One round per page of expired leases, until that many rounds in a row collect nothing.
+      const expired = store ? (await store.expired(undefined, GHOST_GC_BATCH * 64)).length : 0;
+      const pages = Math.ceil(expired / GHOST_GC_BATCH);
+      let empty = 0;
+      for (let round = 0; pages > 0 && round < GHOST_GC_MAX_ROUNDS; round++) {
+        if ((await collectGhostLeases(runtime, { limit: GHOST_GC_BATCH })) > 0) empty = 0;
+        else if (++empty >= pages) break;
+      }
     } catch (err) {
       console.error("ingest ghost lease gc failed", errorClass(err));
     }
