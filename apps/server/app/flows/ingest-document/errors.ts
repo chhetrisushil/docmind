@@ -18,6 +18,18 @@ export class DocumentGoneError extends Error {
   }
 }
 
+/**
+ * A blob store returned null for a document whose row may still exist. The parse step re-checks the
+ * row: gone stays DocumentGoneError, a live row is this fatal fault (a lost file or a moved blob
+ * directory: deployment trouble, never retried). The message is fixed: it is logged.
+ */
+export class BlobMissingError extends Error {
+  constructor() {
+    super("blob missing for a live document");
+    this.name = "BlobMissingError";
+  }
+}
+
 export const FAILURE_CODES = ["unsupported_content", "corrupt_content", "too_large"] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
@@ -78,6 +90,7 @@ export class IngestConfigError extends Error {
 export const isFatal = (err: unknown): boolean =>
   err instanceof IngestConfigError ||
   err instanceof StepResultError ||
+  err instanceof BlobMissingError ||
   (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError));
 
 export function isDocumentGone(err: unknown): boolean {

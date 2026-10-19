@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { withTenant } from "../../db/tenant";
-import { DocumentGoneError } from "./errors";
+import { BlobMissingError, DocumentGoneError } from "./errors";
 import type { IngestStartInput } from "./flow";
 
 export interface DocumentSource {
@@ -41,11 +41,12 @@ export class PgDocumentSource implements DocumentSource {
   }
 
   async read(ref: IngestStartInput, contentAddress: string): Promise<Uint8Array> {
-    // The gap between this row check and the blob read is accepted: a vanished blob is null, so gone, and the step's later writes hit the FK.
+    // The gap between this row check and the blob read is accepted: a vanished blob is BlobMissingError (the parse step re-checks the row), and the step's later writes hit the FK.
     if ((await this.row(ref)).contentAddress !== contentAddress) throw new DocumentGoneError();
     const store = this.blobs({ tenantId: ref.tenantId, userId: ref.userId });
     const bytes = await store.get({ __loomContent: contentAddress });
-    if (bytes === null) throw new DocumentGoneError(); // delete removed the blob first, or erasure did
+    // Null is a deleted document (delete removes the blob first) or a lost blob: the caller re-checks the row.
+    if (bytes === null) throw new BlobMissingError();
     return bytes;
   }
 }
