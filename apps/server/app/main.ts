@@ -4,6 +4,7 @@ import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { closeSequence } from "./closeSequence";
 import { buildServer } from "./compose";
+import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
@@ -38,6 +39,21 @@ async function main(): Promise<void> {
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
 
   const pool = await createAppPool(databaseUrl);
+
+  // Read-only: an applied migration file that was edited since refuses the start (the file name only).
+  // Any other failure of the check (an old schema without the grant) is logged by class, not fatal.
+  try {
+    await verifyMigrationChecksums(pool);
+  } catch (err) {
+    if (err instanceof MigrationChecksumError) {
+      await pool.end();
+      throw new StartupConfigError(err.message);
+    }
+    console.error(
+      "migration checksum check failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    );
+  }
 
   // Loom's stores connect as docmind_loom; check that role is unprivileged too before they start.
   try {

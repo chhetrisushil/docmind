@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, setAppRolePassword } from "./migrate";
+import {
+  MigrationChecksumError,
+  migrate,
+  setAppRolePassword,
+  verifyMigrationChecksums,
+} from "./migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
 
 describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
@@ -66,6 +71,53 @@ describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
       );
     } finally {
       rmSync(d, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("hashes a CRLF or BOM variant of an applied file the same, and still refuses a real change", async () => {
+    const fresh = await createTestDb();
+    const d = mkdtempSync(join(tmpdir(), "docmind-eol-"));
+    try {
+      const file = join(d, "0001_a.sql");
+      writeFileSync(file, "CREATE TABLE a (id int);\n-- note\n");
+      await migrate(fresh.owner, d);
+      writeFileSync(file, "\uFEFFCREATE TABLE a (id int);\r\n-- note\r\n");
+      expect(await migrate(fresh.owner, d)).toEqual([]);
+      await expect(verifyMigrationChecksums(fresh.owner, d)).resolves.toBeUndefined();
+      writeFileSync(file, "\uFEFFCREATE TABLE a (id bigint);\r\n-- note\r\n");
+      await expect(migrate(fresh.owner, d)).rejects.toBeInstanceOf(MigrationChecksumError);
+      await expect(verifyMigrationChecksums(fresh.owner, d)).rejects.toThrow(
+        /^migration 0001_a\.sql was changed after it was applied$/,
+      );
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("the start check runs as docmind_app, skips unbackfilled rows and a database without the column, and refuses an edited file", async () => {
+    const fresh = await createTestDb();
+    const d = mkdtempSync(join(tmpdir(), "docmind-verify-"));
+    const app = new Pool({ connectionString: fresh.appUrl });
+    try {
+      writeFileSync(join(d, "0001_a.sql"), "SELECT 1;");
+      await expect(verifyMigrationChecksums(fresh.owner, d)).resolves.toBeUndefined(); // no table yet
+      await migrate(fresh.owner); // the real migrations: roles and the 0017 grant
+      await setAppRolePassword(fresh.owner, APP_PASSWORD);
+      await expect(verifyMigrationChecksums(app)).resolves.toBeUndefined();
+      await fresh.owner.query(
+        "UPDATE schema_migrations SET checksum = NULL WHERE name = '0002_tenancy.sql'",
+      );
+      await fresh.owner.query(
+        "UPDATE schema_migrations SET checksum = 'x' WHERE name = '0003_tenancy_hardening.sql'",
+      );
+      await expect(verifyMigrationChecksums(app)).rejects.toThrow(
+        /^migration 0003_tenancy_hardening\.sql was changed after it was applied$/,
+      );
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+      await app.end();
       await fresh.drop();
     }
   });
