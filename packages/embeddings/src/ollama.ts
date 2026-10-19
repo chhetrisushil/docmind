@@ -30,6 +30,27 @@ export interface OllamaOptions {
   fetch?: typeof fetch;
 }
 
+const BAD_URL = "DOCMIND_OLLAMA_URL must be an http(s) URL without credentials, query or fragment";
+
+/** The one URL requests go to: the validated base plus /api/embed, nothing taken from elsewhere. */
+function embedUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new EmbeddingError(BAD_URL);
+  }
+  const http = url.protocol === "http:" || url.protocol === "https:";
+  if (!http || url.username || url.password || url.search || url.hash) {
+    throw new EmbeddingError(BAD_URL);
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, "")}/api/embed`;
+}
+
+const positive = (n: number | undefined, message: string) => {
+  if (n !== undefined && !(Number.isInteger(n) && n > 0)) throw new EmbeddingError(message);
+};
+
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_BATCH_SIZE = 64;
 /** A JSON double is at most about 25 bytes; the cap allows 32 per expected value plus 64 KiB. */
@@ -42,7 +63,12 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly modelId: string;
   readonly dimensions: number;
   readonly maxBatchSize: number;
+  private readonly endpoint: string;
   constructor(private readonly options: OllamaOptions) {
+    this.endpoint = embedUrl(options.baseUrl);
+    positive(options.dimensions, "DOCMIND_EMBED_DIMENSIONS must be a positive integer");
+    positive(options.timeoutMs, "DOCMIND_EMBED_TIMEOUT_MS must be a positive integer");
+    positive(options.maxBatchSize, "maxBatchSize must be a positive integer");
     this.modelId = `ollama/${options.model}`;
     this.dimensions = options.dimensions;
     this.maxBatchSize = options.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
@@ -66,15 +92,13 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
     const merged = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
     try {
-      response = await (this.options.fetch ?? fetch)(
-        `${this.options.baseUrl.replace(/\/$/, "")}/api/embed`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
-          signal: merged,
-        },
-      );
+      response = await (this.options.fetch ?? fetch)(this.endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
+        redirect: "error", // a hostile redirect must not carry document text elsewhere
+        signal: merged,
+      });
     } catch {
       throw this.failure(signal); // connection refused, DNS, timeout, caller abort
     }

@@ -147,6 +147,90 @@ describe("OllamaEmbeddingProvider", () => {
     expect(late).toBeInstanceOf(EmbeddingAbortedError);
     expect(late).not.toBeInstanceOf(EmbeddingError);
   });
+
+  it("accepts a trailing slash and a path prefix, and posts to that base plus /api/embed only", async () => {
+    const urls: string[] = [];
+    const record = async (url: Parameters<typeof fetch>[0]) => {
+      urls.push(String(url));
+      return ok([vec(3)]);
+    };
+    await provider(record, { baseUrl: "https://ollama.internal:8443/" }).embed(["a"]);
+    await provider(record, { baseUrl: "http://127.0.0.1:11434/proxy/" }).embed(["a"]);
+    expect(urls).toEqual([
+      "https://ollama.internal:8443/api/embed",
+      "http://127.0.0.1:11434/proxy/api/embed",
+    ]);
+  });
+
+  it("refuses to follow redirects", async () => {
+    let seen: RequestInit | undefined;
+    await provider(async (_u, init) => {
+      seen = init;
+      return ok([vec(3)]);
+    }).embed(["a"]);
+    expect(seen?.redirect).toBe("error");
+  });
+
+  it.each([
+    "ftp://h",
+    "file:///etc/passwd",
+    "http://u:pw@h",
+    "http://h?x=1",
+    "http://h#f",
+    "nope",
+    "",
+  ])("rejects the base URL %j with a fixed message naming the variable", (baseUrl) => {
+    const make = () => provider(hang, { baseUrl });
+    expect(make).toThrow(EmbeddingError);
+    expect(make).toThrow(
+      "DOCMIND_OLLAMA_URL must be an http(s) URL without credentials, query or fragment",
+    );
+  });
+
+  it.each([
+    [{ dimensions: 0 }, "DOCMIND_EMBED_DIMENSIONS must be a positive integer"],
+    [{ timeoutMs: -1 }, "DOCMIND_EMBED_TIMEOUT_MS must be a positive integer"],
+    [{ maxBatchSize: 1.5 }, "maxBatchSize must be a positive integer"],
+  ])("rejects bad options %j", (over, message) => {
+    expect(() => provider(hang, over)).toThrow(message);
+  });
+
+  it("never carries the url, the text, the body or a cause in any error it throws", async () => {
+    const secrets = ["secret-host.invalid", "pw-12345", "secret text", "secret body"];
+    const baseUrl = "http://secret-host.invalid:1/p";
+    const leaky = new TypeError("connect ECONNREFUSED http://u:pw-12345@secret-host.invalid:1/p");
+    const abort = new AbortController();
+    const cases: [string, typeof fetch, Parameters<typeof provider>[1]?, AbortSignal?][] = [
+      [
+        "network",
+        async () => {
+          throw leaky;
+        },
+        {},
+      ],
+      ["timeout", hang, { timeoutMs: 1 }],
+      ["5xx", async () => new Response("secret body", { status: 500 }), {}],
+      ["4xx", async () => new Response("secret body", { status: 404 }), {}],
+      ["shape", async () => new Response("secret body"), {}],
+      ["oversize", async () => new Response(`${" ".repeat(1 << 17)}secret body`), {}],
+      ["abort", hang, {}, abort.signal],
+    ];
+    abort.abort();
+    for (const [name, fetch, over, signal] of cases) {
+      const err = await provider(fetch, { baseUrl, ...over })
+        .embed(["secret text"], { signal })
+        .catch((e: unknown) => e);
+      expect(err, name).toBeInstanceOf(Error);
+      const { message, cause } = err as Error;
+      expect(cause, name).toBeUndefined();
+      for (const s of secrets) expect(message, name).not.toContain(s);
+    }
+    const config = await Promise.resolve()
+      .then(() => provider(hang, { baseUrl: "http://u:pw-12345@secret-host.invalid" }))
+      .catch((e: unknown) => e as Error);
+    expect((config as Error).message).not.toMatch(/pw-12345|secret-host/);
+    expect((config as Error).cause).toBeUndefined();
+  });
 });
 
 /** A fetch that never answers until its signal aborts. */
