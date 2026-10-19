@@ -147,6 +147,25 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
       ev("STEP_STARTED", started, { id: "Q3 report.pdf" }),
       /\.id is not an id/,
     ],
+    [
+      "a free-text cancel reason",
+      ev("EXECUTION_CANCELLED", { reason: "user deleted Q3 report.pdf" }),
+      /\.reason is not an id/,
+    ],
+    [
+      "a text fence",
+      ev(
+        "EXECUTION_CANCELLED",
+        { reason: "document-deleted" },
+        { metadata: { fence: "Q3 report.pdf" } },
+      ),
+      /\.fence is not an id/,
+    ],
+    [
+      "text in a step cancel",
+      ev("STEP_CANCELLED", { stepId: "ingest-parse", note: SENTENCE }),
+      /unexpected key .*\.note/,
+    ],
   ])("throws for %s", (_name, event, message) => {
     expect(() => check(event)).toThrow(message);
   });

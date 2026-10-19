@@ -2,24 +2,33 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
-import { ParseRejectedError } from "@docmind/parsers";
+import { ParseAbortedError, ParseRejectedError } from "@docmind/parsers";
 import type { EventEnvelope } from "@loom/core";
+import { flow$, step$ } from "@loom/core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { setRolePassword } from "../../db/migrate";
 import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
-import { ingestExecutionId } from "../../documents/ingest";
+import { ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { insertDocument } from "../../documents/repo";
 import { T1, U1, newDocument } from "../../documents/testHarness";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
-import { type IngestStartInput, ingestDocumentFlow } from "./flow";
+import {
+  type INGEST_STEPS,
+  IngestOutput,
+  type IngestStartInput,
+  ingestDocumentFlow,
+  ingestParseStep,
+  runIngestSteps,
+} from "./flow";
 import { createIngestWiring } from "./limits";
 import { pgIngestDeps } from "./pgDeps";
 import { type PgFixture, startPgFixture } from "./pgFixture";
 import { PgParsedStore } from "./pgParsed";
+import { recoverIngest } from "./recovery";
 import { type RawEvent, assertEventsAreContentFree } from "./testing";
 
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars";
@@ -204,6 +213,121 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "document_gone" },
         stepId: "ingest-parse",
       });
+    });
+
+    it("a user cancel (a delete) records only its fixed reason", async () => {
+      let inRun: () => void = () => {};
+      const entered = new Promise<void>((resolve) => {
+        inRun = resolve;
+      });
+      runner = {
+        run: (_id, _bytes, options) =>
+          new Promise((_, reject) => {
+            inRun();
+            options?.signal?.addEventListener("abort", () => reject(new ParseAbortedError()));
+          }),
+      };
+      const ref = await seedTxt("1".repeat(64));
+      await start(ref);
+      await entered;
+      await loomIngest(app.runtime).cancel({ tenantId: T1, userId: U1 }, ref.documentId);
+      // Loom appends the cancel, then the step's, after cancel() returns: wait on the log (bounded), then assert.
+      await vi.waitFor(async () =>
+        expect((await log(ref)).map((e) => e.eventType)).toContain("STEP_CANCELLED"),
+      );
+      const raw = proven(await log(ref), ref);
+      expect(raw.at(-2)?.payload).toEqual({ reason: "document-deleted" });
+      expect(raw.at(-1)?.payload).toEqual({ stepId: "ingest-parse" });
+    });
+
+    /** A process over the shared database with its own Loom pool, as after a restart. */
+    const peers: (() => Promise<unknown>)[] = [];
+    afterAll(async () => {
+      for (const close of peers.reverse()) await close().catch(() => {});
+    });
+    async function peer(run: IngestDeps["runner"]["run"], over: Partial<IngestDeps> = {}) {
+      const d = await openDurableStorage({ loomUrl: f.db.loomUrl, keys: f.keys });
+      const base = pgIngestDeps({ pool: f.app, fields: f.fields, blobs, wiring });
+      const a = buildApp(d.storage, d.crypto, {
+        ingest: { ...base, runner: { run }, ...over },
+      });
+      peers.push(async () => {
+        await a.close();
+        await d.close();
+      });
+      return { app: a, source: d.storage.eventStore };
+    }
+    const never = () => new Promise<never>(() => {});
+    /** Starts `ref` on a process that then "crashes" in its step: its lease is released, the step never ends. */
+    async function crashed(ref: IngestStartInput, flow = ingestDocumentFlow) {
+      let inStep: () => void = () => {};
+      const entered = new Promise<void>((resolve) => {
+        inStep = resolve;
+      });
+      const origin = await peer(() => {
+        inStep();
+        return never();
+      });
+      origin.app.runtime.registerFlow(flow.definition, flow.runner);
+      await origin.app.runtime.start(flow, ref, {
+        executionId: ingestExecutionId(ref.userId, ref.documentId),
+        principal: { tenant: ref.tenantId, actor: ref.userId },
+      });
+      await entered;
+      await origin.app.runtime.closeHeartbeat();
+    }
+
+    it("a recovery cancel (crash loop past its bound) records only its fixed reason", async () => {
+      const ref = await seedTxt("2".repeat(64));
+      await crashed(ref);
+      let redriven: () => void = () => {};
+      const second = new Promise<void>((resolve) => {
+        redriven = resolve;
+      });
+      const one = await peer(() => {
+        redriven();
+        return never();
+      });
+      const opts = { graceMs: 0, maxRecoveries: 1 };
+      void recoverIngest(one.app.runtime, one.source, opts);
+      await second; // the first re-drive is running and hangs again
+      await one.app.runtime.closeHeartbeat();
+      const two = await peer(never);
+      expect(await recoverIngest(two.app.runtime, two.source, opts)).toMatchObject({
+        exhausted: 1,
+      });
+      const raw = proven(await log(ref), ref);
+      expect(types(raw)).toContain("EXECUTION_RECOVERED");
+      expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-recovery-exhausted" });
+      expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
+    });
+
+    it("a recovery cancel for a flow whose identity changed records only its fixed reason", async () => {
+      // The flow as an earlier deploy defined it: the same step with another retry policy (part of the flow hash).
+      const oldSteps = [
+        step$({ ...ingestParseStep, retry: { maxAttempts: 5 } }),
+      ] as unknown as typeof INGEST_STEPS;
+      const old = {
+        runner: runIngestSteps(oldSteps) as never,
+        definition: flow$({
+          id: "ingest-document",
+          name: "IngestDocument",
+          version: "1.9.0",
+          inputSchema: ingestDocumentFlow.definition.inputSchema,
+          outputSchema: IngestOutput,
+          steps: oldSteps,
+        }),
+      };
+      const ref = await seedTxt("3".repeat(64));
+      await crashed(ref, old);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const next = await peer(never);
+      expect(await recoverIngest(next.app.runtime, next.source, { graceMs: 0 })).toMatchObject({
+        failed: 1,
+      });
+      const raw = proven(await log(ref), ref);
+      expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-flow-mismatch" });
+      expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
   },
 );
