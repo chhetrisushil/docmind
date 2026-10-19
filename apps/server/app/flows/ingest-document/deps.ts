@@ -1,16 +1,14 @@
 import type { Effect } from "@loom/effect-runtime";
 import { isDocumentGone } from "./errors";
 import type { IngestOutput, IngestStartInput } from "./flow";
-import type { StepGuard } from "./stepEffect";
+import type { ParseDeps } from "./steps/parse";
 
 /**
  * What the flow's steps need from the outside world. Loom has no per-flow dependency argument, so
  * `buildApp` hands these to the runtime as effects (`execution.registerEffects`), one per step id.
  * The composition root (`main.ts`, or a test) supplies them per app; nothing is process-global.
  */
-export interface IngestDeps {
-  guard: StepGuard;
-}
+export interface IngestDeps extends ParseDeps {}
 
 /** The stub step (retired by Task 80c): the same guard question the real steps ask; it writes nothing. */
 export function ingestBeginEffect(deps: IngestDeps): Effect<IngestStartInput, IngestOutput> {

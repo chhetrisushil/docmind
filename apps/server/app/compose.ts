@@ -38,7 +38,7 @@ export interface ComposeOptions {
   blobRoot: string;
   secureCookies: boolean;
   trustProxy: boolean;
-  /** Parser registry, runner and progress bus; nothing consumes them until the parse step is wired. */
+  /** Parser registry, runner and progress bus; the runner and registry reach the parse ports through pgIngestDeps. */
   ingest: IngestWiring;
   /** The ingest-status model's stores. */
   status: StatusStores;
@@ -54,8 +54,18 @@ export interface ComposeOptions {
 export function buildServer(options: ComposeOptions) {
   const { pool, keys, limits } = options;
   const feed: { onEvent?: IngestStatus["onEvent"] } = {}; // the model is built after defineConfig, which the sensitive map needs; onEvent reaches it through this holder
+  const fields = new FieldCrypto(keys);
+  // The per-identity blob store, built the same way for the routes and the ingest source.
+  const blobs = ({ tenantId, userId }: Identity) =>
+    new EncryptedFsContentStore({
+      root: options.blobRoot,
+      tenantId,
+      userId,
+      keys,
+      maxBytes: limits.maxFileBytes,
+    });
   const app = buildApp(options.storage, options.crypto, {
-    ingest: pgIngestDeps(pool),
+    ingest: pgIngestDeps({ pool, fields, blobs, wiring: options.ingest }),
     onEvent: (event) => feed.onEvent?.(event),
   });
   const status = new IngestStatus({
@@ -85,15 +95,8 @@ export function buildServer(options: ComposeOptions) {
     ...documentRoutes({
       pool,
       authenticator,
-      fields: new FieldCrypto(keys),
-      blobs: ({ tenantId, userId }) =>
-        new EncryptedFsContentStore({
-          root: options.blobRoot,
-          tenantId,
-          userId,
-          keys,
-          maxBytes: limits.maxFileBytes,
-        }),
+      fields,
+      blobs,
       limits,
       ingest,
       starts,
