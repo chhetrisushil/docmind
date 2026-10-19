@@ -30,7 +30,9 @@ export interface StepGuard {
  * The parse step's retry policy. Loom records a step's `retry` as declared metadata (it is part of
  * the flow's identity) and enforces nothing itself, so `stepEffect` applies it: a transient failure
  * (a parser crash, a key store outage) is re-run in memory, with exponential backoff, up to
- * `maxAttempts` attempts in all. Permanent outcomes and cancellations are never retried.
+ * `maxAttempts` attempts in all. Permanent outcomes and cancellations are never retried. The policy
+ * is part of the flow's identity (flowHash): changing a number here changes the flow version, and an
+ * execution recorded under the old one is refused (FlowCodeMismatchError) until it is cancelled or restarted.
  */
 export const PARSE_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
 
@@ -38,6 +40,8 @@ export interface StepOptions {
   retry?: RetryPolicy;
   /** Injectable wait between attempts; must reject if `signal` aborts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Aborted by the composition root just before the runner closes: whatever the step is doing is interrupted, not failed. */
+  shutdown?: AbortSignal;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -55,8 +59,8 @@ const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   });
 
 /**
- * A shutdown (`runner.close()`) aborts an in-flight parse while the execution's own signal is
- * quiet. That is neither a failure nor an attempt: the step must stay un-completed in the log, as
+ * A shutdown (the `shutdown` signal, aborted just before `runner.close()`) interrupts a step while
+ * the execution's own signal is quiet, whatever error that surfaces as. That is neither a failure nor an attempt: the step must stay un-completed in the log, as
  * after a crash, so recovery re-runs it. Loom turns any rejection into STEP_FAILED and a failed
  * execution is final, so the effect does not settle: the process is about to exit.
  */
@@ -76,24 +80,27 @@ export function stepEffect(
   return {
     kind: "tool",
     execute: async (ref, ctx) => {
+      const interrupted = () => options.shutdown?.aborted === true && ctx?.signal?.aborted !== true;
+      const waitSignals = [ctx?.signal, options.shutdown].filter((x): x is AbortSignal => !!x);
+      const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
       for (let attempt = 1; ; attempt++) {
         try {
           await guard.begin(ref, step);
           return { outcome: "done", ...((await work(ref, ctx?.signal)) ?? {}) };
         } catch (err) {
+          if (interrupted()) return INTERRUPTED;
           if (isDocumentGone(err)) return { outcome: "document_gone" };
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
-          const cancelled = ctx?.signal?.aborted === true;
-          if (err instanceof ParseAbortedError && !cancelled) return INTERRUPTED;
           if (err instanceof ParseAbortedError || attempt >= maxAttempts) throw failure(step, err);
           try {
             const base = options.retry?.backoffMs ?? 0;
             await sleep(
               base * (options.retry?.backoffMultiplier ?? 1) ** (attempt - 1),
-              ctx?.signal,
+              waitSignal,
             );
           } catch {
+            if (interrupted()) return INTERRUPTED;
             throw failure(step, err); // cancelled while waiting
           }
         }

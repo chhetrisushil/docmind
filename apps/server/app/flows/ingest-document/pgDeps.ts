@@ -22,4 +22,6 @@ export const pgIngestDeps = ({ pool, fields, blobs, wiring }: PgIngestArgs): Ing
   parsed: new PgParsedStore(pool, fields),
   registry: wiring.registry,
   runner: wiring.runner,
+  shutdown: wiring.shutdown.signal,
+  ...(wiring.sleep && { sleep: wiring.sleep }),
 });

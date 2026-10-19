@@ -137,38 +137,82 @@ describe("stepEffect", () => {
     expect(JSON.stringify(spy.mock.calls)).not.toContain("secret");
   });
 
-  it("rethrows an abort of a cancelled execution with the fixed message", async () => {
+  /** Runs the effect and reports whether it settled within a macrotask flush (so a rejection would have shown). */
+  const settlesWithin = async (promise: Promise<unknown>) => {
+    let settled = false;
+    promise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    return settled;
+  };
+
+  it("rethrows an abort of a cancelled execution with the fixed message, and an abort with no shutdown signal too", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { port } = guard();
-    const cancelled = { signal: AbortSignal.abort() } as never;
-    await expect(
-      stepEffect(
-        "chunk",
-        port,
-        throwing(() => new ParseAbortedError()),
-      ).execute(ref(), cancelled),
-    ).rejects.toThrow(/^ingest step failed: chunk$/);
-  });
-
-  it("leaves a shutdown abort un-completed: no result, no failure, no retry", async () => {
-    const { port, calls } = guard();
-    const sleep = vi.fn();
-    const settled = vi.fn();
-    stepEffect(
+    const effect = stepEffect(
       "chunk",
       port,
       throwing(() => new ParseAbortedError()),
-      {
-        retry: { maxAttempts: 3 },
-        sleep,
-      },
-    )
-      .execute(ref(), { signal: new AbortController().signal } as never)
-      .then(settled, settled);
-    await vi.waitFor(() => expect(calls).toEqual(["begin:chunk"]));
-    await Promise.resolve();
-    expect(settled).not.toHaveBeenCalled();
+    );
+    await expect(effect.execute(ref(), { signal: AbortSignal.abort() } as never)).rejects.toThrow(
+      /^ingest step failed: chunk$/,
+    );
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
+  });
+
+  it("leaves any error during a shutdown un-completed: pending, no failure logged, no retry", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    const sleep = vi.fn();
+    const shutdown = AbortSignal.abort();
+    const make = (err: () => unknown) =>
+      stepEffect("chunk", port, throwing(err), { retry: { maxAttempts: 3 }, sleep, shutdown });
+    for (const err of [() => new ParseAbortedError(), () => new TypeError("boom")]) {
+      const pending = make(err).execute(ref(), { signal: new AbortController().signal } as never);
+      expect(await settlesWithin(pending)).toBe(false);
+    }
     expect(sleep).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    // Control: the same effect settles (rejects) when the execution itself was cancelled.
+    const own = AbortSignal.abort();
+    const cancelled = make(() => new TypeError("boom")).execute(ref(), { signal: own } as never);
+    expect(await settlesWithin(cancelled)).toBe(true);
+    await expect(cancelled).rejects.toThrow(/^ingest step failed: chunk$/);
+  });
+
+  it("wakes the backoff on shutdown and then stays un-completed", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    const shutdown = new AbortController();
+    const own = new AbortController();
+    let waiting: AbortSignal | undefined;
+    let works = 0;
+    const sleep = (_ms: number, signal?: AbortSignal) =>
+      new Promise<void>((_, reject) => {
+        waiting = signal;
+        signal?.addEventListener("abort", () => reject(new Error("woken")));
+      });
+    const pending = stepEffect(
+      "chunk",
+      port,
+      async () => {
+        works++;
+        throw new ParseCrashedError();
+      },
+      { retry: { maxAttempts: 3 }, sleep, shutdown: shutdown.signal },
+    ).execute(ref(), { signal: own.signal } as never);
+    await vi.waitFor(() => expect(waiting).toBeDefined());
+    shutdown.abort();
+    expect(waiting?.aborted).toBe(true);
+    expect(await settlesWithin(pending)).toBe(false);
+    expect(works).toBe(1);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("retries a transient failure with exponential backoff up to maxAttempts, never a permanent one", async () => {

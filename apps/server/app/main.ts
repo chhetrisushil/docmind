@@ -4,7 +4,7 @@ import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
-import { createIngestWiring } from "./flows/ingest-document/limits";
+import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
 
   // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
   await bootStatus(status, [
-    () => ingest.runner.close(),
+    () => closeIngest(ingest),
     () => app.close(),
     () => durable.close(),
     () => pool.end(),
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(
           () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
-          () => ingest.runner.close(), // aborts in-flight parses and kills their children, before any pool ends
+          () => closeIngest(ingest), // signals the steps, then aborts in-flight parses and kills their children, before any pool ends
           async () => {
             detachStatusFeed(); // a step still running must not fold onto stores about to close
             await status.close();

@@ -18,6 +18,7 @@ import {
   ingestParseStep,
   runIngestSteps,
 } from "./flow";
+import { type IngestWiring, closeIngest } from "./limits";
 import { PARSE_RETRY, StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
 
@@ -192,30 +193,37 @@ describe("the parse step's failures and restarts", () => {
     });
     const input = ids();
     const executionId = ingestExecutionId(input.userId, input.documentId);
+    // A runner that, like ParseRunner.close(), aborts its in-flight parse with ParseAbortedError.
     let entered: () => void = () => {};
     const inParse = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const shutdown = new AbortController();
+    let abortParse: () => void = () => {};
     let attempts = 0;
     const runner = {
       run: async () => {
         attempts++;
         entered();
-        await new Promise<never>((_, reject) =>
-          shutdown.signal.addEventListener("abort", () => reject(new ParseAbortedError())),
-        );
+        await new Promise<never>((_, reject) => {
+          abortParse = () => reject(new ParseAbortedError());
+        });
         return PARSED;
       },
+      close: async () => abortParse(),
     };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const wiring = { shutdown: new AbortController(), runner } as unknown as IngestWiring;
     const first = buildApp({ kind: "custom", eventStore: kept }, undefined, {
-      ingest: fakeDeps({ runner }).deps,
+      ingest: fakeDeps({ runner, shutdown: wiring.shutdown.signal }).deps,
     });
     await run(input, first);
     await inParse;
-    shutdown.abort(); // runner.close(): the parse is aborted; the execution's own signal is quiet
+    await closeIngest(wiring); // the shutdown signal, then the runner aborts the parse; the execution's own signal is quiet
+    // A failure would be journaled by now: let the rejection and the write-behind journal run.
+    await new Promise((resolve) => setImmediate(resolve));
     await first.close();
     expect(attempts).toBe(1);
+    expect(errors).not.toHaveBeenCalled();
     const types = (await eventStore.read(executionId)).map((e) => e.eventType);
     expect(types).toContain("STEP_STARTED");
     expect(types.filter((t) => /FAILED|COMPLETED|CANCELLED/.test(t))).toEqual([]);
