@@ -58,6 +58,14 @@ export const EMBED_RETRY: RetryPolicy = { maxAttempts: 6, backoffMs: 1_000, back
 export const EMBED_BACKOFF_CAP_MS = 30_000;
 
 /**
+ * The policy of steps that call Claude (summarize; parse, for vision). An API overload (529) or a rate
+ * limit lasts seconds to minutes: 2, 4, 8, 16 and 32 s between 6 attempts, each wait capped at
+ * LLM_BACKOFF_CAP_MS. Part of the flow's identity: declared on steps in Task 121 (flow 3.0.0).
+ */
+export const LLM_RETRY: RetryPolicy = { maxAttempts: 6, backoffMs: 2_000, backoffMultiplier: 2 };
+export const LLM_BACKOFF_CAP_MS = 60_000;
+
+/**
  * The wall-clock bound of one attempt of a step that has no runner clock of its own (the chunk step;
  * parse is bounded by the parser runner's wall clock, DOCMIND_PARSE_TIMEOUT_MS). Generous: chunking is
  * CPU work over text already in memory. Recovery re-drives steps one by one, so a step that never

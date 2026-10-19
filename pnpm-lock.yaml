@@ -52,6 +52,9 @@ importers:
       '@docmind/keystore-pg':
         specifier: workspace:*
         version: link:../../packages/keystore-pg
+      '@docmind/llm-anthropic':
+        specifier: workspace:*
+        version: link:../../packages/llm-anthropic
       '@docmind/parsers':
         specifier: workspace:*
         version: link:../../packages/parsers
@@ -61,6 +64,9 @@ importers:
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
+      '@loom/classify':
+        specifier: link:../../../loom/packages/classify
+        version: link:../../../loom/packages/classify
       '@loom/core':
         specifier: link:../../../loom/packages/core
         version: link:../../../loom/packages/core
@@ -70,6 +76,9 @@ importers:
       '@loom/fair-scheduler':
         specifier: link:../../../loom/packages/fair-scheduler
         version: link:../../../loom/packages/fair-scheduler
+      '@loom/llm':
+        specifier: link:../../../loom/packages/llm
+        version: link:../../../loom/packages/llm
       '@loom/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
@@ -95,9 +104,6 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@loom/classify':
-        specifier: link:../../../loom/packages/classify
-        version: link:../../../loom/packages/classify
       '@loom/cli':
         specifier: link:../../../loom/tools/cli
         version: link:../../../loom/tools/cli

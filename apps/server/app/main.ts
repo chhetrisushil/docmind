@@ -47,6 +47,8 @@ async function main(): Promise<void> {
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
+  if (!ingest.llm.summary)
+    console.warn("summaries and image reading are off: ANTHROPIC_API_KEY is not set");
 
   const pool = await createAppPool(databaseUrl);
 

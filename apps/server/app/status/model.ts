@@ -30,6 +30,7 @@ export const STATUS_MESSAGES: Record<StatusCode, string> = {
   unsupported_content: "This file's content is not a supported document.",
   corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
   too_large: "This document is too large to process.",
+  vision_unavailable: "Reading images needs a Claude API key on the server.",
   internal: "Processing failed. Try again.",
 };
 
