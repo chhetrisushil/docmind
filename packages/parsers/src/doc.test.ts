@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DOC_SECTION_CHARS, docParser } from "./doc";
+import { DOC_SECTION_CHARS, docParser, groupParagraphs } from "./doc";
 import { ParseRunner } from "./runner/ParseRunner";
 import { runDocumentParserConformance } from "./testing/conformance";
 
@@ -36,10 +36,47 @@ describe("docParser", () => {
       expect(s.locator.from).toBe(next);
       next = s.locator.to + 1;
       expect(s.headingPath).toEqual([]);
-      expect(s.text.length).toBeLessThanOrEqual(Math.max(DOC_SECTION_CHARS, s.text.length));
     }
     expect(doc.sections.map((s) => s.text).join("\n\n")).toBe(doc.text);
     expect(doc.text).not.toMatch(/\r|\n{3,}/);
+  });
+
+  describe("groupParagraphs", () => {
+    const loc = (s: { locator: { kind: string } }) => s.locator;
+    it("keeps two paragraphs summing to exactly the limit (with separator) in one section", () => {
+      const a = "a".repeat(1999);
+      const b = "b".repeat(DOC_SECTION_CHARS - 1999 - 2);
+      const out = groupParagraphs([a, b]);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.text.length).toBe(DOC_SECTION_CHARS);
+      expect(groupParagraphs([a, `${b}b`])).toHaveLength(2);
+    });
+
+    it("makes contiguous sections covering the paragraphs in order", () => {
+      const paras = Array.from({ length: 9 }, (_, i) => String(i).repeat(1500));
+      const out = groupParagraphs(paras);
+      expect(out.length).toBeGreaterThanOrEqual(3);
+      let next = 0;
+      for (const s of out) {
+        const l = loc(s) as { kind: string; from: number; to: number };
+        expect(l.kind).toBe("paragraphs");
+        expect(l.from).toBe(next);
+        next = l.to + 1;
+      }
+      expect(next).toBe(paras.length);
+      expect(out.map((s) => s.text).join("\n\n")).toBe(paras.join("\n\n"));
+    });
+
+    it("keeps an oversize paragraph whole in its own section", () => {
+      const big = "x".repeat(5000);
+      const out = groupParagraphs(["small", big, "tail"]);
+      expect(out.map((s) => s.text)).toEqual(["small", big, "tail"]);
+      expect(out.map(loc)).toEqual([
+        { kind: "paragraphs", from: 0, to: 0 },
+        { kind: "paragraphs", from: 1, to: 1 },
+        { kind: "paragraphs", from: 2, to: 2 },
+      ]);
+    });
   });
 
   it("accepts by mime or extension only", () => {
