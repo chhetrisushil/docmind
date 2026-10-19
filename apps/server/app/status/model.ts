@@ -59,6 +59,16 @@ const payloadOf = (e: EventEnvelope): Record<string, unknown> =>
   isRecord(e.payload) && e.payload.$shredded !== true ? e.payload : {};
 const stepOf = (p: Record<string, unknown>): IngestStep | undefined =>
   typeof p.stepId === "string" ? STEP_OF_ID.get(p.stepId) : undefined;
+/**
+ * The cancel reasons recovery records when it gives an execution up (a crash loop past its bound, or
+ * a flow whose identity changed under it). Loom has no way to fail an execution from outside, so
+ * a cancel with one of these reasons is the document's recorded failure. A user's delete cancels
+ * with another reason and is not a failure (its row is purged).
+ */
+export const UNRECOVERABLE_REASONS = ["ingest-recovery-exhausted", "ingest-flow-mismatch"] as const;
+const isUnrecoverable = (p: Record<string, unknown>): boolean =>
+  (UNRECOVERABLE_REASONS as readonly unknown[]).includes(p.reason);
+
 const codeOf = (v: unknown): StatusCode =>
   (FAILURE_CODES as readonly unknown[]).includes(v) ? (v as FailureCode) : "internal";
 
@@ -85,6 +95,10 @@ export const ingestHandlers = {
     if (step === "finalize" && out.outcome === "done") return { status: "ready", step, code: null };
     return s;
   },
+  EXECUTION_CANCELLED: (s, e) =>
+    isTerminal(s) || !isUnrecoverable(payloadOf(e))
+      ? s
+      : { ...s, status: "failed", code: "internal" },
   // A failure after a terminal state (a specific code, or ready) changes nothing.
   EXECUTION_FAILED: (s) => (isTerminal(s) ? s : { ...s, status: "failed", code: "internal" }),
 } satisfies Record<string, Handler>;
@@ -93,7 +107,7 @@ export const ingestHandlers = {
 export const ingestStatus = projection$<IngestStatusState>({
   id: INGEST_STATUS_MODEL,
   name: "IngestStatus",
-  version: "1",
+  version: "2",
   initialState: INITIAL_STATUS,
   handlers: ingestHandlers,
 });
@@ -129,6 +143,11 @@ export function progressOf(
   // An unexpected failure (an embedder outage, a crash) names no step: the terminal event carries none.
   if (e.eventType === "EXECUTION_FAILED") {
     return { userId, progress: { documentId, status: "failed", detail: "internal" } };
+  }
+  if (e.eventType === "EXECUTION_CANCELLED") {
+    return isUnrecoverable(payloadOf(e))
+      ? { userId, progress: { documentId, status: "failed", detail: "internal" } }
+      : null;
   }
   const next = foldIngestStatus([e]);
   if (next.step === null) return null; // not a step transition (the model's null step is absent here)

@@ -7,6 +7,7 @@ import {
   INITIAL_STATUS,
   STATUS_MESSAGES,
   STATUS_OF_STEP,
+  UNRECOVERABLE_REASONS,
   UPLOADED,
   foldIngestStatus,
   generationOf,
@@ -157,10 +158,11 @@ describe("the fold", () => {
   it("is registered as one durable fold, with enums and codes only", () => {
     expect([ingestStatus.id, ingestStatus.version, ingestStatus.initialState]).toEqual([
       "ingest-status",
-      "1",
+      "2",
       INITIAL_STATUS,
     ]);
     expect(Object.keys(ingestStatus.handlers).sort()).toEqual([
+      "EXECUTION_CANCELLED",
       "EXECUTION_FAILED",
       "EXECUTION_STARTED",
       "STEP_COMPLETED",
@@ -267,5 +269,32 @@ describe("progressOf", () => {
       progressOf(evt(`u_${U}:chat-${D}`, 1, "STEP_STARTED", { stepId: "ingest-parse" })),
     ).toBeNull();
     expect(progressOf(evt(`u_${U}:chat-${D}`, 2, "EXECUTION_FAILED", {}))).toBeNull();
+  });
+});
+
+describe("an execution recovery gave up on", () => {
+  const cancelled = (reason: unknown) => evt(exec(), 9, "EXECUTION_CANCELLED", { reason });
+
+  it.each(UNRECOVERABLE_REASONS)("folds a cancel with reason %s to failed / internal", (reason) => {
+    const log = [...ingestRun(exec(), "parsed"), cancelled(reason)];
+    expect(foldIngestStatus(log)).toEqual({ status: "failed", step: "parse", code: "internal" });
+    expect(viewOf(foldIngestStatus(log)).error).toBe(STATUS_MESSAGES.internal);
+    expect(progressOf(cancelled(reason))).toEqual({
+      userId: U,
+      progress: { documentId: D, status: "failed", detail: "internal" },
+    });
+  });
+
+  it("leaves a user's delete (any other reason) and a missing reason as they were", () => {
+    for (const reason of ["document-deleted", undefined, 42]) {
+      const log = [...ingestRun(exec(), "parsed"), cancelled(reason)];
+      expect(foldIngestStatus(log)).toEqual(foldIngestStatus(ingestRun(exec(), "parsed")));
+      expect(progressOf(cancelled(reason))).toBeNull();
+    }
+  });
+
+  it("does not reopen or change a terminal state", () => {
+    const log = [...ingestRun(exec(), "failed:too_large"), cancelled(UNRECOVERABLE_REASONS[0])];
+    expect(foldIngestStatus(log)).toMatchObject({ status: "failed", code: "too_large" });
   });
 });

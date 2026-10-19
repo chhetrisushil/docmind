@@ -71,9 +71,9 @@ describe("buildServer and the ingest-status model", () => {
   it("registers the model under the sensitive map computed from the sealing store, not the declared version alone", async () => {
     const { composed, store } = compose();
     await composed.status.boot();
-    // `effectiveFoldVersion` appends a digest of the sensitive map; "1" alone means the map was empty.
+    // `effectiveFoldVersion` appends a digest of the sensitive map; "2" alone means the map was empty.
     expect(store.registeredVersions).toHaveLength(1);
-    expect(store.registeredVersions[0]).toMatch(/^1\+sens\.[0-9a-f]{8}$/);
+    expect(store.registeredVersions[0]).toMatch(/^2\+sens\.[0-9a-f]{8}$/);
     await composed.status.close();
     await composed.app.close();
   });
