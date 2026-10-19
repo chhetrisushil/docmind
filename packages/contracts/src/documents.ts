@@ -5,8 +5,46 @@ export const DocumentStatus = z.enum(["uploaded", "parsing", "embedding", "ready
 export type DocumentStatus = z.infer<typeof DocumentStatus>;
 
 /** Steps of the `ingest-document` flow, in order. */
-export const IngestStep = z.enum(["parse", "chunk", "embed", "analyze", "summarize", "finalize"]);
+export const IngestStep = z.enum([
+  "parse",
+  "chunk",
+  "embed",
+  "analyze",
+  "summarize",
+  "link",
+  "finalize",
+]);
 export type IngestStep = z.infer<typeof IngestStep>;
+
+const Count = z.number().int().nonnegative();
+/**
+ * Where a chunk or section sits in its source. Numbers only: a heading path is content, so it is
+ * kept (sealed) beside the text and never in a locator that is stored or logged in the clear.
+ * `chars` offsets are UTF-16 code units into the parsed text.
+ */
+export const Locator = z
+  .discriminatedUnion("kind", [
+    z.object({ kind: z.literal("chars"), start: Count, end: Count }).strict(),
+    z.object({ kind: z.literal("section"), index: Count }).strict(),
+    z.object({ kind: z.literal("page"), page: z.number().int().min(1) }).strict(),
+    z.object({ kind: z.literal("paragraphs"), from: Count, to: Count }).strict(),
+    z
+      .object({
+        kind: z.literal("region"),
+        page: z.number().int().min(1),
+        x: z.number().nonnegative(),
+        y: z.number().nonnegative(),
+        w: z.number().nonnegative(),
+        h: z.number().nonnegative(),
+      })
+      .strict(),
+  ])
+  .superRefine((l, ctx) => {
+    const [a, b] =
+      l.kind === "chars" ? [l.start, l.end] : l.kind === "paragraphs" ? [l.from, l.to] : [0, 0];
+    if (b < a) ctx.addIssue({ code: "custom", message: "end must not precede start" });
+  });
+export type Locator = z.infer<typeof Locator>;
 
 /** Output of the analyze step: deterministic statistics. */
 export const DocumentStats = z.object({
@@ -64,7 +102,7 @@ export type ListDocumentsResponse = z.infer<typeof ListDocumentsResponse>;
 /** One event on `GET /api/documents/events` (SSE). */
 export const DocumentProgressEvent = z.object({
   documentId: Uuid,
-  step: IngestStep,
+  step: IngestStep.optional(),
   status: DocumentStatus,
   detail: z.string().optional(),
 });

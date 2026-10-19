@@ -9,16 +9,16 @@ export const ChatScope = z.union([
 export type ChatScope = z.infer<typeof ChatScope>;
 
 /** Where a passage sits in its document. Extra fields per `kind` are defined with the parsers (M3). */
-export const Locator = z
+export const CitationLocator = z
   .object({ kind: z.enum(["chars", "heading", "page", "paragraphs", "region"]) })
   .passthrough();
-export type Locator = z.infer<typeof Locator>;
+export type CitationLocator = z.infer<typeof CitationLocator>;
 
 export const Citation = z.object({
   passageId: z.string().min(1),
   documentId: Uuid,
   docTitle: z.string(),
-  locator: Locator,
+  locator: CitationLocator,
   snippet: z.string(),
 });
 export type Citation = z.infer<typeof Citation>;
