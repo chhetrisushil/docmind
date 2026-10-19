@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openStream } from "./events";
-import { InMemoryProgressBus } from "./progress";
+import { InMemoryProgressBus, type ProgressBus } from "./progress";
 
 // A bus per test: a module-level bus would keep every earlier test's subscribers attached.
 let bus = new InMemoryProgressBus();
@@ -197,5 +197,35 @@ describe("openStream", () => {
     expect(written[0]?.split("\n")).toHaveLength(5);
     expect(written[0]?.endsWith("\n\n")).toBe(true);
     expect(JSON.stringify("a\nevent: evil")).not.toContain("\n");
+  });
+
+  it("a bus that delivers during subscribe and fills the buffer leaves no subscription behind", () => {
+    const { res, raw } = fakeResponse(false);
+    const off = vi.fn();
+    const cancelled = vi.fn();
+    const syncBus: ProgressBus = {
+      publish: () => {},
+      subscribe: (_scope, listener) => {
+        listener(ev()); // synchronous delivery before subscribe returns
+        return off;
+      },
+    };
+    openStream(
+      res,
+      () => {},
+      syncBus,
+      scope,
+      () => cancelled,
+      15_000,
+    );
+    expect(raw.destroy).toHaveBeenCalledTimes(1);
+    expect(off).toHaveBeenCalledTimes(1);
+    expect(cancelled).toHaveBeenCalledTimes(1); // the heartbeat started after the end is cancelled too
+  });
+
+  it("the in-memory bus never delivers during subscribe", () => {
+    const heard = vi.fn();
+    new InMemoryProgressBus().subscribe(scope, heard);
+    expect(heard).not.toHaveBeenCalled();
   });
 });
