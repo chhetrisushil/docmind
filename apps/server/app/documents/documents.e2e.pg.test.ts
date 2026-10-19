@@ -8,6 +8,7 @@ import type {
   ListDocumentsResponse,
   UploadDocumentResponse,
 } from "@docmind/contracts";
+import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
@@ -19,7 +20,7 @@ import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { createIngestWiring } from "../flows/ingest-document/limits";
 import { loadBlobRoot, loadLimits } from "./limits";
-import { PDF, PNG } from "./testHarness";
+import { PDF, PNG, twinOverPgChunks } from "./testHarness";
 
 const PASSWORD = "correct horse battery";
 
@@ -38,6 +39,7 @@ describe.skipIf(!PG_URL)(
     let status: ReturnType<typeof buildServer>["status"] | undefined;
     const calls: string[] = [];
     const handles = new Map<string, ExecutionHandle>();
+    let fake: FakeOllama | undefined;
 
     beforeAll(async () => {
       db = await createTestDb();
@@ -51,6 +53,12 @@ describe.skipIf(!PG_URL)(
       // The production composition (main.ts calls the same function): only the pool, memory Loom
       // storage, a temp blob root and the env are the test's. Limits and blob root go through the
       // production parsers. The wrapper records start and cancel and keeps the flow handles.
+      fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
+      const wiring = createIngestWiring({
+        DOCMIND_OLLAMA_URL: fake.url,
+        DOCMIND_EMBED_MODEL: "fake-embed",
+        DOCMIND_EMBED_DIMENSIONS: "64",
+      });
       const eventStore = new InMemoryAsyncEventStore();
       const statusStore = new InMemoryReadModelStore();
       const composed = buildServer({
@@ -62,7 +70,8 @@ describe.skipIf(!PG_URL)(
         blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
         secureCookies: false,
         trustProxy: false,
-        ingest: createIngestWiring({}),
+        ingest: wiring,
+        vectors: twinOverPgChunks(app, wiring), // the production vector store runs in the acceptance tasks
         wrapIngest: (real) => ({
           async start(identity, documentId) {
             calls.push(`start:${documentId}`);
@@ -94,6 +103,7 @@ describe.skipIf(!PG_URL)(
       await status?.close();
       await loom?.close();
       await app?.end();
+      await fake?.close();
       await db?.drop();
       if (root) rmSync(root, { recursive: true, force: true });
     });

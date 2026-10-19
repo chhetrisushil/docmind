@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Authenticator, Identity } from "@docmind/auth";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
+import { startFakeOllama } from "@docmind/embeddings/testing";
+import { type ChunkVectorStore, InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
@@ -13,6 +15,7 @@ import { Pool } from "pg";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
+import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import {
   type IngestWiring,
@@ -103,12 +106,34 @@ export interface IngestProbe {
   failNext(op: "start" | "cancel"): void;
 }
 
+/**
+ * An in-memory vector store whose `chunkIds` read the real `chunks` table, so the whole pipeline runs
+ * against the real table without the pgvector SQL (the acceptance tests run the production store).
+ */
+export function twinOverPgChunks(app: Pool, wiring: IngestWiring): ChunkVectorStore {
+  const chunkIds = (scope: VectorScope, documentId: string) =>
+    withTenant(app, scope.tenantId, async (tx) =>
+      (
+        await tx.query<{ id: string }>(
+          "SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id AND d.tenant_id = c.tenant_id WHERE c.document_id = $1 AND d.owner_id = $2 ORDER BY c.ordinal",
+          [documentId, scope.ownerId],
+        )
+      ).rows.map((r) => r.id),
+    );
+  return new InMemoryChunkVectors({
+    modelId: wiring.embedder.modelId,
+    dimensions: wiring.embedder.dimensions,
+    chunkIds,
+  });
+}
+
 /** A real in-memory Loom app running the ingest stub against `app`, behind a probe. */
 function makeIngest(
   app: Pool,
   fields: FieldCrypto,
   blobs: DocumentRoutesDeps["blobs"],
   wiring: IngestWiring,
+  vectors: ChunkVectorStore,
 ): {
   port: IngestPort;
   probe: IngestProbe;
@@ -124,7 +149,7 @@ function makeIngest(
   let open: () => void = () => {};
   let startGate: Promise<void> | null = null;
   let openStart: () => void = () => {};
-  const real = pgIngestDeps({ pool: app, fields, blobs, wiring });
+  const real = pgIngestDeps({ pool: app, fields, blobs, wiring, vectors });
   const loom = buildApp({ kind: "custom", eventStore }, undefined, {
     onEvent: (e) => status.onEvent(e),
     ingest: {
@@ -254,10 +279,21 @@ export async function startDocumentServer(
       keys,
       maxBytes: limits.maxFileBytes,
     });
-  const wiring = createIngestWiring({});
+  const fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
+  const wiring = createIngestWiring({
+    DOCMIND_OLLAMA_URL: fake.url,
+    DOCMIND_EMBED_MODEL: "fake-embed",
+    DOCMIND_EMBED_DIMENSIONS: "64",
+  });
   // The ingest source reads through whatever `deps` finally gives the routes (a failing store reaches both).
   let effectiveBlobs = blobs;
-  const ingest = makeIngest(app, fields, (id) => effectiveBlobs(id), wiring);
+  const ingest = makeIngest(
+    app,
+    fields,
+    (id) => effectiveBlobs(id),
+    wiring,
+    twinOverPgChunks(app, wiring),
+  );
   const inFlight = new InFlight();
   await ingest.status.boot();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
@@ -323,6 +359,7 @@ export async function startDocumentServer(
         () => closeIngest(wiring),
         () => ingest.close(),
         () => app.end(),
+        () => fake.close(),
       );
       await db.drop();
       rmSync(root, { recursive: true, force: true });
