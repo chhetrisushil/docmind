@@ -8,7 +8,7 @@ import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
-import { runAll, shutdown } from "./shutdown";
+import { runAll, scheduleForceExit, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
@@ -145,10 +145,12 @@ async function main(): Promise<void> {
           }),
         );
       },
-    }).catch((err: unknown) => {
-      console.error("shutdown failed", err instanceof Error ? err.constructor.name : typeof err);
-      process.exitCode = 1;
-    });
+    })
+      .catch((err: unknown) => {
+        console.error("shutdown failed", err instanceof Error ? err.constructor.name : typeof err);
+        process.exitCode = 1;
+      })
+      .finally(() => scheduleForceExit(process.exit, () => process.exitCode));
   };
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {

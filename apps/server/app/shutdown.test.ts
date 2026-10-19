@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
-import { drainWithin, runAll, shutdown } from "./shutdown";
+import { describe, expect, it, vi } from "vitest";
+import { drainWithin, runAll, scheduleForceExit, shutdown } from "./shutdown";
 
 describe("shutdown", () => {
   it("lets the in-flight request finish before it closes the app", async () => {
@@ -80,5 +80,36 @@ describe("runAll", () => {
       ),
     ).rejects.toBeInstanceOf(RangeError);
     expect(ran).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("scheduleForceExit", () => {
+  it("exits with the process's exit code after the delay, and its timer is unref'd", async () => {
+    vi.useFakeTimers();
+    try {
+      const exit = vi.fn();
+      scheduleForceExit(exit, () => 1, 100);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(exit).toHaveBeenCalledWith(1);
+      scheduleForceExit(exit, () => undefined, 100);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(exit).toHaveBeenLastCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not keep a clean process alive", () => {
+    const unref = vi.spyOn(globalThis, "setTimeout");
+    scheduleForceExit(
+      () => {},
+      () => 0,
+      60_000,
+    );
+    const timer = unref.mock.results.at(-1)?.value as NodeJS.Timeout;
+    expect(timer.hasRef()).toBe(false);
+    clearTimeout(timer);
+    unref.mockRestore();
   });
 });

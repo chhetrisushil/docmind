@@ -49,3 +49,19 @@ export async function runAll(...steps: (() => Promise<unknown>)[]): Promise<void
   }
   if (failure) throw failure.err;
 }
+
+/** After the close sequence, how long a still-live event loop (a stuck socket) is given before the forced exit. */
+export const FORCE_EXIT_MS = 5_000;
+
+/**
+ * Schedules an unref'd forced exit: it never keeps a cleanly stopped process alive, and it ends one
+ * that a stuck socket or pool client would otherwise hold open. Call it after the close sequence,
+ * whether it succeeded or failed; `exit` receives the exit code the process was going to have.
+ */
+export function scheduleForceExit(
+  exit: (code: number) => void,
+  getCode: () => number | string | null | undefined,
+  ms = FORCE_EXIT_MS,
+): void {
+  setTimeout(() => exit(Number(getCode() ?? 0)), ms).unref();
+}
