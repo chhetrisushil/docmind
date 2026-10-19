@@ -25,15 +25,27 @@ import {
   runIngestSteps,
 } from "./flow";
 import { createIngestWiring } from "./limits";
+import { PgChunkStore } from "./pgChunks";
 import { pgIngestDeps } from "./pgDeps";
 import { type PgFixture, startPgFixture } from "./pgFixture";
-import { PgParsedStore } from "./pgParsed";
 import { recoverIngest } from "./recovery";
 import { type RawEvent, assertEventsAreContentFree } from "./testing";
 
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars";
+/** A flow that ends at its first step (a gone document). */
 const CLEAN_RUN = [
   "EXECUTION_STARTED",
+  "STEP_STARTED",
+  "RESOURCE_METERED",
+  "STEP_COMPLETED",
+  "EXECUTION_COMPLETED",
+];
+/** Parse then chunk, both done. */
+const FULL_RUN = [
+  "EXECUTION_STARTED",
+  "STEP_STARTED",
+  "RESOURCE_METERED",
+  "STEP_COMPLETED",
   "STEP_STARTED",
   "RESOURCE_METERED",
   "STEP_COMPLETED",
@@ -115,21 +127,35 @@ describe.skipIf(!PG_URL)(
     };
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
 
-    it("a successful parse: ids, an outcome and a count only; the text is only in the sealed row", async () => {
+    it("a successful parse and chunk: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
       const ref = await seedTxt("a".repeat(64));
       const raw = proven(await run(ref), ref);
-      expect(types(raw)).toEqual(CLEAN_RUN);
+      expect(types(raw)).toEqual(FULL_RUN);
       expect(raw[3]?.payload).toEqual({
         output: { outcome: "done", count: 1 },
         stepId: "ingest-parse",
       });
-      expect(foldIngestStatus(raw)).toEqual({ status: "parsing", step: "parse", code: null }); // the model's handlers match the kernel's real events
-      const row = await f.db.owner.query(
-        "SELECT body_enc FROM parsed_documents WHERE document_id = $1",
+      expect(raw[6]?.payload).toEqual({
+        output: { outcome: "done", count: 1 },
+        stepId: "ingest-chunk",
+      });
+      expect(foldIngestStatus(raw)).toEqual({ status: "parsing", step: "chunk", code: null }); // the model's handlers match the kernel's real events
+      const chunked = await f.db.owner.query(
+        "SELECT count(*)::int AS n FROM chunks WHERE document_id = $1",
         [ref.documentId],
       );
-      expect(row.rows[0].body_enc.__loomEnc).toBe("loom/aes-256-gcm");
-      expect((await new PgParsedStore(f.app, f.fields).take(ref))?.text).toContain(SENTENCE); // opens for its owner
+      expect(chunked.rows[0].n).toBeGreaterThanOrEqual(1);
+      const left = await f.db.owner.query("SELECT 1 FROM parsed_documents WHERE document_id = $1", [
+        ref.documentId,
+      ]);
+      expect(left.rowCount).toBe(0); // the parsed row is dropped once the chunks exist
+      const row = await f.db.owner.query(
+        "SELECT id, text_enc FROM chunks WHERE document_id = $1 ORDER BY ordinal",
+        [ref.documentId],
+      );
+      expect(row.rows[0].text_enc.__loomEnc).toBe("loom/aes-256-gcm");
+      const opened = await new PgChunkStore(f.app, f.fields).read(ref, [row.rows[0].id]);
+      expect(opened[0]?.text).toContain(SENTENCE.slice(0, 30)); // opens for its owner
     });
 
     it("a permanent failure by mime leaves a code in the log, not a message", async () => {
@@ -174,7 +200,7 @@ describe.skipIf(!PG_URL)(
       const ref = await seedTxt("d".repeat(64));
       const raw = proven(await run(ref), ref);
       expect(attempts).toBe(3); // the retries are in memory: the same events as a clean run
-      expect(types(raw)).toEqual(CLEAN_RUN);
+      expect(types(raw)).toEqual(FULL_RUN);
     });
 
     it("a transient failure that exhausts its retries records a fixed message, not the error text", async () => {
@@ -343,6 +369,9 @@ describe.skipIf(!PG_URL)(
         "EXECUTION_STARTED",
         "STEP_STARTED",
         "EXECUTION_RECOVERED",
+        "STEP_STARTED",
+        "RESOURCE_METERED",
+        "STEP_COMPLETED",
         "STEP_STARTED",
         "RESOURCE_METERED",
         "STEP_COMPLETED",

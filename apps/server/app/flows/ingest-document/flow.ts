@@ -29,12 +29,20 @@ export const ingestParseStep = step$({
   retry: PARSE_RETRY,
 });
 
-/** Spec 5.2 order. Later tasks append chunk, embed, analyze, summarize, link and finalize. */
-export const INGEST_STEPS = [ingestParseStep];
+export const ingestChunkStep = step$({
+  id: "ingest-chunk",
+  name: "IngestChunk",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: PARSE_RETRY,
+});
+
+/** Spec 5.2 order. Later tasks append embed, analyze, summarize, link and finalize. */
+export const INGEST_STEPS = [ingestParseStep, ingestChunkStep];
 
 /** Runs each step in order; a `document_gone` or `failed` outcome ends the flow, later steps never run. */
 export const runIngestSteps =
-  (steps: readonly (typeof ingestParseStep)[]): FlowRunner<IngestStartInput, IngestOutput> =>
+  (steps: readonly (typeof INGEST_STEPS)[number][]): FlowRunner<IngestStartInput, IngestOutput> =>
   async (ctx, input) => {
     for (const step of steps) {
       const result = await ctx.run(step, input);
