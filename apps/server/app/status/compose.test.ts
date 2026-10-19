@@ -61,7 +61,8 @@ async function runFailingIngest(composed: ReturnType<typeof compose>["composed"]
       principal: { tenant: identity.tenantId, actor: identity.userId },
     },
   );
-  // The stub step cannot reach the stub pool, so the execution fails: pin that it rejects with an Error.
+  // The parse step's guard cannot reach the stub pool: its existence check fails with the fixed message
+  // (`document existence check failed`) before any work, so the execution fails: pin that it rejects with an Error.
   await expect(handle.waitForCompletion()).rejects.toBeInstanceOf(Error);
   return { identity, documentId };
 }

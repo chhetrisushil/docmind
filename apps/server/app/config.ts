@@ -1,6 +1,6 @@
 import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loom/app";
 import type { EventEnvelope } from "@loom/core";
-import { type IngestDeps, ingestBeginEffect } from "./flows/ingest-document/deps";
+import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import {
   agentModules,
   flowModules,
@@ -45,7 +45,10 @@ export function buildApp(
     durability: { retention: { compactionExempt: isIngestExecution } },
     execution: {
       registerEffects: (effects) => {
-        if (deps.ingest) effects.register("ingest-begin", ingestBeginEffect(deps.ingest));
+        if (!deps.ingest) return;
+        for (const [id, effect] of Object.entries(ingestEffects(deps.ingest))) {
+          effects.register(id, effect);
+        }
       },
     },
     security: {

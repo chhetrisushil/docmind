@@ -1,6 +1,7 @@
 import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
+import { PARSE_RETRY, StepResult } from "./stepEffect";
 
 /**
  * Start input: ids only (never a filename, title or text), and strict so a field added later fails
@@ -12,34 +13,46 @@ export const IngestStartInput = z
   .strict();
 export type IngestStartInput = z.infer<typeof IngestStartInput>;
 
-/** A two-value enum on purpose: it cannot carry user content. */
-export const IngestOutput = z.object({ outcome: z.enum(["accepted", "document_gone"]) });
+export const IngestOutput = z
+  .object({ outcome: StepResult.shape.outcome, code: StepResult.shape.code })
+  .strict();
 export type IngestOutput = z.infer<typeof IngestOutput>;
 
-/**
- * The M2 skeleton of spec §5.2: confirm the document is still there and stop. It writes nothing,
- * so the document stays `uploaded`. The step has no inline handler: its effect (see `deps.ts`) is
- * registered per app by `buildApp`. M3 item 14 replaces it with the parse/chunk/embed/analyze/
- * summarize/finalize steps and reuses the same existence guard at the top of each.
- */
-export const ingestBeginStep = step$({
-  id: "ingest-begin",
-  name: "IngestBegin",
+// A step id doubles as its tool id; `security.ts` grants exactly these. The steps have no inline
+// handler: their effects (see `deps.ts`) are registered per app by `buildApp`.
+export const ingestParseStep = step$({
+  id: "ingest-parse",
+  name: "IngestParse",
   inputSchema: IngestStartInput,
-  outputSchema: IngestOutput,
+  outputSchema: StepResult,
+  // Declared policy; stepEffect enforces it (PARSE_RETRY).
+  retry: PARSE_RETRY,
 });
 
-const runner: FlowRunner<IngestStartInput, IngestOutput> = (ctx, input) =>
-  ctx.run(ingestBeginStep, input);
+/** Spec 5.2 order. Later tasks append chunk, embed, analyze, summarize, link and finalize. */
+export const INGEST_STEPS = [ingestParseStep];
+
+/** Runs each step in order; a `document_gone` or `failed` outcome ends the flow, later steps never run. */
+export const runIngestSteps =
+  (steps: readonly (typeof ingestParseStep)[]): FlowRunner<IngestStartInput, IngestOutput> =>
+  async (ctx, input) => {
+    for (const step of steps) {
+      const result = await ctx.run(step, input);
+      if (result.outcome !== "done") {
+        return { outcome: result.outcome, ...(result.code !== undefined && { code: result.code }) };
+      }
+    }
+    return { outcome: "done" };
+  };
 
 export const ingestDocumentFlow: RegisteredFlow = {
   definition: flow$({
     id: "ingest-document",
     name: "IngestDocument",
-    version: "1.0.0",
+    version: "2.0.0",
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,
-    steps: [ingestBeginStep],
+    steps: INGEST_STEPS,
   }),
-  runner: runner as FlowRunner<unknown, unknown>,
+  runner: runIngestSteps(INGEST_STEPS) as FlowRunner<unknown, unknown>,
 };

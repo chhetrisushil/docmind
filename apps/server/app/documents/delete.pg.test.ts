@@ -61,7 +61,7 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
   });
 
   it("cancels the flow first: a delete during an in-flight flow cancels it, and the step that was running finds nothing", async () => {
-    h.ingest.hold(); // the stub step waits before it looks the document up
+    h.ingest.hold(); // the parse step waits before it looks the document up
     const bytes = TEXT("in flight");
     const doc = await create("busy.txt", bytes);
     const handle = h.ingest.handles.get(doc.id);

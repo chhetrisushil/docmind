@@ -1,7 +1,7 @@
 import type { Effect } from "@loom/effect-runtime";
-import { isDocumentGone } from "./errors";
-import type { IngestOutput, IngestStartInput } from "./flow";
-import type { ParseDeps } from "./steps/parse";
+import type { IngestStartInput } from "./flow";
+import type { StepResult } from "./stepEffect";
+import { type ParseDeps, parseEffect } from "./steps/parse";
 
 /**
  * What the flow's steps need from the outside world. Loom has no per-flow dependency argument, so
@@ -10,18 +10,9 @@ import type { ParseDeps } from "./steps/parse";
  */
 export interface IngestDeps extends ParseDeps {}
 
-/** The stub step (retired by Task 80c): the same guard question the real steps ask; it writes nothing. */
-export function ingestBeginEffect(deps: IngestDeps): Effect<IngestStartInput, IngestOutput> {
-  return {
-    kind: "tool",
-    execute: async (input) => {
-      try {
-        await deps.guard.begin(input, "parse");
-        return { outcome: "accepted" };
-      } catch (err) {
-        if (isDocumentGone(err)) return { outcome: "document_gone" };
-        throw err;
-      }
-    },
-  };
-}
+/** The effect of each step, keyed by step id (which is also its tool id). */
+export const ingestEffects = (
+  deps: IngestDeps,
+): Record<string, Effect<IngestStartInput, StepResult>> => ({
+  "ingest-parse": parseEffect(deps),
+});
