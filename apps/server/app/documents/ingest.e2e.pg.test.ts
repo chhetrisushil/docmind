@@ -461,6 +461,30 @@ describe.skipIf(!PG_URL)(
     );
 
     it(
+      "the sweep recovers a document whose start FAILED (not just one never started) to ready",
+      async () => {
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        const user = await st.signUpAndLogIn("failedstart@example.com");
+        const stream = await st.events(user.cookie);
+        st.failNextStart();
+        const id = await idOf(await st.upload(user.cookie, "failedstart.txt", textOf("Failed")));
+        await st.composed.starts.idle(); // the failed start has settled: no execution exists
+        expect(errors).toHaveBeenCalledWith("ingest start failed", "Error", "POST /api/documents");
+        errors.mockRestore();
+        expect((await getDoc(user.cookie, id)).status).toBe("uploaded");
+        await backdate(id);
+        expect(await sweepStaleUploads(sweepArgs())).toBe(1);
+        const seen = await st.until(stream, id, (s) => s === "ready");
+        stream.close();
+        expect(seen.at(-1)?.status).toBe("ready");
+        await st.composed.starts.idle();
+        expect(await sweepStaleUploads(sweepArgs())).toBe(0); // it has a status row now
+        await assertLogContentFree(user, id);
+      },
+      WAIT,
+    );
+
+    it(
       "the sweep does not restart a document that recovery gave up on",
       async () => {
         const user = await st.signUpAndLogIn("giveup@example.com");
