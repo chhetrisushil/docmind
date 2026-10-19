@@ -210,6 +210,9 @@ importers:
       marked:
         specifier: 18.1.1
         version: 18.1.1
+      orga:
+        specifier: 5.0.0
+        version: 5.0.0
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -898,6 +901,9 @@ packages:
     resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
     hasBin: true
 
+  orga@5.0.0:
+    resolution: {integrity: sha512-+0xLhxNUCmP7+S1ajgj4P05uwR26xgvuEMEAkEJ7KH3c27XvxPEe1vlGSSgMLS257xmwnF66qsLIXGJGEfshgQ==}
+
   path-key@3.1.1:
     resolution: {integrity: sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q==}
     engines: {node: '>=8'}
@@ -999,6 +1005,9 @@ packages:
   streamsearch@1.1.0:
     resolution: {integrity: sha512-Mcc5wHehp9aXz1ax6bZUyY5afg9u2rv5cqQI3mRrYkGC8rW2hM02jWuwjtL++LS5qinSyhj2QfLyNsuc+VsExg==}
     engines: {node: '>=10.0.0'}
+
+  text-kit@4.5.1:
+    resolution: {integrity: sha512-f6Q0eXek4NuPh+PX1TnOpXXaFKmQRbvTFPBJsQUIfEoU2O15JajAU7XVNu55yDdSg/uPP89IRNZYA/3XPaPioQ==}
 
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
@@ -1581,6 +1590,10 @@ snapshots:
 
   node-gyp-build@4.8.4: {}
 
+  orga@5.0.0:
+    dependencies:
+      text-kit: 4.5.1
+
   path-key@3.1.1: {}
 
   pathe@1.1.2: {}
@@ -1689,6 +1702,8 @@ snapshots:
   std-env@3.10.0: {}
 
   streamsearch@1.1.0: {}
+
+  text-kit@4.5.1: {}
 
   tinybench@2.9.0: {}
 
