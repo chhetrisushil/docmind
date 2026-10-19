@@ -41,6 +41,7 @@ export class PgDocumentSource implements DocumentSource {
   }
 
   async read(ref: IngestStartInput, contentAddress: string): Promise<Uint8Array> {
+    // The gap between this row check and the blob read is accepted: a vanished blob is null, so gone, and the step's later writes hit the FK.
     if ((await this.row(ref)).contentAddress !== contentAddress) throw new DocumentGoneError();
     const store = this.blobs({ tenantId: ref.tenantId, userId: ref.userId });
     const bytes = await store.get({ __loomContent: contentAddress });

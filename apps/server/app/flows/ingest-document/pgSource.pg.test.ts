@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BlobCorruptError, BlobKeyUnavailableError } from "@docmind/blob-store";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../../db/testSupport";
 import { T2, U1B } from "../../documents/testHarness";
@@ -89,5 +90,20 @@ describe.skipIf(!PG_URL)("PgDocumentSource (needs DOCMIND_TEST_PG_URL)", () => {
     await expect(new PgDocumentSource(f.app, none).read(ref, addr("c"))).rejects.toBeInstanceOf(
       DocumentGoneError,
     );
+  });
+
+  it.each([
+    ["BlobCorruptError", () => new BlobCorruptError()],
+    ["BlobKeyUnavailableError", () => new BlobKeyUnavailableError()],
+  ])("read propagates %s from the blob store unchanged", async (_n, make) => {
+    const c = _n === "BlobCorruptError" ? "d" : "e";
+    const ref = await f.doc(c.repeat(64));
+    const err = make();
+    const source = new PgDocumentSource(f.app, () => ({
+      get: async () => {
+        throw err;
+      },
+    }));
+    await expect(source.read(ref, addr(c))).rejects.toBe(err);
   });
 });
