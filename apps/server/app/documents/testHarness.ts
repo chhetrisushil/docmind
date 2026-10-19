@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Authenticator, Identity } from "@docmind/auth";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
+import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { ExecutionHandle } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { buildApp } from "../config";
@@ -15,9 +17,11 @@ import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import { type IngestWiring, createIngestWiring } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
+import { IngestStatus } from "../status/ingestStatus";
 import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
+import { InMemoryProgressBus } from "./progress";
 import { type NewDocument, filenameBind, titleBind } from "./repo";
 import { type DocumentRoutesDeps, documentRoutes } from "./routes";
 import { StartScheduler } from "./startScheduler";
@@ -95,19 +99,38 @@ export interface IngestProbe {
 }
 
 /** A real in-memory Loom app running the ingest stub against `app`, behind a probe. */
-function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close(): Promise<void> } {
+function makeIngest(app: Pool): {
+  port: IngestPort;
+  probe: IngestProbe;
+  status: IngestStatus;
+  statusStore: InMemoryReadModelStore;
+  bus: InMemoryProgressBus;
+  close(): Promise<void>;
+} {
+  const eventStore = new InMemoryAsyncEventStore();
+  const statusStore = new InMemoryReadModelStore();
+  const bus = new InMemoryProgressBus();
   let gate: Promise<void> | null = null;
   let open: () => void = () => {};
   let startGate: Promise<void> | null = null;
   let openStart: () => void = () => {};
   const real = pgIngestDeps(app);
-  const loom = buildApp({ kind: "memory" }, undefined, {
+  const loom = buildApp({ kind: "custom", eventStore }, undefined, {
+    onEvent: (e) => status.onEvent(e),
     ingest: {
       documentExists: async (ref) => {
         await gate;
         return real.documentExists(ref);
       },
     },
+  });
+  const status = new IngestStatus({
+    writer: statusStore,
+    readerFor: () => statusStore,
+    source: eventStore,
+    sensitive: {},
+    bus,
+    onError: () => {},
   });
   const inner = loomIngest(loom.runtime);
   const failures = { start: 0, cancel: 0 };
@@ -160,9 +183,13 @@ function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close():
   return {
     port,
     probe,
+    status,
+    statusStore,
+    bus,
     close: async () => {
       probe.release();
       probe.releaseStart();
+      await status.close();
       await loom.close();
     },
   };
@@ -179,6 +206,10 @@ export interface DocumentHarness {
   wiring: IngestWiring;
   inFlight: InFlight;
   starts: StartScheduler;
+  /** The ingest-status model the routes read, its stores and the bus its publisher uses. */
+  status: IngestStatus;
+  statusStore: InMemoryReadModelStore;
+  bus: InMemoryProgressBus;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -203,6 +234,7 @@ export async function startDocumentServer(
   const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
   const ingest = makeIngest(app);
   const inFlight = new InFlight();
+  await ingest.status.boot();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
   const wrapped = wrap({
     pool: app,
@@ -218,6 +250,7 @@ export async function startDocumentServer(
       }),
     limits,
     ingest: ingest.port,
+    status: ingest.status,
     starts: new StartScheduler(ingest.port),
     inFlight,
   });
@@ -237,6 +270,9 @@ export async function startDocumentServer(
     wiring: createIngestWiring({}),
     inFlight,
     starts,
+    status: ingest.status,
+    statusStore: ingest.statusStore,
+    bus: ingest.bus,
     upload(user, name, data) {
       const form = new FormData();
       form.append("file", new Blob([data]), name);
