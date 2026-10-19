@@ -236,3 +236,43 @@ describe("shutdown with an open stream (F10)", () => {
     await closing;
   });
 });
+
+describe("the process-wide stream ceiling", () => {
+  it("refuses a stream over the ceiling with the same fixed 429, whoever asks, and frees the slot when one closes", async () => {
+    let ended: () => void = () => {};
+    const capped = documentEventRoutes({
+      authenticator: testAuthenticator,
+      bus,
+      maxStreamsPerUser: 10,
+      maxStreams: 2,
+      onStreamEnd: () => ended(),
+    });
+    const srv = createHttpServer(capped.routes);
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/documents/events`;
+    try {
+      const [a, b] = [
+        await openSse(url, { "x-test-user": "alice" }),
+        await openSse(url, { "x-test-user": "bob" }),
+      ];
+      const refused = await fetch(url, { headers: { "x-test-user": "alice2" } });
+      expect([refused.status, await refused.json()]).toEqual([
+        429,
+        { error: { code: "too_many_streams", message: "too many open event streams" } },
+      ]);
+      const freed = new Promise<void>((resolve) => {
+        ended = resolve;
+      });
+      a.close();
+      await freed;
+      const again = await openSse(url, { "x-test-user": "alice2" });
+      expect(again.res.status).toBe(200);
+      again.close();
+      b.close();
+    } finally {
+      capped.closeAll();
+      srv.closeAllConnections();
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    }
+  });
+});

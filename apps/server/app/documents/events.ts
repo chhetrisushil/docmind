@@ -4,6 +4,9 @@ import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
 import type { ProgressBus, ProgressScope } from "./progress";
 
+/** Open event streams the whole process allows, over every user (each also counts against its user's cap). */
+export const MAX_STREAMS_GLOBAL = 1000;
+
 export type Schedule = (fn: () => void, ms: number) => () => void;
 
 export const intervalSchedule: Schedule = (fn, ms) => {
@@ -72,6 +75,8 @@ export interface EventRoutesDeps {
   authenticator: Authenticator;
   bus: ProgressBus;
   maxStreamsPerUser?: number;
+  /** Process-wide ceiling on open streams. Default {@link MAX_STREAMS_GLOBAL}. */
+  maxStreams?: number;
   heartbeatMs?: number;
   schedule?: Schedule;
   /** Called after a stream has released its slot (tests await it). */
@@ -80,7 +85,7 @@ export interface EventRoutesDeps {
 
 /**
  * `GET /api/documents/events`: the caller's own progress events as server-sent events. The bus scope
- * is the session's user id and nothing from the request. Open streams are counted per user (state
+ * is the session's user id and nothing from the request. Open streams are counted per user and in total (state
  * owned by this route set, no module global); the slot is released exactly once on every exit path
  * (client close, error, backpressure destroy, `closeAll`).
  */
@@ -89,6 +94,7 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
   closeAll(): void;
 } {
   const max = deps.maxStreamsPerUser ?? 4;
+  const maxGlobal = deps.maxStreams ?? MAX_STREAMS_GLOBAL;
   const open = new Map<string, number>();
   const live = new Map<ServerResponse, () => void>(); // each open stream's `release`, for closeAll
   const stops = new Map<ServerResponse, () => void>();
@@ -104,7 +110,7 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
         return;
       }
       const count = open.get(userId) ?? 0;
-      if (count >= max) {
+      if (count >= max || live.size >= maxGlobal) {
         return sendError(res, 429, "too_many_streams", "too many open event streams");
       }
       // The client left while authentication ran: its close event has already fired, so no slot is taken.
