@@ -80,8 +80,11 @@ async function main(): Promise<void> {
   await bootStatus(status, [() => app.close(), () => durable.close(), () => pool.end()]);
 
   const sweep = () =>
-    Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
-      console.error(err),
+    Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
+      console.error(
+        "session sweep failed",
+        err instanceof Error ? err.constructor.name : typeof err,
+      ),
     );
   void sweep();
   const sweepTimer = setInterval(sweep, HOUR_MS);
@@ -122,8 +125,8 @@ async function main(): Promise<void> {
           () => pool.end(),
         );
       },
-    }).catch((err) => {
-      console.error(err);
+    }).catch((err: unknown) => {
+      console.error("shutdown failed", err instanceof Error ? err.constructor.name : typeof err);
       process.exitCode = 1;
     });
   };
