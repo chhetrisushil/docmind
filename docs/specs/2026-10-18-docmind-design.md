@@ -100,14 +100,14 @@ Each interface has **one shared conformance test suite** that every implementati
 | Durable flows, steps, logged non-determinism | `@loom/core` |
 | ReAct agent loop, delta chunking | `@loom/agent` |
 | LLM effects, provider interface, untrusted-input guard | `@loom/llm` (its Anthropic provider is replaced by `packages/llm-anthropic`, §6.5) |
-| Chunking, idempotent sync, grounding, `checkCitations` | `@loom/knowledge` |
+| Idempotent sync, grounding, `checkCitations` (chunking is app-local: `@loom/knowledge` has no overlap, offsets or token budget) | `@loom/knowledge` |
 | Embedding/vector-index interfaces, `recallRelevant` | `@loom/memory` |
 | Multi-turn conversations, history reader, barge-in, token-window rotation | `@loom/conversation` |
 | Authenticated, resumable SSE | `@loom/plugin-conversation-sse` |
 | Event store | `@loom/plugin-postgres` |
 | Blob seam, GC of unpinned content | `@loom/plugin-content` |
 | Encrypting event and snapshot stores, `shredSubject` | `@loom/plugin-crypto` |
-| Sandboxed execution of parsers | `@loom/plugin-sandbox` |
+| Sandboxed execution of parsers | none: `@docmind/parsers` `ParseRunner` (child process, §5.2) |
 | Per-tenant fair scheduling | `@loom/fair-scheduler` |
 | Test harness, evals | `@loom/testing`, `loom eval` |
 | Chat transcript state, Lit widgets | loom-ui `ChatFeed`, `chatSource`, `lu-chat`, `lu-inputs`, `lu-media`, `lu-data-table`, `lu-note` |
@@ -221,8 +221,8 @@ from the step that failed.
 
 | Step | Behavior |
 |---|---|
-| **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in `@loom/plugin-sandbox` with time and memory limits and decompression caps (docx zip bombs). |
-| **chunk** | `@loom/knowledge` chunker. Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
+| **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in a child process under Node's permission model (no filesystem beyond the parser code, no child processes, empty environment, V8 heap cap, wall clock, 2 concurrent) with decompression caps (docx zip bombs). The permission model does not restrict network, and the heap cap does not bound external (Buffer) memory: the deployment must cap host memory (container/cgroup). |
+| **chunk** | App-local section-bounded chunker (`chunker.ts`). Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
 | **embed** | Batches of 64 → `EmbeddingProvider` → `VectorIndex.upsert`, idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
 | **analyze** | Deterministic statistics: word and page counts, reading time, language, outline, notable dates and numbers. |
 | **summarize** | Map-reduce. Summarize each section in parallel, then reduce to structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest`. |
