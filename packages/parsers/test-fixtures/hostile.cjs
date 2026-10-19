@@ -60,6 +60,34 @@ exports.parsers.push(
     }),
   },
   {
+    // Heading text is content: a few sections whose heading paths alone are far over maxChars.
+    id: "headingbulk",
+    accepts: () => true,
+    parse: () => ({
+      text: "x",
+      sections: [
+        {
+          headingPath: Array.from({ length: 16 }, () => "h".repeat(500)),
+          text: "",
+          locator: { kind: "chars", start: 0, end: 1 },
+        },
+      ],
+      media: [],
+    }),
+  },
+  {
+    id: "mediabulk",
+    accepts: () => true,
+    parse: () => ({
+      text: "x",
+      sections: [],
+      media: Array.from({ length: 101 }, () => ({
+        mime: "image/png",
+        locator: { kind: "chars", start: 0, end: 1 },
+      })),
+    }),
+  },
+  {
     id: "sectioncount",
     accepts: () => true,
     parse: () => ({

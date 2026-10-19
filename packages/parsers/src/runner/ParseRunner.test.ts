@@ -279,8 +279,8 @@ describe("ParseRunner", () => {
     released();
   });
 
-  it.each(["sectionbulk", "sectioncount"])(
-    "the parent bounds the sections' total text and count by maxChars (%s)",
+  it.each(["sectionbulk", "sectioncount", "headingbulk", "mediabulk"])(
+    "the parent bounds the sections' text and headings and the section and media counts by maxChars (%s)",
     async (id) => {
       await expect(limited({ maxChars: 100 }).run(id, bytes("x"))).rejects.toMatchObject({
         name: "ParseLimitError",
