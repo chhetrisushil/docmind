@@ -1,6 +1,6 @@
 import { type ChunkVectorStore, VectorDimensionError, type VectorScope } from "./types";
 
-type Row = { vector: number[]; model: string };
+type Row = { vector: number[]; model: string; documentId: string };
 
 export interface InMemoryOptions {
   modelId: string;
@@ -32,6 +32,19 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
     }
   }
 
+  /** Drops the scope's vectors whose chunk its lister no longer lists (a deleted or re-seeded chunk takes its vector with it, as the foreign key does in Postgres). */
+  private async prune(scope: VectorScope, documentIds: Iterable<string>): Promise<void> {
+    const p = prefix(scope);
+    for (const documentId of new Set(documentIds)) {
+      const live = new Set(await this.lister(scope, documentId));
+      for (const [key, row] of this.rows) {
+        if (key.startsWith(p) && row.documentId === documentId && !live.has(key.slice(p.length))) {
+          this.rows.delete(key);
+        }
+      }
+    }
+  }
+
   async upsert(
     scope: VectorScope,
     documentId: string,
@@ -48,13 +61,18 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
         missing.push(chunkId);
         continue;
       }
-      this.rows.set(prefix(scope) + chunkId, { vector: [...vector], model: this.modelId });
+      this.rows.set(prefix(scope) + chunkId, {
+        vector: [...vector],
+        model: this.modelId,
+        documentId,
+      });
       written += 1;
     }
     return { written, missing };
   }
 
   async missing(scope: VectorScope, documentId: string, limit: number): Promise<string[]> {
+    await this.prune(scope, [documentId]);
     const ids = await this.lister(scope, documentId);
     const todo = ids.filter((id) => this.rows.get(prefix(scope) + id)?.model !== this.modelId);
     return todo.slice(0, Math.max(0, limit));
@@ -68,6 +86,11 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
   ): Promise<{ chunkId: string; score: number }[]> {
     this.check(query);
     const p = prefix(scope);
+    const owned = [...this.rows].filter(([key]) => key.startsWith(p));
+    await this.prune(
+      scope,
+      owned.map(([, row]) => row.documentId),
+    );
     const hits: { chunkId: string; score: number }[] = [];
     for (const [key, row] of this.rows) {
       if (!key.startsWith(p) || row.model !== this.modelId) continue;
