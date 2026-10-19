@@ -17,12 +17,14 @@ import {
   INGEST_STEPS,
   IngestOutput,
   IngestStartInput,
+  ingestChunkStep,
   ingestDocumentFlow,
+  ingestEmbedStep,
   ingestParseStep,
   runIngestSteps,
 } from "./flow";
 import { type IngestWiring, closeIngest } from "./limits";
-import { STEP_RETRY, StepResult } from "./stepEffect";
+import { EMBED_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
 
 afterEach(() => vi.restoreAllMocks());
@@ -262,6 +264,12 @@ describe("the parse step's failures and restarts", () => {
   it("declares the retry policy on the step and keeps it small", () => {
     expect(ingestParseStep.retry).toBe(STEP_RETRY);
     expect(STEP_RETRY.maxAttempts).toBe(3);
+  });
+
+  it("gives the embed step its own, longer retry policy", () => {
+    expect(ingestEmbedStep.retry).toBe(EMBED_RETRY);
+    expect(EMBED_RETRY.maxAttempts).toBe(6);
+    expect(ingestChunkStep.retry).toBe(STEP_RETRY);
   });
 
   it("ends a deterministic crash after maxAttempts attempts and does not loop", async () => {
