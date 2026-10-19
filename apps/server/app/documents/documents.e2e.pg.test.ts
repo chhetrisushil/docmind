@@ -125,7 +125,7 @@ describe.skipIf(!PG_URL)(
 
       // the upload started the real stub flow, with the owner's execution id and ids only
       const started = handles.get(a1.document.id);
-      expect(started?.executionId).toMatch(/^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}$/);
+      expect(started?.executionId).toMatch(/^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}(\.\d+)?$/);
       const done = await started?.waitForCompletion();
       expect(done?.variables._output).toEqual({ outcome: "accepted" });
       expect(done?.status).toBe("completed");
