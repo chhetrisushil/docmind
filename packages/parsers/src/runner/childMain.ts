@@ -2,13 +2,11 @@ import { createWriteStream } from "node:fs";
 import { createDefaultParsers } from "../defaults";
 import { ParserRegistry } from "../registry";
 import { type DocumentParser, ParseRejectedError } from "../types";
-import {
-  CHILD_DEADLINE_EXIT,
-  CHILD_GRACE_MS,
-  type ChildReply,
-  type ChildRequest,
-  encodeFrame,
-} from "./protocol";
+import { CHILD_GRACE_MS, type ChildReply, type ChildRequest, encodeFrame } from "./protocol";
+
+// Captured before any parser module loads, so a parser cannot replace them.
+const kill = process.kill.bind(process);
+const selfPid = process.pid;
 
 const reply = (message: ChildReply) => {
   createWriteStream("", { fd: 3 }).end(encodeFrame(message), () => process.exit(0));
@@ -19,10 +17,10 @@ async function main(): Promise<void> {
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
   const frame = Buffer.concat(chunks);
   const request = JSON.parse(frame.subarray(4).toString("utf8")) as ChildRequest;
-  // The parent SIGKILLs at its wall clock; this is the backstop if the parent is gone or stuck.
-  // Unref'd, so it never keeps a finished child alive (it cannot fire inside a synchronous loop).
+  // Second layer behind the kernel CPU limit (see limitedSpawn): ends an idle hang when the parent
+  // is gone. Unref'd, so it never keeps a finished child alive; it cannot fire in a synchronous loop.
   const deadlineMs = Math.min(request.wallClockMs + CHILD_GRACE_MS, 2_147_483_647); // setTimeout's ceiling
-  setTimeout(() => process.exit(CHILD_DEADLINE_EXIT), deadlineMs).unref();
+  setTimeout(() => kill(selfPid, "SIGKILL"), deadlineMs).unref();
   const parsers: DocumentParser[] = request.module
     ? (require(request.module) as { parsers: DocumentParser[] }).parsers
     : createDefaultParsers();

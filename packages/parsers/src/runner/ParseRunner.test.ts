@@ -1,9 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawned: ChildProcess[] = [];
+const handSpawned: ChildProcess[] = [];
+const runners: { close(): Promise<void> }[] = [];
 let stdiolessSpawn = false;
 let spawnCommand: string | null = null;
 let onSpawn: (() => void) | null = null;
@@ -35,13 +37,14 @@ import {
   ParseTimeoutError,
 } from "./ParseRunner";
 import { setRunnerInternals } from "./internals";
-import { CHILD_DEADLINE_EXIT, encodeFrame } from "./protocol";
+import { encodeFrame, limitedSpawn } from "./protocol";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256, maxInputBytes: 1024, maxChars: 500 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
 /** A runner whose test-only internals (the parser module) are set through the hidden table. */
 const withModule = (options: ParseRunnerOptions, parserModule?: string): ParseRunner => {
   const r = new ParseRunner(options);
+  runners.push(r);
   if (parserModule) setRunnerInternals(r, { parserModule });
   return r;
 };
@@ -57,6 +60,14 @@ const released = () => {
   expect(child.stdio[3]?.destroyed).toBe(true);
   expect(child.listenerCount("exit")).toBe(0);
 };
+
+// No test may leave a child behind: close every runner, then kill anything still alive.
+afterEach(async () => {
+  await Promise.all(runners.splice(0).map((r) => r.close()));
+  for (const c of [...spawned, ...handSpawned.splice(0)]) {
+    if (c.pid !== undefined && c.exitCode === null && c.signalCode === null) c.kill("SIGKILL");
+  }
+});
 
 describe("ParseRunner", () => {
   beforeEach(() => {
@@ -469,6 +480,7 @@ describe("ParseRunner concurrency and abort", () => {
     const first = r.close();
     expect(r.close()).toBe(first);
     await first;
+    expect(spawned[0]?.signalCode).toBe("SIGKILL"); // close() resolves only after the child is gone
     const results = await settled;
     for (const res of results) {
       expect(res).toMatchObject({ status: "rejected", reason: { name: "ParseAbortedError" } });
@@ -487,27 +499,41 @@ describe("ParseRunner concurrency and abort", () => {
     expect(spawned).toHaveLength(0);
   });
 
-  it("an orphaned child whose parent stops reading ends itself at wallClockMs plus grace", async () => {
-    // Started by hand, as the runner does, but nothing ever reads fd 3 or kills it.
-    const entry = join(__dirname, "../../dist/runner/child.js");
-    const map = Object.fromEntries(
-      ["@docmind/contracts", "zod"].map((n) => [n, realpathSync(require.resolve(n))]),
-    );
-    const { spawn } =
-      await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    const child = spawn(process.execPath, [entry, JSON.stringify(map)], {
-      stdio: ["pipe", "ignore", "ignore", "pipe"],
-      env: {},
-      cwd: dirname(entry),
+  it("a child killed by the kernel CPU limit (SIGXCPU) is a timeout, not a crash", async () => {
+    await expect(runner().run("xcpu", bytes("x"))).rejects.toMatchObject({
+      name: "ParseTimeoutError",
+      message: "parse timed out",
     });
-    const exited = new Promise<number | null>((res) => child.once("exit", (code) => res(code)));
-    const request = { parserId: "hang", bytes: "", module: hostile, maxChars: 500, wallClockMs: 1 };
-    child.stdin?.end(encodeFrame(request));
-    try {
-      expect(await exited).toBe(CHILD_DEADLINE_EXIT);
-    } finally {
-      child.kill("SIGKILL");
-      child.stdio[3]?.destroy();
-    }
+    released();
   });
+
+  // Started by hand through the runner's own launcher, but nothing ever reads fd 3 or kills it:
+  // the parent has stopped reading. The child must end itself (POSIX only).
+  it.each([
+    ["spin", "SIGXCPU"], // a synchronous loop: the kernel CPU limit, 3 s soft limit
+    ["hang", "SIGKILL"], // idle but alive: the child's own timer
+    ["patched-hang", "SIGKILL"], // the parser replaced process.exit and process.kill
+  ])(
+    "an orphaned %s child ends itself (%s)",
+    async (parserId, signal) => {
+      const entry = join(__dirname, "../../dist/runner/child.js");
+      const map = Object.fromEntries(
+        ["@docmind/contracts", "zod"].map((n) => [n, realpathSync(require.resolve(n))]),
+      );
+      const { spawn } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const launch = limitedSpawn(1, process.execPath, [entry, JSON.stringify(map)]);
+      const child = spawn(launch.command, launch.args, {
+        stdio: ["pipe", "ignore", "ignore", "pipe"],
+        env: {},
+        cwd: dirname(entry),
+      });
+      handSpawned.push(child);
+      const exited = new Promise<string | null>((res) => child.once("exit", (_c, sig) => res(sig)));
+      const request = { parserId, bytes: "", module: hostile, maxChars: 500, wallClockMs: 1 };
+      child.stdin?.end(encodeFrame(request));
+      expect(await exited).toBe(signal);
+    },
+    20_000,
+  );
 });
