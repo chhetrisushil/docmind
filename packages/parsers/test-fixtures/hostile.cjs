@@ -32,6 +32,19 @@ const frame = (v) => {
   return Buffer.concat([h, b]);
 };
 exports.parsers.push(
+  { id: "big", accepts: () => true, parse: () => ok("x".repeat(1000)) },
+  {
+    id: "noisy",
+    accepts: () => true,
+    parse: () => {
+      for (let i = 0; i < 4000; i++) {
+        process.stdout.write("x".repeat(1000));
+        process.stderr.write("y".repeat(1000));
+        require("node:fs").writeSync(1, "z".repeat(1000));
+      }
+      return ok("done");
+    },
+  },
   {
     id: "spin",
     accepts: () => true,
