@@ -38,6 +38,10 @@ runDocumentParserConformance(
       { name: "nul bytes", bytes: Uint8Array.from([0x68, 0, 0x69, 0, 0, 0xff, 0]) },
       { name: "invalid utf-8", bytes: Uint8Array.from([0xc3, 0x28]) },
       {
+        name: "BOM-less UTF-16-looking bytes",
+        bytes: Uint8Array.from([0x41, 0, 0x42, 0x43, 0x44, 0, 0x46, 0x47]),
+      },
+      {
         name: "UTF-16 BOM over binary",
         bytes: Uint8Array.from([0xff, 0xfe, 0x00, 0xd8, 0x41, 0x00]),
       },
@@ -47,13 +51,12 @@ runDocumentParserConformance(
 );
 
 describe("txtParser", () => {
-  it("decodes UTF-8, UTF-8 with BOM, UTF-16 LE and BE (with BOM), and BOM-less UTF-16", async () => {
+  it("decodes UTF-8, UTF-8 with BOM, and UTF-16 LE and BE (with BOM)", async () => {
     for (const bytes of [
       utf8("naïve café"),
       Uint8Array.from([0xef, 0xbb, 0xbf, ...utf8("naïve café")]),
       utf16le("naïve café"),
       utf16be("naïve café"),
-      utf16le("naïve café", false),
     ]) {
       expect((await txtParser.parse(bytes)).text).toBe("naïve café");
     }
@@ -73,15 +76,47 @@ describe("txtParser", () => {
   });
 
   it.each([
-    ["a NUL byte", Uint8Array.from([0x41, 0x00, 0x42, 0x43])],
-    ["a C0 control", utf8("ok\u0001bad")],
-    ["a noncharacter (UTF-16 binary tends to decode to these)", utf16le("a￿b")],
-    ["a lone surrogate in UTF-16", Uint8Array.from([0xff, 0xfe, 0x00, 0xd8])],
-    ["an odd-length UTF-16 body", Uint8Array.from([0xff, 0xfe, 0x41])],
-  ])("rejects %s with ParseRejectedError", async (_n, bytes) => {
+    ["a NUL byte", Uint8Array.from([0x41, 0x00, 0x42, 0x43]), "unsupported_content"],
+    [
+      "8 bytes that look like BOM-less UTF-16",
+      Uint8Array.from([0x41, 0, 0x42, 0x43, 0x44, 0, 0x46, 0x47]),
+      "unsupported_content",
+    ],
+    [
+      "BOM-less UTF-16LE (NULs are rejected as UTF-8)",
+      utf16le("hello", false),
+      "unsupported_content",
+    ],
+    ["a C0 control", utf8("ok\u0001bad"), "unsupported_content"],
+    ["a C1 control", utf8("ok\u0085bad"), "unsupported_content"],
+    ["noncharacter U+FFFE", utf16le("a\ufffeb"), "unsupported_content"],
+    ["noncharacter U+FDD0", utf8("a\ufdd0b"), "unsupported_content"],
+    ["noncharacter U+1FFFF", utf8("a\u{1ffff}b"), "unsupported_content"],
+    ["invalid UTF-8", Uint8Array.from([0xc3, 0x28]), "corrupt_content"],
+    ["a lone surrogate in UTF-16", Uint8Array.from([0xff, 0xfe, 0x00, 0xd8]), "corrupt_content"],
+    ["an odd-length UTF-16 body", Uint8Array.from([0xff, 0xfe, 0x41]), "corrupt_content"],
+  ])("rejects %s", async (_n, bytes, code) => {
+    await expect(Promise.resolve().then(() => txtParser.parse(bytes))).rejects.toMatchObject({
+      name: "ParseRejectedError",
+      code,
+    });
     await expect(Promise.resolve().then(() => txtParser.parse(bytes))).rejects.toBeInstanceOf(
       ParseRejectedError,
     );
+  });
+
+  it("accepts private-use and unassigned code points", async () => {
+    const t = "Shot on \uf8ff iPhone \ue0b0 \u0378";
+    expect((await txtParser.parse(utf8(t))).text).toBe(t);
+  });
+
+  it("strips exactly one leading U+FEFF after the BOM, locators still slice", async () => {
+    const doc = await txtParser.parse(
+      Uint8Array.from([0xef, 0xbb, 0xbf, 0xef, 0xbb, 0xbf, ...utf8("hi")]),
+    );
+    expect(doc.text).toBe("hi");
+    expect(doc.sections[0]?.locator).toEqual({ kind: "chars", start: 0, end: 2 });
+    expect((await txtParser.parse(utf16le("\ufeffhi"))).text).toBe("hi");
   });
 
   it("keeps tab, form feed and escape (log files), which the sniffer also allows", async () => {
@@ -92,5 +127,7 @@ describe("txtParser", () => {
     expect(txtParser.accepts("text/plain")).toBe(true);
     expect(txtParser.accepts("application/octet-stream", "TXT")).toBe(true);
     expect(txtParser.accepts("text/markdown")).toBe(false);
+    expect(txtParser.accepts("text/plain; charset=utf-8")).toBe(true);
+    expect(txtParser.accepts("TEXT/Plain")).toBe(true);
   });
 });
