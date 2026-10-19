@@ -87,6 +87,10 @@ export type DocumentDto = z.infer<typeof DocumentDto>;
 export const UploadDocumentResponse = z.object({ document: DocumentDto, duplicate: z.boolean() });
 export type UploadDocumentResponse = z.infer<typeof UploadDocumentResponse>;
 
+/** `POST /api/documents/:id/retry`: the document, now queued (`uploaded`) under its next generation. */
+export const RetryDocumentResponse = z.object({ document: DocumentDto });
+export type RetryDocumentResponse = z.infer<typeof RetryDocumentResponse>;
+
 export const ListDocumentsQuery = z.object({
   cursor: Cursor.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),

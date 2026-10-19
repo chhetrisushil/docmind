@@ -52,7 +52,11 @@ export interface IngestPort {
     documentId: string,
     generation: number,
   ): Promise<ExecutionHandle | null>;
-  /** Cancels generations 1..`generation` (pass the document's current one). Unknown or finished ones are not an error. */
+  /**
+   * Cancels the document's current generation and the one before it (`max(1, generation - 1)..generation`).
+   * A retry is only allowed when the previous generation is failed (terminal), so older ones are
+   * already finished. Unknown or finished ones are not an error.
+   */
   cancel(identity: Identity, documentId: string, generation: number): Promise<void>;
 }
 
@@ -81,7 +85,7 @@ export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): 
     },
     async cancel(identity, documentId, generation) {
       const { ref, principal } = target(identity, documentId, generation);
-      for (let g = 1; g <= generation; g++) {
+      for (let g = Math.max(1, generation - 1); g <= generation; g++) {
         const executionId = ingestExecutionId(ref.userId, ref.documentId, g);
         try {
           await runtime.cancel(executionId, CANCEL_REASON, { principal });

@@ -154,6 +154,22 @@ export async function getDocument(
   return rows[0];
 }
 
+/** D1: moves the owner's document to the next generation if it is still at `from`. Also stamps updated_at (the sweep's clock). */
+export async function bumpGeneration(
+  tx: PoolClient,
+  id: string,
+  ownerId: string,
+  from: number,
+): Promise<DocumentRow | null> {
+  const { rows } = await tx.query<DocumentRow>(
+    `UPDATE documents SET ingest_generation = ingest_generation + 1, updated_at = now()
+      WHERE id = $1 AND owner_id = $2 AND ingest_generation = $3
+      RETURNING ${DOCUMENT_COLUMNS}`,
+    [id, ownerId, from],
+  );
+  return rows[0] ?? null;
+}
+
 /** Removes the row (RLS and the owner filter scope it). Returns what the blob store needs, or undefined. */
 export async function deleteDocument(
   tx: PoolClient,
