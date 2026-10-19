@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSuppo
 import { ingestExecutionId } from "./ingest";
 import { ALICE, BOB, T1, T2, U1, U2, seedDoc, seedRow, seedUsers } from "./testHarness";
 
-const DEFINERS = ["docmind_stale_uploads"];
+const DEFINERS = ["docmind_orphan_statuses", "docmind_stale_uploads"];
 const fn = (generation: number, max = 10) =>
   `docmind_stale_uploads(make_interval(secs => 120), make_interval(secs => 604800), ${generation}, ${max})`;
 
@@ -111,6 +112,47 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     expect(await call(["120 seconds", "7 days", 2, 100000])).toHaveLength(500);
     expect(await call(["120 seconds", "7 days", 2, 0])).toHaveLength(1);
     expect(await call(["120 seconds", "7 days", 2, -5])).toHaveLength(1);
+  });
+
+  it("docmind_orphan_statuses lists live status rows whose document is gone or owned by someone else, and nothing else", async () => {
+    await owner.query("DELETE FROM documents");
+    await owner.query("DELETE FROM read_model_state");
+    const kept = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+    const gone = randomUUID();
+    const tombstoned = randomUUID();
+    await seedRow(owner, ingestExecutionId(U1, kept), kept, U1);
+    await seedRow(owner, ingestExecutionId(U2, kept), kept, U2); // the document exists, but not for this owner
+    await seedRow(owner, ingestExecutionId(U1, gone), gone, U1);
+    await seedRow(owner, ingestExecutionId(U1, gone, 3), gone, U1);
+    await seedRow(owner, ingestExecutionId(U2, tombstoned), tombstoned, U2);
+    await owner.query(
+      "UPDATE read_model_state SET erased = true, state = NULL WHERE app_key = $1",
+      [tombstoned],
+    );
+    const rows = (await app.query("SELECT * FROM docmind_orphan_statuses(10)")).rows;
+    expect(rows.map((r) => r.execution_id)).toEqual(
+      [
+        ingestExecutionId(U2, kept),
+        ingestExecutionId(U1, gone),
+        ingestExecutionId(U1, gone, 3),
+      ].sort(),
+    );
+    expect((await app.query("SELECT * FROM docmind_orphan_statuses(1)")).rows).toHaveLength(1);
+  });
+
+  it("docmind_orphan_statuses returns no rows for NULL and clamps the limit to 500", async () => {
+    await owner.query("DELETE FROM read_model_state");
+    await owner.query(
+      `INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state)
+       SELECT 'ingest-status', 'u_${U1}:ingest-' || u, u, '${U1}', 0, '{}'
+         FROM (SELECT gen_random_uuid()::text AS u FROM generate_series(1, 501)) x`,
+    );
+    const call = async (n: number | null) =>
+      (await app.query("SELECT * FROM docmind_orphan_statuses($1::integer)", [n])).rows;
+    expect(await call(null)).toEqual([]);
+    expect(await call(100000)).toHaveLength(500);
+    expect(await call(0)).toHaveLength(1);
+    expect(await call(-5)).toHaveLength(1);
   });
 
   it("every docmind_ definer function pins its search_path and is executable by the app role alone", async () => {
