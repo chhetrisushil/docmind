@@ -149,8 +149,14 @@ export function stepEffect(
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
           if (err instanceof ParseAbortedError || attempt >= maxAttempts) throw failure(step, err);
-          if (err instanceof StepTimeoutError && !(await settledWithin(err.settled, settleMs))) {
-            throw failure(step, err); // a zombie is still running: no attempt may overlap it
+          if (
+            err instanceof StepTimeoutError &&
+            !(await settledWithin(err.settled, settleMs, waitSignal))
+          ) {
+            // A shutdown leaves the step un-completed; a user cancel is a cancel, not a failure.
+            if (interrupted()) return INTERRUPTED;
+            // Otherwise a zombie is still running: no attempt may overlap it.
+            throw failure(step, ctx?.signal?.aborted ? new ParseAbortedError() : err);
           }
           try {
             const base = options.retry?.backoffMs ?? 0;
@@ -168,15 +174,25 @@ export function stepEffect(
   };
 }
 
-async function settledWithin(settled: Promise<void>, ms: number): Promise<boolean> {
+/** True when `settled` resolves within `ms`; false at the deadline or as soon as `signal` aborts. */
+async function settledWithin(
+  settled: Promise<void>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   const late = new Promise<boolean>((resolve) => {
     timer = setTimeout(() => resolve(false), ms);
+    onAbort = () => resolve(false);
+    if (signal?.aborted) resolve(false);
+    else signal?.addEventListener("abort", onAbort, { once: true });
   });
   try {
     return await Promise.race([settled.then(() => true), late]);
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 }
 

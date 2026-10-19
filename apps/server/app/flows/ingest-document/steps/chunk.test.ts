@@ -206,4 +206,19 @@ describe("the chunk step", () => {
     await new Promise((r) => setImmediate(r));
     expect(settled).not.toHaveBeenCalled();
   });
+
+  it("a cancelled attempt stops after the read with a cancel, not a transient failure, and writes nothing", async () => {
+    const cancel = new AbortController();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { d, calls } = deps();
+    d.parsed.take = async () => {
+      cancel.abort();
+      return parsed as never;
+    };
+    await expect(chunkEffect(d).execute(ref(), { signal: cancel.signal } as never)).rejects.toThrow(
+      /^ingest step failed: chunk$/,
+    );
+    expect(calls).toEqual(["begin:chunk"]);
+    expect(logged).not.toHaveBeenCalled();
+  });
 });

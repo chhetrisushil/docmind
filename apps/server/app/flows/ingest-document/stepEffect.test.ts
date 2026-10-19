@@ -412,4 +412,45 @@ describe("stepEffect per-attempt wall clock", () => {
     await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
     expect(calls).toEqual(["begin:chunk"]);
   });
+
+  it("a user cancel during the settle wait ends the step as a cancel without waiting or logging", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port, calls } = guard();
+    const cancel = new AbortController();
+    const effect = stepEffect("chunk", port, never, {
+      timeoutMs: 1,
+      retry: { maxAttempts: 3 },
+      sleep: async () => {},
+      settleMs: 60_000,
+    });
+    const pending = effect.execute(ref(), { signal: cancel.signal } as never);
+    cancel.abort();
+    await expect(pending).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(calls).toEqual(["begin:chunk"]);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("a shutdown during the settle wait leaves the step un-completed, not failed", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { port } = guard();
+      const shutdown = new AbortController();
+      const settled = vi.fn();
+      const effect = stepEffect("chunk", port, never, {
+        timeoutMs: 1,
+        retry: { maxAttempts: 3 },
+        sleep: async () => {},
+        settleMs: 60_000,
+        shutdown: shutdown.signal,
+      });
+      void effect.execute(ref(), {} as never).then(settled, settled);
+      await vi.advanceTimersByTimeAsync(5); // the bound hit: the step is now in its settle wait
+      shutdown.abort();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
