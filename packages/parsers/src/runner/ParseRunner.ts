@@ -28,6 +28,12 @@ export class ParseCrashedError extends Error {
     this.name = "ParseCrashedError";
   }
 }
+export class ParseTimeoutError extends Error {
+  constructor() {
+    super("parse timed out");
+    this.name = "ParseTimeoutError";
+  }
+}
 /** Bare specifiers the child's built code imports, resolved by the parent to real files. */
 const BARE_SPECIFIERS = ["@docmind/contracts", "zod"] as const;
 const real = (p: string): string => realpathSync(p);
@@ -104,11 +110,19 @@ export class ParseRunner {
       const parts: Buffer[] = [];
       let have = 0;
       let settled = false;
-      const crash = () => {
-        if (!settled) reject(new ParseCrashedError());
+      const settle = (err: Error) => {
+        clearTimeout(timer);
+        if (!settled) reject(err);
         settled = true;
       };
+      const crash = () => settle(new ParseCrashedError());
+      // The wall clock only rejects; the caller's `finally` SIGKILLs the child and closes the pipes.
+      const timer: NodeJS.Timeout = setTimeout(
+        () => settle(new ParseTimeoutError()),
+        this.options.limits.wallClockMs,
+      );
       const finish = (frame: Buffer) => {
+        clearTimeout(timer);
         if (settled) return;
         settled = true;
         try {

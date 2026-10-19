@@ -15,16 +15,20 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { ParseCrashedError, ParseRunner } from "./ParseRunner";
+import { ParseCrashedError, ParseRunner, ParseTimeoutError } from "./ParseRunner";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
-const runner = (parserModule: string | null = hostile) =>
-  new ParseRunner({ limits: LIMITS, ...(parserModule ? { parserModule } : {}) });
+const runner = (parserModule: string | null = hostile, limits = LIMITS) =>
+  new ParseRunner({ limits, ...(parserModule ? { parserModule } : {}) });
 const bytes = (s: string) => new TextEncoder().encode(s);
 const released = () => {
   expect(spawned).toHaveLength(1);
-  expect(spawned[0]?.exitCode !== null || spawned[0]?.signalCode !== null).toBe(true);
+  const child = spawned[0] as ChildProcess;
+  expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  expect(child.stdin?.destroyed).toBe(true);
+  expect(child.stdio[3]?.destroyed).toBe(true);
+  expect(child.listenerCount("exit")).toBe(0);
 };
 
 describe("ParseRunner", () => {
@@ -111,6 +115,33 @@ describe("ParseRunner", () => {
 
   it("refuses a bare import the parent did not map (no node_modules resolution)", async () => {
     await expect(runner().run("bare", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    released();
+  });
+
+  it("kills a parser that never returns at the wall clock", async () => {
+    const r = runner(hostile, { ...LIMITS, wallClockMs: 200 });
+    await expect(r.run("spin", bytes("x"))).rejects.toBeInstanceOf(ParseTimeoutError);
+    released();
+    expect(spawned[0]?.signalCode).toBe("SIGKILL");
+  });
+
+  it.each(["exit", "signal", "oom"])(
+    "a child that dies without a reply (%s) is a prompt crash",
+    async (id) => {
+      await expect(runner().run(id, bytes("x"))).rejects.toMatchObject({
+        name: "ParseCrashedError",
+        message: "parse crashed",
+      });
+      released();
+    },
+  );
+
+  it("a child that exits 0 without writing a reply is a crash, not a hang", async () => {
+    const r = new ParseRunner({
+      limits: LIMITS,
+      childEntry: resolve(__dirname, "../../test-fixtures/hostile.cjs"),
+    });
+    await expect(r.run("echo", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
     released();
   });
 });
