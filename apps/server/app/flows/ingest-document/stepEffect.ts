@@ -100,6 +100,7 @@ export function stepEffect(
   work: (
     ref: IngestStartInput,
     signal?: AbortSignal,
+    progress?: () => void,
   ) => Promise<{ count?: number; model?: string } | undefined>,
   options: StepOptions = {},
 ): Effect<IngestStartInput, StepResult> {
@@ -109,11 +110,12 @@ export function stepEffect(
   const attemptOnce = async (
     ref: IngestStartInput,
     signal: AbortSignal | undefined,
+    progress: () => void,
   ): Promise<StepResult> => {
     const bound = options.timeoutMs;
     const run = async (inner: AbortSignal | undefined): Promise<StepResult> => {
       await guard.begin(ref, step);
-      return { outcome: "done", ...((await work(ref, inner)) ?? {}) };
+      return { outcome: "done", ...((await work(ref, inner, progress)) ?? {}) };
     };
     if (bound === undefined) return run(signal);
     const timeout = new AbortController();
@@ -141,13 +143,22 @@ export function stepEffect(
       const waitSignals = [ctx?.signal, options.shutdown].filter((x): x is AbortSignal => !!x);
       const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
       for (let attempt = 1; ; attempt++) {
+        // Set by the work (after a committed unit) through `progress`; read only when this attempt times out.
+        const made = { value: false };
         try {
-          return await attemptOnce(ref, ctx?.signal);
+          return await attemptOnce(ref, ctx?.signal, () => {
+            made.value = true;
+          });
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
           if (isDocumentGone(err)) return { outcome: "document_gone" };
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
+          // Progress-aware budget: a timeout after the work reported progress is not a failed attempt
+          // (the committed units stay and the next attempt resumes), so the count restarts. Bound: each
+          // progressing attempt commits at least one unit that the work will not redo, so a step of n units
+          // has at most n progressing attempts, plus at most maxAttempts non-progressing ones in a row.
+          if (err instanceof StepTimeoutError && made.value) attempt = 0;
           if (isAbort(err) || isFatal(err) || attempt >= maxAttempts) throw failure(step, err);
           if (
             err instanceof StepTimeoutError &&
@@ -161,7 +172,7 @@ export function stepEffect(
           try {
             const base = options.retry?.backoffMs ?? 0;
             await sleep(
-              base * (options.retry?.backoffMultiplier ?? 1) ** (attempt - 1),
+              base * (options.retry?.backoffMultiplier ?? 1) ** Math.max(0, attempt - 1),
               waitSignal,
             );
           } catch {
