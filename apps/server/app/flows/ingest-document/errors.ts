@@ -1,5 +1,10 @@
 import { BlobKeyUnavailableError } from "@docmind/blob-store";
-import { ParseLimitError, ParseMemoryError, ParseRejectedError } from "@docmind/parsers";
+import {
+  ParseLimitError,
+  ParseMemoryError,
+  ParseRejectedError,
+  ParseTimeoutError,
+} from "@docmind/parsers";
 import { FieldKeyUnavailableError } from "../../crypto/fields";
 
 /** The document, its row or its blob is gone (deleted or erased while a step ran): stop quietly. */
@@ -53,9 +58,10 @@ export function isDocumentGone(err: unknown): boolean {
 
 /**
  * The failure code of a permanent error, else undefined. Parser rejections carry a code from
- * PARSE_REJECT_CODES (the same three values); an input or memory limit is deterministic for the
- * same bytes, so it is `too_large`. Timeouts, crashes, aborts (cancellation) and key-store
- * outages are NOT permanent: they stay transient and are never recorded as a code.
+ * PARSE_REJECT_CODES (the same three values); an input limit, a memory limit and a timeout are
+ * deterministic for the same bytes (Task 78 ruling, superseding 73a), so they are `too_large`.
+ * Crashes, aborts (cancellation) and key-store outages are NOT permanent: they stay transient and
+ * are never recorded as a code.
  */
 export function permanentCode(err: unknown): FailureCode | undefined {
   if (err instanceof PermanentIngestError || err instanceof ParseRejectedError) {
@@ -63,6 +69,11 @@ export function permanentCode(err: unknown): FailureCode | undefined {
     return (FAILURE_CODES as readonly string[]).includes(err.code) ? err.code : undefined;
   }
   // ParseLimitError's only variant today is "input"; revisit if another limit is added.
-  if (err instanceof ParseLimitError || err instanceof ParseMemoryError) return "too_large";
+  if (
+    err instanceof ParseLimitError ||
+    err instanceof ParseMemoryError ||
+    err instanceof ParseTimeoutError
+  )
+    return "too_large";
   return undefined;
 }

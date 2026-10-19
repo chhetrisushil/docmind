@@ -88,13 +88,13 @@ describe("stepEffect", () => {
   it.each([
     ["an input limit", () => new ParseLimitError("input")],
     ["the memory limit", () => new ParseMemoryError()],
+    ["a timeout", () => new ParseTimeoutError()],
   ])("maps %s to too_large", async (_n, make) => {
     const { port } = guard();
     expect(await run(throwing(make), port)).toEqual({ outcome: "failed", code: "too_large" });
   });
 
   it.each([
-    ["a timeout", () => new ParseTimeoutError()],
     ["a crash", () => new ParseCrashedError()],
     ["a cancellation", () => new ParseAbortedError()],
     ["a key store outage", () => new FieldKeyStoreError()],
