@@ -97,6 +97,7 @@ export function buildServer(options: ComposeOptions) {
       limits,
       ingest,
       starts,
+      status,
     }),
   });
   return {

@@ -1,8 +1,9 @@
 import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
+import { UPLOADED } from "../status/model";
 import { ingestExecutionId } from "./ingest";
-import { type DocumentHarness, TEXT, U1, startDocumentServer } from "./testHarness";
+import { ALICE, type DocumentHarness, TEXT, U1, startDocumentServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -29,9 +30,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const state = await handle?.waitForCompletion();
     expect(state?.status).toBe("completed");
     expect(state?.variables._output).toEqual({ outcome: "accepted" });
-    // The stub writes nothing: the document is still `uploaded`.
-    const row = await h.owner.query("SELECT status FROM documents WHERE id = $1", [id]);
-    expect(row.rows[0].status).toBe("uploaded");
+    expect(await h.status.forDocument(ALICE, id)).toEqual(UPLOADED); // the stub writes nothing
   });
 
   it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {

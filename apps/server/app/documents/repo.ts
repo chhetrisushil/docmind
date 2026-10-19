@@ -6,6 +6,7 @@ import {
 } from "@docmind/contracts";
 import type { PoolClient } from "pg";
 import type { UserFieldCipher } from "../crypto/fields";
+import type { StatusView } from "../status/model";
 
 export const titleBind = (id: string) => `document:${id}:title`;
 export const filenameBind = (id: string) => `document:${id}:filename`;
@@ -77,15 +78,19 @@ export async function insertDocument(tx: PoolClient, doc: NewDocument): Promise<
   return rows[0] as DocumentRow;
 }
 
-export async function toDto(row: DocumentRow, cipher: UserFieldCipher): Promise<DocumentDto> {
+export async function toDto(
+  row: DocumentRow,
+  cipher: UserFieldCipher,
+  view: StatusView,
+): Promise<DocumentDto> {
   return {
     id: row.id,
     title: await cipher.openText(titleBind(row.id), row.title_enc),
     filename: await cipher.openText(filenameBind(row.id), row.filename_enc),
     mime: row.mime,
     sizeBytes: Number(row.size_bytes),
-    status: row.status,
-    error: row.error,
+    status: view.status,
+    error: view.error,
     stats:
       row.stats_enc == null
         ? null

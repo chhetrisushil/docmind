@@ -19,6 +19,8 @@ import { UploadTooLargeError, receiveFile } from "../http/multipart";
 import { peek } from "../http/peek";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
+import type { DocumentStatusReads } from "../status/ingestStatus";
+import { UPLOADED } from "../status/model";
 import { decodeCursor, encodeCursor } from "./cursor";
 import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
@@ -45,6 +47,8 @@ export interface DocumentRoutesDeps {
   /** A blob store for this user. Cheap to build: no I/O happens until it is used. */
   blobs: (identity: Identity) => EncryptedFsContentStore;
   limits: DocumentLimits;
+  /** The ingest-status model: every document status the API answers comes from here. */
+  status: DocumentStatusReads;
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
   /** Test seam: how long a delete waits for a pending start before cancelling anyway. */
@@ -94,7 +98,11 @@ async function register(
       const existing = await findByFingerprint(tx, identity.userId, fingerprint);
       if (existing) {
         await staged.discard();
-        return { kind: "stored", document: await toDto(existing, cipher), duplicate: true };
+        return {
+          kind: "stored",
+          document: await toDto(existing, cipher, UPLOADED),
+          duplicate: true,
+        };
       }
       const usage = await usageOfTenant(tx);
       if (usage.documents + 1 > deps.limits.tenantMaxDocuments) {
@@ -118,7 +126,7 @@ async function register(
       });
       const committed = await staged.commit();
       try {
-        return { kind: "stored", document: await toDto(row, cipher), duplicate: false };
+        return { kind: "stored", document: await toDto(row, cipher, UPLOADED), duplicate: false };
       } catch (err) {
         // Still under the tenant lock: take back a blob this upload created, so no concurrent
         // upload of the same bytes can have relied on it. A failure of COMMIT itself happens after
@@ -146,6 +154,12 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
         throw err instanceof BlobTooLargeError ? new UploadTooLargeError() : err;
       });
       const result = await register(deps, identity, store, staged, filename, sniffed);
+      // A duplicate is an existing document, so its status is the model's (one log-tail read); a new
+      // one is `uploaded`. Resolved before the start decision below, which keys on it.
+      if (result.kind === "stored" && result.duplicate) {
+        const view = await deps.status.forDocument(identity, result.document.id);
+        result.document = { ...result.document, status: view.status, error: view.error };
+      }
       // The row is committed (register returns after COMMIT). Fire now, before the body drain and
       // the response, so one round trip (withTenant's reset) separates COMMIT from the registration a
       // delete settles on.
@@ -252,8 +266,14 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         listDocuments(tx, identity.userId, { cursor, limit: query.data.limit }),
       );
       const cipher = deps.fields.forUser(identity.userId);
+      const views = await deps.status.forPage(
+        identity,
+        page.rows.map((row) => row.id),
+      );
       json(res, 200, {
-        items: await Promise.all(page.rows.map((row) => toDto(row, cipher))),
+        items: await Promise.all(
+          page.rows.map((row) => toDto(row, cipher, views.get(row.id) ?? UPLOADED)),
+        ),
         nextCursor: page.next ? encodeCursor(page.next) : null,
       } satisfies ListDocumentsResponse);
     }),
@@ -268,7 +288,8 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           )
         : undefined;
       if (!row) return sendError(res, 404, "not_found", "document not found");
-      json(res, 200, await toDto(row, deps.fields.forUser(identity.userId)));
+      const view = await deps.status.forDocument(identity, row.id);
+      json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view));
     }),
 
     "DELETE /api/documents/:id": requireAuth(
@@ -310,6 +331,19 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           return true;
         });
         if (!removed) return sendError(res, 404, "not_found", "document not found");
+
+        // 3. The row and blob are gone (committed) and the flow is cancelled: now forget the status
+        //    rows. A failure here must not turn a completed delete into an error: log the class only
+        //    and answer 204; M5's forgetUser tombstones whatever is left.
+        try {
+          await deps.status.forgetDocument(identity, mine.id);
+        } catch (err) {
+          console.error(
+            "forget document status failed",
+            err instanceof Error ? err.constructor.name : typeof err,
+            "DELETE /api/documents/:id",
+          );
+        }
         res.writeHead(204);
         res.end();
       },

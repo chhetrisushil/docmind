@@ -35,6 +35,7 @@ describe.skipIf(!PG_URL)(
     let base = "";
     let root = "";
     let loom: ReturnType<typeof buildServer>["app"] | undefined;
+    let status: ReturnType<typeof buildServer>["status"] | undefined;
     const calls: string[] = [];
     const handles = new Map<string, ExecutionHandle>();
 
@@ -75,7 +76,9 @@ describe.skipIf(!PG_URL)(
           },
         }),
       });
+      await composed.status.boot();
       loom = composed.app;
+      status = composed.status;
       server = composed.server;
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -88,6 +91,7 @@ describe.skipIf(!PG_URL)(
           server.closeAllConnections();
         });
       }
+      await status?.close();
       await loom?.close();
       await app?.end();
       await db?.drop();
