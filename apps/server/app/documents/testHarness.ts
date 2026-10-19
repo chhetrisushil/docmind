@@ -392,7 +392,7 @@ export async function seedDoc(
   const d = await newDocument(fields, who.tenantId, who.userId, fingerprint);
   await withTenant(app, who.tenantId, (tx) => insertDocument(tx, d));
   await owner.query(
-    "UPDATE documents SET created_at = now() - make_interval(secs => $2::float8) WHERE id = $1",
+    "UPDATE documents SET created_at = now() - make_interval(secs => $2::float8), updated_at = now() - make_interval(secs => $2::float8) WHERE id = $1",
     [d.id, ageSeconds],
   );
   return d.id;

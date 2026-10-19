@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
+import { ingestExecutionId } from "./ingest";
 import { StartScheduler } from "./startScheduler";
 import { sweepStaleUploads } from "./sweep";
 import { ALICE, BOB, seedDoc, startDocumentServer } from "./testHarness";
@@ -37,10 +38,38 @@ describe.skipIf(!PG_URL)("sweepStaleUploads (needs DOCMIND_TEST_PG_URL)", () => 
   });
 });
 
+describe.skipIf(!PG_URL)("sweepStaleUploads generations (needs DOCMIND_TEST_PG_URL)", () => {
+  it("starts the execution of the generation the document is at", async () => {
+    const h = await startDocumentServer();
+    try {
+      const fields = new FieldCrypto(h.keys);
+      const doc = await seedDoc(h.owner, h.app, fields, ALICE, "3".repeat(64), 600);
+      await h.owner.query("UPDATE documents SET ingest_generation = 5 WHERE id = $1", [doc]);
+      const args = {
+        pool: h.app,
+        starts: h.starts,
+        olderThanMs: 120_000,
+        lookbackMs: 604_800_000,
+        limit: 10,
+      };
+      expect(await sweepStaleUploads(args)).toBe(1);
+      await h.starts.idle();
+      expect(h.ingest.handles.get(doc)?.executionId).toBe(ingestExecutionId(ALICE.userId, doc, 5));
+    } finally {
+      await h.close();
+    }
+  });
+});
+
 describe("sweepStaleUploads failures", () => {
   it("warns by count only when the batch comes back full", async () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const rows = [1, 2].map((n) => ({ tenant_id: "t", owner_id: "u", id: `secret-${n}` }));
+    const rows = [1, 2].map((n) => ({
+      tenant_id: "t",
+      owner_id: "u",
+      id: `secret-${n}`,
+      generation: 2,
+    }));
     const pool = { query: async () => ({ rows }) } as unknown as Pool;
     const start = vi.fn(async () => null);
     const starts = new StartScheduler({ start, cancel: async () => {} });

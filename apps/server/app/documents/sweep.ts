@@ -1,5 +1,4 @@
 import type { Pool } from "pg";
-import { INGEST_GENERATION } from "./ingest";
 import type { StartScheduler } from "./startScheduler";
 
 export const STALE_UPLOAD_MS = 120_000;
@@ -35,22 +34,22 @@ export interface SweepArgs {
 export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
   const { pool, starts, olderThanMs, lookbackMs, limit, signal } = args;
   try {
-    const { rows } = await pool.query<{ tenant_id: string; owner_id: string; id: string }>(
-      `SELECT tenant_id, owner_id, id
-         FROM docmind_stale_uploads(make_interval(secs => $1::float8), make_interval(secs => $2::float8), $3::integer, $4::integer)`,
-      [olderThanMs / 1000, lookbackMs / 1000, INGEST_GENERATION, limit],
+    const { rows } = await pool.query<{
+      tenant_id: string;
+      owner_id: string;
+      id: string;
+      generation: number;
+    }>(
+      `SELECT tenant_id, owner_id, id, generation
+         FROM docmind_stale_uploads_v2(make_interval(secs => $1::float8), make_interval(secs => $2::float8), $3::integer)`,
+      [olderThanMs / 1000, lookbackMs / 1000, limit],
     );
     if (signal?.aborted) return 0;
     // A full batch may hide older strays behind it (the scan has no cursor): say so, by count only.
     if (rows.length >= Math.min(limit, MAX_BATCH))
       console.warn("stale upload sweep batch was full", rows.length);
     for (const r of rows)
-      starts.fire(
-        { tenantId: r.tenant_id, userId: r.owner_id },
-        r.id,
-        INGEST_GENERATION,
-        SWEEP_LABEL,
-      );
+      starts.fire({ tenantId: r.tenant_id, userId: r.owner_id }, r.id, r.generation, SWEEP_LABEL);
     return rows.length;
   } catch (err) {
     console.error("stale upload sweep failed", className(err));
