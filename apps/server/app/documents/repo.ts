@@ -1,6 +1,7 @@
 import { type DocumentDto, DocumentStats, DocumentSummary } from "@docmind/contracts";
 import type { PoolClient } from "pg";
 import type { UserFieldCipher } from "../crypto/fields";
+import { ENTITY_LOCK_EXCLUSIVE } from "../db/entityLock";
 import type { StatusView } from "../status/model";
 
 export const titleBind = (id: string) => `document:${id}:title`;
@@ -182,6 +183,7 @@ export async function deleteDocument(
   );
   if (!rows[0]) return undefined;
   // The cascade removed this document's mentions; entities no chunk mentions any more go with them.
+  await tx.query(ENTITY_LOCK_EXCLUSIVE, [ownerId]);
   await tx.query(
     `DELETE FROM entities e WHERE e.owner_id = $1
        AND NOT EXISTS (SELECT 1 FROM chunk_entities ce WHERE ce.entity_id = e.id)`,

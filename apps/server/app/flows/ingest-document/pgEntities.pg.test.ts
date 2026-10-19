@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EntityKeys } from "../../crypto/entityKeys";
+import { ENTITY_LOCK_SHARED } from "../../db/entityLock";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
 import { deleteDocument, insertDocument } from "../../documents/repo";
@@ -182,5 +183,42 @@ describe.skipIf(!PG_URL)("PgEntityStore (needs DOCMIND_TEST_PG_URL)", () => {
     await withTenant(fx.app, T1, (tx) => deleteDocument(tx, U1, DOC_A.documentId));
     const { rows } = await fx.db.owner.query("SELECT 1 FROM entities WHERE owner_id = $1", [U1]);
     expect(rows).toHaveLength(1);
+  });
+
+  it("a delete's purge waits for an in-flight ingest and does not cascade away its mention", async () => {
+    const X = await seedDoc(T1, U1, "e".repeat(64));
+    const Y = await seedDoc(T1, U1, "f".repeat(64));
+    await store.replaceForDocument(X, [{ chunkIds: [ch(X, 0)], name: "Shared", kind: "other" }]);
+    const entityId = (await fx.db.owner.query<{ id: string }>("SELECT id FROM entities")).rows[0]
+      ?.id as string;
+    // Ingest of B, held open after its mention insert (the same steps as replaceForDocument).
+    const held = await fx.db.owner.connect();
+    let deleting: Promise<unknown> | undefined;
+    try {
+      await held.query("BEGIN");
+      await held.query(ENTITY_LOCK_SHARED, [U1]);
+      await held.query(
+        "INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id) VALUES ($1, $2, $3)",
+        [T1, ch(Y, 0), entityId],
+      );
+      deleting = withTenant(fx.app, T1, (tx) => deleteDocument(tx, U1, X.documentId));
+      deleting.catch(() => {});
+      await vi.waitFor(async () => {
+        const { rowCount } = await fx.db.owner.query(
+          "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'",
+        );
+        expect(rowCount).toBe(1);
+      });
+      await held.query("COMMIT");
+    } finally {
+      held.release();
+    }
+    await deleting;
+    const { rows } = await fx.db.owner.query<{ chunk_id: string }>(
+      "SELECT chunk_id FROM chunk_entities WHERE entity_id = $1",
+      [entityId],
+    );
+    expect(rows.map((r) => r.chunk_id)).toEqual([ch(Y, 0)]);
+    expect(await count("SELECT 1 FROM entities")).toBe(1);
   });
 });
