@@ -167,4 +167,21 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
     );
     expect(liveTypes).not.toContain("EXECUTION_RECOVERED");
   });
+
+  it("a full pass deletes an expired lease that has no stream (a ghost) and leaves a live lease untouched", async () => {
+    const ghost = ingestExecutionId(randomUUID(), randomUUID());
+    const live = ingestExecutionId(randomUUID(), randomUUID());
+    const one = await boot();
+    const store = one.durable.storage.leaseStore as LeaseStore;
+    // A crash between taking the lease and the first append leaves rows with no stream.
+    await store.acquire(ghost, "node-dead", 60_000);
+    await store.acquire(live, "node-other", 3_600_000);
+    await db.owner.query("UPDATE loom.leases SET expires_at = 0 WHERE execution_id = $1", [ghost]);
+    expect(await store.get?.(ghost)).not.toBeNull();
+
+    await recoverIngest(one.app.runtime, one.durable.storage.eventStore, { graceMs: 0 });
+
+    expect(await store.get?.(ghost)).toBeNull();
+    expect(await store.get?.(live)).not.toBeNull();
+  });
 });
