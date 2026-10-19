@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
-import { createIngestWiring, loadParseLimits } from "./limits";
+import { StartupConfigError } from "../../startupError";
+import { createIngestWiring, loadEmbedConfig, loadParseLimits } from "./limits";
 
 describe("loadParseLimits", () => {
   it("has defaults", () => {
@@ -68,5 +69,57 @@ describe("createIngestWiring", () => {
     expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: "17" })).toThrow(
       /^DOCMIND_PARSE_CONCURRENCY must be at most 16$/,
     );
+  });
+});
+
+describe("loadEmbedConfig", () => {
+  it("has defaults", () => {
+    expect(loadEmbedConfig({})).toEqual({
+      baseUrl: "http://127.0.0.1:11434",
+      model: "nomic-embed-text",
+      dimensions: 768,
+      timeoutMs: 30_000,
+    });
+  });
+  it("reads overrides", () => {
+    expect(
+      loadEmbedConfig({
+        DOCMIND_OLLAMA_URL: "http://127.0.0.1:9",
+        DOCMIND_EMBED_MODEL: "m",
+        DOCMIND_EMBED_DIMENSIONS: "8",
+      }),
+    ).toMatchObject({ baseUrl: "http://127.0.0.1:9", model: "m", dimensions: 8 });
+  });
+  it.each([
+    ["DOCMIND_EMBED_DIMENSIONS", "0"],
+    ["DOCMIND_EMBED_TIMEOUT_MS", "abc"],
+  ])("rejects %s=%s naming the variable and not the value", (name, value) => {
+    expect(() => loadEmbedConfig({ [name]: value })).toThrow(
+      new RegExp(`^${name} must be a positive integer$`),
+    );
+  });
+  it.each([
+    ["DOCMIND_EMBED_DIMENSIONS", "16001"],
+    ["DOCMIND_EMBED_TIMEOUT_MS", "600001"],
+  ])("bounds %s", (name, value) => {
+    expect(() => loadEmbedConfig({ [name]: value })).toThrow(
+      new RegExp(`^${name} must be at most \\d+$`),
+    );
+  });
+});
+
+describe("createIngestWiring embedder", () => {
+  it("builds the embedder from the configuration", () => {
+    const { embedder } = createIngestWiring({
+      DOCMIND_EMBED_MODEL: "m",
+      DOCMIND_EMBED_DIMENSIONS: "8",
+    });
+    expect(embedder).toMatchObject({ modelId: "ollama/m", dimensions: 8 });
+  });
+  it("fails startup on a bad URL with a StartupConfigError naming the variable, never the value", () => {
+    const run = () => createIngestWiring({ DOCMIND_OLLAMA_URL: "http://user:hunter2@host:1" });
+    expect(run).toThrow(StartupConfigError);
+    expect(run).toThrow(/^DOCMIND_OLLAMA_URL must be an http\(s\) URL/);
+    expect(run).not.toThrow(/hunter2/);
   });
 });
