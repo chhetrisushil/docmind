@@ -20,6 +20,8 @@ export interface ParseRunnerOptions {
   childEntry?: string;
   /** Tests only: a CommonJS file exporting `parsers`. */
   parserModule?: string;
+  /** Tests only: the Node executable to spawn. */
+  executable?: string;
 }
 
 export class ParseCrashedError extends Error {
@@ -67,7 +69,15 @@ const defaultEntry = (): string => {
  * permission model (documented limit).
  */
 export class ParseRunner {
-  constructor(private readonly options: ParseRunnerOptions) {}
+  constructor(private readonly options: ParseRunnerOptions) {
+    const { wallClockMs, memoryMb } = options.limits;
+    if (!Number.isInteger(wallClockMs) || wallClockMs < 1 || wallClockMs > 2147483647) {
+      throw new RangeError("limits.wallClockMs must be an integer in 1..2147483647");
+    }
+    if (!Number.isInteger(memoryMb) || memoryMb < 1) {
+      throw new RangeError("limits.memoryMb must be a positive integer");
+    }
+  }
 
   async run(parserId: string, bytes: Uint8Array): Promise<ParsedDocument> {
     const { limits } = this.options;
@@ -82,13 +92,24 @@ export class ParseRunner {
       entry,
       JSON.stringify(map),
     ];
-    const child = spawn(process.execPath, args, {
+    const child = spawn(this.options.executable ?? process.execPath, args, {
       stdio: ["pipe", "ignore", "ignore", "pipe"],
       env: {},
       cwd: dirname(entry),
     });
-    child.on("error", () => {}); // spawn/kill failures: 69a2 maps no-reply ends to a rejection
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    // Spawn failures (ENOENT, EACCES, EAGAIN) emit 'error' and never 'exit'; kill failures emit it too.
+    const exited = new Promise<void>((resolve) => {
+      child.once("exit", () => resolve());
+      child.on("error", () => {
+        if (child.pid === undefined) resolve(); // never started: no exit will come
+      });
+    });
+    // Never started, or stdio unassigned (EMFILE): nothing to exchange with.
+    if (child.pid === undefined || !child.stdin || !child.stdio?.[3]) {
+      child.stdin?.destroy();
+      child.stdio?.[3]?.destroy();
+      throw new ParseCrashedError();
+    }
     try {
       const request: ChildRequest = {
         parserId,
@@ -99,7 +120,7 @@ export class ParseRunner {
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       child.stdin?.destroy();
-      child.stdio[3]?.destroy();
+      child.stdio?.[3]?.destroy();
       await exited;
     }
   }
