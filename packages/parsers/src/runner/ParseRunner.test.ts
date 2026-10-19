@@ -427,10 +427,12 @@ describe("ParseRunner concurrency and abort", () => {
     await spawns(2);
     expect(spawned).toHaveLength(2);
     expect(r.active()).toBe(2);
+    // Both rejections get a handler before either abort: `two` rejects as soon as `b` aborts, and
+    // awaiting `one` first would leave it unhandled for a tick (an unhandled rejection).
+    const aborted = [one, two].map((run) => expect(run).rejects.toBeInstanceOf(ParseAbortedError));
     a.abort();
     b.abort();
-    await expect(one).rejects.toBeInstanceOf(ParseAbortedError);
-    await expect(two).rejects.toBeInstanceOf(ParseAbortedError);
+    await Promise.all(aborted);
     expect((await three).text).toBe("third");
     expect(spawned.every(dead)).toBe(true);
     expect([r.active(), r.queued()]).toEqual([0, 0]);
