@@ -39,6 +39,7 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     embedder: wiring.embedder,
     runner: wiring.runner,
     shutdown: wiring.shutdown.signal,
+    gate: wiring.gate,
     ...(wiring.sleep && { sleep: wiring.sleep }),
   };
 }

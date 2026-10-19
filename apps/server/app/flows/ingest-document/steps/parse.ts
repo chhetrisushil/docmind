@@ -22,6 +22,8 @@ export interface ParseDeps {
   sleep?: StepOptions["sleep"];
   /** Aborted by the composition root before the runner closes (see StepOptions). */
   shutdown?: AbortSignal;
+  /** Each attempt waits for the ingest gate (see StepOptions). */
+  gate?: StepOptions["gate"];
 }
 
 /** A parser that throws from accepts() is rejected with a fixed code; its message is never kept. */
@@ -67,6 +69,7 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
       retry: STEP_RETRY,
       ...(deps.sleep && { sleep: deps.sleep }),
       ...(deps.shutdown && { shutdown: deps.shutdown }),
+      ...(deps.gate && { gate: deps.gate }),
     },
   );
 }
