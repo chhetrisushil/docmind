@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { EmbeddingAbortedError } from "@docmind/embeddings";
 import { ParseAbortedError, ParseCrashedError, ParseRejectedError } from "@docmind/parsers";
+import { InMemoryChunkVectors } from "@docmind/vector-pg";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
 import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflow-runtime";
 import { recoverAbandoned } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
-import { ingestExecutionId } from "../../documents/ingest";
+import { ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import type { IngestDeps } from "./deps";
 import { DocumentGoneError } from "./errors";
@@ -83,6 +85,50 @@ describe("ingest-document flow v2", () => {
       outcome: "failed",
       code: "corrupt_content",
     });
+  });
+
+  it("a user delete during embed cancels the execution and aborts the embedder call", async () => {
+    let inEmbed: () => void = () => {};
+    const entered = new Promise<void>((resolve) => {
+      inEmbed = resolve;
+    });
+    let aborted = false;
+    const input = ids();
+    const embedder = {
+      modelId: "m",
+      dimensions: 8,
+      embed: (_texts: string[], options?: { signal?: AbortSignal }) =>
+        new Promise<number[][]>((_, reject) => {
+          inEmbed();
+          options?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new EmbeddingAbortedError());
+          });
+        }),
+    };
+    const { deps } = fakeDeps({
+      embedder,
+      vectors: new InMemoryChunkVectors({
+        modelId: "m",
+        dimensions: 8,
+        chunkIds: async () => ["c1"],
+      }),
+      chunks: {
+        replace: async (_r, c) => c.length,
+        count: async () => 1,
+        read: async (_r, rows) => rows.map((id) => ({ id, text: "t" })),
+      },
+    });
+    const app = buildApp({ kind: "memory" }, undefined, { ingest: deps });
+    const handle = await run(input, app);
+    await entered;
+    await loomIngest(app.runtime).cancel(
+      { tenantId: input.tenantId, userId: input.userId },
+      input.documentId,
+    );
+    await vi.waitFor(() => expect(handle.getState().status).toBe("cancelled"));
+    expect(aborted).toBe(true); // a cancel is neither retried nor a failure
+    await app.close();
   });
 
   it("is start-once per document and generation", async () => {
