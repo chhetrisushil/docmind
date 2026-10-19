@@ -65,7 +65,7 @@ describe("recoverIngest: resuming executions", () => {
     const seen: IngestStartInput[] = [];
     const app = boot(log, fakeIngestDeps({ guard: { begin: async (ref) => void seen.push(ref) } }));
     await recoverIngest(app.runtime, log.kept, { graceMs: 0 });
-    expect(seen).toEqual([ids]);
+    expect(seen).toEqual([ids, ids]); // parse (re-run) then chunk
     const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });

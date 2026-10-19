@@ -3,6 +3,12 @@ import { ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
 import type { IngestStartInput } from "./flow";
 
+const PARSED = {
+  text: "h",
+  sections: [{ headingPath: [], text: "h", locator: { kind: "chars" as const, start: 0, end: 1 } }],
+  media: [],
+};
+
 /** Fakes of every ingest port, for tests that run the flow over an in-memory Loom app. */
 export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
   return {
@@ -11,7 +17,8 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       meta: async () => ({ mime: "text/plain", contentAddress: "a" }),
       read: async () => new Uint8Array([104]),
     },
-    parsed: { put: async () => {}, take: async () => undefined, drop: async () => {} },
+    parsed: { put: async () => {}, take: async () => PARSED, drop: async () => {} },
+    chunks: { replace: async (_r, c) => c.length, count: async () => 0, read: async () => [] },
     registry: new ParserRegistry(createDefaultParsers()),
     runner: {
       run: async () => ({
