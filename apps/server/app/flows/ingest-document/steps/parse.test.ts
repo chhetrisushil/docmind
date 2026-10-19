@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import {
   type DocumentParser,
   ParseAbortedError,
@@ -13,6 +14,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { DocumentGoneError } from "../errors";
 import type { IngestStartInput } from "../flow";
+import { pngBytes } from "../imageFixtures";
 import { type ParseDeps, parseEffect } from "./parse";
 
 const ref = (): IngestStartInput => ({
@@ -261,5 +263,72 @@ describe("parse step", () => {
     };
     await run(d, { signal: new AbortController().signal });
     expect(seen).toBeInstanceOf(AbortSignal);
+  });
+});
+
+describe("parse step: images", () => {
+  const png = (w: number, h: number, pad = 0) => {
+    const b = new Uint8Array(Math.max(29, pad));
+    b.set(pngBytes(w, h));
+    return b;
+  };
+  const imageSource = (bytes: Uint8Array, mime: string) => ({
+    meta: async () => ({ mime, contentAddress: "a" }),
+    read: async () => bytes,
+  });
+  const region = { kind: "region", page: 1, x: 0, y: 0, w: 640, h: 480 };
+
+  it("reads an image with vision into two region sections and never calls the parser runner", async () => {
+    const vision = { readImage: vi.fn(async () => ({ text: "HELLO", description: "A sign." })) };
+    const { d, calls, stored } = deps({ source: imageSource(png(640, 480), "image/png"), vision });
+    expect(await run(d)).toEqual({ outcome: "done", count: 2 });
+    expect(calls).toEqual(["begin:parse"]);
+    expect((stored[0] as { sections: unknown }).sections).toEqual([
+      { headingPath: ["Text in the image"], text: "HELLO", locator: region },
+      { headingPath: ["Description"], text: "A sign.", locator: region },
+    ]);
+  });
+
+  it("fails as vision_unavailable without a vision reader", async () => {
+    const { d } = deps({ source: imageSource(png(640, 480), "image/png") });
+    expect(await run(d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
+  });
+
+  it("fails as too_large over 5 MiB or 8000 px, and corrupt_content when the header does not parse", async () => {
+    const vision = { readImage: vi.fn() };
+    const failed = async (bytes: Uint8Array) =>
+      run(deps({ source: imageSource(bytes, "image/png"), vision }).d);
+    expect(await failed(png(10, 10, 5 * 1024 * 1024 + 1))).toMatchObject({ code: "too_large" });
+    expect(await failed(png(8001, 10))).toMatchObject({ code: "too_large" });
+    expect(await failed(new Uint8Array([0x89, 0x50]))).toMatchObject({ code: "corrupt_content" });
+    expect(vision.readImage).not.toHaveBeenCalled();
+  });
+
+  it("maps a refusal to unsupported_content and a rejected request to corrupt_content; an outage is retried", async () => {
+    const source = imageSource(png(640, 480), "image/png");
+    const refuse = {
+      readImage: vi.fn(async () => {
+        throw new LlmRefusalError();
+      }),
+    };
+    expect(await run(deps({ source, vision: refuse }).d)).toMatchObject({
+      code: "unsupported_content",
+    });
+    const bad = {
+      readImage: vi.fn(async () => {
+        throw new LlmRequestError(400);
+      }),
+    };
+    expect(await run(deps({ source, vision: bad }).d)).toMatchObject({ code: "corrupt_content" });
+    let n = 0;
+    const flaky = {
+      readImage: vi.fn(async () => {
+        if (n++ === 0) throw new LlmUnavailableError(529);
+        return { text: "t", description: "d" };
+      }),
+    };
+    const sleep = async () => {};
+    expect((await run(deps({ source, vision: flaky, sleep }).d)).outcome).toBe("done");
+    expect(flaky.readImage).toHaveBeenCalledTimes(2);
   });
 });

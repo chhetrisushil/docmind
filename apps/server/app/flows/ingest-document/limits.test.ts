@@ -178,8 +178,10 @@ describe("loadGateLimits", () => {
 });
 
 describe("parseStepTimeoutMs", () => {
-  it("covers a slot wait, the run itself, and 30s of slack", () => {
-    expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 })).toBe(90_000);
+  it("covers a slot wait, the run itself, one LLM call and 30s of slack", () => {
+    expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 }, 60_000)).toBe(
+      150_000,
+    );
   });
 });
 
