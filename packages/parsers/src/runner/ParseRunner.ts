@@ -8,11 +8,15 @@ import {
   ParseRejectedError,
   ParsedDocument,
 } from "../types";
-import { type ChildReply, type ChildRequest, MAX_REPLY_BYTES, encodeFrame } from "./protocol";
+import { type ChildReply, type ChildRequest, encodeFrame, maxReplyBytes } from "./protocol";
 
 export interface ParseLimits {
   wallClockMs: number;
   memoryMb: number;
+  /** Largest input the parent will hand to a child. */
+  maxInputBytes: number;
+  /** Longest parsed text (UTF-16 code units) a parse may return; over it is too_large. */
+  maxChars: number;
 }
 export interface ParseRunnerOptions {
   limits: ParseLimits;
@@ -34,6 +38,12 @@ export class ParseTimeoutError extends Error {
   constructor() {
     super("parse timed out");
     this.name = "ParseTimeoutError";
+  }
+}
+export class ParseLimitError extends Error {
+  constructor(readonly limit: "input") {
+    super(`parse ${limit} over limit`);
+    this.name = "ParseLimitError";
   }
 }
 /** Bare specifiers the child's built code imports, resolved by the parent to real files. */
@@ -69,8 +79,22 @@ const defaultEntry = (): string => {
  * permission model (documented limit).
  */
 export class ParseRunner {
+  private readonly live = new Set<ChildProcess>();
+
+  /** Children currently alive (spawned and not yet exited). */
+  active(): number {
+    return this.live.size;
+  }
+
   constructor(private readonly options: ParseRunnerOptions) {
-    const { wallClockMs, memoryMb } = options.limits;
+    const { wallClockMs, memoryMb, maxInputBytes, maxChars } = options.limits;
+    if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes < 1) {
+      throw new RangeError("limits.maxInputBytes must be a positive integer");
+    }
+    // The reply frame length is a uint32: 700M chars * 6 + 1 MiB still fits.
+    if (!Number.isSafeInteger(maxChars) || maxChars < 1 || maxChars > 700_000_000) {
+      throw new RangeError("limits.maxChars must be a positive integer of at most 700000000");
+    }
     if (!Number.isInteger(wallClockMs) || wallClockMs < 1 || wallClockMs > 2147483647) {
       throw new RangeError("limits.wallClockMs must be an integer in 1..2147483647");
     }
@@ -81,6 +105,7 @@ export class ParseRunner {
 
   async run(parserId: string, bytes: Uint8Array): Promise<ParsedDocument> {
     const { limits } = this.options;
+    if (bytes.byteLength > limits.maxInputBytes) throw new ParseLimitError("input");
     const entry = this.options.childEntry ?? defaultEntry();
     const map = specifierMap();
     const readable = readablePaths(entry, map);
@@ -97,6 +122,7 @@ export class ParseRunner {
       env: {},
       cwd: dirname(entry),
     });
+    this.live.add(child);
     // Spawn failures (ENOENT, EACCES, EAGAIN) emit 'error' and never 'exit'; kill failures emit it too.
     const exited = new Promise<void>((resolve) => {
       child.once("exit", () => resolve());
@@ -108,6 +134,7 @@ export class ParseRunner {
     if (child.pid === undefined || !child.stdin || !child.stdio?.[3]) {
       child.stdin?.destroy();
       child.stdio?.[3]?.destroy();
+      this.live.delete(child);
       throw new ParseCrashedError();
     }
     try {
@@ -115,6 +142,7 @@ export class ParseRunner {
         parserId,
         bytes: Buffer.from(bytes).toString("base64"),
         module: this.options.parserModule,
+        maxChars: limits.maxChars,
       };
       return await this.exchange(child, request);
     } finally {
@@ -122,6 +150,7 @@ export class ParseRunner {
       child.stdin?.destroy();
       child.stdio?.[3]?.destroy();
       await exited;
+      this.live.delete(child);
     }
   }
 
@@ -147,7 +176,11 @@ export class ParseRunner {
         if (settled) return;
         settled = true;
         try {
-          resolve(decodeReply(frame));
+          const doc = decodeReply(frame);
+          // The child checks too, but a compromised child cannot skip the parent's check.
+          if (doc.text.length > this.options.limits.maxChars)
+            throw new ParseRejectedError("too_large");
+          resolve(doc);
         } catch (err) {
           reject(err);
         }
@@ -161,7 +194,7 @@ export class ParseRunner {
         if (have < 4) return;
         const head = parts.length === 1 ? (parts[0] as Buffer) : Buffer.concat(parts);
         const len = head.readUInt32BE(0);
-        if (len > MAX_REPLY_BYTES || have > 4 + len) return crash(); // oversized or extra bytes
+        if (len > maxReplyBytes(this.options.limits.maxChars) || have > 4 + len) return crash(); // oversized or extra bytes
         if (have < 4 + len) return; // keep chunks; concatenate once, when complete
         finish(head.subarray(4));
       });

@@ -6,6 +6,8 @@ export interface ChildRequest {
   /** base64 of the document bytes. */
   bytes: string;
   module?: string;
+  /** The child refuses text longer than this (too_large) before it serialises the reply. */
+  maxChars: number;
 }
 /** Child to parent, as one frame on fd 3. Nothing but a document, a rejection code or "failed". */
 export type ChildReply =
@@ -13,8 +15,8 @@ export type ChildReply =
   | { ok: false; kind: "rejected"; code: ParseRejectCode }
   | { ok: false; kind: "failed" };
 
-/** Largest reply frame body the parent accepts (69b ties this to the limits). */
-export const MAX_REPLY_BYTES = 64 * 1024 * 1024;
+/** Largest reply frame body for a character cap: JSON escapes cost up to 6 bytes a character, plus 1 MiB for sections and media. */
+export const maxReplyBytes = (maxChars: number): number => maxChars * 6 + 1024 * 1024;
 
 /** Frame = 4-byte big-endian length + UTF-8 JSON body. */
 export const encodeFrame = (value: unknown): Buffer => {
