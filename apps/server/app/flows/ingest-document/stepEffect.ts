@@ -3,7 +3,7 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
-import { FAILURE_CODES, isAbort, isDocumentGone, permanentCode } from "./errors";
+import { FAILURE_CODES, isAbort, isDocumentGone, isFatal, permanentCode } from "./errors";
 import type { IngestStartInput } from "./flow";
 
 /** What every step returns, and so what the event log holds: an outcome, a count, a model id, a code. Never text. */
@@ -148,7 +148,7 @@ export function stepEffect(
           if (isDocumentGone(err)) return { outcome: "document_gone" };
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
-          if (isAbort(err) || attempt >= maxAttempts) throw failure(step, err);
+          if (isAbort(err) || isFatal(err) || attempt >= maxAttempts) throw failure(step, err);
           if (
             err instanceof StepTimeoutError &&
             !(await settledWithin(err.settled, settleMs, waitSignal))
@@ -156,7 +156,7 @@ export function stepEffect(
             // A shutdown leaves the step un-completed; a user cancel is a cancel, not a failure.
             if (interrupted()) return INTERRUPTED;
             // Otherwise a zombie is still running: no attempt may overlap it.
-            throw failure(step, ctx?.signal?.aborted ? new ParseAbortedError() : err);
+            throw failure(step, err, ctx?.signal?.aborted === true);
           }
           try {
             const base = options.retry?.backoffMs ?? 0;
@@ -166,7 +166,7 @@ export function stepEffect(
             );
           } catch {
             if (interrupted()) return INTERRUPTED;
-            throw failure(step, err); // cancelled while waiting
+            throw failure(step, err, ctx?.signal?.aborted === true); // cancelled while waiting
           }
         }
       }
@@ -197,9 +197,9 @@ async function settledWithin(
 }
 
 /** A step failure's message is written to the event log: fixed text; only the class goes to the process log. */
-function failure(step: IngestStep, cause: unknown): Error {
+function failure(step: IngestStep, cause: unknown, cancelled = false): Error {
   // A cancellation (a delete aborting the runner) is expected, so it is not logged.
-  if (!isAbort(cause)) {
+  if (!cancelled && !isAbort(cause)) {
     console.error(
       "ingest step failed",
       step,

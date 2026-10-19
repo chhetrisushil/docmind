@@ -2,7 +2,7 @@ import { EmbeddingAbortedError } from "@docmind/embeddings";
 import type { ChunkVectorStore } from "@docmind/vector-pg";
 import type { Effect } from "@loom/effect-runtime";
 import type { EmbeddingProvider } from "@loom/memory";
-import { DocumentGoneError } from "../errors";
+import { DocumentGoneError, IngestConfigError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import {
@@ -44,8 +44,8 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
     deps.guard,
     async (ref, signal) => {
       const model = deps.embedder.modelId;
-      if (model !== deps.vectors.modelId)
-        throw new Error("embedder and vector store models differ");
+      if (model !== deps.vectors.modelId || deps.embedder.dimensions !== deps.vectors.dimensions)
+        throw new IngestConfigError(); // before any batch; fatal, not retried
       const scope = { tenantId: ref.tenantId, ownerId: ref.userId };
       const count = await deps.chunks.count(ref);
       for (let batches = 0; ; batches++) {
@@ -61,6 +61,7 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
         );
         if (vectors.length !== rows.length) throw new Error("embedder returned the wrong count");
         if (signal?.aborted) throw new EmbeddingAbortedError(); // an abandoned attempt does not write
+        // upsert takes no signal: a late commit is idempotent (deterministic chunk ids, same text and model) and cannot overlap a successor (stepEffect's settle wait).
         const { missing } = await deps.vectors.upsert(
           scope,
           ref.documentId,

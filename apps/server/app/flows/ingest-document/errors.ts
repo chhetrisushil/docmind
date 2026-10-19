@@ -54,6 +54,23 @@ const isDocumentFkViolation = (err: unknown): boolean => {
 export const isAbort = (err: unknown): boolean =>
   err instanceof ParseAbortedError || err instanceof EmbeddingAbortedError;
 
+/** Deployment misconfiguration (embedder and vector store disagree): deterministic, never retried. Names no values. */
+export class IngestConfigError extends Error {
+  constructor() {
+    super("embedder and vector store modelId/dimensions differ");
+    this.name = "IngestConfigError";
+  }
+}
+
+/**
+ * Retrying cannot help and no content code fits: a permanent embedder error (redirect, missing model,
+ * unexpected shape: a deployment fault, never the document's) or a config mismatch. The step fails
+ * (failed/internal through EXECUTION_FAILED) and the class is logged for ops.
+ */
+export const isFatal = (err: unknown): boolean =>
+  err instanceof IngestConfigError ||
+  (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError));
+
 export function isDocumentGone(err: unknown): boolean {
   return (
     err instanceof DocumentGoneError ||
@@ -82,9 +99,5 @@ export function permanentCode(err: unknown): FailureCode | undefined {
     err instanceof ParseTimeoutError
   )
     return "too_large";
-  // A permanent embedder error (bad request, redirect, unexpected shape): the same input fails the
-  // same way. No code fits exactly; `unsupported_content` is the closest. An outage is transient.
-  if (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError))
-    return "unsupported_content";
   return undefined;
 }
