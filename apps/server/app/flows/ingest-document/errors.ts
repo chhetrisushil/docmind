@@ -101,7 +101,7 @@ export function permanentCode(err: unknown): FailureCode | undefined {
     // Runtime guard: a code outside the contract is never recorded.
     return (FAILURE_CODES as readonly string[]).includes(err.code) ? err.code : undefined;
   }
-  // ParseLimitError's only variant today is "input"; revisit if another limit is added.
+  // ParseLimitError ("input" or "output") is deterministic for the same bytes.
   if (
     err instanceof ParseLimitError ||
     err instanceof ParseMemoryError ||

@@ -114,6 +114,7 @@ describe("stepEffect", () => {
 
   it.each([
     ["an input limit", () => new ParseLimitError("input")],
+    ["an output limit", () => new ParseLimitError("output")],
     ["the memory limit", () => new ParseMemoryError()],
     ["a timeout", () => new ParseTimeoutError()],
   ])("maps %s to too_large", async (_n, make) => {

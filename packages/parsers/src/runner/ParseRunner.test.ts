@@ -259,6 +259,7 @@ describe("ParseRunner", () => {
 
   it("has fixed error messages", () => {
     expect(new ParseLimitError("input").message).toBe("parse input over limit");
+    expect(new ParseLimitError("output").message).toBe("parse output over limit");
   });
 
   it("rejects text over maxChars as too_large", async () => {
@@ -275,6 +276,23 @@ describe("ParseRunner", () => {
       name: "ParseRejectedError",
       code: "too_large",
     });
+    released();
+  });
+
+  it.each(["sectionbulk", "sectioncount"])(
+    "the parent bounds the sections' total text and count by maxChars (%s)",
+    async (id) => {
+      await expect(limited({ maxChars: 100 }).run(id, bytes("x"))).rejects.toMatchObject({
+        name: "ParseLimitError",
+        limit: "output",
+      });
+      released();
+    },
+  );
+
+  it("accepts sections whose total text and count are exactly at maxChars", async () => {
+    const r = limited({ maxChars: 150 });
+    expect((await r.run("sectionbulk", bytes("x"))).sections).toHaveLength(5);
     released();
   });
 

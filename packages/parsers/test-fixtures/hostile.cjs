@@ -45,6 +45,33 @@ exports.parsers.push(
   { id: "atcap", ...raw(padded(CAP1)) },
   { id: "overcap", ...raw(Buffer.concat([Buffer.from([0, 0x80, 0, 0x0d]), Buffer.alloc(8)])) },
   { id: "huge", accepts: () => true, parse: () => ok("x".repeat(9 * 1024 * 1024)) },
+  {
+    // Short whole-document text, but sections that carry far more than maxChars between them.
+    id: "sectionbulk",
+    accepts: () => true,
+    parse: () => ({
+      text: "x",
+      sections: Array.from({ length: 5 }, () => ({
+        headingPath: [],
+        text: "y".repeat(30),
+        locator: { kind: "chars", start: 0, end: 1 },
+      })),
+      media: [],
+    }),
+  },
+  {
+    id: "sectioncount",
+    accepts: () => true,
+    parse: () => ({
+      text: "x",
+      sections: Array.from({ length: 101 }, () => ({
+        headingPath: [],
+        text: "",
+        locator: { kind: "chars", start: 0, end: 1 },
+      })),
+      media: [],
+    }),
+  },
   { id: "big", accepts: () => true, parse: () => ok("x".repeat(1000)) },
   {
     id: "noisy",
