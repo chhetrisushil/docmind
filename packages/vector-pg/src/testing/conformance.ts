@@ -124,5 +124,92 @@ export function runChunkVectorStoreConformance(
       expect(await store.missing(A, DOC_A, 10)).toEqual(c);
       expect(await store.search(A, basis(d, 0), 10)).toEqual([]);
     });
+
+    test("a repeated id in one call is written once (the last vector wins) and counted once", async ({
+      store,
+      seed,
+    }) => {
+      const [id] = uuids(1) as [string];
+      await seed(A, DOC_A, [id]);
+      const d = store.dimensions;
+      expect(
+        await store.upsert(A, DOC_A, [
+          { chunkId: id, vector: basis(d, 0) },
+          { chunkId: id, vector: basis(d, 1) },
+        ]),
+      ).toEqual({ written: 1, missing: [] });
+      expect(ids(await store.search(A, basis(d, 1), 10, 0.9))).toEqual([id]);
+      expect(await store.search(A, basis(d, 0), 10, 0.9)).toEqual([]);
+    });
+
+    test("search ranks by cosine similarity, best first, applies the floor and the limit", async ({
+      store,
+      seed,
+    }) => {
+      const [x, near, y] = uuids(3) as [string, string, string];
+      await seed(A, DOC_A, [y, near, x]);
+      const d = store.dimensions;
+      const nearVec = basis(d, 0);
+      nearVec[1] = 0.1;
+      await store.upsert(A, DOC_A, [
+        { chunkId: x, vector: basis(d, 0) },
+        { chunkId: near, vector: nearVec },
+        { chunkId: y, vector: basis(d, 1) },
+      ]);
+      const all = await store.search(A, basis(d, 0), 10);
+      expect(ids(all)).toEqual([x, near, y]);
+      expect(all[0]?.score).toBeCloseTo(1, 5);
+      expect(all[2]?.score).toBeCloseTo(0, 5);
+      expect(ids(await store.search(A, basis(d, 0), 10, 0.5))).toEqual([x, near]);
+      expect(ids(await store.search(A, basis(d, 0), 2))).toEqual([x, near]);
+      expect(await store.search(A, basis(d, 0), 0)).toEqual([]);
+    });
+
+    test("equal scores are ordered by chunk id", async ({ store, seed }) => {
+      const c = uuids(3);
+      await seed(A, DOC_A, c);
+      const d = store.dimensions;
+      await store.upsert(
+        A,
+        DOC_A,
+        c.map((chunkId) => ({ chunkId, vector: basis(d, 2) })),
+      );
+      expect(ids(await store.search(A, basis(d, 2), 10))).toEqual([...c].sort());
+      expect(ids(await store.search(A, basis(d, 2), 2))).toEqual([...c].sort().slice(0, 2));
+    });
+
+    test("a zero-length vector is never a hit, for a stored vector or a query", async ({
+      store,
+      seed,
+    }) => {
+      const [zero, real] = uuids(2) as [string, string];
+      await seed(A, DOC_A, [zero, real]);
+      const d = store.dimensions;
+      await store.upsert(A, DOC_A, [
+        { chunkId: zero, vector: new Array(d).fill(0) },
+        { chunkId: real, vector: basis(d, 0) },
+      ]);
+      expect(ids(await store.search(A, basis(d, 0), 10, -1))).toEqual([real]);
+      expect(await store.search(A, new Array(d).fill(0), 10, -1)).toEqual([]);
+    });
+
+    test("a query of the wrong dimension or with a non-finite value rejects with VectorDimensionError", async ({
+      store,
+      seed,
+    }) => {
+      const [id] = uuids(1) as [string];
+      await seed(A, DOC_A, [id]);
+      const d = store.dimensions;
+      await store.upsert(A, DOC_A, [{ chunkId: id, vector: basis(d, 0) }]);
+      for (const bad of [
+        new Array(d - 1).fill(1),
+        new Array(d + 1).fill(1),
+        [],
+        basis(d, 0).fill(Number.NaN),
+        basis(d, 0).fill(Number.NEGATIVE_INFINITY),
+      ]) {
+        await expect(store.search(A, bad, 5)).rejects.toBeInstanceOf(VectorDimensionError);
+      }
+    });
   });
 }
