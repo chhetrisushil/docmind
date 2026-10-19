@@ -12,6 +12,7 @@ import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
+import { type IngestWiring, createIngestWiring } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
 import { InFlight } from "./inFlight";
@@ -174,6 +175,8 @@ export interface DocumentHarness {
   root: string;
   keys: InMemoryKeyStore;
   ingest: IngestProbe;
+  /** The parser registry, runner and progress bus (defaults); nothing consumes them until the parse step. */
+  wiring: IngestWiring;
   inFlight: InFlight;
   starts: StartScheduler;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
@@ -231,6 +234,7 @@ export async function startDocumentServer(
     root,
     keys,
     ingest: ingest.probe,
+    wiring: createIngestWiring({}),
     inFlight,
     starts,
     upload(user, name, data) {

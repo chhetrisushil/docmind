@@ -28,8 +28,10 @@ import {
   ParseLimitError,
   ParseMemoryError,
   ParseRunner,
+  type ParseRunnerOptions,
   ParseTimeoutError,
 } from "./ParseRunner";
+import { createTestParseRunner } from "./testing";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256, maxInputBytes: 1024, maxChars: 500 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
@@ -173,10 +175,16 @@ describe("ParseRunner", () => {
   });
 
   it("a failed spawn (ENOENT) rejects with a crash instead of hanging", async () => {
-    const r = new ParseRunner({ limits: LIMITS, executable: "/nonexistent/node-binary" });
+    const r = createTestParseRunner({ limits: LIMITS }, "/nonexistent/node-binary");
     await expect(r.run("txt", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.pid).toBeUndefined();
+  });
+
+  it("the public options type has no executable", () => {
+    // @ts-expect-error `executable` is reachable only through createTestParseRunner
+    const options: ParseRunnerOptions = { limits: LIMITS, executable: "/nonexistent/node-binary" };
+    expect(options.limits).toBe(LIMITS);
   });
 
   it("a spawn that returns no stdio (EMFILE) rejects with a crash, not a TypeError", async () => {

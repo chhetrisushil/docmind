@@ -21,7 +21,12 @@ export const DEFAULT_LIMITS: DocumentLimits = {
 // Reading a blob buffers it whole, so the per-file limit has a ceiling.
 const MAX_FILE_CEILING = 256 * 1024 * 1024;
 
-function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+export function positiveInt(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  max = Number.MAX_SAFE_INTEGER,
+): number {
   const raw = env[name]?.trim();
   if (!raw) return fallback;
   const value = Number(raw);
@@ -29,6 +34,7 @@ function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): nu
   if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer`);
   }
+  if (value > max) throw new Error(`${name} must be at most ${max}`);
   return value;
 }
 

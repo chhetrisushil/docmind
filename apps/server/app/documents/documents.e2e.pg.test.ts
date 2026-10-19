@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../compose";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { createIngestWiring } from "../flows/ingest-document/limits";
 import { loadBlobRoot, loadLimits } from "./limits";
 import { PDF, PNG } from "./testHarness";
 
@@ -55,6 +56,7 @@ describe.skipIf(!PG_URL)(
         blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
         secureCookies: false,
         trustProxy: false,
+        ingest: createIngestWiring({}),
         wrapIngest: (real) => ({
           async start(identity, documentId) {
             calls.push(`start:${documentId}`);

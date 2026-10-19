@@ -4,6 +4,7 @@ import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { createIngestWiring } from "./flows/ingest-document/limits";
 import { shutdown } from "./shutdown";
 import { openDurableStorage } from "./storage";
 
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   const keks = loadKeks();
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
+  const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* variables before any connection opens
 
   const pool = await createAppPool(databaseUrl);
 
@@ -50,7 +52,7 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle } = buildServer({
+  const { app, server, store, throttle, starts } = buildServer({
     pool,
     keys,
     storage: durable.storage,
@@ -59,6 +61,7 @@ async function main(): Promise<void> {
     blobRoot,
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
     trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
+    ingest,
   });
 
   const sweep = () =>
@@ -91,6 +94,8 @@ async function main(): Promise<void> {
     clearInterval(sweepTimer);
     closing ??= shutdown(server, {
       close: async () => {
+        // The server has stopped accepting uploads; let every fired flow start settle before Loom closes.
+        await starts.idle();
         await app.close();
         await durable.close();
         await pool.end();
