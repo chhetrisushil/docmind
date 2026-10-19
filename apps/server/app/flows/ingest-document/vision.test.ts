@@ -84,6 +84,18 @@ describe("VisionReader.readPdfPages", () => {
     expect(JSON.stringify(content)).toContain("untrusted-input");
   });
 
+  it("uses its own system prompt: a JSON array, no image description; readImage still asks for an object", async () => {
+    const systemOf = () => (fake.requests.at(-1)?.body as never as { system: string }).system;
+    fake.reply(() => ({ text: "[]" }));
+    await reader.readPdfPages(PDF_BYTES, [1]);
+    expect(systemOf()).toContain("one JSON array");
+    expect(systemOf()).not.toMatch(/image|JSON object/);
+    expect(systemOf()).toContain(UNTRUSTED_CONTENT_SYSTEM_NOTE);
+    fake.reply(() => ({ text: '{"text":"a","description":"b"}' }));
+    await reader.readImage(PNG_BYTES, "image/png");
+    expect(systemOf()).toContain("one JSON object");
+  });
+
   it("caps each page at 100,000 characters", async () => {
     fake.reply(() => ({ text: JSON.stringify([{ page: 1, text: "t".repeat(150_000) }]) }));
     expect((await reader.readPdfPages(PDF_BYTES, [1])).get(1)?.length).toBe(100_000);

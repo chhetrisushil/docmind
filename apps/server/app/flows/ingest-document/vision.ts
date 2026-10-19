@@ -30,11 +30,17 @@ const SYSTEM = [
   "Answer with one JSON object and nothing else.",
 ].join(" ");
 
+const PDF_SYSTEM = [
+  "You read documents for a private document library.",
+  "Transcribe the requested pages of the document exactly, in reading order, preserving line breaks; do not translate or correct them.",
+  "Answer with one JSON array and nothing else.",
+].join(" ");
+
 const PdfAnswer = z.array(z.object({ page: z.number().int().min(1), text: z.string() }));
 const ImageAnswer = z.object({ text: z.string(), description: z.string() });
 
 /**
- * Reads images (and, from Task 113, textless PDF pages) with Claude, in the server process: the bytes
+ * Reads images and textless PDF pages with Claude, in the server process: the bytes
  * go to the API as an untrusted part and are never decoded here (M3b D8). The answer is document text:
  * the caller seals it like any parsed text and never logs it.
  */
@@ -91,7 +97,7 @@ export class VisionReader {
     if (bytes.length > VISION_PDF_MAX_BYTES) throw new RangeError("pdf exceeds the size limit");
     const request = guardRequest(
       {
-        system: `${SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
+        system: `${PDF_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
         messages: [
           {
             role: "user",
