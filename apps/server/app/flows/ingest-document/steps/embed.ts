@@ -6,11 +6,10 @@ import { DocumentGoneError, IngestConfigError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import {
-  STEP_RETRY,
-  STEP_TIMEOUT_MS,
   type StepGuard,
   type StepOptions,
   type StepResult,
+  ingestStepOptions,
   stepEffect,
 } from "../stepEffect";
 
@@ -72,12 +71,6 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
       }
       return { count, model };
     },
-    {
-      retry: STEP_RETRY,
-      timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
-      ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
-      ...(deps.sleep && { sleep: deps.sleep }),
-      ...(deps.shutdown && { shutdown: deps.shutdown }),
-    },
+    ingestStepOptions(deps),
   );
 }
