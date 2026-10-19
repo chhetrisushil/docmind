@@ -28,9 +28,11 @@
       "@loom/conformance": "link:../loom/packages/conformance",
       "@loom/core": "link:../loom/packages/core",
       "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
+      "@loom/event-runtime": "link:../loom/packages/event-runtime",
       "@loom/plugin-content": "link:../loom/plugins/content",
       "@loom/plugin-crypto": "link:../loom/plugins/crypto",
       "@loom/plugin-postgres": "link:../loom/plugins/postgres",
+      "@loom/plugin-read-model": "link:../loom/plugins/read-model",
       "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
     }
   }
