@@ -40,9 +40,9 @@ export const docxParser: DocumentParser = {
     const { text, sections, images: imageSections } = htmlToSections(html);
     // An image belongs to the section open where it appeared (the walker's index per <img>, in order).
     // If the two lists disagree, record no media rather than mismatched ones.
-    const last = Math.max(0, sections.length - 1);
+    const last = sections.length - 1;
     const media: ParsedMedia[] =
-      imageSections.length === images.length
+      sections.length > 0 && imageSections.length === images.length
         ? images.map((mime, i) => ({
             mime,
             locator: { kind: "section", index: Math.min(imageSections[i] as number, last) },
