@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { DocumentDto } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { type DocumentHarness, T1, TEXT, U1, startDocumentServer } from "./testHarness";
+import { ALICE, type DocumentHarness, T1, TEXT, U1, startDocumentServer } from "./testHarness";
 
 /** Makes the next `ingest.start` wait, and says when it has been reached (i.e. after COMMIT). */
 function startGate() {
@@ -138,34 +138,62 @@ describe.skipIf(!PG_URL)("delete races and the erasure shape (needs DOCMIND_TEST
     expect(existsSync(blob(T1, U1, fp))).toBe(false);
   });
 
-  it("a delete between an upload's COMMIT and its ingest.start: 204, the late start finds the document gone", async () => {
-    // Accepted M2 behaviour (found in the Task 60 review): the cancel finds no execution yet, so the
-    // delete succeeds and removes row and blob; the upload's start then runs for a deleted document
-    // and the step ends with outcome `document_gone`. Nothing is left behind but the finished run.
+  it("a delete between an upload's COMMIT and its start waits for the start (in this process), then cancels the run", async () => {
+    h.ingest.hold(); // the started step waits, so the cancel meets a live run
     const bytes = TEXT("delete between commit and start");
     const fp = await h.fingerprint("alice", bytes);
     gate.state.armed = true;
-    const uploaded = h.upload("alice", "w.txt", bytes);
+    const uploaded = await h.upload("alice", "w.txt", bytes);
+    let parked: () => void = () => {};
+    const reached = new Promise<void>((resolve) => {
+      parked = resolve;
+    });
+    const real = h.starts.settle.bind(h.starts);
+    const spy = vi.spyOn(h.starts, "settle").mockImplementation((...args) => {
+      parked();
+      return real(...args);
+    });
+    let id = "";
     try {
-      await gate.state.reached; // the row is committed, the start has not happened
-      const id = (await h.owner.query("SELECT id FROM documents WHERE fingerprint = $1", [fp]))
-        .rows[0].id as string;
-      expect((await del(id)).status).toBe(204);
-      expect(h.ingest.handles.has(id)).toBe(false);
-      expect(await rows(fp)).toBe(0);
-      expect(existsSync(blob(T1, U1, fp))).toBe(false);
-
+      expect(uploaded.status).toBe(201); // answered although the start is held
+      await gate.state.reached;
+      id = ((await uploaded.json()) as { document: DocumentDto }).document.id;
+      const callsBefore = h.ingest.calls.length;
+      const deleting = del(id);
+      await reached; // the delete is parked on the pending start
+      expect(h.ingest.calls.slice(callsBefore)).toEqual([]);
       gate.open();
-      const res = await uploaded;
-      expect(res.status).toBe(201);
-      expect(((await res.json()) as { document: DocumentDto }).document.id).toBe(id);
-      const handle = h.ingest.handles.get(id);
-      expect(handle).toBeDefined();
-      await handle?.waitForCompletion();
-      expect(handle?.getState().variables._output).toEqual({ outcome: "document_gone" });
+      expect((await deleting).status).toBe(204);
+      expect(h.ingest.calls.slice(callsBefore)).toEqual([`start:${id}`, `cancel:${id}`]);
     } finally {
+      spy.mockRestore();
       gate.open();
+      h.ingest.release();
     }
+    const handle = h.ingest.handles.get(id);
+    await expect(handle?.waitForCompletion()).rejects.toThrow(/cancel/i);
+    expect(handle?.getState().status).toBe("cancelled");
+    expect(await rows(fp)).toBe(0);
+    expect(existsSync(blob(T1, U1, fp))).toBe(false);
+  });
+
+  it("a start that lands after the delete (another process, or a duplicate after a failed start) ends document_gone", async () => {
+    const bytes = TEXT("late start after delete");
+    const fp = await h.fingerprint("alice", bytes);
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.ingest.failNext("start"); // the first start fails, so no execution exists when the delete cancels
+    const doc = await create("late.txt", bytes);
+    await h.starts.idle();
+    logged.mockRestore();
+    expect((await del(doc.id)).status).toBe(204);
+    expect(await rows(fp)).toBe(0);
+    // Stand-in for a start the delete could not see (another process, or a duplicate upload).
+    h.starts.fire(ALICE, doc.id);
+    await h.starts.idle();
+    const handle = h.ingest.handles.get(doc.id);
+    expect(handle).toBeDefined();
+    const state = await handle?.waitForCompletion();
+    expect(state?.variables._output).toEqual({ outcome: "document_gone" });
     expect(await rows(fp)).toBe(0);
     expect(existsSync(blob(T1, U1, fp))).toBe(false);
   });
