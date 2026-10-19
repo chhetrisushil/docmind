@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawned: ChildProcess[] = [];
@@ -34,6 +35,7 @@ import {
   ParseTimeoutError,
 } from "./ParseRunner";
 import { setRunnerInternals } from "./internals";
+import { CHILD_DEADLINE_EXIT, encodeFrame } from "./protocol";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256, maxInputBytes: 1024, maxChars: 500 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
@@ -457,5 +459,55 @@ describe("ParseRunner concurrency and abort", () => {
 
   it("rejects an invalid maxConcurrent", () => {
     expect(() => gated(0)).toThrow(/maxConcurrent must be/);
+  });
+
+  it("close() aborts a running parse and a queued one, kills the child, and is idempotent", async () => {
+    const r = gated(1);
+    const started = spawns(1);
+    const settled = Promise.allSettled([r.run("spin", bytes("x")), r.run("spin", bytes("x"))]);
+    await started;
+    const first = r.close();
+    expect(r.close()).toBe(first);
+    await first;
+    const results = await settled;
+    for (const res of results) {
+      expect(res).toMatchObject({ status: "rejected", reason: { name: "ParseAbortedError" } });
+    }
+    expect(spawned).toHaveLength(1);
+    released();
+    expect(spawned[0]?.signalCode).toBe("SIGKILL");
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+    await expect(r.close()).resolves.toBeUndefined();
+  });
+
+  it("a closed runner refuses new runs without spawning", async () => {
+    const r = gated(1);
+    await r.close();
+    await expect(r.run("echo", bytes("x"))).rejects.toBeInstanceOf(ParseAbortedError);
+    expect(spawned).toHaveLength(0);
+  });
+
+  it("an orphaned child whose parent stops reading ends itself at wallClockMs plus grace", async () => {
+    // Started by hand, as the runner does, but nothing ever reads fd 3 or kills it.
+    const entry = join(__dirname, "../../dist/runner/child.js");
+    const map = Object.fromEntries(
+      ["@docmind/contracts", "zod"].map((n) => [n, realpathSync(require.resolve(n))]),
+    );
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    const child = spawn(process.execPath, [entry, JSON.stringify(map)], {
+      stdio: ["pipe", "ignore", "ignore", "pipe"],
+      env: {},
+      cwd: dirname(entry),
+    });
+    const exited = new Promise<number | null>((res) => child.once("exit", (code) => res(code)));
+    const request = { parserId: "hang", bytes: "", module: hostile, maxChars: 500, wallClockMs: 1 };
+    child.stdin?.end(encodeFrame(request));
+    try {
+      expect(await exited).toBe(CHILD_DEADLINE_EXIT);
+    } finally {
+      child.kill("SIGKILL");
+      child.stdio[3]?.destroy();
+    }
   });
 });

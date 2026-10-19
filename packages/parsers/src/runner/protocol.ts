@@ -8,7 +8,13 @@ export interface ChildRequest {
   module?: string;
   /** The child refuses text longer than this (too_large) before it serialises the reply. */
   maxChars: number;
+  /** The child exits by itself this long (plus CHILD_GRACE_MS) after it reads the request. */
+  wallClockMs: number;
 }
+/** Slack past the parent's wall clock before an orphaned child ends itself. */
+export const CHILD_GRACE_MS = 2_000;
+/** Exit code of a child that hit its own deadline. */
+export const CHILD_DEADLINE_EXIT = 124;
 /** Child to parent, as one frame on fd 3. Nothing but a document, a rejection code or "failed". */
 export type ChildReply =
   | { ok: true; doc: ParsedDocument }
