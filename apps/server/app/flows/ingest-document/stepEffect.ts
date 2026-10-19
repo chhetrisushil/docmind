@@ -3,7 +3,7 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
-import { FAILURE_CODES, isDocumentGone, permanentCode } from "./errors";
+import { FAILURE_CODES, isAbort, isDocumentGone, permanentCode } from "./errors";
 import type { IngestStartInput } from "./flow";
 
 /** What every step returns, and so what the event log holds: an outcome, a count, a model id, a code. Never text. */
@@ -148,7 +148,7 @@ export function stepEffect(
           if (isDocumentGone(err)) return { outcome: "document_gone" };
           const code = permanentCode(err);
           if (code) return { outcome: "failed", code };
-          if (err instanceof ParseAbortedError || attempt >= maxAttempts) throw failure(step, err);
+          if (isAbort(err) || attempt >= maxAttempts) throw failure(step, err);
           if (
             err instanceof StepTimeoutError &&
             !(await settledWithin(err.settled, settleMs, waitSignal))
@@ -199,7 +199,7 @@ async function settledWithin(
 /** A step failure's message is written to the event log: fixed text; only the class goes to the process log. */
 function failure(step: IngestStep, cause: unknown): Error {
   // A cancellation (a delete aborting the runner) is expected, so it is not logged.
-  if (!(cause instanceof ParseAbortedError)) {
+  if (!isAbort(cause)) {
     console.error(
       "ingest step failed",
       step,

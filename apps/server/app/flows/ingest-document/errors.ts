@@ -1,10 +1,13 @@
 import { BlobKeyUnavailableError } from "@docmind/blob-store";
+import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import {
+  ParseAbortedError,
   ParseLimitError,
   ParseMemoryError,
   ParseRejectedError,
   ParseTimeoutError,
 } from "@docmind/parsers";
+import { EmbeddingError } from "@loom/memory";
 import { FieldKeyUnavailableError } from "../../crypto/fields";
 
 /** The document, its row or its blob is gone (deleted or erased while a step ran): stop quietly. */
@@ -47,6 +50,10 @@ const isDocumentFkViolation = (err: unknown): boolean => {
   );
 };
 
+/** A caller abort (a cancel, a shutdown, an abandoned attempt): neither retried nor a failure. */
+export const isAbort = (err: unknown): boolean =>
+  err instanceof ParseAbortedError || err instanceof EmbeddingAbortedError;
+
 export function isDocumentGone(err: unknown): boolean {
   return (
     err instanceof DocumentGoneError ||
@@ -75,5 +82,9 @@ export function permanentCode(err: unknown): FailureCode | undefined {
     err instanceof ParseTimeoutError
   )
     return "too_large";
+  // A permanent embedder error (bad request, redirect, unexpected shape): the same input fails the
+  // same way. No code fits exactly; `unsupported_content` is the closest. An outage is transient.
+  if (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError))
+    return "unsupported_content";
   return undefined;
 }
