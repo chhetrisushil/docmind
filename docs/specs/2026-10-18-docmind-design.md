@@ -239,8 +239,12 @@ from the step that failed.
   `status=failed` with a human-readable error. `POST /api/documents/:id/retry` re-runs the flow.
 - Deleting a document cancels its flow.
 
-**Scaling.** `@loom/fair-scheduler` caps ingestion concurrency per tenant. Moving flows to a separate
-worker process is a configuration change.
+**Scaling.** `@loom/fair-scheduler` caps ingestion concurrency per tenant. In v1 the server and its flow
+engine run as ONE process per database. Recovery of interrupted ingests assumes it: the boot pass has no
+grace period, and an execution whose flow definition changed is given up (failed) by whichever node finds
+it. Running several nodes or a separate worker is therefore not a configuration change: it first needs
+fencing between them (version-aware recovery, so only the newest code gives up on a mismatch, and a
+lease-only periodic scan).
 
 ### 5.3 Parsers
 

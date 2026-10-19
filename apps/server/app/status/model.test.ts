@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "../flows/ingest-document/errors";
 import {
   INITIAL_STATUS,
+  RECOVERY_EXHAUSTED_REASON,
   STATUS_MESSAGES,
   STATUS_OF_STEP,
   UNRECOVERABLE_REASONS,
@@ -294,7 +295,7 @@ describe("an execution recovery gave up on", () => {
   });
 
   it("does not reopen or change a terminal state", () => {
-    const log = [...ingestRun(exec(), "failed:too_large"), cancelled(UNRECOVERABLE_REASONS[0])];
+    const log = [...ingestRun(exec(), "failed:too_large"), cancelled(RECOVERY_EXHAUSTED_REASON)];
     expect(foldIngestStatus(log)).toMatchObject({ status: "failed", code: "too_large" });
   });
 });

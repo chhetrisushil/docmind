@@ -4,7 +4,11 @@ import {
   type WorkflowRuntime,
   recoverAbandoned,
 } from "@loom/workflow-runtime";
-import { UNRECOVERABLE_REASONS, isIngestExecution } from "../../status/model";
+import {
+  FLOW_MISMATCH_REASON,
+  RECOVERY_EXHAUSTED_REASON,
+  isIngestExecution,
+} from "../../status/model";
 
 /** How often the periodic pass looks for executions whose driver is gone. */
 export const RECOVERY_INTERVAL_MS = 60_000;
@@ -20,8 +24,6 @@ export const MAX_RECOVERIES = 3;
  * store already vetoes any execution a live driver heartbeats.
  */
 export const ABANDON_GRACE_MS = 60_000;
-
-const [EXHAUSTED, MISMATCH] = UNRECOVERABLE_REASONS;
 
 const errorClass = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
@@ -41,8 +43,9 @@ export interface RecoverOptions {
  * the status model folds to `failed` / `internal` (see UNRECOVERABLE_REASONS):
  *  - the crash-loop bound was reached (`MAX_RECOVERIES`);
  *  - the flow's identity changed under it (`FlowCodeMismatchError`: a deploy changed the steps or
- *    their retry policy). Rule (a): the user re-uploads; a restart under the next generation is not
- *    taken because the old content's start is not replayable under the new definition.
+ *    their retry policy). Rule (a): the user deletes the document and uploads it again (a duplicate
+ *    upload of a failed document starts nothing); a restart under the next generation waits for the
+ *    retry task.
  * Only the error class is logged, never an id.
  */
 export async function recoverIngest(
@@ -62,10 +65,10 @@ export async function recoverIngest(
     source,
     maxRecoveries,
     isAbandoned: (c) => isIngestExecution(c.executionId) && now() - c.updatedAt >= graceMs,
-    onExhausted: (id) => giveUp(id, EXHAUSTED),
+    onExhausted: (id) => giveUp(id, RECOVERY_EXHAUSTED_REASON),
     onError: (id, err) =>
       err instanceof FlowCodeMismatchError
-        ? giveUp(id, MISMATCH)
+        ? giveUp(id, FLOW_MISMATCH_REASON)
         : console.error("ingest recovery failed", errorClass(err)),
   });
   await Promise.all(ending);

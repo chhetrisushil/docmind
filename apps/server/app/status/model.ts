@@ -30,7 +30,7 @@ export const STATUS_MESSAGES: Record<StatusCode, string> = {
   unsupported_content: "This file's content is not a supported document.",
   corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
   too_large: "This document is too large to process.",
-  internal: "Processing failed. Please try again later.",
+  internal: "Processing failed. Delete the document and upload it again.",
 };
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -65,7 +65,9 @@ const stepOf = (p: Record<string, unknown>): IngestStep | undefined =>
  * a cancel with one of these reasons is the document's recorded failure. A user's delete cancels
  * with another reason and is not a failure (its row is purged).
  */
-export const UNRECOVERABLE_REASONS = ["ingest-recovery-exhausted", "ingest-flow-mismatch"] as const;
+export const RECOVERY_EXHAUSTED_REASON = "ingest-recovery-exhausted";
+export const FLOW_MISMATCH_REASON = "ingest-flow-mismatch";
+export const UNRECOVERABLE_REASONS = [RECOVERY_EXHAUSTED_REASON, FLOW_MISMATCH_REASON] as const;
 const isUnrecoverable = (p: Record<string, unknown>): boolean =>
   (UNRECOVERABLE_REASONS as readonly unknown[]).includes(p.reason);
 
