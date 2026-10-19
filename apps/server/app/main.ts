@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { primeDecoy } from "@docmind/auth";
 import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
+import { closeSequence } from "./closeSequence";
 import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
-import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
+import { runAll, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
@@ -132,18 +133,16 @@ async function main(): Promise<void> {
         // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(
-          () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
-          () => closeIngest(ingest), // signals the steps, then aborts in-flight parses and kills their children, before any pool ends
-          // Releases every execution lease this node holds, so the next boot recovers what was interrupted
-          // at once instead of waiting out the lease. After the steps are interrupted, before the stores close.
-          () => app.runtime.closeHeartbeat(),
-          async () => {
-            detachStatusFeed(); // a step still running must not fold onto stores about to close
-            await status.close();
-          },
-          () => app.close(),
-          () => durable.close(),
-          () => pool.end(),
+          ...closeSequence({
+            startsIdle: () => starts.idle(),
+            closeIngest: () => closeIngest(ingest),
+            closeHeartbeat: () => app.runtime.closeHeartbeat(),
+            detachStatusFeed,
+            closeStatus: () => status.close(),
+            closeApp: () => app.close(),
+            closeDurable: () => durable.close(),
+            endPool: () => pool.end(),
+          }),
         );
       },
     }).catch((err: unknown) => {
