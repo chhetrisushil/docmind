@@ -166,6 +166,20 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
       ev("STEP_CANCELLED", { stepId: "ingest-parse", note: SENTENCE }),
       /unexpected key .*\.note/,
     ],
+    [
+      "a free-text denied reason",
+      ev("EXECUTION_DENIED", { op: "cancel", actor: ID, reason: "no: Q3 report.pdf" }),
+      /\.reason is not an id/,
+    ],
+    [
+      "a name as the denied actor",
+      ev("EXECUTION_DENIED", {
+        op: "cancel",
+        actor: "alice@example.com",
+        reason: "only the execution's owner may do this",
+      }),
+      /\.actor is not an id/,
+    ],
   ])("throws for %s", (_name, event, message) => {
     expect(() => check(event)).toThrow(message);
   });
