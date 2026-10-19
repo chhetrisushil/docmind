@@ -186,6 +186,20 @@ exports.parsers.push(
     },
   },
   {
+    // package.json one directory above the bundle: outside the grant (dist/child).
+    id: "escape-up",
+    accepts: () => true,
+    parse: () => {
+      const file = require("node:path").resolve(process.cwd(), "..", "package.json");
+      try {
+        require("node:fs").readFileSync(file);
+        return ok("READ");
+      } catch (e) {
+        return ok(e.code);
+      }
+    },
+  },
+  {
     id: "bare",
     accepts: () => true,
     parse: () => ({ text: String(require("fs-extra")), sections: [], media: [] }),

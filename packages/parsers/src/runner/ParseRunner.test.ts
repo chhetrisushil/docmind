@@ -1,5 +1,4 @@
 import type { ChildProcess } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -148,6 +147,11 @@ describe("ParseRunner", () => {
 
   it("denies the child reads of packages/contracts/src", async () => {
     expect((await runner().run("readsrc", bytes("x"))).text).toBe("denied");
+    released();
+  });
+
+  it("refuses a read one directory above the bundle (the grant is its directory only)", async () => {
+    expect((await runner().run("escape-up", bytes("x"))).text).toBe("ERR_ACCESS_DENIED");
     released();
   });
 
@@ -537,13 +541,10 @@ describe("ParseRunner concurrency and abort", () => {
   ])(
     "an orphaned %s child ends itself (%s)",
     async (parserId, signal) => {
-      const entry = join(__dirname, "../../dist/runner/child.js");
-      const map = Object.fromEntries(
-        ["@docmind/contracts", "zod"].map((n) => [n, realpathSync(require.resolve(n))]),
-      );
+      const entry = join(__dirname, "../../dist/child/child.cjs");
       const { spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
-      const launch = limitedSpawn(1, process.execPath, [entry, JSON.stringify(map)]);
+      const launch = limitedSpawn(1, process.execPath, [entry]);
       const child = spawn(launch.command, launch.args, {
         stdio: ["pipe", "ignore", "ignore", "pipe"],
         env: {},

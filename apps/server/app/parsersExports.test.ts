@@ -7,7 +7,7 @@ describe("@docmind/parsers exports map", () => {
   it("resolves the package entry", () => {
     expect(req.resolve("@docmind/parsers")).toMatch(/dist[\\/]index\.js$/);
   });
-  it.each(["runner/ParseRunner.js", "runner/internals.js", "runner/child.js"])(
+  it.each(["runner/ParseRunner.js", "runner/internals.js", "child/child.cjs"])(
     "refuses the deep import dist/%s",
     (file) => {
       expect(() => req.resolve(`@docmind/parsers/dist/${file}`)).toThrow(

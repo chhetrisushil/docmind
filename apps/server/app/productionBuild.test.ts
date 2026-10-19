@@ -1,4 +1,6 @@
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -32,5 +34,10 @@ describe("the production build", () => {
     // A file here is a production file, or a test-only one a production file imports (tsc pulls
     // imports in even when excluded).
     expect(files.filter((f) => TEST_ONLY.test(f))).toEqual([]);
+  });
+
+  it("builds the parsers' one-file parse child bundle", () => {
+    const entry = createRequire(__filename).resolve("@docmind/parsers"); // <pkg>/dist/index.js
+    expect(existsSync(join(dirname(entry), "child/child.cjs"))).toBe(true);
   });
 });

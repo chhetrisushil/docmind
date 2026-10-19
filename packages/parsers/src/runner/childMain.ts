@@ -1,3 +1,5 @@
+// Bundle entry: scripts/bundle-child.mjs inlines this file and every dependency into
+// dist/child/child.cjs, the one file (and directory) the sandboxed child may read.
 import { createWriteStream } from "node:fs";
 import { createDefaultParsers } from "../defaults";
 import { ParserRegistry } from "../registry";
@@ -28,6 +30,7 @@ async function main(): Promise<void> {
   // is gone. Unref'd, so it never keeps a finished child alive; it cannot fire in a synchronous loop.
   const deadlineMs = Math.min(request.wallClockMs + CHILD_GRACE_MS, 2_147_483_647); // setTimeout's ceiling
   setTimeout(() => reallyExit.call(process, CHILD_DEADLINE_EXIT), deadlineMs).unref();
+  // A non-literal require stays a run-time require in the bundle (the parserModule test seam).
   const parsers: DocumentParser[] = request.module
     ? (require(request.module) as { parsers: DocumentParser[] }).parsers
     : createDefaultParsers();
