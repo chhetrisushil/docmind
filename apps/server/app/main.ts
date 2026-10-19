@@ -49,9 +49,12 @@ async function main(): Promise<void> {
       await pool.end();
       throw new StartupConfigError(err.message);
     }
+    // Cannot verify (e.g. booted before db:migrate granted 0017): boot on, but say so with the code.
+    const code = (err as { code?: unknown } | null)?.code;
     console.error(
-      "migration checksum check failed",
+      "migration checksum verification skipped",
       err instanceof Error ? err.constructor.name : typeof err,
+      typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : "",
     );
   }
 
