@@ -46,4 +46,23 @@ describe.skipIf(!PG_URL)("PgStepGuard (needs DOCMIND_TEST_PG_URL)", () => {
     expect((err as Error).message).not.toContain(bad);
     expect((err as Error).cause).toBeUndefined();
   });
+
+  it("refuses a generation other than the document's current one", async () => {
+    const ref = await f.doc("b".repeat(64));
+    const guard = new PgStepGuard(f.app);
+    const current = (
+      await f.db.owner.query<{ ingest_generation: number }>(
+        "SELECT ingest_generation FROM documents WHERE id = $1",
+        [ref.documentId],
+      )
+    ).rows[0]?.ingest_generation as number;
+    await expect(guard.begin(ref, "parse", current)).resolves.toBeUndefined();
+    await f.db.owner.query("UPDATE documents SET ingest_generation = $2 WHERE id = $1", [
+      ref.documentId,
+      current + 1,
+    ]);
+    await expect(guard.begin(ref, "parse", current)).rejects.toBeInstanceOf(DocumentGoneError);
+    await expect(guard.begin(ref, "parse", current + 1)).resolves.toBeUndefined();
+    await expect(guard.begin(ref, "parse")).resolves.toBeUndefined();
+  });
 });

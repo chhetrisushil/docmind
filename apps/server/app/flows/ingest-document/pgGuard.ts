@@ -16,19 +16,21 @@ export class PgStepGuard implements StepGuard {
   async begin(
     { tenantId, userId, documentId }: IngestStartInput,
     _step: IngestStep,
+    generation?: number,
   ): Promise<void> {
-    let found: boolean;
+    let current: number | undefined;
     try {
-      found = await withTenant(this.pool, tenantId, async (tx) => {
-        const { rowCount } = await tx.query(
-          "SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2",
+      current = await withTenant(this.pool, tenantId, async (tx) => {
+        const { rows } = await tx.query<{ ingest_generation: number }>(
+          "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2",
           [documentId, userId],
         );
-        return (rowCount ?? 0) > 0;
+        return rows[0]?.ingest_generation;
       });
     } catch {
       throw new Error("document existence check failed");
     }
-    if (!found) throw new DocumentGoneError();
+    if (current === undefined) throw new DocumentGoneError();
+    if (generation !== undefined && generation !== current) throw new DocumentGoneError(); // superseded (D1)
   }
 }

@@ -3,6 +3,7 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
+import { generationOf } from "../../status/model";
 import {
   BlobMissingError,
   FAILURE_CODES,
@@ -28,10 +29,11 @@ export type StepResult = z.infer<typeof StepResult>;
 /**
  * Called first by every step. Throws DocumentGoneError when the document (or its owner row) is
  * gone, and writes nothing: the document's status is the `ingest-status` model's job, folded from
- * the step events.
+ * the step events. With `generation`, a document now on another generation is gone too: a
+ * superseded execution must not write (D1).
  */
 export interface StepGuard {
-  begin(ref: IngestStartInput, step: IngestStep): Promise<void>;
+  begin(ref: IngestStartInput, step: IngestStep, generation?: number): Promise<void>;
 }
 
 /**
@@ -167,10 +169,11 @@ export function stepEffect(
     ref: IngestStartInput,
     signal: AbortSignal | undefined,
     progress: () => void,
+    generation: number | undefined,
   ): Promise<StepResult> => {
     const bound = options.timeoutMs;
     const run = async (inner: AbortSignal | undefined): Promise<StepResult> => {
-      await guard.begin(ref, step);
+      await guard.begin(ref, step, generation);
       // The result is written to the event log: nothing outside StepResult may reach it.
       const parsed = StepResult.safeParse({
         outcome: "done",
@@ -205,15 +208,21 @@ export function stepEffect(
       const waitSignals = [ctx?.signal, options.shutdown].filter((x): x is AbortSignal => !!x);
       const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
       const ceiling = options.maxAttemptsTotal ?? MAX_ATTEMPTS_TOTAL;
+      const generation = ctx?.executionId ? generationOf(ctx.executionId) : undefined;
       let total = 0;
       for (let attempt = 1; ; attempt++) {
         total++;
         // Set by the work (after a committed unit) through `progress`; read only when this attempt times out.
         const made = { value: false };
         try {
-          return await attemptOnce(ref, ctx?.signal, () => {
-            made.value = true;
-          });
+          return await attemptOnce(
+            ref,
+            ctx?.signal,
+            () => {
+              made.value = true;
+            },
+            generation,
+          );
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
           if (isDocumentGone(err)) return { outcome: "document_gone" };
