@@ -1,8 +1,9 @@
+import { inspect } from "node:util";
 import type { LlmRequest } from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
 import { AnthropicMessagesProvider } from "./provider";
-import { type FakeAnthropic, startFakeAnthropic } from "./testing/fakeAnthropic";
+import { type FakeAnthropic, type FakeReply, startFakeAnthropic } from "./testing/fakeAnthropic";
 
 let fake: FakeAnthropic;
 beforeAll(async () => {
@@ -90,8 +91,18 @@ describe("AnthropicMessagesProvider over the fake server", () => {
     await expect(provider({ maxResponseBytes: 1_000 }).complete(HI)).rejects.toBeInstanceOf(
       LlmRequestError,
     );
-    fake.reply(() => ({ status: 302, rawBody: "" }));
-    await expect(provider().complete(HI)).rejects.toBeInstanceOf(LlmRequestError);
+    const target = await startFakeAnthropic();
+    try {
+      fake.reply(() => ({
+        status: 302,
+        rawBody: "",
+        headers: { location: `${target.url}/v1/messages` },
+      }));
+      await expect(provider().complete(HI)).rejects.toBeInstanceOf(LlmRequestError);
+      expect(target.requests).toHaveLength(0);
+    } finally {
+      await target.close();
+    }
     fake.reply(() => ({ status: 200, rawBody: "not json" }));
     await expect(provider().complete(HI)).rejects.toBeInstanceOf(LlmRequestError);
     fake.reply(() => ({
@@ -103,10 +114,114 @@ describe("AnthropicMessagesProvider over the fake server", () => {
   });
 
   it("refuses a baseUrl with credentials, a query or a non-http scheme, naming the option only", () => {
-    for (const baseUrl of ["http://u:p@127.0.0.1", "http://127.0.0.1/?x=1", "file:///etc"]) {
+    for (const baseUrl of [
+      "http://u:p@127.0.0.1",
+      "http://127.0.0.1/?x=1",
+      "http://127.0.0.1/?",
+      "http://127.0.0.1/#f",
+      "http://127.0.0.1/#",
+      "file:///etc",
+    ]) {
       expect(() => provider({ baseUrl })).toThrow(
         /^baseUrl must be an http\(s\) URL without credentials, query or fragment$/,
       );
     }
+  });
+
+  it("keeps the key out of JSON, inspect and own properties, and refuses a key that is not header-safe", () => {
+    const p = provider({ apiKey: "sk-test-SECRETKEY-123" });
+    expect(JSON.stringify(p)).not.toContain("SECRETKEY");
+    expect(inspect(p, { depth: 5, showHidden: true })).not.toContain("SECRETKEY");
+    for (const apiKey of ["", "a\r\nb", "a\nb", "k\u00e9y", "has space"]) {
+      expect(() => provider({ apiKey })).toThrow(/^apiKey must be a header-safe string$/);
+    }
+  });
+});
+
+/** Wraps fetch so each response body records whether it was drained or cancelled. */
+function trackedFetch() {
+  const bodies: { released: boolean }[] = [];
+  let firstChunk: () => void = () => {};
+  const arrived = new Promise<void>((r) => {
+    firstChunk = r;
+  });
+  const tracked: typeof fetch = async (input, init) => {
+    const res = await fetch(input, init);
+    if (!res.body) return res;
+    const state = { released: false };
+    bodies.push(state);
+    const reader = res.body.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(c) {
+        const { done, value } = await reader.read().catch((err: unknown) => {
+          state.released = true; // the transport errored (abort or timeout): it is torn down
+          throw err;
+        });
+        if (done) {
+          state.released = true;
+          c.close();
+        } else {
+          c.enqueue(value);
+          firstChunk();
+        }
+      },
+      async cancel(reason) {
+        state.released = true;
+        await reader.cancel(reason).catch(() => {});
+      },
+    });
+    return new Response(body, { status: res.status, headers: res.headers });
+  };
+  return { fetch: tracked, bodies, arrived };
+}
+
+describe("response body release", () => {
+  const expectReleased = (t: ReturnType<typeof trackedFetch>) => {
+    expect(t.bodies.length).toBeGreaterThan(0);
+    expect(t.bodies.every((b) => b.released)).toBe(true);
+  };
+
+  it("releases the body on success, an error status, cap overflow and malformed JSON", async () => {
+    const cases: [() => FakeReply, (p: AnthropicMessagesProvider) => Promise<unknown>][] = [
+      [() => ({ text: "fine" }), (p) => p.complete(HI)],
+      [
+        () => ({ status: 400, rawBody: "{}" }),
+        (p) => expect(p.complete(HI)).rejects.toBeInstanceOf(LlmRequestError),
+      ],
+      [
+        () => ({ text: "x".repeat(10_000) }),
+        (p) => expect(p.complete(HI)).rejects.toBeInstanceOf(LlmRequestError),
+      ],
+      [
+        () => ({ status: 200, rawBody: "not json" }),
+        (p) => expect(p.complete(HI)).rejects.toBeInstanceOf(LlmRequestError),
+      ],
+    ];
+    for (const [reply, run] of cases) {
+      fake.reply(reply);
+      const t = trackedFetch();
+      await run(provider({ fetch: t.fetch, maxResponseBytes: 1_000 }));
+      expectReleased(t);
+    }
+  });
+
+  it("times out mid-body as LlmUnavailableError and releases the body", async () => {
+    fake.reply(() => ({ stallAfterHeaders: true }));
+    const t = trackedFetch();
+    await expect(provider({ fetch: t.fetch, timeoutMs: 100 }).complete(HI)).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expectReleased(t);
+  });
+
+  it("aborts mid-body as LlmAbortedError and releases the body", async () => {
+    fake.reply(() => ({ stallAfterHeaders: true }));
+    const t = trackedFetch();
+    const ac = new AbortController();
+    const pending = provider({ fetch: t.fetch }).complete({ ...HI, signal: ac.signal });
+    await t.arrived; // the first part of the body has been read
+    ac.abort();
+    await expect(pending).rejects.toBeInstanceOf(LlmAbortedError);
+    expectReleased(t);
   });
 });

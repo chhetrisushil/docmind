@@ -5,6 +5,7 @@ import { toMessagesBody } from "./request";
 const TRANSIENT = new Set([408, 409, 429, 529]);
 const DEFAULT_BASE = "https://api.anthropic.com";
 const DEFAULT_MAX_RESPONSE = 4 * 1024 * 1024;
+const BAD_KEY = "apiKey must be a header-safe string";
 const BAD_BASE = "baseUrl must be an http(s) URL without credentials, query or fragment";
 
 export interface AnthropicOptions {
@@ -18,6 +19,7 @@ export interface AnthropicOptions {
 }
 
 function checkedBase(raw: string): string {
+  if (/[?#]/.test(raw)) throw new TypeError(BAD_BASE);
   let url: URL;
   try {
     url = new URL(raw);
@@ -83,9 +85,16 @@ export class AnthropicMessagesProvider implements LlmProvider {
   };
   readonly model: string;
   private readonly base: string;
+  /** Private (not an enumerable property) so logging or diffing the provider never prints it. */
+  readonly #apiKey: string;
+  private readonly o: Omit<AnthropicOptions, "apiKey">;
 
-  constructor(private readonly o: AnthropicOptions) {
-    if (!o.apiKey) throw new TypeError("apiKey must be set");
+  constructor({ apiKey, ...o }: AnthropicOptions) {
+    if (typeof apiKey !== "string" || !/^[\x21-\x7e]+$/.test(apiKey)) {
+      throw new TypeError(BAD_KEY);
+    }
+    this.#apiKey = apiKey;
+    this.o = o;
     if (!Number.isSafeInteger(o.maxTokens) || o.maxTokens < 1) {
       throw new RangeError("maxTokens must be a positive integer");
     }
@@ -108,7 +117,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
         signal,
         headers: {
           "content-type": "application/json",
-          "x-api-key": this.o.apiKey,
+          "x-api-key": this.#apiKey,
           "anthropic-version": "2023-06-01",
         },
         body,
@@ -169,6 +178,9 @@ async function readCapped(res: Response, max: number): Promise<string> {
   } catch (err) {
     if (err instanceof LlmRequestError) throw err;
     throw new LlmUnavailableError(); // the connection broke or timed out mid-body
+  } finally {
+    // The reader locks the stream, so the caller's res.body.cancel() cannot release it.
+    await reader.cancel().catch(() => {});
   }
   return Buffer.concat(chunks).toString("utf8");
 }
