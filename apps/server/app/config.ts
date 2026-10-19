@@ -1,4 +1,5 @@
 import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loom/app";
+import type { EventEnvelope } from "@loom/core";
 import { type IngestDeps, ingestBeginEffect } from "./flows/ingest-document/deps";
 import {
   agentModules,
@@ -8,6 +9,7 @@ import {
   toolModules,
 } from "./loom.gen";
 import { authorizer, executionAuthorizer, principalCodec, resumeAuthenticator } from "./security";
+import { isIngestExecution } from "./status/model";
 
 /**
  * The composition root: the only place that picks an implementation for each interface.
@@ -21,6 +23,8 @@ import { authorizer, executionAuthorizer, principalCodec, resumeAuthenticator } 
  */
 export interface FlowDeps {
   ingest?: IngestDeps;
+  /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
+  onEvent?: (event: EventEnvelope) => void;
 }
 
 export function buildApp(
@@ -35,6 +39,10 @@ export function buildApp(
     toolModules,
     skillModules,
     projectionModules,
+    observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
+    // The status model folds each ingest execution's log from its first event, so compaction must never
+    // remove an ingest execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
+    durability: { retention: { compactionExempt: isIngestExecution } },
     execution: {
       registerEffects: (effects) => {
         if (deps.ingest) effects.register("ingest-begin", ingestBeginEffect(deps.ingest));
