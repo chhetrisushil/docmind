@@ -1,7 +1,8 @@
+import { mdParser } from "./md";
 import { txtParser } from "./txt";
 
 export * from "./types";
 export { ParserRegistry } from "./registry";
-export { txtParser };
+export { mdParser, txtParser };
 export { createDefaultParsers } from "./defaults";
 export * from "./runner/ParseRunner";
