@@ -71,20 +71,33 @@ describe("the chunk step", () => {
     expect(calls).toEqual(["begin:chunk", "count"]);
   });
 
-  it("after a crash between replace and drop, stores the same chunks again and drops", async () => {
+  it("when the drop fails after the chunks were stored, the retry stores them again and drops", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let drops = 0;
     const { d, calls } = deps();
-    await run(d);
-    await run(d);
-    expect(calls.filter((c) => c === "replace:1")).toHaveLength(2);
-    expect(calls.filter((c) => c === "drop")).toHaveLength(2);
+    d.parsed.drop = async () => {
+      calls.push("drop");
+      if (++drops === 1) throw new Error("connection reset");
+    };
+    expect(await run(d)).toEqual({ outcome: "done", count: 1 });
+    expect(calls).toEqual([
+      "begin:chunk",
+      "take",
+      "replace:1",
+      "drop",
+      "begin:chunk",
+      "take",
+      "replace:1",
+      "drop",
+    ]);
   });
 
   it("an empty document yields zero chunks and still drops the parsed row", async () => {
     const empty = { text: "", sections: [], media: [] };
-    const { d, calls } = deps({ parsed: parsedPort(async () => empty) });
-    // the drop of this port is not recorded; replace:0 proves the empty path ran
+    const { d, calls } = deps();
+    d.parsed.take = async () => empty as never;
     expect(await run(d)).toEqual({ outcome: "done", count: 0 });
-    expect(calls).toContain("replace:0");
+    expect(calls).toEqual(["begin:chunk", "replace:0", "drop"]);
   });
 
   it("returns a count only: no text reaches the result", async () => {
