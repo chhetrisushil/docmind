@@ -26,9 +26,9 @@ const store = (count: () => Promise<number>) => ({
 });
 
 describe("placeholders", () => {
-  // Part 2 replaces these three names with real steps and updates this guard in the same PR.
-  it("are exactly analyze, summarize and link", () => {
-    expect([...PLACEHOLDER_STEPS]).toEqual(["analyze", "summarize", "link"]);
+  // Part 2 replaces these names with real steps and updates this guard in the same PR.
+  it("are exactly summarize and link", () => {
+    expect([...PLACEHOLDER_STEPS]).toEqual(["summarize", "link"]);
   });
 
   it.each(PLACEHOLDER_STEPS)("%s only checks the document and reports done", async (step) => {
@@ -54,7 +54,7 @@ describe("placeholders", () => {
       },
     };
     const waits: number[] = [];
-    const effect = placeholderEffect("analyze", guard, {
+    const effect = placeholderEffect("summarize", guard, {
       sleep: async (ms) => void waits.push(ms),
     });
     expect(await run(effect)).toEqual({ outcome: "done" });

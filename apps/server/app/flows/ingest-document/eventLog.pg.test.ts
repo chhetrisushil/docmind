@@ -173,12 +173,20 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "done", count: 1, model: "ollama/fake-embed" },
         stepId: "ingest-embed",
       });
-      for (const [i, id] of ["analyze", "summarize", "link"].entries()) {
-        expect(raw[12 + i * 3]?.payload).toEqual({
+      expect(raw[12]?.payload).toEqual({
+        output: { outcome: "done", count: expect.any(Number) },
+        stepId: "ingest-analyze",
+      });
+      for (const [i, id] of ["summarize", "link"].entries()) {
+        expect(raw[15 + i * 3]?.payload).toEqual({
           output: { outcome: "done" },
           stepId: `ingest-${id}`,
         });
       }
+      const statsRow = await f.db.owner.query("SELECT stats_enc FROM documents WHERE id = $1", [
+        ref.documentId,
+      ]);
+      expect(statsRow.rows[0].stats_enc.__loomEnc).toBe("loom/aes-256-gcm");
       expect(raw[21]?.payload).toEqual({
         output: { outcome: "done", count: 1 },
         stepId: "ingest-finalize",

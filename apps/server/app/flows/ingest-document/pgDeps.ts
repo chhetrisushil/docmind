@@ -7,6 +7,7 @@ import { type IngestWiring, parseStepTimeoutMs } from "./limits";
 import { PgChunkStore } from "./pgChunks";
 import { PgStepGuard } from "./pgGuard";
 import { PgParsedStore } from "./pgParsed";
+import { PgDocumentResults } from "./pgResults";
 import { PgDocumentSource } from "./pgSource";
 import { VisionReader } from "./vision";
 
@@ -35,6 +36,7 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     source: new PgDocumentSource(pool, blobs),
     parsed: new PgParsedStore(pool, fields),
     chunks: new PgChunkStore(pool, fields),
+    results: new PgDocumentResults(pool, fields),
     registry: wiring.registry,
     vectors,
     embedder: wiring.embedder,

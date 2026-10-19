@@ -1,3 +1,4 @@
+import type { DocumentStats, DocumentSummary } from "@docmind/contracts";
 import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
 import { HashingEmbeddingProvider } from "@loom/memory";
@@ -5,6 +6,7 @@ import { isBase64Of } from "../../crypto/fields";
 import { ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
 import { INGEST_STEPS, type IngestStartInput } from "./flow";
+import type { DocumentResults } from "./pgResults";
 
 const PARSED = {
   text: "h",
@@ -13,6 +15,22 @@ const PARSED = {
 };
 
 const EMBEDDER = new HashingEmbeddingProvider({ dimensions: 8 });
+
+/** In-memory DocumentResults: stats and summaries keyed by document id. */
+export function fakeResults(): DocumentResults & {
+  stats: Map<string, DocumentStats>;
+  summaries: Map<string, DocumentSummary>;
+} {
+  const stats = new Map<string, DocumentStats>();
+  const summaries = new Map<string, DocumentSummary>();
+  return {
+    stats,
+    summaries,
+    putStats: async (ref, v) => void stats.set(ref.documentId, v),
+    hasSummary: async (ref) => summaries.has(ref.documentId),
+    putSummary: async (ref, v) => void summaries.set(ref.documentId, v),
+  };
+}
 
 /** Fakes of every ingest port, for tests that run the flow over an in-memory Loom app. */
 export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
@@ -28,6 +46,7 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       has: async () => false,
       drop: async () => {},
     },
+    results: fakeResults(),
     chunks: { replace: async (_r, c) => c.length, count: async () => 0, read: async () => [] },
     vectors: new InMemoryChunkVectors({
       modelId: EMBEDDER.modelId,
