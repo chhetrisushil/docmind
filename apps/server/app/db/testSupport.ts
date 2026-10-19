@@ -49,25 +49,32 @@ export async function createTestDb(): Promise<TestDb> {
   };
 }
 
-const ROLE_LOCK_KEY = 727275;
+export const ROLE_LOCK_KEY = 727275;
 
 /**
  * Runs `fn` under a session-level advisory lock on the maintenance database named in
  * DOCMIND_TEST_PG_URL. Roles are cluster-global but advisory locks are per database, so the lock
  * must live in one database every test process shares (not in a test's own database). Serializes
- * `ALTER ROLE` across concurrent vitest processes ("tuple concurrently updated").
+ * `ALTER ROLE` across concurrent vitest processes ("tuple concurrently updated"). The lock and the
+ * unlock use one checked-out client: a pooled idle client is reaped after `idleTimeoutMillis`,
+ * which would end the session and drop the lock while `fn` runs. `pool` is for tests of this helper.
  */
-export async function withRoleLock<T>(fn: () => Promise<T>): Promise<T> {
+export async function withRoleLock<T>(fn: () => Promise<T>, pool?: Pool): Promise<T> {
   if (!PG_URL) throw new Error("DOCMIND_TEST_PG_URL is not set");
-  const lock = new Pool({ connectionString: PG_URL, max: 1 });
+  const own = pool ?? new Pool({ connectionString: PG_URL, max: 1 });
   try {
-    await lock.query("SELECT pg_advisory_lock($1)", [ROLE_LOCK_KEY]);
+    const client = await own.connect();
     try {
-      return await fn();
+      await client.query("SELECT pg_advisory_lock($1)", [ROLE_LOCK_KEY]);
+      try {
+        return await fn();
+      } finally {
+        await client.query("SELECT pg_advisory_unlock($1)", [ROLE_LOCK_KEY]).catch(() => {});
+      }
     } finally {
-      await lock.query("SELECT pg_advisory_unlock($1)", [ROLE_LOCK_KEY]);
+      client.release();
     }
   } finally {
-    await lock.end();
+    if (!pool) await own.end();
   }
 }
