@@ -2,5 +2,29 @@ word-extractor-test11.doc
 
 Source: https://github.com/morungos/node-word-extractor/raw/develop/__tests__/data/test11.doc
 Repository: https://github.com/morungos/node-word-extractor
-Licence: MIT (the repository's licence)
 Commit: develop at d971d9f69056245ae129bd2ce31436d518293854 (last commit touching the file: 1d96e166256d8609d79d6d3940226b4b5efd2f40), fetched 2026-10-20
+SHA-256: 69518782e37ac2d38a519857abae4bf7b5f10320fb7be3176bcd7751643d480e
+
+Licence: MIT. Upstream licence text, reproduced as required:
+
+The MIT License (MIT)
+
+Copyright (c) 2016-2021 Stuart Watt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
