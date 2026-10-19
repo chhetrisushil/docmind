@@ -13,6 +13,7 @@ import {
   ingestScopeOf,
   ingestStatus,
   isIngestExecution,
+  progressOf,
   viewOf,
 } from "./model";
 import { evt, ingestRun } from "./testing";
@@ -207,5 +208,59 @@ describe("the view", () => {
   it("has a message for every failure code and for internal, and UPLOADED carries no error", () => {
     expect(Object.keys(STATUS_MESSAGES).sort()).toEqual([...FAILURE_CODES, "internal"].sort());
     expect(UPLOADED).toEqual({ status: "uploaded", step: null, error: null });
+  });
+});
+
+describe("progressOf", () => {
+  const e = (type: string, payload: unknown) => evt(exec(".2"), 3, type, payload);
+  it("derives the SSE event for a step start, a permanent failure and finalize's completion", () => {
+    expect(progressOf(e("STEP_STARTED", { stepId: "ingest-embed" }))).toEqual({
+      userId: U,
+      progress: { documentId: D, step: "embed", status: "embedding" },
+    });
+    expect(
+      progressOf(
+        e("STEP_COMPLETED", {
+          stepId: "ingest-parse",
+          output: { outcome: "failed", code: "unsupported_content" },
+        }),
+      ),
+    ).toEqual({
+      userId: U,
+      progress: { documentId: D, step: "parse", status: "failed", detail: "unsupported_content" },
+    });
+    expect(
+      progressOf(e("STEP_COMPLETED", { stepId: "ingest-finalize", output: { outcome: "done" } })),
+    ).toEqual({ userId: U, progress: { documentId: D, step: "finalize", status: "ready" } });
+  });
+
+  it("derives a terminal failed event, without a step, for an execution failure", () => {
+    expect(progressOf(e("EXECUTION_FAILED", {}))).toEqual({
+      userId: U,
+      progress: { documentId: D, status: "failed", detail: "internal" },
+    });
+  });
+
+  it("puts only a fixed code in detail, even when the log carries free text as the code", () => {
+    const out = progressOf(
+      e("STEP_COMPLETED", {
+        stepId: "ingest-parse",
+        output: { outcome: "failed", code: "secret text" },
+      }),
+    );
+    expect(out?.progress.detail).toBe("internal");
+  });
+
+  it("derives nothing for events that do not move the status, or for other executions", () => {
+    expect(progressOf(evt(exec(), 1, "EXECUTION_STARTED", {}))).toBeNull();
+    expect(
+      progressOf(
+        evt(exec(), 2, "STEP_COMPLETED", { stepId: "ingest-parse", output: { outcome: "done" } }),
+      ),
+    ).toBeNull();
+    expect(
+      progressOf(evt(`u_${U}:chat-${D}`, 1, "STEP_STARTED", { stepId: "ingest-parse" })),
+    ).toBeNull();
+    expect(progressOf(evt(`u_${U}:chat-${D}`, 2, "EXECUTION_FAILED", {}))).toBeNull();
   });
 });

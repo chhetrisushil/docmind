@@ -8,6 +8,7 @@ import {
   foldedStates,
 } from "@loom/plugin-read-model";
 import { ingestExecutionId } from "../documents/ingest";
+import type { ProgressBus } from "../documents/progress";
 import {
   INGEST_STATUS_MODEL,
   type IngestStatusState,
@@ -17,6 +18,7 @@ import {
   ingestKeyOf,
   ingestScopeOf,
   ingestStatus,
+  progressOf,
   viewOf,
 } from "./model";
 
@@ -29,6 +31,8 @@ export interface IngestStatusOptions {
   source: ReadModelEventSource;
   /** `sensitivePathsFromSteps(...)` unioned with `sensitiveMapFromCovers(...)`, computed after `defineConfig` (R4). */
   sensitive: SensitiveMap;
+  /** Progress events leave here, after the fold has applied. */
+  bus: ProgressBus;
   onError?(err: unknown): void;
 }
 
@@ -39,6 +43,7 @@ const logClass = (err: unknown) =>
 export class IngestStatus {
   private readonly service: ReadModelService;
   private readonly report: (err: unknown) => void;
+  private publishing: Promise<void> = Promise.resolve();
 
   constructor(private readonly o: IngestStatusOptions) {
     this.report = o.onError ?? logClass;
@@ -60,9 +65,21 @@ export class IngestStatus {
     return { rebuilt, executionsScanned };
   }
 
-  /** `observability.onEvent`: synchronous and never throws; the fold is applied asynchronously (ADR 0132 D4). */
+  /**
+   * `observability.onEvent`: synchronous and never throws. Folds the event (asynchronously), then
+   * publishes its progress event on one chain after `drain()`: a client that refetches on the event
+   * never reads an older status, and events leave in log order. A failed fold is reported to
+   * `onError` and the event is still published (the log is the authority; catch-up heals the row).
+   * The publish userId comes from the execution id, never from client input.
+   */
   onEvent = (event: EventEnvelope): void => {
     this.service.handleEvent(event);
+    const derived = progressOf(event);
+    if (derived === null) return;
+    this.publishing = this.publishing
+      .then(() => this.service.drain())
+      .then(() => this.o.bus.publish({ userId: derived.userId }, derived.progress))
+      .catch((err) => this.report(err));
   };
 
   /** One query for one page of documents, under the caller's tenant: absent documents are simply missing. */
@@ -115,6 +132,7 @@ export class IngestStatus {
 
   /** Wait for every fold scheduled so far (shutdown, tests). Callers close the event feed first: events fed afterwards are not awaited. */
   async close(): Promise<void> {
+    await this.publishing;
     await this.service.drain();
   }
 }

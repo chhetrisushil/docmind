@@ -77,6 +77,16 @@ describe("progress events without a step", () => {
     expect(DocumentProgressEvent.parse(failed)).toEqual(failed);
     expect(DocumentProgressEvent.safeParse({ ...failed, step: "ocr" }).success).toBe(false);
   });
+
+  it("allows a step-less event only when failed, and detail only as a fixed code", () => {
+    expect(DocumentProgressEvent.safeParse({ documentId: ID, status: "parsing" }).success).toBe(
+      false,
+    );
+    expect(
+      DocumentProgressEvent.safeParse({ documentId: ID, status: "failed", detail: "free text" })
+        .success,
+    ).toBe(false);
+  });
 });
 
 describe("IngestStep", () => {
