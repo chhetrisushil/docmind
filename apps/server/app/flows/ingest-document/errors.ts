@@ -57,15 +57,15 @@ export class PermanentIngestError extends Error {
 
 const FK_VIOLATION = "23503";
 /**
- * Constraint names of the foreign keys that point at `documents` (migration 0011). A foreign-key
- * violation on one of them means the document went away mid-step. Tables added later with a
- * documents FK (e.g. chunk_links) must add their constraint name here.
+ * Constraint names of the foreign keys whose violation means THIS step's document went away mid-step.
+ * Keys that can also fail because a different document vanished (chunk_links, which writes reverse
+ * rows into other documents' chunks) stay out: they are retried, and the next attempt's owner-scoped
+ * document lock decides.
  */
 export const DOCUMENT_FKEY_CONSTRAINTS: readonly string[] = [
   "chunks_document_fkey",
   "parsed_documents_document_fkey",
   "chunk_entities_chunk_fkey",
-  "chunk_links_src_fkey",
 ];
 
 const isDocumentFkViolation = (err: unknown): boolean => {

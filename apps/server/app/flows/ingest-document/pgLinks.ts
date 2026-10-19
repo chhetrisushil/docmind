@@ -1,5 +1,6 @@
 import { ParseAbortedError } from "@docmind/parsers";
 import type { Pool } from "pg";
+import { LINK_LOCK_EXCLUSIVE } from "../../db/entityLock";
 import { withTenant } from "../../db/tenant";
 import { DocumentGoneError } from "./errors";
 import type { IngestStartInput } from "./flow";
@@ -36,7 +37,7 @@ function bothDirections(links: Link[]): Link[] {
     if (!UUID.test(l.src) || !UUID.test(l.dst) || l.src.toLowerCase() === l.dst.toLowerCase()) {
       continue;
     }
-    if (!(l.weight > 0)) continue;
+    if (!(l.weight >= 1e-30)) continue;
     const w = Math.min(l.weight, 1);
     const src = l.src.toLowerCase();
     const dst = l.dst.toLowerCase();
@@ -67,6 +68,7 @@ export class PgLinkStore implements LinkStore {
         [ref.documentId, ref.userId],
       );
       if (!lock.rowCount) throw new DocumentGoneError();
+      await tx.query(LINK_LOCK_EXCLUSIVE, [ref.userId]);
       await tx.query(
         `DELETE FROM chunk_links l USING chunks c
           WHERE c.document_id = $1 AND (l.src_chunk_id = c.id OR l.dst_chunk_id = c.id)`,
@@ -77,10 +79,10 @@ export class PgLinkStore implements LinkStore {
         const res = await tx.query<{ src_chunk_id: string }>(
           `INSERT INTO chunk_links (tenant_id, src_chunk_id, dst_chunk_id, kind, weight)
            SELECT $1, sc.id, dc.id, u.kind, u.weight
-             FROM unnest($2::text[], $3::text[], $4::text[], $5::real[]) AS u(src, dst, kind, weight)
-             JOIN chunks sc ON sc.id::text = u.src AND sc.tenant_id = $1
+             FROM unnest($2::uuid[], $3::uuid[], $4::text[], $5::real[]) AS u(src, dst, kind, weight)
+             JOIN chunks sc ON sc.id = u.src AND sc.tenant_id = $1
              JOIN documents sd ON sd.id = sc.document_id AND sd.owner_id = $6
-             JOIN chunks dc ON dc.id::text = u.dst AND dc.tenant_id = $1
+             JOIN chunks dc ON dc.id = u.dst AND dc.tenant_id = $1
              JOIN documents dd ON dd.id = dc.document_id AND dd.owner_id = $6
             WHERE sc.document_id = $7 OR dc.document_id = $7
            ON CONFLICT (tenant_id, src_chunk_id, dst_chunk_id, kind)
@@ -117,11 +119,11 @@ export class PgLinkStore implements LinkStore {
 
   async countForDocument(ref: IngestStartInput): Promise<number> {
     return withTenant(this.pool, ref.tenantId, async (tx) => {
-      const lock = await tx.query("SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2", [
+      const owned = await tx.query("SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2", [
         ref.documentId,
         ref.userId,
       ]);
-      if (!lock.rowCount) throw new DocumentGoneError();
+      if (!owned.rowCount) throw new DocumentGoneError();
       return countLinks(tx, ref.documentId);
     });
   }

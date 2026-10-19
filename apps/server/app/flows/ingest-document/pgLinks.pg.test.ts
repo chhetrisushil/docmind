@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { ParseAbortedError } from "@docmind/parsers";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { LINK_LOCK_EXCLUSIVE } from "../../db/entityLock";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
 import { insertDocument } from "../../documents/repo";
 import { T1, T2, U1, U1B, U2, newDocument } from "../../documents/testHarness";
-import { DOCUMENT_FKEY_CONSTRAINTS, DocumentGoneError } from "./errors";
+import { DocumentGoneError } from "./errors";
 import type { IngestStartInput } from "./flow";
 import { type PgFixture, startPgFixture } from "./pgFixture";
 import { type Link, type LinkStore, MAX_DEGREE, PgLinkStore } from "./pgLinks";
@@ -107,6 +108,7 @@ describe.skipIf(!PG_URL)("PgLinkStore (needs DOCMIND_TEST_PG_URL)", () => {
       edge(ch(DOC_A, 0), "not-a-uuid"),
       edge(ch(DOC_A, 0), ch(DOC_A, 0)),
       edge(ch(DOC_A, 0), ch(DOC_A, 1), 0),
+      edge(ch(DOC_A, 0), ch(DOC_A, 1), 1e-40),
     ]);
     expect(n).toBe(0);
     expect(await all()).toEqual([]);
@@ -167,7 +169,25 @@ describe.skipIf(!PG_URL)("PgLinkStore (needs DOCMIND_TEST_PG_URL)", () => {
     ).rejects.toBeInstanceOf(DocumentGoneError);
   });
 
-  it("treats the src foreign key as a document-gone constraint", () => {
-    expect(DOCUMENT_FKEY_CONSTRAINTS).toContain("chunk_links_src_fkey");
+  it("serialises same-owner writes: a second call waits for the first's transaction", async () => {
+    const held = await fx.db.owner.connect();
+    let second: Promise<number> | undefined;
+    try {
+      await held.query("BEGIN");
+      await held.query(LINK_LOCK_EXCLUSIVE, [U1]);
+      second = store.replaceForDocument(DOC_B, [edge(ch(DOC_B, 0), ch(DOC_B, 1))]);
+      second.catch(() => {});
+      await vi.waitFor(async () => {
+        const { rowCount } = await fx.db.owner.query(
+          "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND wait_event = 'advisory'",
+        );
+        expect(rowCount).toBe(1);
+      });
+      expect(await all()).toEqual([]);
+      await held.query("COMMIT");
+    } finally {
+      held.release();
+    }
+    expect(await second).toBe(2);
   });
 });
