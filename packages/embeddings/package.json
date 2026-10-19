@@ -1,0 +1,31 @@
+{
+  "name": "@docmind/embeddings",
+  "version": "0.0.0",
+  "private": true,
+  "description": "OllamaEmbeddingProvider: Loom's EmbeddingProvider over Ollama's /api/embed.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@loom/memory": "*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}

@@ -12,6 +12,7 @@ overrides:
   '@loom/core': link:../loom/packages/core
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
   '@loom/event-runtime': link:../loom/packages/event-runtime
+  '@loom/memory': link:../loom/packages/memory
   '@loom/plugin-content': link:../loom/plugins/content
   '@loom/plugin-crypto': link:../loom/plugins/crypto
   '@loom/plugin-postgres': link:../loom/plugins/postgres
@@ -146,6 +147,22 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.5)
+
+  packages/embeddings:
+    dependencies:
+      '@loom/memory':
+        specifier: link:../../../loom/packages/memory
+        version: link:../../../loom/packages/memory
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.5)
