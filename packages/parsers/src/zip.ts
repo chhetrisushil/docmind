@@ -51,7 +51,8 @@ export function zipBudget(bytes: Uint8Array, limits: ZipLimits): void {
   if (count === 0xffff || dirSize === 0xffffffff || dirOffset === 0xffffffff)
     reject("unsupported_content"); // ZIP64
   if (count > limits.maxEntries) reject("too_large");
-  if (dirOffset + dirSize > eocd) reject("corrupt_content");
+  // jszip ignores the counts and shifts offsets by any gap before the record: demand the directory ends exactly at it.
+  if (dirOffset + dirSize !== eocd) reject("corrupt_content");
 
   let at = dirOffset;
   let total = 0;
@@ -90,4 +91,6 @@ export function zipBudget(bytes: Uint8Array, limits: ZipLimits): void {
     }
     at += 46 + nameLen + extraLen + commentLen;
   }
+  // The headers must fill the directory exactly, so a reader that walks headers (not the count) sees the same set.
+  if (at !== dirOffset + dirSize) reject("corrupt_content");
 }
