@@ -2,5 +2,5 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": ".", "types": ["node"] },
   "include": ["app/**/*", "loom.config.ts"],
-  "exclude": ["**/*.test.ts", "dist"]
+  "exclude": ["**/*.test.ts", "**/testing.ts", "**/pgFixture.ts", "**/ingestStack.ts", "dist"]
 }

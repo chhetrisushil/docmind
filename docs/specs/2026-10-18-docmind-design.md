@@ -136,8 +136,9 @@ Every table carries `tenant_id`.
   - `status` is one of `uploaded | parsing | embedding | ready | failed`.
   - `UNIQUE(tenant_id, owner_id, fingerprint)`: re-uploading identical bytes returns the existing
     document.
-- **`chunks`** `(id, tenant_id, document_id → ON DELETE CASCADE, ordinal, text_enc, locator jsonb,
+- **`chunks`** `(id, tenant_id, document_id → ON DELETE CASCADE, ordinal, section_ordinal, text_enc, locator jsonb,
   token_count, embedding vector(N), embedding_model)`
+  - `locator` holds numbers and a kind only; the heading path is content and is sealed inside `text_enc` as `{text, headingPath}`. `section_ordinal` is the chunker's section index (Decision D3).
   - Indexes: HNSW (cosine) on `embedding`; B-tree on `(tenant_id, document_id)`.
 - **`chat_sessions`** `(id = Loom conversationId, tenant_id, user_id, title_enc, scope jsonb,
   created_at, last_message_at, message_count, deleted_at)`
