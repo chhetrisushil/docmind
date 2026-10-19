@@ -1,4 +1,4 @@
-import type { DocumentStatus, IngestStep } from "@docmind/contracts";
+import type { DocumentProgressEvent, DocumentStatus, IngestStep } from "@docmind/contracts";
 import { type EventEnvelope, projection$ } from "@loom/core";
 import { FAILURE_CODES, type FailureCode } from "../flows/ingest-document/errors";
 
@@ -118,3 +118,20 @@ export const viewOf = (s: IngestStatusState): StatusView => ({
   step: s.step,
   error: s.code === null ? null : STATUS_MESSAGES[s.code],
 });
+
+/** The SSE event one log event produces, from the same handlers the model folds with. Pure; `detail` is only ever a fixed code. */
+export function progressOf(
+  e: EventEnvelope,
+): { userId: string; progress: DocumentProgressEvent } | null {
+  const documentId = ingestKeyOf(e.executionId);
+  const userId = ingestScopeOf(e.executionId);
+  if (documentId === undefined || userId === undefined) return null;
+  // An unexpected failure (an embedder outage, a crash) names no step: the terminal event carries none.
+  if (e.eventType === "EXECUTION_FAILED") {
+    return { userId, progress: { documentId, status: "failed", detail: "internal" } };
+  }
+  const next = foldIngestStatus([e]);
+  if (next.step === null) return null; // not a step transition (the model's null step is absent here)
+  const detail = next.status === "failed" && next.code !== null ? { detail: next.code } : {};
+  return { userId, progress: { documentId, step: next.step, status: next.status, ...detail } };
+}

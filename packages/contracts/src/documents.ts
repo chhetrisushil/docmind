@@ -99,11 +99,24 @@ export const ListDocumentsResponse = z.object({
 });
 export type ListDocumentsResponse = z.infer<typeof ListDocumentsResponse>;
 
-/** One event on `GET /api/documents/events` (SSE). */
-export const DocumentProgressEvent = z.object({
-  documentId: Uuid,
-  step: IngestStep.optional(),
-  status: DocumentStatus,
-  detail: z.string().optional(),
-});
+/** The only values `detail` can take: a failure code (never free text, so no content can ride along). */
+export const ProgressDetail = z.enum([
+  "unsupported_content",
+  "corrupt_content",
+  "too_large",
+  "internal",
+]);
+export type ProgressDetail = z.infer<typeof ProgressDetail>;
+
+/** One event on `GET /api/documents/events` (SSE). Only a terminal failure may omit `step`. */
+export const DocumentProgressEvent = z
+  .object({
+    documentId: Uuid,
+    step: IngestStep.optional(),
+    status: DocumentStatus,
+    detail: ProgressDetail.optional(),
+  })
+  .refine((e) => e.step !== undefined || e.status === "failed", {
+    message: "an event without a step must be failed",
+  });
 export type DocumentProgressEvent = z.infer<typeof DocumentProgressEvent>;
