@@ -60,7 +60,19 @@ export class StepTimeoutError extends Error {
  */
 export const ATTEMPT_SETTLE_MS = 30_000;
 
+/**
+ * Absolute ceiling on attempts of one step, progress or not. Progress resets the retry count, so this
+ * is what makes termination unconditional (a store that reports success but never shrinks its work
+ * list would otherwise retry forever under repeated timeouts). Sized for the largest allowed document:
+ * parse maxChars tops out at 100,000,000; at about 2,400 chars per chunk that is about 42,000 chunks,
+ * about 650 batches of 64 (smaller chunks and overlap add some), and one batch per attempt is the worst
+ * case, so 1024 leaves headroom. Reaching it fails the step with the fixed message.
+ */
+export const MAX_ATTEMPTS_TOTAL = 1024;
+
 export interface StepOptions {
+  /** Test seam: the absolute attempt ceiling (default MAX_ATTEMPTS_TOTAL). */
+  maxAttemptsTotal?: number;
   /** Test seam: the settle wait after a timed-out attempt (default ATTEMPT_SETTLE_MS). */
   settleMs?: number;
   retry?: RetryPolicy;
@@ -142,7 +154,10 @@ export function stepEffect(
       const interrupted = () => options.shutdown?.aborted === true && ctx?.signal?.aborted !== true;
       const waitSignals = [ctx?.signal, options.shutdown].filter((x): x is AbortSignal => !!x);
       const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
+      const ceiling = options.maxAttemptsTotal ?? MAX_ATTEMPTS_TOTAL;
+      let total = 0;
       for (let attempt = 1; ; attempt++) {
+        total++;
         // Set by the work (after a committed unit) through `progress`; read only when this attempt times out.
         const made = { value: false };
         try {
@@ -159,6 +174,7 @@ export function stepEffect(
           // progressing attempt commits at least one unit that the work will not redo, so a step of n units
           // has at most n progressing attempts, plus at most maxAttempts non-progressing ones in a row.
           if (err instanceof StepTimeoutError && made.value) attempt = 0;
+          if (total >= ceiling) throw failure(step, err);
           if (isAbort(err) || isFatal(err) || attempt >= maxAttempts) throw failure(step, err);
           if (
             err instanceof StepTimeoutError &&
