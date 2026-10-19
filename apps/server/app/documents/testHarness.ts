@@ -280,89 +280,94 @@ export async function startDocumentServer(
       maxBytes: limits.maxFileBytes,
     });
   const fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
-  const wiring = createIngestWiring({
-    DOCMIND_OLLAMA_URL: fake.url,
-    DOCMIND_EMBED_MODEL: "fake-embed",
-    DOCMIND_EMBED_DIMENSIONS: "64",
-  });
-  // The ingest source reads through whatever `deps` finally gives the routes (a failing store reaches both).
-  let effectiveBlobs = blobs;
-  const ingest = makeIngest(
-    app,
-    fields,
-    (id) => effectiveBlobs(id),
-    wiring,
-    twinOverPgChunks(app, wiring),
-  );
-  const inFlight = new InFlight();
-  await ingest.status.boot();
-  const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
-  const wrapped = wrap({
-    pool: app,
-    authenticator: testAuthenticator,
-    fields,
-    blobs,
-    limits,
-    ingest: ingest.port,
-    status: ingest.status,
-    starts: new StartScheduler(ingest.port),
-    inFlight,
-  });
-  effectiveBlobs = wrapped.blobs;
-  // A wrapper that replaces `ingest` (an injected failure or gate) gets a scheduler over its port.
-  const starts =
-    wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
-  const server = createHttpServer(documentRoutes({ ...wrapped, starts }));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return {
-    base,
-    owner: db.owner,
-    app,
-    root,
-    keys,
-    ingest: ingest.probe,
-    wiring,
-    inFlight,
-    starts,
-    status: ingest.status,
-    statusStore: ingest.statusStore,
-    bus: ingest.bus,
-    upload(user, name, data) {
-      const form = new FormData();
-      form.append("file", new Blob([data]), name);
-      return fetch(`${base}/api/documents`, {
-        method: "POST",
-        headers: { "x-test-user": user },
-        body: form,
-      });
-    },
-    async fingerprint(user, data) {
-      const identity = BY_HEADER[user];
-      if (!identity) throw new Error("unknown harness user");
-      const dek = await keys.getOrCreate(identity.userId);
-      return fingerprintOf(
-        deriveFingerprintKey(dek),
-        typeof data === "string" ? Buffer.from(data) : data,
-      );
-    },
-    async close() {
-      ingest.probe.release();
-      ingest.probe.releaseStart();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeAllConnections();
-      });
-      await starts.idle(); // after the server stops, nothing can fire anymore
-      // The runner first (kills children, as main does), and a throw must not skip the rest.
-      await runAll(
-        () => closeIngest(wiring),
-        () => ingest.close(),
-        () => app.end(),
-        () => fake.close(),
-      );
-      await db.drop();
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
+  try {
+    const wiring = createIngestWiring({
+      DOCMIND_OLLAMA_URL: fake.url,
+      DOCMIND_EMBED_MODEL: "fake-embed",
+      DOCMIND_EMBED_DIMENSIONS: "64",
+    });
+    // The ingest source reads through whatever `deps` finally gives the routes (a failing store reaches both).
+    let effectiveBlobs = blobs;
+    const ingest = makeIngest(
+      app,
+      fields,
+      (id) => effectiveBlobs(id),
+      wiring,
+      twinOverPgChunks(app, wiring),
+    );
+    const inFlight = new InFlight();
+    await ingest.status.boot();
+    const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
+    const wrapped = wrap({
+      pool: app,
+      authenticator: testAuthenticator,
+      fields,
+      blobs,
+      limits,
+      ingest: ingest.port,
+      status: ingest.status,
+      starts: new StartScheduler(ingest.port),
+      inFlight,
+    });
+    effectiveBlobs = wrapped.blobs;
+    // A wrapper that replaces `ingest` (an injected failure or gate) gets a scheduler over its port.
+    const starts =
+      wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
+    const server = createHttpServer(documentRoutes({ ...wrapped, starts }));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return {
+      base,
+      owner: db.owner,
+      app,
+      root,
+      keys,
+      ingest: ingest.probe,
+      wiring,
+      inFlight,
+      starts,
+      status: ingest.status,
+      statusStore: ingest.statusStore,
+      bus: ingest.bus,
+      upload(user, name, data) {
+        const form = new FormData();
+        form.append("file", new Blob([data]), name);
+        return fetch(`${base}/api/documents`, {
+          method: "POST",
+          headers: { "x-test-user": user },
+          body: form,
+        });
+      },
+      async fingerprint(user, data) {
+        const identity = BY_HEADER[user];
+        if (!identity) throw new Error("unknown harness user");
+        const dek = await keys.getOrCreate(identity.userId);
+        return fingerprintOf(
+          deriveFingerprintKey(dek),
+          typeof data === "string" ? Buffer.from(data) : data,
+        );
+      },
+      async close() {
+        ingest.probe.release();
+        ingest.probe.releaseStart();
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        });
+        await starts.idle(); // after the server stops, nothing can fire anymore
+        // The runner first (kills children, as main does), and a throw must not skip the rest.
+        await runAll(
+          () => closeIngest(wiring),
+          () => ingest.close(),
+          () => app.end(),
+          () => fake.close(),
+        );
+        await db.drop();
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  } catch (err) {
+    await fake.close(); // a later setup step failed: the fake would otherwise leak
+    throw err;
+  }
 }

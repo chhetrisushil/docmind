@@ -1,13 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": ".",
-    "types": ["node"],
-    "paths": {
-      "@docmind/embeddings/testing": ["../../packages/embeddings/dist/testing/fakeOllama"]
-    }
-  },
+  "compilerOptions": { "outDir": "dist", "rootDir": ".", "types": ["node"] },
   "include": ["app/**/*", "loom.config.ts"],
   "exclude": ["**/*.test.ts", "**/testing.ts", "**/pgFixture.ts", "**/ingestStack.ts", "dist"]
 }
