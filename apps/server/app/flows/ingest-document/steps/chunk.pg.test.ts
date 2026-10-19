@@ -96,6 +96,34 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
     expect((await real.read(ref, [id]))[0]?.text).toContain("Hello world.");
   });
 
+  it("chunks that outlived a dropped parsed row are rebuilt after a fresh parse (put clears them)", async () => {
+    const ref = await f.doc("e5".repeat(32));
+    const store = new PgParsedStore(f.app, f.fields);
+    const real = new PgChunkStore(f.app, f.fields);
+    let replaces = 0;
+    const chunks: ChunkStore = {
+      replace: (r, c, s) => {
+        replaces++;
+        return real.replace(r, c, s);
+      },
+      count: (r) => real.count(r),
+      read: (r, ids) => real.read(r, ids),
+    };
+    const run = () =>
+      chunkEffect({ guard: new PgStepGuard(f.app), parsed: store, chunks }).execute(
+        ref,
+        {} as never,
+      );
+    await store.put(ref, parsed);
+    await run();
+    await store.drop(ref); // as finalize did, before the execution failed without its completion
+    expect(await store.has(ref)).toBe(false);
+    await store.put(ref, parsed); // parse runs again on the retry
+    expect(await rows("chunks", ref.documentId)).toBe(0);
+    expect(await run()).toEqual({ outcome: "done", count: 1 });
+    expect(replaces).toBe(2);
+  });
+
   it("an attempt that hangs past its bound never commits, and the next attempt waits for it to settle", async () => {
     const ref = await f.doc("f".repeat(64));
     const store = new PgParsedStore(f.app, f.fields);

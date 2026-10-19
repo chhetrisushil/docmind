@@ -29,6 +29,12 @@ export class PgParsedStore implements ParsedStore {
     private readonly fields: FieldCrypto,
   ) {}
 
+  /**
+   * Stores the parsed document. Invariant: chunks (and the summary) that exist derive from the
+   * current parsed row, so a fresh put deletes this document's chunks (vectors, links and entity
+   * rows go with them) and clears the summary in the same transaction. Chunk and summarize skip when
+   * their output exists; without this a re-parse could pair a new parsed row with stale chunks.
+   */
   async put(ref: IngestStartInput, parsed: ParsedDocument): Promise<void> {
     const sealed = await this.fields.forUser(ref.userId).seal(parsedBind(ref.documentId), parsed);
     await withTenant(this.pool, ref.tenantId, async (tx) => {
@@ -40,6 +46,11 @@ export class PgParsedStore implements ParsedStore {
         [ref.documentId, ref.userId, JSON.stringify(sealed)],
       );
       if (!rowCount) throw new DocumentGoneError();
+      await tx.query("DELETE FROM chunks WHERE document_id = $1", [ref.documentId]);
+      await tx.query("UPDATE documents SET summary_enc = NULL WHERE id = $1 AND owner_id = $2", [
+        ref.documentId,
+        ref.userId,
+      ]);
     });
   }
 

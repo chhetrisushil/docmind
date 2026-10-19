@@ -5,7 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
 import { PG_URL } from "../../db/testSupport";
 import { U1, U1B } from "../../documents/testHarness";
+import { chunkDocument } from "./chunker";
 import { DocumentGoneError } from "./errors";
+import { PgChunkStore } from "./pgChunks";
 import { type PgFixture, startPgFixture } from "./pgFixture";
 import { parsedBind } from "./pgParsed";
 import { PgParsedStore } from "./pgParsed";
@@ -64,6 +66,24 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
     await store.drop(ref);
     await store.drop(ref);
     expect(await store.take(ref)).toBeUndefined();
+  });
+
+  it("put invalidates what derives from the old parse: chunks are deleted and the summary cleared", async () => {
+    const ref = await f.doc("d4".repeat(32));
+    const store = new PgParsedStore(f.app, f.fields);
+    await store.put(ref, parsed);
+    await new PgChunkStore(f.app, f.fields).replace(ref, chunkDocument(parsed));
+    await f.db.owner.query("UPDATE documents SET summary_enc = '{\"x\":1}'::jsonb WHERE id = $1", [
+      ref.documentId,
+    ]);
+    const count = () => new PgChunkStore(f.app, f.fields).count(ref);
+    expect(await count()).toBe(1);
+    await store.put(ref, { ...parsed, text: "second" });
+    expect(await count()).toBe(0);
+    const { rows } = await f.db.owner.query("SELECT summary_enc FROM documents WHERE id = $1", [
+      ref.documentId,
+    ]);
+    expect(rows[0].summary_enc).toBeNull();
   });
 
   it("has is false before put, true after, and false after drop", async () => {
