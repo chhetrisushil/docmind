@@ -1,3 +1,4 @@
+import { createDeflateRaw } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { makeZip } from "./testing/makeZip";
 import { ParseRejectedError } from "./types";
@@ -35,11 +36,45 @@ describe("zipBudget", () => {
     expect(code(() => zipBudget(total, LIMITS))).toBe("too_large");
   });
 
-  it("refuses an entry whose real inflated size exceeds its declared size, without inflating past it", () => {
-    const forged = makeZip([
-      { name: "bomb", data: new Uint8Array(512 * 1024), method: 8, declaredSize: 1000 },
+  it("caps inflation at the declared size: a 1 GiB bomb declared as 1000 bytes is refused without inflating it", async () => {
+    const deflate = createDeflateRaw();
+    const chunks: Buffer[] = [];
+    deflate.on("data", (c: Buffer) => chunks.push(c));
+    const ended = new Promise<void>((resolve) => deflate.on("end", resolve));
+    const zeros = Buffer.alloc(MiB);
+    for (let i = 0; i < 1024; i++) {
+      if (!deflate.write(zeros)) await new Promise((r) => deflate.once("drain", r));
+    }
+    deflate.end();
+    await ended;
+    const bomb = makeZip([
+      {
+        name: "bomb",
+        data: new Uint8Array(0),
+        method: 8,
+        declaredSize: 1000,
+        precompressed: Buffer.concat(chunks),
+      },
     ]);
-    expect(code(() => zipBudget(forged, LIMITS))).toBe("corrupt_content");
+    const before = process.memoryUsage().rss;
+    expect(code(() => zipBudget(bomb, LIMITS))).toBe("corrupt_content");
+    expect(process.memoryUsage().rss - before).toBeLessThan(256 * MiB);
+  }, 60_000);
+
+  it("refuses a directory the end record undercounts (jszip walks headers, not the count)", () => {
+    const zip = makeZip(
+      [
+        { name: "a", data: enc("a") },
+        { name: "b", data: enc("b") },
+      ],
+      { eocdCount: 1 },
+    );
+    expect(code(() => zipBudget(zip, LIMITS))).toBe("corrupt_content");
+  });
+
+  it("refuses a gap between the directory and the end record (jszip shifts offsets by it)", () => {
+    const zip = makeZip([{ name: "a", data: enc("a") }], { gap: 8 });
+    expect(code(() => zipBudget(zip, LIMITS))).toBe("corrupt_content");
   });
 
   it("refuses garbage and a truncated directory as corrupt_content", () => {
