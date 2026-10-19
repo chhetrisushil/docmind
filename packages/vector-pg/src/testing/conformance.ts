@@ -339,119 +339,130 @@ export function runChunkVectorStoreConformance(
       v[1] = Math.SQRT1_2;
       return v;
     };
+    // These cases seed several documents in the shared database; restore them so no other case sees the vectors.
+    const ntest = (name: string, body: (h: VectorHarness) => Promise<void>) =>
+      test(name, async (h) => {
+        try {
+          await body(h);
+        } finally {
+          await h.seed(A, DOC_A, []);
+          await h.seed(A, DOC_A2, []);
+          await h.seed(B, DOC_B, []);
+          await h.seed(C, DOC_C, []);
+        }
+      });
     const hits = (r: { chunkId: string; neighbourId: string; score: number }[]) =>
       r.map((h) => [h.chunkId, h.neighbourId] as const);
 
-    test("neighbours finds only the owner's other documents, this model, and non-zero vectors", async ({
-      store,
-      seed,
-      withModel,
-    }) => {
-      const [src, same, near, far, zero, theirs, foreign, otherModel] = uuids(8) as string[] as [
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-      ];
-      const d = store.dimensions;
-      await seed(A, DOC_A, [src, same]);
-      await seed(A, DOC_A2, [near, far, zero, otherModel]);
-      await seed(B, DOC_B, [theirs]);
-      await seed(C, DOC_C, [foreign]);
-      await store.upsert(A, DOC_A, [
-        { chunkId: src, vector: basis(d, 0) },
-        { chunkId: same, vector: basis(d, 0) },
-      ]);
-      await store.upsert(A, DOC_A2, [
-        { chunkId: near, vector: half(d) },
-        { chunkId: far, vector: basis(d, 2) },
-        { chunkId: zero, vector: new Array(d).fill(0) },
-      ]);
-      await withModel("another-model").upsert(A, DOC_A2, [
-        { chunkId: otherModel, vector: basis(d, 0) },
-      ]);
-      await store.upsert(B, DOC_B, [{ chunkId: theirs, vector: basis(d, 0) }]);
-      await store.upsert(C, DOC_C, [{ chunkId: foreign, vector: basis(d, 0) }]);
-      const all = await store.neighbours(A, DOC_A, [src], 10, -1);
-      expect(hits(all)).toEqual([
-        [src, near],
-        [src, far],
-      ]);
-      expect(all[0]?.score).toBeCloseTo(Math.SQRT1_2, 5);
-      expect(all[1]?.score).toBeCloseTo(0, 5);
-      expect(hits(await store.neighbours(A, DOC_A, [src], 10, 0.5))).toEqual([[src, near]]);
-    });
+    ntest(
+      "neighbours finds only the owner's other documents, this model, and non-zero vectors",
+      async ({ store, seed, withModel }) => {
+        const [src, same, near, far, zero, theirs, foreign, otherModel] = uuids(8) as string[] as [
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+          string,
+        ];
+        const d = store.dimensions;
+        await seed(A, DOC_A, [src, same]);
+        await seed(A, DOC_A2, [near, far, zero, otherModel]);
+        await seed(B, DOC_B, [theirs]);
+        await seed(C, DOC_C, [foreign]);
+        await store.upsert(A, DOC_A, [
+          { chunkId: src, vector: basis(d, 0) },
+          { chunkId: same, vector: basis(d, 0) },
+        ]);
+        await store.upsert(A, DOC_A2, [
+          { chunkId: near, vector: half(d) },
+          { chunkId: far, vector: basis(d, 2) },
+          { chunkId: zero, vector: new Array(d).fill(0) },
+        ]);
+        await withModel("another-model").upsert(A, DOC_A2, [
+          { chunkId: otherModel, vector: basis(d, 0) },
+        ]);
+        await store.upsert(B, DOC_B, [{ chunkId: theirs, vector: basis(d, 0) }]);
+        await store.upsert(C, DOC_C, [{ chunkId: foreign, vector: basis(d, 0) }]);
+        const all = await store.neighbours(A, DOC_A, [src], 10, -1);
+        expect(hits(all)).toEqual([
+          [src, near],
+          [src, far],
+        ]);
+        expect(all[0]?.score).toBeCloseTo(Math.SQRT1_2, 5);
+        expect(all[1]?.score).toBeCloseTo(0, 5);
+        expect(hits(await store.neighbours(A, DOC_A, [src], 10, 0.5))).toEqual([[src, near]]);
+      },
+    );
 
-    test("neighbours returns at most perChunk per source, best first, ties by neighbour id", async ({
-      store,
-      seed,
-    }) => {
-      const s = uuids(2).sort() as [string, string];
-      const tied = uuids(3);
-      const best = randomUUID();
-      const d = store.dimensions;
-      await seed(A, DOC_A, s);
-      await seed(A, DOC_A2, [...tied, best]);
-      await store.upsert(
-        A,
-        DOC_A,
-        s.map((chunkId) => ({ chunkId, vector: basis(d, 0) })),
-      );
-      await store.upsert(A, DOC_A2, [
-        ...tied.map((chunkId) => ({ chunkId, vector: half(d) })),
-        { chunkId: best, vector: basis(d, 0) },
-      ]);
-      const sortedTied = [...tied].sort();
-      const two = await store.neighbours(A, DOC_A, [s[1], s[0]], 2, 0.5);
-      expect(hits(two)).toEqual([
-        [s[0], best],
-        [s[0], sortedTied[0] as string],
-        [s[1], best],
-        [s[1], sortedTied[0] as string],
-      ]);
-      expect(two.every((h) => h.score >= 0.5)).toBe(true);
-      expect(hits(await store.neighbours(A, DOC_A, [s[0]], 100, 0.5))).toEqual([
-        [s[0], best],
-        ...sortedTied.map((n) => [s[0], n] as const),
-      ]);
-    });
+    ntest(
+      "neighbours returns at most perChunk per source, best first, ties by neighbour id",
+      async ({ store, seed }) => {
+        const s = uuids(2).sort() as [string, string];
+        const tied = uuids(3);
+        const best = randomUUID();
+        const d = store.dimensions;
+        await seed(A, DOC_A, s);
+        await seed(A, DOC_A2, [...tied, best]);
+        await store.upsert(
+          A,
+          DOC_A,
+          s.map((chunkId) => ({ chunkId, vector: basis(d, 0) })),
+        );
+        await store.upsert(A, DOC_A2, [
+          ...tied.map((chunkId) => ({ chunkId, vector: half(d) })),
+          { chunkId: best, vector: basis(d, 0) },
+        ]);
+        const sortedTied = [...tied].sort();
+        const two = await store.neighbours(A, DOC_A, [s[1], s[0]], 2, 0.5);
+        expect(hits(two)).toEqual([
+          [s[0], best],
+          [s[0], sortedTied[0] as string],
+          [s[1], best],
+          [s[1], sortedTied[0] as string],
+        ]);
+        expect(two.every((h) => h.score >= 0.5)).toBe(true);
+        expect(hits(await store.neighbours(A, DOC_A, [s[0]], 100, 0.5))).toEqual([
+          [s[0], best],
+          ...sortedTied.map((n) => [s[0], n] as const),
+        ]);
+      },
+    );
 
-    test("neighbours yields nothing for unknown, another document's, another owner's, or unembedded sources", async ({
-      store,
-      seed,
-    }) => {
-      const [mine, unembedded, other, theirs, target] = uuids(5) as string[] as [
-        string,
-        string,
-        string,
-        string,
-        string,
-      ];
-      const d = store.dimensions;
-      await seed(A, DOC_A, [mine, unembedded]);
-      await seed(A, DOC_A2, [other, target]);
-      await seed(B, DOC_B, [theirs]);
-      await store.upsert(A, DOC_A, [{ chunkId: mine, vector: basis(d, 0) }]);
-      await store.upsert(A, DOC_A2, [
-        { chunkId: other, vector: basis(d, 0) },
-        { chunkId: target, vector: basis(d, 0) },
-      ]);
-      await store.upsert(B, DOC_B, [{ chunkId: theirs, vector: basis(d, 0) }]);
-      const ghost = randomUUID();
-      expect(
-        await store.neighbours(A, DOC_A, [ghost, unembedded, other, theirs, "not-a-uuid"], 5, -1),
-      ).toEqual([]);
-      expect(await store.neighbours(B, DOC_A, [mine], 5, -1)).toEqual([]);
-      expect(await store.neighbours(A, DOC_B, [theirs], 5, -1)).toEqual([]);
-      expect(await store.neighbours(A, DOC_A, [], 5, -1)).toEqual([]);
-      const found = await store.neighbours(A, DOC_A, [ghost, mine], 5, -1);
-      expect(found.map((h) => h.neighbourId)).toEqual([other, target].sort());
-      expect(found.every((h) => h.chunkId === mine)).toBe(true);
-    });
+    ntest(
+      "neighbours yields nothing for unknown, another document's, another owner's, or unembedded sources",
+      async ({ store, seed }) => {
+        const [mine, unembedded, other, theirs, target] = uuids(5) as string[] as [
+          string,
+          string,
+          string,
+          string,
+          string,
+        ];
+        const d = store.dimensions;
+        await seed(A, DOC_A, [mine, unembedded]);
+        await seed(A, DOC_A2, [other, target]);
+        await seed(B, DOC_B, [theirs]);
+        await store.upsert(A, DOC_A, [{ chunkId: mine, vector: basis(d, 0) }]);
+        await store.upsert(A, DOC_A2, [
+          { chunkId: other, vector: basis(d, 0) },
+          { chunkId: target, vector: basis(d, 0) },
+        ]);
+        await store.upsert(B, DOC_B, [{ chunkId: theirs, vector: basis(d, 0) }]);
+        const ghost = randomUUID();
+        expect(
+          await store.neighbours(A, DOC_A, [ghost, unembedded, other, theirs, "not-a-uuid"], 5, -1),
+        ).toEqual([]);
+        expect(await store.neighbours(B, DOC_A, [mine], 5, -1)).toEqual([]);
+        expect(await store.neighbours(A, DOC_B, [theirs], 5, -1)).toEqual([]);
+        expect(await store.neighbours(A, DOC_A, [], 5, -1)).toEqual([]);
+        const found = await store.neighbours(A, DOC_A, [ghost, mine], 5, -1);
+        expect(found.map((h) => h.neighbourId)).toEqual([other, target].sort());
+        expect(found.every((h) => h.chunkId === mine)).toBe(true);
+      },
+    );
 
     test("neighbours rejects a bad perChunk or minScore with a RangeError naming the parameter", async ({
       store,

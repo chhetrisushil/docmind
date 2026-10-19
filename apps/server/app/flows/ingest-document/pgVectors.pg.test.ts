@@ -4,7 +4,6 @@ import {
   A,
   B,
   DOC_A,
-  DOC_A2,
   DOC_B,
   type VectorHarness,
   runChunkVectorStoreConformance,
@@ -87,7 +86,6 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     const store = make("m1");
     const a = randomUUID();
     const b = randomUUID();
-    await seed(A, DOC_A2, []); // the kit's neighbours cases leave vectors in A's second document
     await seed(A, DOC_A, [a]);
     await seed(B, DOC_B, [b]);
     expect(await store.missing(B, DOC_A, 10)).toEqual([]); // while A's chunk has no vector yet
@@ -154,6 +152,9 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
       ["ownerId", () => store.missing({ ...A, ownerId: bad }, DOC_A, 1)],
       ["ownerId", () => store.search({ ...A, ownerId: bad }, basis(0), 1)],
       ["tenantId", () => store.search({ ...A, tenantId: bad }, basis(0), 1)],
+      ["ownerId", () => store.neighbours({ ...A, ownerId: bad }, DOC_A, [randomUUID()], 1, 0)],
+      ["tenantId", () => store.neighbours({ ...A, tenantId: bad }, DOC_A, [randomUUID()], 1, 0)],
+      ["documentId", () => store.neighbours(A, bad, [randomUUID()], 1, 0)],
     ];
     for (const [name, run] of attempts) {
       const err = await run().then(
