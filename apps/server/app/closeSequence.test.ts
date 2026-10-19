@@ -52,4 +52,24 @@ describe("closeSequence", () => {
     ).rejects.toBe(boom);
     expect(calls).toHaveLength(6);
   });
+
+  it.each(["closeDurable", "endPool"] as const)(
+    "does not wait forever for %s (a pool held open by a stuck query)",
+    async (stuck) => {
+      const ok = async () => {};
+      const never = () => new Promise<never>(() => {});
+      const deps = {
+        startsIdle: ok,
+        closeIngest: ok,
+        closeHeartbeat: ok,
+        detachStatusFeed: () => {},
+        closeStatus: ok,
+        closeApp: ok,
+        closeDurable: ok,
+        endPool: ok,
+        [stuck]: never,
+      };
+      await expect(runAll(...closeSequence(deps, 5))).resolves.toBeUndefined();
+    },
+  );
 });

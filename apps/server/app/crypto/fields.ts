@@ -30,11 +30,11 @@ export class FieldKeyStoreError extends Error {
 const GCM_IV_BYTES = 12;
 const GCM_TAG_BYTES = 16;
 
-/** Strict base64 that decodes to exactly `bytes` bytes (re-encodes to the same string). */
-const isBase64Of = (v: unknown, bytes: number): boolean => {
-  if (typeof v !== "string") return false;
+/** Strict base64 (re-encodes to the same string); with `bytes`, it must decode to exactly that many bytes. */
+export const isBase64Of = (v: unknown, bytes?: number): boolean => {
+  if (typeof v !== "string" || v.length === 0) return false;
   const raw = Buffer.from(v, "base64");
-  return raw.length === bytes && raw.toString("base64") === v;
+  return (bytes === undefined || raw.length === bytes) && raw.toString("base64") === v;
 };
 
 /** A field envelope: Loom's shape, sealed by this module (carries our AAD marker). */

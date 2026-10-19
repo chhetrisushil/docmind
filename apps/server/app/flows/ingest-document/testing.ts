@@ -1,4 +1,5 @@
 import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
+import { isBase64Of } from "../../crypto/fields";
 import { ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
 import { INGEST_STEPS, type IngestStartInput } from "./flow";
@@ -52,11 +53,6 @@ const exactly =
   (v) =>
     v === want;
 const count: Leaf = (v) => Number.isInteger(v) && (v as number) >= 0;
-const isBase64 = (v: unknown, bytes?: number): boolean => {
-  if (typeof v !== "string" || v.length === 0) return false;
-  const raw = Buffer.from(v, "base64");
-  return raw.toString("base64") === v && (bytes === undefined || raw.length === bytes);
-};
 /**
  * Loom's sealed field: ciphertext, so it is allowed where Loom sealed it, and nothing else is. Its
  * leaves are FieldCrypto's real encoding: strict base64, a 12-byte IV and a 16-byte GCM tag.
@@ -68,9 +64,9 @@ const sealed: Leaf = (v) => {
     o !== null &&
     Object.keys(o).sort().join() === "__loomEnc,data,iv,tag" &&
     o.__loomEnc === "loom/aes-256-gcm" &&
-    isBase64(o.data) &&
-    isBase64(o.iv, 12) &&
-    isBase64(o.tag, 16)
+    isBase64Of(o.data) &&
+    isBase64Of(o.iv, 12) &&
+    isBase64Of(o.tag, 16)
   );
 };
 /** The closed set of step ids: a step added to the flow is allowed here by being in INGEST_STEPS. */
