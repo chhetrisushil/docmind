@@ -86,6 +86,23 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
     expect(rows[0].summary_enc).toBeNull();
   });
 
+  it("an aborted put leaves the previous parsed row and the existing chunks untouched", async () => {
+    const ref = await f.doc("e5".repeat(32));
+    const store = new PgParsedStore(f.app, f.fields);
+    await store.put(ref, parsed);
+    const chunks = new PgChunkStore(f.app, f.fields);
+    await chunks.replace(ref, chunkDocument(parsed));
+    const before = await rawBody(ref.documentId);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(store.put(ref, { ...parsed, text: "late" }, ac.signal)).rejects.toBeInstanceOf(
+      ParseAbortedError,
+    );
+    expect(await rawBody(ref.documentId)).toEqual(before);
+    expect((await store.take(ref))?.text).toBe(parsed.text);
+    expect(await chunks.count(ref)).toBe(1);
+  });
+
   it("has is false before put, true after, and false after drop", async () => {
     const ref = await f.doc("c3".repeat(32));
     const store = new PgParsedStore(f.app, f.fields);

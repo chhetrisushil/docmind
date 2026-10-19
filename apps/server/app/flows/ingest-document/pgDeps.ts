@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { FieldCrypto } from "../../crypto/fields";
 import type { IngestDeps } from "./deps";
 import { IngestConfigError } from "./errors";
-import type { IngestWiring } from "./limits";
+import { type IngestWiring, parseStepTimeoutMs } from "./limits";
 import { PgChunkStore } from "./pgChunks";
 import { PgStepGuard } from "./pgGuard";
 import { PgParsedStore } from "./pgParsed";
@@ -40,6 +40,7 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     runner: wiring.runner,
     shutdown: wiring.shutdown.signal,
     gate: wiring.gate,
+    parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits),
     ...(wiring.sleep && { sleep: wiring.sleep }),
   };
 }

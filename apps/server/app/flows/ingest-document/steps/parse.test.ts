@@ -149,20 +149,22 @@ describe("parse step", () => {
     log.mockRestore();
   });
 
-  it("hands the effect's AbortSignal to the runner, and none when the effect has none", async () => {
-    const seen: unknown[] = [];
+  it("hands the runner an attempt signal that follows the effect's own cancel", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
     const { d } = deps({
       runner: {
         run: async (_id, _b, opts) => {
-          seen.push(opts);
+          signals.push(opts?.signal);
           return parsedDoc as never;
         },
       },
     });
     const ac = new AbortController();
     await run(d, { signal: ac.signal });
-    await run(d);
-    expect(seen).toEqual([{ signal: ac.signal }, undefined]);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0]?.aborted).toBe(false);
+    ac.abort();
+    expect(signals[0]?.aborted).toBe(true);
   });
 
   it("stops as document_gone, running no parser, when the blob is gone", async () => {
@@ -232,5 +234,32 @@ describe("parse step", () => {
       },
     });
     expect(await run(d)).toEqual({ outcome: "document_gone" });
+  });
+
+  it("bounds an attempt whose database read never answers: the step fails with the fixed message, not a hang", async () => {
+    let reads = 0;
+    const { d } = deps({
+      source: {
+        meta: () => {
+          reads++;
+          return new Promise(() => {}); // a hung read that never settles
+        },
+        read: async () => new Uint8Array([104, 105]),
+      },
+      parseStepTimeoutMs: 5,
+      attemptSettleMs: 0,
+    });
+    await expect(run(d)).rejects.toThrow(/^ingest step failed: parse$/);
+    expect(reads).toBe(1); // a zombie is still running, so no second attempt overlaps it
+  });
+
+  it("passes the attempt signal to the parsed store's put", async () => {
+    let seen: AbortSignal | undefined;
+    const { d } = deps();
+    d.parsed.put = async (_r, _p, signal) => {
+      seen = signal;
+    };
+    await run(d, { signal: new AbortController().signal });
+    expect(seen).toBeInstanceOf(AbortSignal);
   });
 });

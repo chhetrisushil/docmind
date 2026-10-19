@@ -43,7 +43,7 @@ describe.skipIf(!PG_URL)("the chunk step over Postgres (needs DOCMIND_TEST_PG_UR
       taken = resolve;
     });
     const gated: ParsedStore = {
-      put: (r, p) => real.put(r, p),
+      put: (r, p, s) => real.put(r, p, s),
       take: async (r) => {
         const out = await real.take(r);
         taken();

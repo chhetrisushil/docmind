@@ -5,25 +5,24 @@ import type { IngestStartInput } from "../flow";
 import type { ParsedStore } from "../pgParsed";
 import type { DocumentSource } from "../pgSource";
 import {
-  STEP_RETRY,
   type StepGuard,
-  type StepOptions,
   type StepResult,
+  type StepSeams,
+  ingestStepOptions,
   stepEffect,
 } from "../stepEffect";
 
-export interface ParseDeps {
+export interface ParseDeps extends StepSeams {
   guard: StepGuard;
   source: DocumentSource;
   parsed: ParsedStore;
   registry: ParserRegistry;
   runner: Pick<ParseRunner, "run">;
-  /** Test seam: the wait between retry attempts (default: a real, abortable timer). */
-  sleep?: StepOptions["sleep"];
-  /** Aborted by the composition root before the runner closes (see StepOptions). */
-  shutdown?: AbortSignal;
-  /** Each attempt waits for the ingest gate (see StepOptions). */
-  gate?: StepOptions["gate"];
+  /**
+   * Parse's own attempt bound. The deps object is shared by every step, so this is not the generic
+   * `stepTimeoutMs`: parse must outlast a runner slot wait and its own run (see parseStepTimeoutMs).
+   */
+  parseStepTimeoutMs?: number;
 }
 
 /** A parser that throws from accepts() is rejected with a fixed code; its message is never kept. */
@@ -62,14 +61,12 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
         throw err;
       }
       const parsed = await deps.runner.run(parser.id, bytes, signal ? { signal } : undefined);
-      await deps.parsed.put(ref, parsed);
+      await deps.parsed.put(ref, parsed, signal);
       return { count: parsed.sections.length };
     },
-    {
-      retry: STEP_RETRY,
-      ...(deps.sleep && { sleep: deps.sleep }),
-      ...(deps.shutdown && { shutdown: deps.shutdown }),
-      ...(deps.gate && { gate: deps.gate }),
-    },
+    ingestStepOptions({
+      ...deps,
+      ...(deps.parseStepTimeoutMs !== undefined && { stepTimeoutMs: deps.parseStepTimeoutMs }),
+    }),
   );
 }
