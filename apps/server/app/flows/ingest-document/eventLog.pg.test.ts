@@ -25,6 +25,7 @@ import {
   type IngestStartInput,
   ingestChunkStep,
   ingestDocumentFlow,
+  ingestEmbedStep,
   ingestParseStep,
   runIngestSteps,
 } from "./flow";
@@ -243,6 +244,12 @@ describe.skipIf(!PG_URL)(
       const raw = proven(await run(ref), ref);
       expect(attempts).toBe(3); // the retries are in memory: the same events as a clean run
       expect(types(raw)).toEqual(FULL_RUN);
+      // No sections means no chunks: the document is still ready, with count 0.
+      expect(raw[21]?.payload).toEqual({
+        output: { outcome: "done", count: 0 },
+        stepId: "ingest-finalize",
+      });
+      expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null });
     });
 
     it("a transient failure that exhausts its retries records a fixed message, not the error text", async () => {
@@ -461,6 +468,35 @@ describe.skipIf(!PG_URL)(
         }),
       };
       const ref = await seedTxt("a1".repeat(32));
+      await crashed(ref, old);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const next = await peer(never);
+      expect(await recoverIngest(next.app.runtime, next.source, { graceMs: 0 })).toMatchObject({
+        failed: 1,
+        recovered: 0,
+      });
+      const raw = proven(await log(ref), ref);
+      expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-flow-mismatch" });
+    });
+
+    it("an execution started under the parse+chunk+embed flow (2.1.0) is a mismatch for the flow with the later steps", async () => {
+      const before = [
+        ingestParseStep,
+        ingestChunkStep,
+        ingestEmbedStep,
+      ] as unknown as typeof INGEST_STEPS;
+      const old = {
+        runner: runIngestSteps(before) as never,
+        definition: flow$({
+          id: "ingest-document",
+          name: "IngestDocument",
+          version: "2.1.0", // the version that shipped parse, chunk and embed
+          inputSchema: ingestDocumentFlow.definition.inputSchema,
+          outputSchema: IngestOutput,
+          steps: before,
+        }),
+      };
+      const ref = await seedTxt("a2".repeat(32));
       await crashed(ref, old);
       vi.spyOn(console, "error").mockImplementation(() => {});
       const next = await peer(never);

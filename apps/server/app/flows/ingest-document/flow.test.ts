@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
+import { foldIngestStatus } from "../../status/model";
 import type { IngestDeps } from "./deps";
 import { DocumentGoneError } from "./errors";
 import {
@@ -86,6 +87,52 @@ describe("ingest-document flow v2", () => {
       },
     };
     expect(await outputOf(fakeDeps({ guard }).deps)).toEqual({ outcome: "document_gone" });
+  });
+
+  /** Runs the flow over a kept log: the output and the status the model folds from the real events. */
+  const runLogged = async (deps: IngestDeps) => {
+    const input = ids();
+    const eventStore = new InMemoryAsyncEventStore();
+    const app = buildApp({ kind: "custom", eventStore }, undefined, { ingest: deps });
+    const state = await (await run(input, app)).waitForCompletion();
+    const raw = await eventStore.read(ingestExecutionId(input.userId, input.documentId));
+    await app.close();
+    return { output: state.variables._output, status: foldIngestStatus(raw as never) };
+  };
+
+  it("a document gone at a later step (link) ends the flow there: no finalize, never ready", async () => {
+    const seen: string[] = [];
+    const guard = {
+      begin: async (_r: IngestStartInput, step: string) => {
+        seen.push(step);
+        if (step === "link") throw new DocumentGoneError();
+      },
+    };
+    const { output, status } = await runLogged(fakeDeps({ guard }).deps);
+    expect(output).toEqual({ outcome: "document_gone" });
+    expect(seen).toEqual(["parse", "chunk", "embed", "analyze", "summarize", "link"]);
+    expect(status).toEqual({ status: "embedding", step: "link", code: null });
+  });
+
+  it("a permanent failure in finalize ends failed, never ready", async () => {
+    let current = "";
+    const guard = {
+      begin: async (_r: IngestStartInput, step: string) => {
+        current = step;
+      },
+    };
+    const chunks = {
+      replace: async (_r: IngestStartInput, c: unknown[]) => c.length,
+      // embed counts too; only finalize's count fails
+      count: async () => {
+        if (current === "finalize") throw new ParseRejectedError("corrupt_content");
+        return 0;
+      },
+      read: async () => [],
+    };
+    const { output, status } = await runLogged(fakeDeps({ guard, chunks }).deps);
+    expect(output).toEqual({ outcome: "failed", code: "corrupt_content" });
+    expect(status).toEqual({ status: "failed", step: "finalize", code: "corrupt_content" });
   });
 
   it("ends with outcome failed and the code for a permanent content problem", async () => {
