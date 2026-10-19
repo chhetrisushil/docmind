@@ -73,7 +73,11 @@ export class IngestStatus {
     const views = new Map<string, StatusView>();
     if (documentIds.length === 0) return views;
     // Stored keys are lowercase (routes lowercase ids too); answer under the caller's spelling.
-    const spelled = new Map(documentIds.map((id) => [id.toLowerCase(), id]));
+    const spelled = new Map<string, string[]>();
+    for (const id of documentIds) {
+      const key = id.toLowerCase();
+      spelled.set(key, [...(spelled.get(key) ?? []), id]);
+    }
     const reader = this.o.readerFor(identity);
     if (reader.getFoldedByKey === undefined)
       throw new TypeError("the status reader store has no folded-state support");
@@ -86,10 +90,11 @@ export class IngestStatus {
       const generation = generationOf(row.executionId);
       // Highest generation wins (generation 1 is the bare id; `.1` is never emitted, Task 74b ruling).
       if (generation === undefined || generation < (best.get(row.key) ?? 0)) continue;
-      const caller = spelled.get(row.key);
-      if (caller === undefined) continue;
+      const callers = spelled.get(row.key);
+      if (callers === undefined) continue;
       best.set(row.key, generation);
-      views.set(caller, viewOf(row.state as IngestStatusState));
+      const view = viewOf(row.state as IngestStatusState);
+      for (const caller of callers) views.set(caller, view);
     }
     return views;
   }

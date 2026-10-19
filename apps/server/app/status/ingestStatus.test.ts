@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Identity } from "@docmind/auth";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
+import { type FoldedApplyResult, InMemoryReadModelStore } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { ingestExecutionId } from "../documents/ingest";
 import { IngestStatus, type IngestStatusOptions } from "./ingestStatus";
@@ -96,14 +96,16 @@ describe("IngestStatus", () => {
     expect((await status.forPage(bob, [D1])).size).toBe(0);
     expect(await status.forDocument(bob, D1)).toEqual(UPLOADED);
     const upper = D1.toUpperCase();
-    expect((await status.forPage(ALICE, [upper])).get(upper)).toMatchObject({ status: "ready" });
+    const both = await status.forPage(ALICE, [upper, D1]);
+    expect([...both.keys()].sort()).toEqual([D1, upper].sort());
+    expect(both.get(upper)).toEqual(both.get(D1));
+    expect(both.get(D1)).toMatchObject({ status: "ready" });
   });
 
   it("boot rejects when catch-up fails", async () => {
     class Failing extends InMemoryReadModelStore {
-      override async applyFolded(...a: Parameters<InMemoryReadModelStore["applyFolded"]>) {
-        if (a.length >= 0) throw new RangeError("store down");
-        return super.applyFolded(...a);
+      override applyFolded(): Promise<FoldedApplyResult> {
+        return Promise.reject(new RangeError("store down"));
       }
     }
     const store = new Failing();
