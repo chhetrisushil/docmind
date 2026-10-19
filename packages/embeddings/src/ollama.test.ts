@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   EmbeddingAbortedError,
   EmbeddingUnavailableError,
+  MAX_BYTES_PER_VALUE,
+  MAX_RESPONSE_OVERHEAD_BYTES,
   OllamaEmbeddingProvider,
 } from "./ollama";
 
@@ -98,11 +100,21 @@ describe("OllamaEmbeddingProvider", () => {
   it.each([
     ["a wrong count", [vec(3)]],
     ["a wrong dimension", [vec(2), vec(2)]],
+    ["a wrong dimension in a later vector only", [vec(3), vec(2)]],
     ["a null value (JSON has no NaN; a server may send null)", [vec(3), [1, null, 3]]],
     ["a string value", [vec(3), [1, "2", 3]]],
   ])("rejects %s with a permanent EmbeddingError", async (_n, embeddings) => {
     const err = await provider(async () => ok(embeddings))
       .embed(["a", "b"])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EmbeddingError);
+    expect(err).not.toBeInstanceOf(EmbeddingUnavailableError);
+  });
+
+  it("rejects a non-finite number: 1e999 parses to Infinity", async () => {
+    const raw = '{"embeddings":[[1,1e999,3]]}';
+    const err = await provider(async () => new Response(raw))
+      .embed(["a"])
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EmbeddingError);
     expect(err).not.toBeInstanceOf(EmbeddingUnavailableError);
@@ -119,10 +131,44 @@ describe("OllamaEmbeddingProvider", () => {
   });
 
   it("cancels the body of an error response instead of leaving it open (F23)", async () => {
-    const { body, cancelled } = trackedBody(new Uint8Array(0));
-    const p = provider(async () => new Response(body, { status: 500 }));
-    await expect(p.embed(["a"])).rejects.toBeInstanceOf(EmbeddingUnavailableError);
-    expect(cancelled()).toBe(true);
+    for (const [status, expected] of [
+      [500, EmbeddingUnavailableError],
+      [404, EmbeddingError],
+    ] as const) {
+      const { body, cancelled } = trackedBody(new Uint8Array(0));
+      const p = provider(async () => new Response(body, { status }));
+      await expect(p.embed(["a"])).rejects.toBeInstanceOf(expected);
+      expect(cancelled(), String(status)).toBe(true);
+    }
+  });
+
+  it("reads a body that fails the shape check to its end, leaving no stream open", async () => {
+    let drained = false;
+    const chunks = [new TextEncoder().encode('{"embeddings":[]}')];
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        const next = chunks.shift();
+        if (next) c.enqueue(next);
+        else {
+          drained = true;
+          c.close();
+        }
+      },
+    });
+    const p = provider(async () => new Response(body, { status: 200 }));
+    await expect(p.embed(["a"])).rejects.toBeInstanceOf(EmbeddingError);
+    expect(drained).toBe(true);
+  });
+
+  it("accepts a body of exactly the size cap and refuses one byte more", async () => {
+    const max = 1 * 3 * MAX_BYTES_PER_VALUE + MAX_RESPONSE_OVERHEAD_BYTES;
+    const raw = '{"embeddings":[[1,2,3]]}';
+    const padded = (n: number) => raw + " ".repeat(n - raw.length);
+    const at = provider(async () => new Response(padded(max)));
+    expect(await at.embed(["a"])).toEqual([[1, 2, 3]]);
+    const over = provider(async () => new Response(padded(max + 1)));
+    await expect(over.embed(["a"])).rejects.toThrow(/too large/);
+    await expect(over.embed(["a"])).rejects.toBeInstanceOf(EmbeddingError);
   });
 
   it("caps the response size: an endless body is cancelled and refused, permanently", async () => {
@@ -192,7 +238,9 @@ describe("OllamaEmbeddingProvider", () => {
     [{ timeoutMs: -1 }, "DOCMIND_EMBED_TIMEOUT_MS must be a positive integer"],
     [{ maxBatchSize: 1.5 }, "maxBatchSize must be a positive integer"],
   ])("rejects bad options %j", (over, message) => {
-    expect(() => provider(hang, over)).toThrow(message);
+    const make = () => provider(hang, over);
+    expect(make).toThrow(EmbeddingError);
+    expect(make).toThrow(message);
   });
 
   it("never carries the url, the text, the body or a cause in any error it throws", async () => {
@@ -214,6 +262,18 @@ describe("OllamaEmbeddingProvider", () => {
       ["shape", async () => new Response("secret body"), {}],
       ["oversize", async () => new Response(`${" ".repeat(1 << 17)}secret body`), {}],
       ["abort", hang, {}, abort.signal],
+      [
+        "mid-body",
+        async () =>
+          new Response(
+            new ReadableStream({
+              pull(c) {
+                c.error(leaky);
+              },
+            }),
+          ),
+        {},
+      ],
     ];
     abort.abort();
     for (const [name, fetch, over, signal] of cases) {
