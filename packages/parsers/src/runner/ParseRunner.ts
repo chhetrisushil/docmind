@@ -8,6 +8,7 @@ import {
   ParseRejectedError,
   ParsedDocument,
 } from "../types";
+import { runnerInternals } from "./internals";
 import { type ChildReply, type ChildRequest, encodeFrame, maxReplyBytes } from "./protocol";
 
 export interface ParseLimits {
@@ -20,10 +21,6 @@ export interface ParseLimits {
 }
 export interface ParseRunnerOptions {
   limits: ParseLimits;
-  /** The compiled child entry. Default: `dist/runner/child.js` next to or above this file. */
-  childEntry?: string;
-  /** Tests only: a CommonJS file exporting `parsers`. */
-  parserModule?: string;
   /** Parses allowed at once; extra runs queue. Default 2. */
   maxConcurrent?: number;
 }
@@ -146,11 +143,6 @@ export class ParseRunner {
     else this.slots--;
   }
 
-  /** The Node executable to spawn. Not an option: only the test subclass (`runner/testing.ts`) overrides it. */
-  protected executable(): string {
-    return process.execPath;
-  }
-
   constructor(private readonly options: ParseRunnerOptions) {
     const { wallClockMs, memoryMb, maxInputBytes, maxChars } = options.limits;
     if (
@@ -195,10 +187,11 @@ export class ParseRunner {
     signal?: AbortSignal,
   ): Promise<ParsedDocument> {
     const { limits } = this.options;
-    const entry = this.options.childEntry ?? defaultEntry();
+    const { childEntry, parserModule } = runnerInternals(this);
+    const entry = childEntry ?? defaultEntry();
     const map = specifierMap();
     const readable = readablePaths(entry, map);
-    if (this.options.parserModule) readable.push(dirname(this.options.parserModule));
+    if (parserModule) readable.push(dirname(parserModule));
     const args = [
       "--permission",
       ...readable.map((p) => `--allow-fs-read=${p}`),
@@ -206,7 +199,7 @@ export class ParseRunner {
       entry,
       JSON.stringify(map),
     ];
-    const child = spawn(this.executable(), args, {
+    const child = spawn(process.execPath, args, {
       stdio: ["pipe", "ignore", "ignore", "pipe"],
       env: {},
       cwd: dirname(entry),
@@ -228,7 +221,7 @@ export class ParseRunner {
       const request: ChildRequest = {
         parserId,
         bytes: Buffer.from(bytes).toString("base64"),
-        module: this.options.parserModule,
+        module: parserModule,
         maxChars: limits.maxChars,
       };
       return await this.exchange(child, request, signal);
