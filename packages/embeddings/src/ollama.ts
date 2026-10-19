@@ -1,4 +1,5 @@
 import { type EmbedOptions, EmbeddingError, type EmbeddingProvider } from "@loom/memory";
+import { z } from "zod";
 
 /** Worth retrying: the service is down, slow or overloaded. Permanent problems are plain EmbeddingError. */
 export class EmbeddingUnavailableError extends EmbeddingError {
@@ -20,6 +21,8 @@ export interface OllamaOptions {
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_BATCH_SIZE = 64;
 
+const Body = z.object({ embeddings: z.array(z.array(z.number().finite())) });
+
 export class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly modelId: string;
   readonly dimensions: number;
@@ -40,15 +43,41 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   private async request(batch: readonly string[], signal?: AbortSignal): Promise<number[][]> {
     const timeout = AbortSignal.timeout(this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    const response = await (this.options.fetch ?? fetch)(
-      `${this.options.baseUrl.replace(/\/$/, "")}/api/embed`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
-        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      },
-    );
-    return ((await response.json()) as { embeddings: number[][] }).embeddings;
+    let response: Response;
+    try {
+      response = await (this.options.fetch ?? fetch)(
+        `${this.options.baseUrl.replace(/\/$/, "")}/api/embed`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        },
+      );
+    } catch {
+      throw new EmbeddingUnavailableError(); // connection refused, DNS, timeout, abort
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {}); // never leave the body open
+      if (response.status === 429 || response.status >= 500) throw new EmbeddingUnavailableError();
+      throw new EmbeddingError(
+        `the embedding service refused the request (HTTP ${response.status})`,
+      );
+    }
+    let embeddings: number[][];
+    try {
+      embeddings = Body.parse(await response.json()).embeddings;
+    } catch {
+      throw new EmbeddingError("the embedding service answered with an unexpected shape");
+    }
+    if (
+      embeddings.length !== batch.length ||
+      embeddings.some((v) => v.length !== this.dimensions)
+    ) {
+      throw new EmbeddingError(
+        "the embedding service returned the wrong number or size of vectors",
+      );
+    }
+    return embeddings;
   }
 }
