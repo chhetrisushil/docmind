@@ -174,3 +174,33 @@ describe.skipIf(!PG_URL)("POST /api/documents failure paths (needs DOCMIND_TEST_
     expect((await h.upload("alice", "a.txt", bytes)).status).toBe(201);
   });
 });
+
+describe.skipIf(!PG_URL)(
+  "cross-origin writes to the document routes (needs DOCMIND_TEST_PG_URL)",
+  () => {
+    let h: DocumentHarness;
+    beforeAll(async () => {
+      h = await startDocumentServer();
+    });
+    afterAll(async () => {
+      await h?.close();
+    });
+
+    it("refuses a same-site upload and delete before auth or any work", async () => {
+      const form = new FormData();
+      form.append("file", new Blob([TEXT("csrf")]), "c.txt");
+      const up = await fetch(`${h.base}/api/documents`, {
+        method: "POST",
+        headers: { "sec-fetch-site": "same-site" },
+        body: form,
+      });
+      expect(up.status).toBe(403);
+      expect(await up.json()).toEqual({ error: { code: "cross_origin_request" } });
+      const del = await fetch(`${h.base}/api/documents/${U1}`, {
+        method: "DELETE",
+        headers: { "sec-fetch-site": "cross-site" },
+      });
+      expect(del.status).toBe(403);
+    });
+  },
+);

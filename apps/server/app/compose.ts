@@ -97,27 +97,30 @@ export function buildServer(options: ComposeOptions) {
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
   const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });
-  const server = createHttpServer({
-    ...authRoutes({
-      service: new AuthService(store),
-      authenticator,
-      store,
-      throttle,
-      secureCookies: options.secureCookies,
-      trustProxy: options.trustProxy,
-    }),
-    ...documentRoutes({
-      pool,
-      authenticator,
-      fields,
-      blobs,
-      limits,
-      ingest,
-      starts,
-      status,
-    }),
-    ...events.routes, // exact route, matched before `GET /api/documents/:id`
-  });
+  const server = createHttpServer(
+    {
+      ...authRoutes({
+        service: new AuthService(store),
+        authenticator,
+        store,
+        throttle,
+        secureCookies: options.secureCookies,
+        trustProxy: options.trustProxy,
+      }),
+      ...documentRoutes({
+        pool,
+        authenticator,
+        fields,
+        blobs,
+        limits,
+        ingest,
+        starts,
+        status,
+      }),
+      ...events.routes, // exact route, matched before `GET /api/documents/:id`
+    },
+    { secure: options.secureCookies },
+  );
   return {
     app,
     server,
