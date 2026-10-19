@@ -69,6 +69,12 @@ describe("docxParser", () => {
     expect(doc.media).toEqual([{ mime: "image/png", locator: { kind: "section", index: 0 } }]);
   });
 
+  it("records no media when the document has no text sections", async () => {
+    const doc = await docxParser.parse(makeDocx([{ text: "" }], { image: true }));
+    expect(doc.sections).toEqual([]);
+    expect(doc.media).toEqual([]);
+  });
+
   it("places an image in the section open where it appeared", async () => {
     const doc = await docxParser.parse(
       makeDocx(
