@@ -1,3 +1,4 @@
+import { ParseAbortedError } from "@docmind/parsers";
 import type { Effect } from "@loom/effect-runtime";
 import { chunkDocument } from "../chunker";
 import type { IngestStartInput } from "../flow";
@@ -41,7 +42,7 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
     deps.guard,
     async (ref, signal) => {
       const parsed = await deps.parsed.take(ref);
-      signal?.throwIfAborted(); // an abandoned attempt does not go on to write
+      if (signal?.aborted) throw new ParseAbortedError(); // an abandoned attempt does not go on to write
       // No parsed row for a document that exists: an earlier run stored the chunks and dropped it,
       // and crashed before its STEP_COMPLETED was appended. The chunks are the result.
       if (!parsed) return { count: await deps.chunks.count(ref) };
