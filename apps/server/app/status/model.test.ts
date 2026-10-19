@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
+import { FAILURE_CODES } from "../flows/ingest-document/errors";
 import {
   INITIAL_STATUS,
+  STATUS_MESSAGES,
   STATUS_OF_STEP,
+  UPLOADED,
   foldIngestStatus,
   generationOf,
   ingestKeyOf,
   ingestScopeOf,
   ingestStatus,
   isIngestExecution,
+  viewOf,
 } from "./model";
 import { evt, ingestRun } from "./testing";
 
@@ -186,5 +190,22 @@ describe("through Loom's folded-model service", () => {
     });
     const [other] = await store.getFolded("ingest-status", [chat]);
     expect(other).toMatchObject({ key: null, scope: null, state: INITIAL_STATUS });
+  });
+});
+
+describe("the view", () => {
+  it("carries the fixed message of a failure code, and no error for a healthy state", () => {
+    const state = foldIngestStatus(ingestRun(exec(), "failed:corrupt_content"));
+    expect(viewOf(state)).toEqual({
+      status: "failed",
+      step: "parse",
+      error: STATUS_MESSAGES.corrupt_content,
+    });
+    expect(viewOf(INITIAL_STATUS)).toEqual(UPLOADED);
+  });
+
+  it("has a message for every failure code and for internal, and UPLOADED carries no error", () => {
+    expect(Object.keys(STATUS_MESSAGES).sort()).toEqual([...FAILURE_CODES, "internal"].sort());
+    expect(UPLOADED).toEqual({ status: "uploaded", step: null, error: null });
   });
 });
