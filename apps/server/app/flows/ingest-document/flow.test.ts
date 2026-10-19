@@ -1,21 +1,38 @@
 import { randomUUID } from "node:crypto";
+import { ParseAbortedError, ParseCrashedError, ParseRejectedError } from "@docmind/parsers";
+import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
 import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflow-runtime";
-import { describe, expect, it } from "vitest";
+import { recoverAbandoned } from "@loom/workflow-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { ingestExecutionId } from "../../documents/ingest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import type { IngestDeps } from "./deps";
 import { DocumentGoneError } from "./errors";
-import { INGEST_STEPS, IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
-import { StepResult } from "./stepEffect";
+import {
+  INGEST_STEPS,
+  IngestOutput,
+  IngestStartInput,
+  ingestDocumentFlow,
+  ingestParseStep,
+  runIngestSteps,
+} from "./flow";
+import { PARSE_RETRY, StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
+
+afterEach(() => vi.restoreAllMocks());
 
 const ids = (): IngestStartInput => ({
   tenantId: randomUUID(),
   userId: randomUUID(),
   documentId: randomUUID(),
 });
+const PARSED = {
+  text: "h",
+  sections: [{ headingPath: [], text: "h", locator: { kind: "chars" as const, start: 0, end: 1 } }],
+  media: [],
+};
 /** Fake ports; `run` is the sandboxed parse, `sleep` the (instant) wait between retry attempts. */
 const fakeDeps = (over: Partial<IngestDeps> = {}) => {
   const seen: string[] = [];
@@ -55,6 +72,18 @@ describe("ingest-document flow v2", () => {
     expect(await outputOf(fakeDeps({ guard }).deps)).toEqual({ outcome: "document_gone" });
   });
 
+  it("ends with outcome failed and the code for a permanent content problem", async () => {
+    const runner = {
+      run: async () => {
+        throw new ParseRejectedError("corrupt_content");
+      },
+    };
+    expect(await outputOf(fakeDeps({ runner }).deps)).toEqual({
+      outcome: "failed",
+      code: "corrupt_content",
+    });
+  });
+
   it("is start-once per document and generation", async () => {
     const app = buildApp({ kind: "memory" }, undefined, { ingest: fakeDeps().deps });
     const input = ids();
@@ -80,6 +109,130 @@ describe("ingest-document flow v2", () => {
       }),
     ).rejects.toBeInstanceOf(ExecutionDeniedError);
     await app.close();
+  });
+});
+
+describe("the step runner", () => {
+  const second = { ...ingestParseStep, id: "ingest-second" };
+  const sequence = async (first: StepResult) => {
+    const ran: string[] = [];
+    const ctx = {
+      run: async (step: { id: string }) => {
+        ran.push(step.id);
+        return step.id === ingestParseStep.id ? first : { outcome: "done" as const };
+      },
+    };
+    const out = await runIngestSteps([ingestParseStep, second])(ctx as never, ids());
+    return { out, ran };
+  };
+
+  it.each([
+    [{ outcome: "document_gone" as const }, { outcome: "document_gone" }],
+    [
+      { outcome: "failed" as const, code: "corrupt_content" as const },
+      { outcome: "failed", code: "corrupt_content" },
+    ],
+  ])("returns early on %j without running a later step", async (first, expected) => {
+    expect(await sequence(first)).toEqual({ out: expected, ran: ["ingest-parse"] });
+  });
+
+  it("runs every step when each is done", async () => {
+    expect(await sequence({ outcome: "done" })).toEqual({
+      out: { outcome: "done" },
+      ran: ["ingest-parse", "ingest-second"],
+    });
+  });
+});
+
+describe("the parse step's failures and restarts", () => {
+  it("declares the retry policy on the step and keeps it small", () => {
+    expect(ingestParseStep.retry).toBe(PARSE_RETRY);
+    expect(PARSE_RETRY.maxAttempts).toBe(3);
+  });
+
+  it("ends a deterministic crash after maxAttempts attempts and does not loop", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    const runner = {
+      run: async () => {
+        calls++;
+        throw new ParseCrashedError();
+      },
+    };
+    const app = buildApp({ kind: "memory" }, undefined, { ingest: fakeDeps({ runner }).deps });
+    await expect((await run(ids(), app)).waitForCompletion()).rejects.toThrow(
+      /ingest step failed: parse/,
+    );
+    expect(calls).toBe(PARSE_RETRY.maxAttempts);
+    await app.close();
+  });
+
+  it("recovers a transient crash within the attempts", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    const runner = {
+      run: async () => {
+        if (++calls < 2) throw new ParseCrashedError();
+        return PARSED;
+      },
+    };
+    expect(await outputOf(fakeDeps({ runner }).deps)).toEqual({ outcome: "done" });
+    expect(calls).toBe(2);
+  });
+
+  it("a graceful restart mid-parse is not a failure and not an attempt: recovery re-runs the step to done", async () => {
+    const eventStore = new InMemoryAsyncEventStore();
+    // The log outlives the first app: app.close() would otherwise drop an in-memory store (a restart keeps it).
+    const kept = new Proxy(eventStore, {
+      get: (target, prop) => {
+        if (prop === "close") return async () => {};
+        const value = Reflect.get(target, prop, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const input = ids();
+    const executionId = ingestExecutionId(input.userId, input.documentId);
+    let entered: () => void = () => {};
+    const inParse = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const shutdown = new AbortController();
+    let attempts = 0;
+    const runner = {
+      run: async () => {
+        attempts++;
+        entered();
+        await new Promise<never>((_, reject) =>
+          shutdown.signal.addEventListener("abort", () => reject(new ParseAbortedError())),
+        );
+        return PARSED;
+      },
+    };
+    const first = buildApp({ kind: "custom", eventStore: kept }, undefined, {
+      ingest: fakeDeps({ runner }).deps,
+    });
+    await run(input, first);
+    await inParse;
+    shutdown.abort(); // runner.close(): the parse is aborted; the execution's own signal is quiet
+    await first.close();
+    expect(attempts).toBe(1);
+    const types = (await eventStore.read(executionId)).map((e) => e.eventType);
+    expect(types).toContain("STEP_STARTED");
+    expect(types.filter((t) => /FAILED|COMPLETED|CANCELLED/.test(t))).toEqual([]);
+
+    const second = buildApp({ kind: "custom", eventStore: kept }, undefined, {
+      ingest: fakeDeps().deps,
+    });
+    const summary = await recoverAbandoned(second.runtime, {
+      source: eventStore,
+      isAbandoned: () => true,
+    });
+    expect(summary).toMatchObject({ recovered: 1, failed: 0 });
+    const state = await second.runtime.loadState(executionId, {
+      principal: { tenant: input.tenantId, actor: input.userId },
+    });
+    expect([state?.status, state?.variables._output]).toEqual(["completed", { outcome: "done" }]);
+    await second.close();
   });
 });
 
