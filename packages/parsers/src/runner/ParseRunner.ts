@@ -46,6 +46,17 @@ export class ParseLimitError extends Error {
     this.name = "ParseLimitError";
   }
 }
+/**
+ * The parser hit the V8 heap limit. Advisory label: SIGABRT / exit 134 can also come from a parser
+ * or a native assert, and a kernel OOM kill arrives as SIGKILL (a plain crash). The limit covers
+ * the V8 heap only; Buffers and ArrayBuffers bypass it.
+ */
+export class ParseMemoryError extends Error {
+  constructor() {
+    super("parse ran out of memory");
+    this.name = "ParseMemoryError";
+  }
+}
 /** Bare specifiers the child's built code imports, resolved by the parent to real files. */
 const BARE_SPECIFIERS = ["@docmind/contracts", "zod"] as const;
 const real = (p: string): string => realpathSync(p);
@@ -75,8 +86,12 @@ const defaultEntry = (): string => {
  * Node IPC channel (a parser could poison it): the request is one length-prefixed JSON frame on
  * the child's stdin, the reply one frame on fd 3, read with a byte cap and validated strictly;
  * anything malformed is ParseCrashedError. stdout/stderr are ignored; every pipe is destroyed and
- * the child SIGKILLed on every path through the `finally`. Network access is not covered by Node's
- * permission model (documented limit).
+ * the child SIGKILLed on every path through the `finally`. Network access is NOT restricted by Node's
+ * permission model (documented limit; not tested). The memory limit is a V8 heap limit only:
+ * external memory (Buffers/ArrayBuffers) is not bounded by Node, so cap host memory in deployment
+ * with a container/cgroup/systemd MemoryMax limit. The out-of-memory label (ParseMemoryError) is
+ * advisory: SIGABRT/exit 134 can be produced by a parser or a native assert, a kernel OOM kill
+ * arrives as SIGKILL (a crash), and SIGABRT may write a core dump where core dumps are enabled.
  */
 export class ParseRunner {
   private readonly live = new Set<ChildProcess>();
@@ -187,7 +202,17 @@ export class ParseRunner {
         }
       };
       out.on("error", crash);
-      out.on("close", crash); // a truncated or empty frame
+      // A truncated or empty frame; a V8 out-of-memory abort (SIGABRT / 134) is reported as such.
+      out.on("close", () => {
+        const decide = () =>
+          settle(
+            child.signalCode === "SIGABRT" || child.exitCode === 134
+              ? new ParseMemoryError()
+              : new ParseCrashedError(),
+          );
+        if (child.exitCode !== null || child.signalCode !== null) decide();
+        else child.once("exit", decide);
+      });
       out.on("data", (chunk: Buffer) => {
         if (settled) return;
         parts.push(chunk);

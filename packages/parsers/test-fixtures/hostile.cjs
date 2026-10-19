@@ -110,4 +110,26 @@ exports.parsers.push(
     accepts: () => true,
     parse: () => ({ text: String(require("fs-extra")), sections: [], media: [] }),
   },
+  {
+    id: "probe",
+    accepts: () => true,
+    parse: () => {
+      const fs = require("node:fs");
+      const code = (f) => {
+        try {
+          f();
+          return "allowed";
+        } catch (e) {
+          return e.code;
+        }
+      };
+      const result = {
+        read: code(() => fs.readFileSync("/etc/hosts")),
+        write: code(() => fs.writeFileSync(`${require("node:os").tmpdir()}/dm-probe`, "x")),
+        spawn: code(() => require("node:child_process").execSync("true")),
+        env: Object.keys(process.env).filter((k) => k !== "__CF_USER_TEXT_ENCODING"),
+      };
+      return ok(JSON.stringify(result));
+    },
+  },
 );
