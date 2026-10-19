@@ -570,4 +570,21 @@ describe("stepEffect progress-aware attempts", () => {
     await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
     expect(attempts).toBe(opts.retry.maxAttempts);
   });
+
+  it("stops at the absolute attempt ceiling however much progress is reported", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let attempts = 0;
+    const effect = stepEffect(
+      "embed",
+      guard().port,
+      async (_r, signal, progress) => {
+        attempts++;
+        progress?.(); // reports success every time, but the work never shrinks
+        return cooperative(signal);
+      },
+      { ...opts, maxAttemptsTotal: 10 },
+    );
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(attempts).toBe(10);
+  });
 });

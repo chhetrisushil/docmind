@@ -138,7 +138,7 @@ describe("embedEffect", () => {
     h.failFrom(2, new EmbeddingError("bad request"), 99);
     await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
     expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "EmbeddingError");
-    expect(h.embedCalls).toEqual([64]); // not retried
+    expect(h.signals).toHaveLength(2); // one call per batch: the failing call was not retried
     expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(36);
   });
 
