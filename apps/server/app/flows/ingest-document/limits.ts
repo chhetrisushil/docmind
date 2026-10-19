@@ -5,6 +5,7 @@ import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
 import { loadLimits, positiveInt } from "../../documents/limits";
 import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress";
 import { StartupConfigError } from "../../startupError";
+import { STEP_TIMEOUT_MS } from "./stepEffect";
 
 /** The ingest flow's dependencies, built once by the composition root and passed down. */
 export interface IngestWiring {
@@ -51,7 +52,8 @@ export interface EmbedConfig {
 }
 
 const MAX_EMBED_DIMENSIONS = 16_000; // pgvector's `vector` column limit
-const MAX_EMBED_TIMEOUT_MS = 600_000;
+/** Each embed attempt is cut off at STEP_TIMEOUT_MS, so a request timeout at or above it could never fire: it must be below. */
+const MAX_EMBED_TIMEOUT_MS = STEP_TIMEOUT_MS - 1;
 
 /** Embedder config from the environment; an invalid variable throws an error naming it, never its value. The URL is validated by the provider. */
 export function loadEmbedConfig(env: NodeJS.ProcessEnv = process.env): EmbedConfig {

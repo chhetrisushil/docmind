@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
 import { createIngestWiring, loadEmbedConfig, loadParseLimits } from "./limits";
+import { STEP_TIMEOUT_MS } from "./stepEffect";
 
 describe("loadParseLimits", () => {
   it("has defaults", () => {
@@ -100,10 +101,23 @@ describe("loadEmbedConfig", () => {
   });
   it.each([
     ["DOCMIND_EMBED_DIMENSIONS", "16001"],
-    ["DOCMIND_EMBED_TIMEOUT_MS", "600001"],
+    ["DOCMIND_EMBED_TIMEOUT_MS", String(STEP_TIMEOUT_MS)],
   ])("bounds %s", (name, value) => {
     expect(() => loadEmbedConfig({ [name]: value })).toThrow(
       new RegExp(`^${name} must be at most \\d+$`),
+    );
+  });
+});
+
+describe("DOCMIND_EMBED_TIMEOUT_MS against the per-attempt bound", () => {
+  it("accepts the largest value below STEP_TIMEOUT_MS", () => {
+    expect(
+      loadEmbedConfig({ DOCMIND_EMBED_TIMEOUT_MS: String(STEP_TIMEOUT_MS - 1) }).timeoutMs,
+    ).toBe(STEP_TIMEOUT_MS - 1);
+  });
+  it("rejects a value that cannot fire before the attempt is cut off, naming the variable", () => {
+    expect(() => loadEmbedConfig({ DOCMIND_EMBED_TIMEOUT_MS: "600000" })).toThrow(
+      new StartupConfigError(`DOCMIND_EMBED_TIMEOUT_MS must be at most ${STEP_TIMEOUT_MS - 1}`),
     );
   });
 });
