@@ -19,7 +19,11 @@ export class InMemoryProgressBus implements ProgressBus {
     if (!parsed.success) throw new Error("invalid progress event");
     for (const listener of [...(this.listeners.get(scope.userId) ?? [])]) {
       try {
-        listener(parsed.data);
+        const result: unknown = listener(parsed.data);
+        // an async listener's rejection would otherwise be unhandled and can crash Node
+        if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function") {
+          Promise.resolve(result).catch(() => {});
+        }
       } catch {
         // one subscriber's failure must not stop the publisher or the other subscribers
       }
