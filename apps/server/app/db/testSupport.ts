@@ -48,3 +48,26 @@ export async function createTestDb(): Promise<TestDb> {
     },
   };
 }
+
+const ROLE_LOCK_KEY = 727275;
+
+/**
+ * Runs `fn` under a session-level advisory lock on the maintenance database named in
+ * DOCMIND_TEST_PG_URL. Roles are cluster-global but advisory locks are per database, so the lock
+ * must live in one database every test process shares (not in a test's own database). Serializes
+ * `ALTER ROLE` across concurrent vitest processes ("tuple concurrently updated").
+ */
+export async function withRoleLock<T>(fn: () => Promise<T>): Promise<T> {
+  if (!PG_URL) throw new Error("DOCMIND_TEST_PG_URL is not set");
+  const lock = new Pool({ connectionString: PG_URL, max: 1 });
+  try {
+    await lock.query("SELECT pg_advisory_lock($1)", [ROLE_LOCK_KEY]);
+    try {
+      return await fn();
+    } finally {
+      await lock.query("SELECT pg_advisory_unlock($1)", [ROLE_LOCK_KEY]);
+    }
+  } finally {
+    await lock.end();
+  }
+}
