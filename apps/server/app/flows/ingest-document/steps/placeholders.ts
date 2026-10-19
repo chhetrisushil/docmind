@@ -10,7 +10,7 @@ import {
   stepEffect,
 } from "../stepEffect";
 
-export const PLACEHOLDER_STEPS = ["analyze", "summarize", "link"] as const;
+export const PLACEHOLDER_STEPS = ["summarize", "link"] as const;
 
 /** Named, durable, and empty: part 2 replaces the effect registered under the step's id and nothing else. */
 export const placeholderEffect = (
