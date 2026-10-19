@@ -26,6 +26,7 @@ import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
+import { documentEventRoutes } from "./events";
 import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
@@ -248,6 +249,7 @@ export interface DocumentHarness {
   status: IngestStatus;
   statusStore: InMemoryReadModelStore;
   bus: InMemoryProgressBus;
+  events: ReturnType<typeof documentEventRoutes>;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -313,7 +315,11 @@ export async function startDocumentServer(
     // A wrapper that replaces `ingest` (an injected failure or gate) gets a scheduler over its port.
     const starts =
       wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
-    const server = createHttpServer(documentRoutes({ ...wrapped, starts }));
+    const events = documentEventRoutes({ authenticator: testAuthenticator, bus: ingest.bus });
+    const server = createHttpServer({
+      ...documentRoutes({ ...wrapped, starts }),
+      ...events.routes,
+    });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     return {
@@ -329,6 +335,7 @@ export async function startDocumentServer(
       status: ingest.status,
       statusStore: ingest.statusStore,
       bus: ingest.bus,
+      events,
       upload(user, name, data) {
         const form = new FormData();
         form.append("file", new Blob([data]), name);
@@ -350,6 +357,7 @@ export async function startDocumentServer(
       async close() {
         ingest.probe.release();
         ingest.probe.releaseStart();
+        events.closeAll();
         await new Promise<void>((resolve) => {
           server.close(() => resolve());
           server.closeAllConnections();

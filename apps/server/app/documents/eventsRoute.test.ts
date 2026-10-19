@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHttpServer } from "../server";
+import { shutdown } from "../shutdown";
 import { documentEventRoutes } from "./events";
 import { InMemoryProgressBus } from "./progress";
 import { U1, U1B, U2, openSse, testAuthenticator } from "./testHarness";
@@ -186,5 +187,21 @@ describe("stream slots on every exit path", () => {
     expect(gone.writeHead).not.toHaveBeenCalled();
     await call(fakeRes());
     expect([subscribe.mock.calls.length, done.mock.calls.length]).toEqual([1, 0]);
+  });
+});
+
+describe("shutdown with an open stream (F10)", () => {
+  it("closeAll lets shutdown finish: the server drain no longer waits on the event stream", async () => {
+    const own = documentEventRoutes({ authenticator: testAuthenticator, bus });
+    const srv = createHttpServer(own.routes);
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/documents/events`;
+    const s = await openSse(url, { "x-test-user": "alice" });
+    expect(await s.next()).toBe("retry: 5000");
+    const closed = vi.fn(async () => {});
+    own.closeAll(); // main.ts: timers, then this, then the drain
+    await shutdown(srv, { close: closed });
+    expect(closed).toHaveBeenCalledTimes(1);
+    await expect(s.next()).rejects.toThrow(/^stream ended$/);
   });
 });
