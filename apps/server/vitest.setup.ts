@@ -10,8 +10,11 @@ vi.mock("./app/db/migrate", async (importOriginal) => {
       ? withRoleLock(() => real.setRolePassword(pool, role, password))
       : real.setRolePassword(pool, role, password);
   // Migrations also CREATE/ALTER/GRANT the cluster-global roles.
+  // Only the real migrations touch roles; a runner test on a temp dir must contend on the runner's own lock.
   const migrate: typeof real.migrate = (pool, dir) =>
-    PG_URL ? withRoleLock(() => real.migrate(pool, dir)) : real.migrate(pool, dir);
+    PG_URL && (dir === undefined || dir === real.MIGRATIONS_DIR)
+      ? withRoleLock(() => real.migrate(pool, dir))
+      : real.migrate(pool, dir);
   return {
     ...real,
     migrate,
