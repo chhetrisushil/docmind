@@ -3,12 +3,17 @@ import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawned: ChildProcess[] = [];
+let stdiolessSpawn = false;
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn: ((...args: Parameters<typeof actual.spawn>) => {
       const child = actual.spawn(...args);
+      if (stdiolessSpawn) {
+        child.kill("SIGKILL");
+        return { pid: undefined, once: () => {}, on: () => {} } as unknown as ChildProcess;
+      }
       spawned.push(child);
       return child;
     }) as typeof actual.spawn,
@@ -137,11 +142,39 @@ describe("ParseRunner", () => {
   );
 
   it("a child that exits 0 without writing a reply is a crash, not a hang", async () => {
-    const r = new ParseRunner({
-      limits: LIMITS,
-      childEntry: resolve(__dirname, "../../test-fixtures/hostile.cjs"),
-    });
-    await expect(r.run("echo", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    await expect(runner().run("exit0", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
     released();
+  });
+
+  it("a parser module that reads outside the grants while loading is a crash", async () => {
+    const mod = resolve(__dirname, "../../test-fixtures/toplevel.cjs");
+    await expect(runner(mod).run("x", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    released();
+  });
+
+  it("a failed spawn (ENOENT) rejects with a crash instead of hanging", async () => {
+    const r = new ParseRunner({ limits: LIMITS, executable: "/nonexistent/node-binary" });
+    await expect(r.run("txt", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.pid).toBeUndefined();
+  });
+
+  it("a spawn that returns no stdio (EMFILE) rejects with a crash, not a TypeError", async () => {
+    stdiolessSpawn = true;
+    try {
+      await expect(runner().run("echo", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    } finally {
+      stdiolessSpawn = false;
+    }
+  });
+
+  it.each([
+    [{ wallClockMs: 0, memoryMb: 256 }, /limits\.wallClockMs must be/],
+    [{ wallClockMs: 1.5, memoryMb: 256 }, /limits\.wallClockMs must be/],
+    [{ wallClockMs: 2147483648, memoryMb: 256 }, /limits\.wallClockMs must be/],
+    [{ wallClockMs: 1000, memoryMb: 0 }, /limits\.memoryMb must be/],
+    [{ wallClockMs: 1000, memoryMb: Number.NaN }, /limits\.memoryMb must be/],
+  ])("rejects invalid limits %#", (limits, text) => {
+    expect(() => new ParseRunner({ limits })).toThrow(text);
   });
 });

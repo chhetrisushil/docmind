@@ -40,6 +40,7 @@ exports.parsers.push(
     },
   },
   { id: "exit", accepts: () => true, parse: () => process.exit(3) },
+  { id: "exit0", accepts: () => true, parse: () => process.exit(0) },
   { id: "signal", accepts: () => true, parse: () => process.kill(process.pid, "SIGKILL") },
   {
     id: "oom",
