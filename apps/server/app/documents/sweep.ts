@@ -50,3 +50,38 @@ export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
     return 0;
   }
 }
+
+/** What the orphan purge needs from the status model. */
+export interface StatusForgetter {
+  forgetExecution(executionId: string): Promise<void>;
+}
+
+/**
+ * Tombstones the status rows whose document no longer exists (a delete that raced a first status
+ * row). Goes through the status model, never a raw delete, so tombstones and versions stay right.
+ * Never throws; a failure is logged by class only.
+ */
+export async function sweepOrphanStatuses(args: {
+  pool: Pool;
+  status: StatusForgetter;
+  limit: number;
+  signal?: AbortSignal;
+}): Promise<number> {
+  const { pool, status, limit, signal } = args;
+  try {
+    const { rows } = await pool.query<{ execution_id: string }>(
+      "SELECT execution_id FROM docmind_orphan_statuses($1::integer)",
+      [limit],
+    );
+    let purged = 0;
+    for (const r of rows) {
+      if (signal?.aborted) break;
+      await status.forgetExecution(r.execution_id);
+      purged++;
+    }
+    return purged;
+  } catch (err) {
+    console.error("orphan status sweep failed", className(err));
+    return 0;
+  }
+}

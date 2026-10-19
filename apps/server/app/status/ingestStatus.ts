@@ -18,6 +18,7 @@ import {
   ingestKeyOf,
   ingestScopeOf,
   ingestStatus,
+  isIngestExecution,
   progressOf,
   viewOf,
 } from "./model";
@@ -155,6 +156,17 @@ export class IngestStatus implements DocumentStatusReads {
       if (ingestScopeOf(row.executionId) !== identity.userId) continue;
       await this.service.purgeFolded(INGEST_STATUS_MODEL, { executionId: row.executionId });
     }
+  }
+
+  /**
+   * Tombstones one execution's row by its id (the stale-upload sweep's orphans: rows whose document is
+   * gone). FOR THE SWEEP ONLY: it is unscoped and cross-tenant, so it must never take an id from a client
+   * and stays off `DocumentStatusReads`. A tombstone, never a delete, so the watermark survives and a late event cannot resurrect it.
+   */
+  async forgetExecution(executionId: string): Promise<void> {
+    if (!isIngestExecution(executionId))
+      throw new TypeError("forgetExecution: not an ingest execution id");
+    await this.service.purgeFolded(INGEST_STATUS_MODEL, { executionId });
   }
 
   /** User erasure, after rows, blobs and key: the table has no foreign key to `users`, so nothing cascades. */
