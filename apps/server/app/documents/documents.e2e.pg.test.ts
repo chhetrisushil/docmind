@@ -134,11 +134,11 @@ describe.skipIf(!PG_URL)(
       expect(g1.status).toBe(201);
       const graceDoc = ((await g1.json()) as UploadDocumentResponse).document;
 
-      // the upload started the real stub flow, with the owner's execution id and ids only
+      // the upload started the real ingest flow, with the owner's execution id and ids only
       const started = handles.get(a1.document.id);
       expect(started?.executionId).toMatch(/^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}(\.\d+)?$/);
       const done = await started?.waitForCompletion();
-      expect(done?.variables._output).toEqual({ outcome: "accepted" });
+      expect(done?.variables._output).toEqual({ outcome: "done" });
       expect(done?.status).toBe("completed");
       // every upload started one flow; let them all finish so teardown does not race a live run
       expect(handles.size).toBe(3);
@@ -160,11 +160,8 @@ describe.skipIf(!PG_URL)(
       const read = (await (
         await get(ada, `/api/documents/${a1.document.id}`)
       ).json()) as DocumentDto;
-      expect(read).toMatchObject({
-        filename: secretName,
-        title: "Ada private diary",
-        status: "uploaded",
-      });
+      expect(read).toMatchObject({ filename: secretName, title: "Ada private diary" });
+      expect(["parsing", "embedding"]).toContain(read.status); // Task 92 sets it to `ready`
       expect((await get(ada, `/api/documents/${graceDoc.id}`)).status).toBe(404);
       expect((await fetch(`${base}/api/documents`)).status).toBe(401);
 

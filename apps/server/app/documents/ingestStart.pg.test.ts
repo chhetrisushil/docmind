@@ -1,7 +1,6 @@
 import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { UPLOADED } from "../status/model";
 import { ingestExecutionId } from "./ingest";
 import { ALICE, type DocumentHarness, TEXT, U1, startDocumentServer } from "./testHarness";
 
@@ -29,23 +28,27 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     expect(handle?.executionId).toBe(ingestExecutionId(U1, id));
     const state = await handle?.waitForCompletion();
     expect(state?.status).toBe("completed");
-    expect(state?.variables._output).toEqual({ outcome: "accepted" });
-    expect(await h.status.forDocument(ALICE, id)).toEqual(UPLOADED); // the stub writes nothing
+    expect(state?.variables._output).toEqual({ outcome: "done" });
+    // Step-agnostic until Task 92: later tasks append steps, so the status moves with them.
+    const view = await h.status.forDocument(ALICE, id);
+    expect(["parsing", "embedding"]).toContain(view.status);
+    expect(view.error).toBeNull();
   });
 
   it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.ingest.failNext("start"); // no execution is created, so the document stays `uploaded`
     const bytes = TEXT("dup flow");
     const first = await created("a.txt", bytes);
-    await h.starts.idle();
     const id = first.body.document.id;
-    const handle = h.ingest.handles.get(id);
-    await handle?.waitForCompletion();
+    await h.starts.idle();
+    spy.mockRestore();
+    expect(h.ingest.handles.has(id)).toBe(false);
     const again = await created("again.txt", bytes);
     expect(again.res.status).toBe(200);
     await h.starts.idle();
-    // Two start calls, one execution (the stored handle is the first one, not replaced).
     expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(2);
-    expect(h.ingest.handles.get(id)).toBe(handle);
+    expect(h.ingest.handles.has(id)).toBe(true); // the retry created the one execution
   });
 
   it("starts nothing for an upload that is refused", async () => {
@@ -120,7 +123,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     expect(handle?.getState().status).toBe("cancelled");
   });
 
-  it("gives the execution only ids: the stub's start input has no filename, title or content", async () => {
+  it("gives the execution only ids: the start input has no filename, title or content", async () => {
     const { body } = await created("Quarterly report.txt", TEXT("ids only"));
     const handle = h.ingest.handles.get(body.document.id);
     const state = JSON.stringify(handle?.getState());

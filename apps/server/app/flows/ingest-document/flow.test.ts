@@ -3,11 +3,12 @@ import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
 import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflow-runtime";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../../config";
+import { ingestExecutionId } from "../../documents/ingest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
-import { executionIdFor } from "../../subject";
 import type { IngestDeps } from "./deps";
 import { DocumentGoneError } from "./errors";
-import { IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
+import { INGEST_STEPS, IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
+import { StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
 
 const ids = (): IngestStartInput => ({
@@ -15,46 +16,47 @@ const ids = (): IngestStartInput => ({
   userId: randomUUID(),
   documentId: randomUUID(),
 });
-const appWith = (exists: boolean) => {
-  const seen: IngestStartInput[] = [];
+/** Fake ports; `run` is the sandboxed parse, `sleep` the (instant) wait between retry attempts. */
+const fakeDeps = (over: Partial<IngestDeps> = {}) => {
+  const seen: string[] = [];
   const deps: IngestDeps = fakeIngestDeps({
-    guard: {
-      begin: async (ref) => {
-        seen.push(ref);
-        if (!exists) throw new DocumentGoneError();
-      },
-    },
+    guard: { begin: async (_r, step) => void seen.push(`begin:${step}`) },
+    sleep: async () => {},
+    ...over,
   });
-  return { app: buildApp({ kind: "memory" }, undefined, { ingest: deps }), seen };
+  return { deps, seen };
 };
 type App = ReturnType<typeof buildApp>;
 const run = (input: IngestStartInput, app: App) =>
   app.runtime.start(ingestDocumentFlow, input, {
-    executionId: executionIdFor(input.userId, `ingest-${input.documentId}`),
+    executionId: ingestExecutionId(input.userId, input.documentId),
     principal: { tenant: input.tenantId, actor: input.userId },
   });
+const outputOf = async (deps: IngestDeps) => {
+  const app = buildApp({ kind: "memory" }, undefined, { ingest: deps });
+  const state = await (await run(ids(), app)).waitForCompletion();
+  await app.close();
+  return state.variables._output;
+};
 
-describe("ingest-document stub flow", () => {
-  it("completes with 'accepted' while the document exists, asking with ids only", async () => {
-    const { app, seen } = appWith(true);
-    const input = ids();
-    const state = await (await run(input, app)).waitForCompletion();
-    expect(state.status).toBe("completed");
-    expect(state.variables._output).toEqual({ outcome: "accepted" });
-    expect(seen).toEqual([input]);
-    await app.close();
+describe("ingest-document flow v2", () => {
+  it("runs the parse step and completes done, asking with ids only", async () => {
+    const { deps, seen } = fakeDeps();
+    expect(await outputOf(deps)).toEqual({ outcome: "done" });
+    expect(seen).toEqual(["begin:parse"]);
   });
 
   it("stops cleanly, not as a failure, when the document is gone", async () => {
-    const { app } = appWith(false);
-    const state = await (await run(ids(), app)).waitForCompletion();
-    expect(state.status).toBe("completed");
-    expect(state.variables._output).toEqual({ outcome: "document_gone" });
-    await app.close();
+    const guard = {
+      begin: async () => {
+        throw new DocumentGoneError();
+      },
+    };
+    expect(await outputOf(fakeDeps({ guard }).deps)).toEqual({ outcome: "document_gone" });
   });
 
-  it("is start-once per document: the execution id is the idempotency key", async () => {
-    const { app } = appWith(true);
+  it("is start-once per document and generation", async () => {
+    const app = buildApp({ kind: "memory" }, undefined, { ingest: fakeDeps().deps });
     const input = ids();
     await (await run(input, app)).waitForCompletion();
     await expect(run(input, app)).rejects.toBeInstanceOf(ExecutionAlreadyExistsError);
@@ -63,19 +65,18 @@ describe("ingest-document stub flow", () => {
 
   it("fails at its step, not silently, when the app was built without ingest deps", async () => {
     const app = buildApp({ kind: "memory" });
-    const handle = await run(ids(), app);
-    await expect(handle.waitForCompletion()).rejects.toThrow(
-      /No effect registered for toolId: "ingest-begin"/,
+    await expect((await run(ids(), app)).waitForCompletion()).rejects.toThrow(
+      /No effect registered for toolId: "ingest-parse"/,
     );
     await app.close();
   });
 
   it("is refused for a caller with no principal (the grants and owner policy are live)", async () => {
-    const { app } = appWith(true);
+    const app = buildApp({ kind: "memory" }, undefined, { ingest: fakeDeps().deps });
     const input = ids();
     await expect(
       app.runtime.start(ingestDocumentFlow, input, {
-        executionId: executionIdFor(input.userId, "ingest-x"),
+        executionId: ingestExecutionId(input.userId, input.documentId),
       }),
     ).rejects.toBeInstanceOf(ExecutionDeniedError);
     await app.close();
@@ -102,9 +103,10 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
     );
   });
 
-  it("produces only a two-value enum, which cannot hold content", () => {
-    expect(Object.keys(IngestOutput.shape)).toEqual(["outcome"]);
-    expect(IngestOutput.shape.outcome.options).toEqual(["accepted", "document_gone"]);
+  it("gives every step the same content-free result and the flow an outcome and a code only", () => {
+    expect(Object.keys(StepResult.shape).sort()).toEqual(["code", "count", "model", "outcome"]);
+    expect(Object.keys(IngestOutput.shape).sort()).toEqual(["code", "outcome"]);
+    for (const step of INGEST_STEPS) expect(step.outputSchema).toBe(StepResult);
   });
 
   it("marks nothing sensitive, and so registers no event paths", () => {
@@ -114,10 +116,10 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
     expect(SENSITIVE_EVENT_PATHS).toEqual({});
   });
 
-  it("keeps the execution id free of content: u_<user>:ingest-<document uuid> only", () => {
+  it("keeps the execution id free of content: u_<user>:ingest-<document uuid>.<generation> only", () => {
     const input = ids();
-    expect(executionIdFor(input.userId, `ingest-${input.documentId}`)).toMatch(
-      /^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}$/,
+    expect(ingestExecutionId(input.userId, input.documentId)).toMatch(
+      /^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}\.\d+$/,
     );
   });
 });
