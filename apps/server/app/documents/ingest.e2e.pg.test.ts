@@ -17,7 +17,7 @@ import { ingestExecutionId } from "./ingest";
 import { type IngestStack, startIngestStack } from "./ingestStack";
 import { insertDocument } from "./repo";
 import { sweepStaleUploads } from "./sweep";
-import { PDF, newDocument } from "./testHarness";
+import { makePdf, newDocument } from "./testHarness";
 
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars.";
 const LONG_TEXT = Array.from(
@@ -300,20 +300,17 @@ describe.skipIf(!PG_URL)(
     );
 
     it(
-      "ends a pdf as failed with unsupported_content until part 2 adds the parser",
+      "ingests a text pdf through the pdf parser to ready",
       async () => {
         const user = await st.signUpAndLogIn("pdf@example.com");
         const stream = await st.events(user.cookie);
-        const id = await idOf(await st.upload(user.cookie, "report.pdf", PDF("acceptance")));
-        const seen = await st.until(stream, id, (s) => s === "failed");
+        const id = await idOf(
+          await st.upload(user.cookie, "report.pdf", makePdf("Acceptance pdf text")),
+        );
+        const seen = await st.until(stream, id, (s) => s === "ready" || s === "failed");
         stream.close();
-        expect(seen.at(-1)).toEqual({
-          documentId: id,
-          step: "parse",
-          status: "failed",
-          detail: "unsupported_content",
-        });
-        expect((await getDoc(user.cookie, id)).error).toBe(STATUS_MESSAGES.unsupported_content);
+        expect(seen.at(-1)?.status).toBe("ready");
+        expect((await getDoc(user.cookie, id)).status).toBe("ready");
         await assertLogContentFree(user, id);
       },
       WAIT,

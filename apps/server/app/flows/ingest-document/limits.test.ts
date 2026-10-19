@@ -59,7 +59,7 @@ describe("maxInputBytes", () => {
 describe("createIngestWiring", () => {
   it("builds a registry with the default parsers, a runner and a bus", () => {
     const w = createIngestWiring({});
-    expect(w.registry.ids()).toEqual(["txt", "md", "org", "docx", "doc"]);
+    expect(w.registry.ids()).toEqual(["txt", "md", "org", "docx", "doc", "pdf"]);
     expect(w.runner.active()).toBe(0);
   });
 

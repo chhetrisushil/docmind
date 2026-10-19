@@ -25,12 +25,14 @@
     "mammoth": "1.13.0",
     "marked": "18.1.1",
     "orga": "5.0.0",
+    "unpdf": "1.9.1",
     "word-extractor": "1.0.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "0.28.2",
+    "pdf-lib": "1.17.1",
     "vitest": "^2.1.8"
   }
 }

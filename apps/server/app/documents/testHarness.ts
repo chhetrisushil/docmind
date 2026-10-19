@@ -68,6 +68,28 @@ export const testAuthenticator: Authenticator = {
 export const PNG = (tag = "") =>
   Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"), Buffer.from(tag)]);
 export const PDF = (tag = "") => Buffer.from(`%PDF-1.7\n${tag}\n%%EOF`);
+/** A real one-page PDF whose text layer is `text` (ASCII, no parentheses or backslashes). */
+export const makePdf = (text: string): Buffer => {
+  const stream = `BT /F1 18 Tf 20 100 Td (${text}) Tj ET`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets = objs.map((o, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+};
 export const TEXT = (tag = "") => Buffer.from(`some plain text ${tag}\n`);
 
 /** A NewDocument with sealed title and filename; `over` replaces any plain field. */
