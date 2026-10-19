@@ -35,7 +35,10 @@ export interface ParseDeps extends StepSeams {
   parsed: ParsedStore;
   registry: ParserRegistry;
   runner: Pick<ParseRunner, "run">;
-  /** Reads images and textless PDF pages with Claude; absent without an API key (images then fail as vision_unavailable). */
+  /**
+   * Reads images and textless PDF pages with Claude; absent without an API key (images then fail as
+   * vision_unavailable; a PDF keeps its text pages, or fails as vision_unavailable if it has none).
+   */
   vision?: Pick<VisionReader, "readImage" | "readPdfPages">;
   /** The parsed text bound (limits.ts maxChars); vision text is added after the runner's own check. */
   maxChars: number;
