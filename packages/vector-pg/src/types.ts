@@ -36,6 +36,14 @@ export interface ChunkVectorStore {
   ): Promise<{ chunkId: string; score: number }[]>;
 }
 
+/** Largest magnitude float4 (pgvector's element type) holds; beyond it Postgres rejects the value. */
+export const FLOAT4_MAX = 3.4028234663852886e38;
+
+/** True when `vector` has `dimensions` elements, each finite and within float4 range. */
+export const isValidVector = (vector: readonly number[], dimensions: number): boolean =>
+  vector.length === dimensions &&
+  vector.every((x) => Number.isFinite(x) && Math.abs(x) <= FLOAT4_MAX);
+
 export class VectorDimensionError extends Error {
   constructor() {
     super("vector has the wrong size or a non-finite value");

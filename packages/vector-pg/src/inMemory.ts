@@ -1,4 +1,9 @@
-import { type ChunkVectorStore, VectorDimensionError, type VectorScope } from "./types";
+import {
+  type ChunkVectorStore,
+  VectorDimensionError,
+  type VectorScope,
+  isValidVector,
+} from "./types";
 
 type Row = { vector: number[]; model: string; documentId: string };
 
@@ -27,7 +32,7 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
   }
 
   private check(vector: readonly number[]): void {
-    if (vector.length !== this.dimensions || !vector.every(Number.isFinite)) {
+    if (!isValidVector(vector, this.dimensions)) {
       throw new VectorDimensionError();
     }
   }

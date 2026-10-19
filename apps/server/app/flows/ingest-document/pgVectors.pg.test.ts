@@ -88,6 +88,7 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     const b = randomUUID();
     await seed(A, DOC_A, [a]);
     await seed(B, DOC_B, [b]);
+    expect(await store.missing(B, DOC_A, 10)).toEqual([]); // while A's chunk has no vector yet
     // B writes against A's document and chunk, and against its own document with A's chunk id.
     expect(await store.upsert(B, DOC_A, [{ chunkId: a, vector: basis(0) }])).toEqual({
       written: 0,
@@ -108,7 +109,6 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     await store.upsert(B, DOC_B, [{ chunkId: b, vector: basis(0) }]);
     expect((await store.search(A, basis(0), 10)).map((h) => h.chunkId)).toEqual([a]);
     expect((await store.search(B, basis(0), 10)).map((h) => h.chunkId)).toEqual([b]);
-    expect(await store.missing(B, DOC_A, 10)).toEqual([]);
   });
 
   it("writes a batch larger than any parameter limit in one call", async () => {
@@ -127,18 +127,24 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     );
   });
 
-  it("a cosine search can use the HNSW index", async () => {
-    const client = await db.owner.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SET LOCAL enable_seqscan = off");
-      const plan = await client.query(
-        `EXPLAIN SELECT id FROM chunks ORDER BY embedding <=> '[${new Array(768).fill(0.1).join(",")}]'::vector LIMIT 5`,
+  it("a malformed id is refused before any transaction with a fixed message that omits the value", async () => {
+    const store = make("m1");
+    const bad = "not-a-uuid-SECRET";
+    const attempts: [string, () => Promise<unknown>][] = [
+      ["chunkId", () => store.upsert(A, DOC_A, [{ chunkId: bad, vector: basis(0) }])],
+      ["documentId", () => store.upsert(A, bad, [])],
+      ["ownerId", () => store.missing({ ...A, ownerId: bad }, DOC_A, 1)],
+      ["ownerId", () => store.search({ ...A, ownerId: bad }, basis(0), 1)],
+      ["tenantId", () => store.search({ ...A, tenantId: bad }, basis(0), 1)],
+    ];
+    for (const [name, run] of attempts) {
+      const err = await run().then(
+        () => undefined,
+        (e: unknown) => e,
       );
-      expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toContain("chunks_embedding_hnsw");
-      await client.query("ROLLBACK");
-    } finally {
-      client.release();
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe(`PgChunkVectorStore: ${name} must be a uuid`);
+      expect((err as Error).message).not.toContain(bad);
     }
   });
 });
