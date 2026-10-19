@@ -7,11 +7,11 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
-    fork: ((...args: Parameters<typeof actual.fork>) => {
-      const child = actual.fork(...args);
+    spawn: ((...args: Parameters<typeof actual.spawn>) => {
+      const child = actual.spawn(...args);
       spawned.push(child);
       return child;
-    }) as typeof actual.fork,
+    }) as typeof actual.spawn,
   };
 });
 
@@ -78,6 +78,34 @@ describe("ParseRunner", () => {
       name: "ParseCrashedError",
       message: "parse crashed",
     });
+    released();
+  });
+
+  it.each(["garbage", "notjson", "oversized", "truncated", "extra"])(
+    "a parser writing a bad frame to fd 3 (%s) yields a fixed crash and the parent survives",
+    async (id) => {
+      const run = runner().run(id, bytes("x"));
+      await expect(run).rejects.toMatchObject({
+        name: "ParseCrashedError",
+        message: "parse crashed",
+      });
+      released();
+    },
+  );
+
+  it("treats a reject code outside PARSE_REJECT_CODES as a crash without the smuggled text", async () => {
+    const err = await runner()
+      .run("badcode", bytes("x"))
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ParseCrashedError);
+    expect(
+      JSON.stringify([(err as Error).message, (err as { code?: unknown }).code]),
+    ).not.toContain("SMUGGLED");
+    released();
+  });
+
+  it("denies the child reads of packages/contracts/src", async () => {
+    expect((await runner().run("readsrc", bytes("x"))).text).toBe("denied");
     released();
   });
 });

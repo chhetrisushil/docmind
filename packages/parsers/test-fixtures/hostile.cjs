@@ -18,3 +18,42 @@ exports.parsers = [
   },
   { id: "bad-shape", accepts: () => true, parse: () => ({ text: 1 }) },
 ];
+const raw = (frame) => ({
+  accepts: () => true,
+  parse: () => {
+    require("node:fs").writeSync(3, frame);
+    return new Promise(() => {});
+  },
+});
+const frame = (v) => {
+  const b = Buffer.from(typeof v === "string" ? v : JSON.stringify(v));
+  const h = Buffer.alloc(4);
+  h.writeUInt32BE(b.length);
+  return Buffer.concat([h, b]);
+};
+exports.parsers.push(
+  { id: "garbage", ...raw(Buffer.from([0, 0, 0, 8, 0xff, 0xff, 0xff, 0xff, 1, 2, 3, 4])) },
+  { id: "notjson", ...raw(frame("not json")) },
+  { id: "oversized", ...raw(Buffer.from([0xff, 0xff, 0xff, 0xff, 1])) },
+  { id: "truncated", ...raw(Buffer.from([0, 0, 0, 9, 123])) },
+  { id: "extra", ...raw(Buffer.concat([frame({ ok: false, kind: "failed" }), Buffer.from("x")])) },
+  { id: "badcode", ...raw(frame({ ok: false, kind: "rejected", code: "SMUGGLED-TEXT" })) },
+  {
+    id: "readsrc",
+    accepts: () => true,
+    parse: () => {
+      const fs = require("node:fs");
+      const root = require("node:path").resolve(process.cwd(), "../../contracts");
+      const denied = (f) => {
+        try {
+          fs.readFileSync(f);
+          return false;
+        } catch (e) {
+          return e.code === "ERR_ACCESS_DENIED";
+        }
+      };
+      const ok = denied(`${root}/src/index.ts`);
+      return { text: ok ? "denied" : "READ", sections: [], media: [] };
+    },
+  },
+);
