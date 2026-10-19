@@ -103,23 +103,16 @@ describe("GET /api/documents/events", () => {
     for (const s of [a, b, other]) s.close();
   });
 
-  it("two concurrent opens at cap-1 do not both succeed", async () => {
-    const first = await open("bob");
-    const racers = await Promise.all([open("bob"), open("bob")]);
-    expect(racers.map((r) => r.res.status).sort()).toEqual([200, 429]);
-    for (const s of [first, ...racers]) s.close();
-  });
-
-  it("closeAll ends every open stream, frees their slots, and leaves later streams possible", async () => {
+  it("closeAll ends every open stream, frees their slots, and answers a later request with a stream that ends at once", async () => {
     const s = await open("alice");
     expect(await s.next()).toBe("retry: 5000");
     const freed = ended();
     events.closeAll();
     await freed;
     await expect(s.next()).rejects.toThrow(/^stream ended$/);
-    const again = await open("alice");
-    expect(again.res.status).toBe(200);
-    again.close();
+    const again = await open("alice"); // shutdown has begun: 200 so EventSource reconnects elsewhere, then the end
+    expect([again.res.status, await again.next()]).toEqual([200, "retry: 5000"]);
+    await expect(again.next()).rejects.toThrow(/^stream ended$/);
   });
 });
 
@@ -158,6 +151,16 @@ describe("stream slots on every exit path", () => {
       route?.(request("alice"), res as unknown as ServerResponse, { params: {} });
     return { ownBus, subscribe, done, call };
   };
+
+  it("two concurrent opens at cap 1 take one slot: the check and the increment are one step", async () => {
+    const { call, subscribe } = setup();
+    const [a, b] = [fakeRes(), fakeRes()];
+    await Promise.all([call(a), call(b)]);
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect([a.writeHead.mock.calls[0]?.[0], b.writeHead.mock.calls[0]?.[0]].sort()).toEqual([
+      200, 429,
+    ]);
+  });
 
   it("a backpressure destroy releases the slot", async () => {
     const { ownBus, done, call, subscribe } = setup();
@@ -203,5 +206,33 @@ describe("shutdown with an open stream (F10)", () => {
     await shutdown(srv, { close: closed });
     expect(closed).toHaveBeenCalledTimes(1);
     await expect(s.next()).rejects.toThrow(/^stream ended$/);
+  });
+
+  it("a stream whose authentication finishes after closeAll is answered 200 and ended, so shutdown still resolves", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const own = documentEventRoutes({
+      authenticator: {
+        authenticate: async (req) => {
+          await gate;
+          return testAuthenticator.authenticate(req);
+        },
+      },
+      bus,
+    });
+    const srv = createHttpServer(own.routes);
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/documents/events`;
+    const pending = openSse(url, { "x-test-user": "alice" }); // blocked in authenticate
+    await new Promise<void>((resolve) => srv.once("request", () => resolve()));
+    own.closeAll();
+    const closing = shutdown(srv, { close: async () => {} });
+    release();
+    const s = await pending;
+    expect([s.res.status, await s.next()]).toEqual([200, "retry: 5000"]);
+    await expect(s.next()).rejects.toThrow(/^stream ended$/);
+    await closing;
   });
 });

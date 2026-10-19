@@ -92,9 +92,17 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
   const open = new Map<string, number>();
   const live = new Map<ServerResponse, () => void>(); // each open stream's `release`, for closeAll
   const stops = new Map<ServerResponse, () => void>();
+  let closing = false; // set by closeAll: shutdown has begun, no new stream may stay open
   const routes: Record<string, Handler> = {
     "GET /api/documents/events": requireAuth(deps.authenticator, (_req, res, identity) => {
       const { userId } = identity;
+      // A request that finished authenticating after closeAll: answer 200 and end at once (a non-200
+      // would stop EventSource for good; a 200 makes it reconnect to the next process). No slot, no subscription.
+      if (closing) {
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+        res.end("retry: 5000\n\n");
+        return;
+      }
       const count = open.get(userId) ?? 0;
       if (count >= max) {
         return sendError(res, 429, "too_many_streams", "too many open event streams");
@@ -116,7 +124,6 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
       };
       live.set(res, release);
       res.once("close", release);
-      res.once("error", release);
       try {
         res.writeHead(200, {
           "content-type": "text/event-stream",
@@ -143,6 +150,7 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
     routes,
     /** Unsubscribes, ends every open stream and frees its slot, so `server.close()` can finish (F10). */
     closeAll() {
+      closing = true;
       for (const [res, release] of [...live]) {
         stops.get(res)?.(); // first: after this no bus event writes to a response that is ending
         release();
