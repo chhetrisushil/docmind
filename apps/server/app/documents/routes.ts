@@ -75,7 +75,12 @@ function uploadError(
 }
 
 type Registered =
-  | { kind: "stored"; document: UploadDocumentResponse["document"]; duplicate: boolean }
+  | {
+      kind: "stored";
+      document: UploadDocumentResponse["document"];
+      generation: number;
+      duplicate: boolean;
+    }
   | { kind: "quota"; reason: "documents" | "storage" };
 
 /** Inserts the row and commits the staged blob, or reports a duplicate. Runs inside one transaction. */
@@ -101,6 +106,7 @@ async function register(
         return {
           kind: "stored",
           document: await toDto(existing, cipher, UPLOADED),
+          generation: existing.ingest_generation,
           duplicate: true,
         };
       }
@@ -126,7 +132,12 @@ async function register(
       });
       const committed = await staged.commit();
       try {
-        return { kind: "stored", document: await toDto(row, cipher, UPLOADED), duplicate: false };
+        return {
+          kind: "stored",
+          document: await toDto(row, cipher, UPLOADED),
+          generation: row.ingest_generation,
+          duplicate: false,
+        };
       } catch (err) {
         // Still under the tenant lock: take back a blob this upload created, so no concurrent
         // upload of the same bytes can have relied on it. A failure of COMMIT itself happens after
@@ -169,7 +180,7 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
         result.kind === "stored" &&
         (!result.duplicate || result.document.status === "uploaded")
       ) {
-        deps.starts.fire(identity, result.document.id);
+        deps.starts.fire(identity, result.document.id, result.generation);
       }
       return { rejected: false as const, result };
     } finally {
@@ -315,7 +326,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           mine.id,
           deps.settleTimeoutMs ?? SETTLE_TIMEOUT_MS,
         );
-        await deps.ingest.cancel(identity, mine.id);
+        await deps.ingest.cancel(identity, mine.id, mine.ingest_generation);
 
         // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
         //    upload of the same bytes cannot slip between the two (the store's contract). If COMMIT

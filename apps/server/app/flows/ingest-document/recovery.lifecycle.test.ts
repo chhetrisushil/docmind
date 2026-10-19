@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { foldIngestStatus } from "../../status/model";
 import { DocumentGoneError } from "./errors";
 import { type IngestStartInput, ingestDocumentFlow } from "./flow";
@@ -24,6 +24,7 @@ describe("recoverIngest: resuming executions", () => {
     await loomIngest(second.runtime).cancel(
       { tenantId: ids.tenantId, userId: ids.userId },
       ids.documentId,
+      INGEST_GENERATION,
     );
     expect(await recoverIngest(second.runtime, log.kept, { graceMs: 0 })).toMatchObject({
       recovered: 0,

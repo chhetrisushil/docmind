@@ -45,7 +45,12 @@ export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
     if (rows.length >= Math.min(limit, MAX_BATCH))
       console.warn("stale upload sweep batch was full", rows.length);
     for (const r of rows)
-      starts.fire({ tenantId: r.tenant_id, userId: r.owner_id }, r.id, SWEEP_LABEL);
+      starts.fire(
+        { tenantId: r.tenant_id, userId: r.owner_id },
+        r.id,
+        INGEST_GENERATION,
+        SWEEP_LABEL,
+      );
     return rows.length;
   } catch (err) {
     console.error("stale upload sweep failed", className(err));

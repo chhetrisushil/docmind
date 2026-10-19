@@ -19,11 +19,16 @@ export class StartScheduler {
   }
 
   /** `label` names who fired the start in the failure log (a route, or the sweep); never an id. */
-  fire(identity: Identity, documentId: string, label = "POST /api/documents"): void {
+  fire(
+    identity: Identity,
+    documentId: string,
+    generation: number,
+    label = "POST /api/documents",
+  ): void {
     const key = StartScheduler.key(identity, documentId);
     const run = (async () => {
       try {
-        await this.port.start(identity, documentId);
+        await this.port.start(identity, documentId, generation);
       } catch (err) {
         console.error(
           "ingest start failed",

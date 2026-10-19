@@ -199,24 +199,24 @@ function makeIngest(
     },
   };
   const port: IngestPort = {
-    async start(identity, documentId) {
+    async start(identity, documentId, generation) {
       await startGate;
       probe.calls.push(`start:${documentId}`);
       if (failures.start > 0) {
         failures.start--;
         throw new Error("synthetic-start-error");
       }
-      const handle = await inner.start(identity, documentId);
+      const handle = await inner.start(identity, documentId, generation);
       if (handle) probe.handles.set(documentId, handle);
       return handle;
     },
-    async cancel(identity, documentId) {
+    async cancel(identity, documentId, generation) {
       probe.calls.push(`cancel:${documentId}`);
       if (failures.cancel > 0) {
         failures.cancel--;
         throw new Error("synthetic-cancel-error");
       }
-      await inner.cancel(identity, documentId);
+      await inner.cancel(identity, documentId, generation);
     },
   };
   return {

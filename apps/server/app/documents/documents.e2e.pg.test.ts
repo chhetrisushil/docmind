@@ -73,15 +73,15 @@ describe.skipIf(!PG_URL)(
         ingest: wiring,
         vectors: twinOverPgChunks(app, wiring), // the production vector store runs in the acceptance tasks
         wrapIngest: (real) => ({
-          async start(identity, documentId) {
+          async start(identity, documentId, generation) {
             calls.push(`start:${documentId}`);
-            const handle = await real.start(identity, documentId);
+            const handle = await real.start(identity, documentId, generation);
             if (handle) handles.set(documentId, handle);
             return handle;
           },
-          async cancel(identity, documentId) {
+          async cancel(identity, documentId, generation) {
             calls.push(`cancel:${documentId}`);
-            await real.cancel(identity, documentId);
+            await real.cancel(identity, documentId, generation);
           },
         }),
       });

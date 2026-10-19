@@ -6,7 +6,7 @@ import { buildApp } from "../config";
 import { DocumentGoneError } from "../flows/ingest-document/errors";
 import { fakeIngestDeps } from "../flows/ingest-document/testing";
 import { generationOf, ingestKeyOf, ingestScopeOf } from "../status/model";
-import { ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
+import { INGEST_GENERATION, ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
 
 const identity = () => ({ tenantId: randomUUID(), userId: randomUUID() });
 const appWith = (exists: () => Promise<boolean>) =>
@@ -47,11 +47,11 @@ describe("loomIngest", () => {
     const port = loomIngest(app.runtime);
     const who = identity();
     const documentId = randomUUID();
-    const handle = await port.start(who, documentId);
+    const handle = await port.start(who, documentId, INGEST_GENERATION);
     expect(handle?.executionId).toBe(ingestExecutionId(who.userId, documentId));
     expect((await handle?.waitForCompletion())?.status).toBe("completed");
-    expect(await port.start(who, documentId)).toBeNull();
-    expect(await port.start(who, documentId.toUpperCase())).toBeNull(); // same document
+    expect(await port.start(who, documentId, INGEST_GENERATION)).toBeNull();
+    expect(await port.start(who, documentId.toUpperCase(), INGEST_GENERATION)).toBeNull(); // same document
     await app.close();
   });
 
@@ -67,8 +67,8 @@ describe("loomIngest", () => {
     const port = loomIngest(app.runtime);
     const who = identity();
     const documentId = randomUUID();
-    const handle = await port.start(who, documentId);
-    await port.cancel(who, documentId);
+    const handle = await port.start(who, documentId, INGEST_GENERATION);
+    await port.cancel(who, documentId, INGEST_GENERATION);
     release();
     await expect(handle?.waitForCompletion()).rejects.toThrow(/cancel/i);
     expect(handle?.getState().status).toBe("cancelled");
@@ -79,11 +79,11 @@ describe("loomIngest", () => {
     const app = appWith(async () => true);
     const port = loomIngest(app.runtime);
     const who = identity();
-    await expect(port.cancel(who, randomUUID())).resolves.toBeUndefined(); // never started
+    await expect(port.cancel(who, randomUUID(), INGEST_GENERATION)).resolves.toBeUndefined(); // never started
     const documentId = randomUUID();
-    await (await port.start(who, documentId))?.waitForCompletion();
-    await expect(port.cancel(who, documentId)).resolves.toBeUndefined(); // already completed
-    await expect(port.cancel(who, documentId)).resolves.toBeUndefined(); // and again
+    await (await port.start(who, documentId, INGEST_GENERATION))?.waitForCompletion();
+    await expect(port.cancel(who, documentId, INGEST_GENERATION)).resolves.toBeUndefined(); // already completed
+    await expect(port.cancel(who, documentId, INGEST_GENERATION)).resolves.toBeUndefined(); // and again
     await app.close();
   });
 
@@ -92,7 +92,7 @@ describe("loomIngest", () => {
     const port = loomIngest(app.runtime);
     const owner = identity();
     const documentId = randomUUID();
-    const handle = await port.start(owner, documentId);
+    const handle = await port.start(owner, documentId, INGEST_GENERATION);
     // Waited out first: a denied cancel on a still-running execution races its journal (see report).
     await handle?.waitForCompletion();
     const id = ingestExecutionId(owner.userId, documentId);
@@ -153,7 +153,7 @@ describe("execution id generations", () => {
 
   it("starts the current generation", async () => {
     const { runtime, calls } = fakeRuntime();
-    await loomIngest(runtime).start(IDENTITY, DOC);
+    await loomIngest(runtime).start(IDENTITY, DOC, INGEST_GENERATION);
     expect(calls.starts).toEqual([ingestExecutionId(IDENTITY.userId, DOC)]);
   });
 
@@ -161,15 +161,47 @@ describe("execution id generations", () => {
     const { runtime, calls } = fakeRuntime({
       unknown: [ingestExecutionId(IDENTITY.userId, DOC, 1)],
     });
-    await loomIngest(runtime).cancel(IDENTITY, DOC);
+    await loomIngest(runtime).cancel(IDENTITY, DOC, INGEST_GENERATION);
     expect(calls.cancels).toEqual([
       ingestExecutionId(IDENTITY.userId, DOC, 1),
       ingestExecutionId(IDENTITY.userId, DOC, 2),
     ]);
     const boom = fakeRuntime({ failWith: new Error("storage down") });
-    await expect(loomIngest(boom.runtime).cancel(IDENTITY, DOC)).rejects.toThrow(/^storage down$/);
+    await expect(loomIngest(boom.runtime).cancel(IDENTITY, DOC, INGEST_GENERATION)).rejects.toThrow(
+      /^storage down$/,
+    );
     // a lookalike message for a different id is not "never started"
     const other = fakeRuntime({ failWith: new Error("No execution found for id: elsewhere") });
-    await expect(loomIngest(other.runtime).cancel(IDENTITY, DOC)).rejects.toThrow(/elsewhere/);
+    await expect(
+      loomIngest(other.runtime).cancel(IDENTITY, DOC, INGEST_GENERATION),
+    ).rejects.toThrow(/elsewhere/);
+  });
+
+  it("starts the execution of the generation it is given", async () => {
+    const { runtime, calls } = fakeRuntime();
+    await loomIngest(runtime).start(IDENTITY, DOC, 5);
+    expect(calls.starts).toEqual([ingestExecutionId(IDENTITY.userId, DOC, 5)]);
+  });
+
+  it("cancels every generation up to the one it is given, ignoring ones that never existed", async () => {
+    const { runtime, calls } = fakeRuntime({
+      unknown: [ingestExecutionId(IDENTITY.userId, DOC, 3)],
+    });
+    await loomIngest(runtime).cancel(IDENTITY, DOC, 4);
+    expect(calls.cancels).toEqual(
+      [1, 2, 3, 4].map((g) => ingestExecutionId(IDENTITY.userId, DOC, g)),
+    );
+  });
+
+  it("refuses a generation that is not an integer from 1 to 999999999", async () => {
+    const port = loomIngest(fakeRuntime().runtime);
+    for (const g of [0, 1.5, 1_000_000_000, Number.NaN]) {
+      await expect(port.start(IDENTITY, DOC, g)).rejects.toThrow(
+        /^generation must be an integer from 1 to 999999999$/,
+      );
+      await expect(port.cancel(IDENTITY, DOC, g)).rejects.toThrow(
+        /^generation must be an integer from 1 to 999999999$/,
+      );
+    }
   });
 });
