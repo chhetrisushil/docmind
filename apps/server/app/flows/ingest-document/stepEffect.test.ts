@@ -41,6 +41,30 @@ const throwing = (make: () => unknown) => async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("stepEffect", () => {
+  it("fails a step whose result has a key outside StepResult: fixed message, one attempt, class logged, nothing returned", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port, calls } = guard();
+    const leaky = async () => ({ count: 1, text: "Nocturne quarterly forecast" }) as never;
+    const attempt = stepEffect("chunk", port, leaky, {
+      retry: { maxAttempts: 3 },
+      sleep: async () => {},
+    }).execute(ref(), {} as never);
+    await expect(attempt).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(calls).toEqual(["begin:chunk"]); // fatal: not retried
+    expect(logged.mock.calls).toEqual([["ingest step failed", "chunk", "StepResultError"]]);
+  });
+
+  it.each([
+    ["a negative count", { count: -1 }],
+    ["a non-integer count", { count: 1.5 }],
+    ["a model that is not a string", { model: 7 }],
+  ])("fails a step whose result has %s", async (_name, result) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(run(async () => result as never, guard().port)).rejects.toThrow(
+      /^ingest step failed: chunk$/,
+    );
+  });
+
   it("checks the document first, runs the work, and reports done with its count", async () => {
     const { port, calls } = guard();
     expect(await run(async () => ({ count: 3 }), port)).toEqual({ outcome: "done", count: 3 });
