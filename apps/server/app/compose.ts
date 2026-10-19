@@ -1,7 +1,9 @@
-import { AuthService, PasswordAuthenticator } from "@docmind/auth";
+import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
+import type { EventStore } from "@loom/event-runtime";
 import type { KeyStore } from "@loom/plugin-crypto";
+import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
@@ -15,6 +17,16 @@ import { StartScheduler } from "./documents/startScheduler";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
+import { IngestStatus } from "./status/ingestStatus";
+import { flowSteps, statusSensitive } from "./status/wire";
+
+/** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
+export interface StatusStores {
+  writer: ReadModelStore;
+  readerFor(identity: Identity): ReadModelStore;
+  /** The decrypting event store the model reads (live and catch-up source); its sealing covers feed the sensitive map. */
+  source: EventStore;
+}
 
 export interface ComposeOptions {
   /** The docmind_app pool: auth, documents and the ingest step read through it. */
@@ -28,6 +40,8 @@ export interface ComposeOptions {
   trustProxy: boolean;
   /** Parser registry, runner and progress bus; nothing consumes them until the parse step is wired. */
   ingest: IngestWiring;
+  /** The ingest-status model's stores. */
+  status: StatusStores;
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
 }
@@ -39,7 +53,19 @@ export interface ComposeOptions {
  */
 export function buildServer(options: ComposeOptions) {
   const { pool, keys, limits } = options;
-  const app = buildApp(options.storage, options.crypto, { ingest: pgIngestDeps(pool) });
+  const feed: { onEvent?: IngestStatus["onEvent"] } = {}; // the model is built after defineConfig, which the sensitive map needs; onEvent reaches it through this holder
+  const app = buildApp(options.storage, options.crypto, {
+    ingest: pgIngestDeps(pool),
+    onEvent: (event) => feed.onEvent?.(event),
+  });
+  const status = new IngestStatus({
+    writer: options.status.writer,
+    readerFor: options.status.readerFor,
+    source: options.status.source,
+    sensitive: statusSensitive(flowSteps(), options.status.source),
+    bus: options.ingest.bus,
+  });
+  feed.onEvent = status.onEvent;
   const ingest = options.wrapIngest
     ? options.wrapIngest(loomIngest(app.runtime))
     : loomIngest(app.runtime);
@@ -81,5 +107,6 @@ export function buildServer(options: ComposeOptions) {
     starts,
     ingestWiring: options.ingest,
     bus: options.ingest.bus,
+    status,
   };
 }

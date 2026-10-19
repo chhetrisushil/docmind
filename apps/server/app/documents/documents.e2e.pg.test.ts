@@ -9,6 +9,8 @@ import type {
   UploadDocumentResponse,
 } from "@docmind/contracts";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
+import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { ExecutionHandle } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -48,10 +50,13 @@ describe.skipIf(!PG_URL)(
       // The production composition (main.ts calls the same function): only the pool, memory Loom
       // storage, a temp blob root and the env are the test's. Limits and blob root go through the
       // production parsers. The wrapper records start and cancel and keeps the flow handles.
+      const eventStore = new InMemoryAsyncEventStore();
+      const statusStore = new InMemoryReadModelStore();
       const composed = buildServer({
         pool: app,
         keys,
-        storage: { kind: "memory" },
+        storage: { kind: "custom", eventStore },
+        status: { writer: statusStore, readerFor: () => statusStore, source: eventStore },
         limits: loadLimits({}),
         blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
         secureCookies: false,

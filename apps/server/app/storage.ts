@@ -27,6 +27,8 @@ interface StorePair {
 export interface DurableStorage {
   storage: CustomStorage;
   crypto: PrincipalCryptoOptions;
+  /** The Loom pool (docmind_loom); the status writer shares it. `close()` ends it. */
+  pool: Pool;
   sealed: StorePair;
   raw: StorePair;
   lease: { get?(executionId: string): Promise<unknown> };
@@ -76,6 +78,7 @@ export function createDurableStorage({
       leaseStore: pg.leaseStore,
     },
     crypto: { events, snapshots },
+    pool,
     sealed: { eventStore: events, snapshotStore: snapshots },
     raw: { eventStore: pg.eventStore, snapshotStore: pg.snapshotStore },
     lease: pg.leaseStore,
