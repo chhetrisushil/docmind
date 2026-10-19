@@ -23,6 +23,7 @@
     "@loom/app": "*",
     "@loom/core": "*",
     "@loom/effect-runtime": "*",
+    "@loom/fair-scheduler": "*",
     "@loom/memory": "*",
     "@loom/plugin-crypto": "*",
     "@loom/plugin-postgres": "*",
