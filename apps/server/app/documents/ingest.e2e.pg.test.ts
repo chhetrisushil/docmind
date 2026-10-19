@@ -1,4 +1,5 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import type {
   DocumentDto,
@@ -480,6 +481,42 @@ describe.skipIf(!PG_URL)(
         await st.composed.starts.idle();
         expect(await sweepStaleUploads(sweepArgs())).toBe(0); // it has a status row now
         await assertLogContentFree(user, id);
+      },
+      WAIT,
+    );
+
+    it(
+      "a live document whose blob file is missing ends failed/internal instead of stuck",
+      async () => {
+        const user = await st.signUpAndLogIn("lostblob@example.com");
+        const stream = await st.events(user.cookie);
+        const store = new EncryptedFsContentStore({
+          root: st.root,
+          tenantId: user.tenantId,
+          userId: user.userId,
+          keys: st.keys,
+          maxBytes: 1 << 20,
+        });
+        const bytes = textOf("Lostblob");
+        const ref = await store.put(bytes);
+        const doc = await newDocument(st.fields, user.tenantId, user.userId, "8".repeat(64), {
+          contentAddress: ref.__loomContent,
+          mime: "text/plain",
+          sizeBytes: bytes.length,
+        });
+        await withTenant(st.app, user.tenantId, (tx) => insertDocument(tx, doc));
+        for (const f of filesOf(user.userId)) rmSync(join(f.parentPath ?? "", f.name));
+        expect(filesOf(user.userId)).toEqual([]);
+        await backdate(doc.id);
+        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+        expect(await sweepStaleUploads(sweepArgs())).toBe(1);
+        const seen = await st.until(stream, doc.id, (s) => s === "failed" || s === "ready");
+        stream.close();
+        spy.mockRestore();
+        expect(seen.at(-1)).toEqual({ documentId: doc.id, status: "failed", detail: "internal" });
+        const row = await getDoc(user.cookie, doc.id);
+        expect([row.status, row.error]).toEqual(["failed", STATUS_MESSAGES.internal]);
+        await assertLogContentFree(user, doc.id);
       },
       WAIT,
     );

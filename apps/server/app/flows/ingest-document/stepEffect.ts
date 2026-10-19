@@ -4,6 +4,7 @@ import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
 import {
+  BlobMissingError,
   FAILURE_CODES,
   StepResultError,
   isAbort,
@@ -263,6 +264,7 @@ function failure(step: IngestStep, cause: unknown, cancelled = false): Error {
       "ingest step failed",
       step,
       cause instanceof Error ? cause.constructor.name : typeof cause,
+      ...(cause instanceof BlobMissingError ? [cause.message] : []), // a fixed text
     );
   }
   return new Error(`ingest step failed: ${step}`);

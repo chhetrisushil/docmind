@@ -3,7 +3,7 @@ import { BlobCorruptError, BlobKeyUnavailableError } from "@docmind/blob-store";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../../db/testSupport";
 import { T2, U1B } from "../../documents/testHarness";
-import { DocumentGoneError } from "./errors";
+import { BlobMissingError, DocumentGoneError } from "./errors";
 import { type PgFixture, startPgFixture } from "./pgFixture";
 import { PgDocumentSource } from "./pgSource";
 
@@ -85,10 +85,10 @@ describe.skipIf(!PG_URL)("PgDocumentSource (needs DOCMIND_TEST_PG_URL)", () => {
     expect(touched).toBe(false);
   });
 
-  it("read treats a blob that is gone as DocumentGoneError", async () => {
+  it("read reports a missing blob as BlobMissingError (the parse step decides whether the document is gone)", async () => {
     const ref = await f.doc("c".repeat(64));
     await expect(new PgDocumentSource(f.app, none).read(ref, addr("c"))).rejects.toBeInstanceOf(
-      DocumentGoneError,
+      BlobMissingError,
     );
   });
 

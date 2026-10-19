@@ -1,6 +1,6 @@
 import type { DocumentParser, ParseRunner, ParserRegistry } from "@docmind/parsers";
 import type { Effect } from "@loom/effect-runtime";
-import { PermanentIngestError } from "../errors";
+import { BlobMissingError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ParsedStore } from "../pgParsed";
 import type { DocumentSource } from "../pgSource";
@@ -48,7 +48,14 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
     async (ref, signal) => {
       const { mime, contentAddress } = await deps.source.meta(ref);
       const parser = select(deps.registry, mime);
-      const bytes = await deps.source.read(ref, contentAddress);
+      let bytes: Uint8Array;
+      try {
+        bytes = await deps.source.read(ref, contentAddress);
+      } catch (err) {
+        // A missing blob is "gone" only if the row is gone too; the guard throws DocumentGoneError then.
+        if (err instanceof BlobMissingError) await deps.guard.begin(ref, "parse");
+        throw err;
+      }
       const parsed = await deps.runner.run(parser.id, bytes, signal ? { signal } : undefined);
       await deps.parsed.put(ref, parsed);
       return { count: parsed.sections.length };
