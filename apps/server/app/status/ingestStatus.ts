@@ -67,9 +67,9 @@ export class IngestStatus {
 
   /**
    * `observability.onEvent`: synchronous and never throws. Folds the event (asynchronously), then
-   * publishes its progress event on one chain after `drain()`: a client that refetches on the event
-   * never reads an older status, and events leave in log order. A failed fold is reported to
-   * `onError` and the event is still published (the log is the authority; catch-up heals the row).
+   * publishes its progress event on one chain after `drain()`, in log order. The event is a hint: it
+   * follows the fold when the fold applied, and is still published if the fold failed (the error goes
+   * to `onError`); a refetch may then briefly read the older status until catch-up heals the row.
    * The publish userId comes from the execution id, never from client input.
    */
   onEvent = (event: EventEnvelope): void => {
