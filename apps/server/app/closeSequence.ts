@@ -6,6 +6,30 @@ import { SHUTDOWN_DRAIN_MS, drainWithin } from "./shutdown";
  */
 export const POOL_END_MS = 10_000;
 
+/** A close step hit its bound. The message names the step only. */
+export class CloseTimeoutError extends Error {
+  constructor(step: string) {
+    super(`shutdown step timed out: ${step}`);
+    this.name = "CloseTimeoutError";
+  }
+}
+
+/**
+ * Races `work` against a deadline. The deadline winning rejects with CloseTimeoutError; the work's
+ * own rejection propagates (unlike drainWithin, which swallows it), so `runAll` still reports it.
+ */
+export async function bounded(work: Promise<unknown>, ms: number, step: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new CloseTimeoutError(step)), ms);
+  });
+  try {
+    await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** What the close sequence calls; main.ts supplies the real ones. */
 export interface CloseDeps {
   startsIdle(): Promise<unknown>;
@@ -41,6 +65,6 @@ export const closeSequence = (
     await d.closeStatus();
   },
   () => d.closeApp(),
-  () => drainWithin(d.closeDurable(), poolEndMs),
-  () => drainWithin(d.endPool(), poolEndMs),
+  () => bounded(d.closeDurable(), poolEndMs, "closeDurable"),
+  () => bounded(d.endPool(), poolEndMs, "endPool"),
 ];

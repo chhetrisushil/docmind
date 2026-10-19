@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeSequence } from "./closeSequence";
+import { CloseTimeoutError, closeSequence } from "./closeSequence";
 import { runAll } from "./shutdown";
 
 describe("closeSequence", () => {
@@ -53,23 +53,48 @@ describe("closeSequence", () => {
     expect(calls).toHaveLength(6);
   });
 
-  it.each(["closeDurable", "endPool"] as const)(
-    "does not wait forever for %s (a pool held open by a stuck query)",
-    async (stuck) => {
-      const ok = async () => {};
-      const never = () => new Promise<never>(() => {});
-      const deps = {
-        startsIdle: ok,
-        closeIngest: ok,
-        closeHeartbeat: ok,
-        detachStatusFeed: () => {},
-        closeStatus: ok,
-        closeApp: ok,
-        closeDurable: ok,
-        endPool: ok,
-        [stuck]: never,
-      };
-      await expect(runAll(...closeSequence(deps, 5))).resolves.toBeUndefined();
-    },
-  );
+  const base = (calls: string[]) => {
+    const ok = async () => {};
+    return {
+      startsIdle: ok,
+      closeIngest: ok,
+      closeHeartbeat: ok,
+      detachStatusFeed: () => {},
+      closeStatus: ok,
+      closeApp: ok,
+      closeDurable: ok,
+      endPool: async () => void calls.push("endPool"),
+    };
+  };
+
+  it("a failing endPool propagates its rejection (so shutdown logs its class and exits 1)", async () => {
+    const boom = new RangeError("pool end failed");
+    await expect(
+      runAll(
+        ...closeSequence({
+          ...base([]),
+          endPool: async () => {
+            throw boom;
+          },
+        }),
+      ),
+    ).rejects.toBe(boom);
+  });
+
+  it("a hung closeDurable times out after the bound with a fixed error, and the pool still ends", async () => {
+    const calls: string[] = [];
+    await expect(
+      runAll(...closeSequence({ ...base(calls), closeDurable: () => new Promise(() => {}) }, 5)),
+    ).rejects.toMatchObject({
+      name: "CloseTimeoutError",
+      message: "shutdown step timed out: closeDurable",
+    });
+    expect(calls).toEqual(["endPool"]);
+  });
+
+  it("a hung endPool times out after the bound", async () => {
+    await expect(
+      runAll(...closeSequence({ ...base([]), endPool: () => new Promise(() => {}) }, 5)),
+    ).rejects.toBeInstanceOf(CloseTimeoutError);
+  });
 });
