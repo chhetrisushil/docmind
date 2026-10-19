@@ -8,6 +8,7 @@ import { PgChunkStore } from "./pgChunks";
 import { PgStepGuard } from "./pgGuard";
 import { PgParsedStore } from "./pgParsed";
 import { PgDocumentSource } from "./pgSource";
+import { VisionReader } from "./vision";
 
 export interface PgIngestArgs {
   pool: Pool;
@@ -40,7 +41,8 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     runner: wiring.runner,
     shutdown: wiring.shutdown.signal,
     gate: wiring.gate,
-    parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits),
+    parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits, wiring.llm.config.timeoutMs),
+    ...(wiring.llm.vision && { vision: new VisionReader(wiring.llm.vision) }),
     ...(wiring.sleep && { sleep: wiring.sleep }),
   };
 }

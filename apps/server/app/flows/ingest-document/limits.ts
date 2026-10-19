@@ -29,8 +29,9 @@ export interface IngestWiring {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-/** One parse attempt: a wait for a runner slot, its own run, and database and blob slack. */
-export const parseStepTimeoutMs = (limits: ParseLimits): number => 2 * limits.wallClockMs + 30_000;
+/** One parse attempt: a wait for a runner slot, its own run (or one vision call), and database and blob slack. */
+export const parseStepTimeoutMs = (limits: ParseLimits, llmTimeoutMs: number): number =>
+  2 * limits.wallClockMs + llmTimeoutMs + 30_000;
 
 /** The one way to stop ingest: signals the steps first, then kills the in-flight parses. */
 export function closeIngest(wiring: IngestWiring): Promise<void> {
