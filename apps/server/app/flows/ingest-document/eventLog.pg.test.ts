@@ -152,5 +152,58 @@ describe.skipIf(!PG_URL)(
       });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "corrupt_content" });
     });
+
+    it("a transient failure that is retried leaves no trace of the attempts, and not the error text", async () => {
+      let attempts = 0;
+      runner = {
+        run: async () => {
+          if (++attempts < 3) throw new Error(`crash while reading ${SENTENCE}`);
+          return { text: "h", sections: [], media: [] };
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const ref = await seedTxt("d".repeat(64));
+      const raw = proven(await run(ref), ref);
+      expect(attempts).toBe(3); // the retries are in memory: the same events as a clean run
+      expect(types(raw)).toEqual(CLEAN_RUN);
+    });
+
+    it("a transient failure that exhausts its retries records a fixed message, not the error text", async () => {
+      runner = {
+        run: async () => {
+          throw new Error(`crash while reading ${SENTENCE}`);
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const ref = await seedTxt("e".repeat(64));
+      const raw = proven(await run(ref), ref);
+      expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
+      expect(raw.at(-1)?.payload).toEqual({ error: "Error: ingest step failed: parse" });
+      expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
+    });
+
+    it("a document that is gone ends with an outcome and nothing else", async () => {
+      const ref = await seedTxt("f".repeat(64));
+      await f.db.owner.query("DELETE FROM documents WHERE id = $1", [ref.documentId]);
+      const raw = proven(await run(ref), ref);
+      expect(raw.at(-1)?.payload).toEqual({ output: { outcome: "document_gone" } });
+    });
+
+    it("a document that goes away between two attempts of a retried step ends the same way", async () => {
+      const ref = await seedTxt("9".repeat(64));
+      runner = {
+        run: async () => {
+          await f.db.owner.query("DELETE FROM documents WHERE id = $1", [ref.documentId]);
+          throw new Error(`crash while reading ${SENTENCE}`);
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const raw = proven(await run(ref), ref);
+      expect(types(raw)).toEqual(CLEAN_RUN);
+      expect(raw.at(-2)?.payload).toEqual({
+        output: { outcome: "document_gone" },
+        stepId: "ingest-parse",
+      });
+    });
   },
 );
