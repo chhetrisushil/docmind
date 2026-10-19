@@ -24,8 +24,6 @@ export interface ParseRunnerOptions {
   childEntry?: string;
   /** Tests only: a CommonJS file exporting `parsers`. */
   parserModule?: string;
-  /** Tests only: the Node executable to spawn. */
-  executable?: string;
   /** Parses allowed at once; extra runs queue. Default 2. */
   maxConcurrent?: number;
 }
@@ -148,6 +146,11 @@ export class ParseRunner {
     else this.slots--;
   }
 
+  /** The Node executable to spawn. Not an option: only the test subclass (`runner/testing.ts`) overrides it. */
+  protected executable(): string {
+    return process.execPath;
+  }
+
   constructor(private readonly options: ParseRunnerOptions) {
     const { wallClockMs, memoryMb, maxInputBytes, maxChars } = options.limits;
     if (
@@ -203,7 +206,7 @@ export class ParseRunner {
       entry,
       JSON.stringify(map),
     ];
-    const child = spawn(this.options.executable ?? process.execPath, args, {
+    const child = spawn(this.executable(), args, {
       stdio: ["pipe", "ignore", "ignore", "pipe"],
       env: {},
       cwd: dirname(entry),

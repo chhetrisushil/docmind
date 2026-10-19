@@ -12,6 +12,7 @@ import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
+import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
 
@@ -25,6 +26,8 @@ export interface ComposeOptions {
   blobRoot: string;
   secureCookies: boolean;
   trustProxy: boolean;
+  /** Parser registry, runner and progress bus; nothing consumes them until the parse step is wired. */
+  ingest: IngestWiring;
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
 }
@@ -70,5 +73,13 @@ export function buildServer(options: ComposeOptions) {
       starts,
     }),
   });
-  return { app, server, store, throttle, starts };
+  return {
+    app,
+    server,
+    store,
+    throttle,
+    starts,
+    ingestWiring: options.ingest,
+    bus: options.ingest.bus,
+  };
 }
