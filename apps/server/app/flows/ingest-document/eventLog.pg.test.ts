@@ -250,6 +250,43 @@ describe.skipIf(!PG_URL)(
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
 
+    it("a transient embed outage that is retried leaves no trace of the attempts, and not the error text", async () => {
+      let attempts = 0;
+      embedder = {
+        modelId: wiring.embedder.modelId,
+        dimensions: wiring.embedder.dimensions,
+        embed: async (texts, options) => {
+          if (++attempts < 2)
+            throw Object.assign(new EmbeddingUnavailableError(), {
+              message: `down while embedding ${SENTENCE}`,
+            });
+          return wiring.embedder.embed(texts, options);
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const ref = await seedTxt("7".repeat(64));
+      const raw = proven(await run(ref), ref);
+      expect(attempts).toBe(2);
+      expect(types(raw)).toEqual(FULL_RUN);
+      expect(raw[9]?.payload).toMatchObject({ output: { model: modelId }, stepId: "ingest-embed" });
+    });
+
+    it("a fatal embedding error records a fixed message, not the error text, and the document fails as internal", async () => {
+      embedder = {
+        modelId: wiring.embedder.modelId,
+        dimensions: wiring.embedder.dimensions,
+        embed: async () => {
+          throw new EmbeddingError(`rejected ${SENTENCE}`);
+        },
+      };
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const ref = await seedTxt("8".repeat(64));
+      const raw = proven(await run(ref), ref);
+      expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
+      expect(raw.at(-1)?.payload).toEqual({ error: "Error: ingest step failed: embed" });
+      expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
+    });
+
     it("a document that is gone ends with an outcome and nothing else", async () => {
       const ref = await seedTxt("f".repeat(64));
       await f.db.owner.query("DELETE FROM documents WHERE id = $1", [ref.documentId]);
