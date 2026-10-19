@@ -39,6 +39,7 @@ function units(text: string, max: number): Span[] {
       while (cut > start + max / 2 && !/\s/.test(text[cut] as string)) cut--;
       if (!/\s/.test(text[cut] as string)) cut = start + max; // no usable whitespace: hard cut
       if (/[\ud800-\udbff]/.test(text[cut - 1] ?? "")) cut--; // not between surrogates
+      if (cut <= start) cut = start + (/[\ud800-\udbff]/.test(text[start] ?? "") ? 2 : 1); // always advance
       out.push({ start, end: cut });
       start = cut;
       while (start < end && /\s/.test(text[start] as string)) start++;
@@ -65,7 +66,13 @@ function packed(all: Span[], max: number): Span[] {
 
 /** Section-bounded chunks whose text is an exact slice of the section text. `overlap` is Task 72's. */
 export function chunkDocument(doc: ParsedDocument, options: ChunkOptions = {}): Chunk[] {
-  const max = (options.targetTokens ?? DEFAULT_TARGET_TOKENS) * CHARS_PER_TOKEN;
+  const target = options.targetTokens ?? DEFAULT_TARGET_TOKENS;
+  if (!Number.isInteger(target) || target < 1)
+    throw new RangeError("targetTokens must be an integer >= 1");
+  const overlap = options.overlap ?? DEFAULT_OVERLAP;
+  if (!Number.isFinite(overlap) || overlap < 0 || overlap >= 1)
+    throw new RangeError("overlap must be a number in [0, 1)");
+  const max = target * CHARS_PER_TOKEN;
   const chunks: Chunk[] = [];
   doc.sections.forEach((section, sectionOrdinal) => {
     const loc = section.locator;
