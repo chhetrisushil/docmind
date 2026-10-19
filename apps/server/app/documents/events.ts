@@ -56,7 +56,11 @@ export function openStream(
   off = bus.subscribe(scope, (event) =>
     send(`id: ${++seq}\nevent: progress\ndata: ${JSON.stringify(event)}\n\n`),
   );
+  // A bus that delivered synchronously during subscribe and ended the stream (a full buffer) ran
+  // `end` while `off` was still the no-op: release the subscription now.
+  if (closed) off();
   cancelHeartbeat = schedule(() => send(": ping\n\n"), heartbeatMs);
+  if (closed) cancelHeartbeat();
   onClose(stop);
   return stop;
 }
