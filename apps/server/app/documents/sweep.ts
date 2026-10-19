@@ -1,0 +1,46 @@
+import type { Pool } from "pg";
+import { INGEST_GENERATION } from "./ingest";
+import type { StartScheduler } from "./startScheduler";
+
+export const STALE_UPLOAD_MS = 120_000;
+export const SWEEP_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+export const SWEEP_EVERY_MS = 60_000;
+export const SWEEP_BATCH = 100;
+
+// The label a failed sweep-fired start is logged under (not an HTTP route).
+const SWEEP_LABEL = "stale upload sweep";
+
+const className = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
+
+export interface SweepArgs {
+  pool: Pool;
+  starts: StartScheduler;
+  olderThanMs: number;
+  lookbackMs: number;
+  limit: number;
+  /** When aborted after the query, nothing is fired (shutdown: the starts are about to drain). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Asks the start-once scheduler to start every document that has no current-generation status row.
+ * The SQL function sees ids only (across tenants); each identity is built from the row's tenant and
+ * owner, as an upload builds it. Never throws: a failure is logged by class only.
+ */
+export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
+  const { pool, starts, olderThanMs, lookbackMs, limit, signal } = args;
+  try {
+    const { rows } = await pool.query<{ tenant_id: string; owner_id: string; id: string }>(
+      `SELECT tenant_id, owner_id, id
+         FROM docmind_stale_uploads(make_interval(secs => $1::float8), make_interval(secs => $2::float8), $3::integer, $4::integer)`,
+      [olderThanMs / 1000, lookbackMs / 1000, INGEST_GENERATION, limit],
+    );
+    if (signal?.aborted) return 0;
+    for (const r of rows)
+      starts.fire({ tenantId: r.tenant_id, userId: r.owner_id }, r.id, SWEEP_LABEL);
+    return rows.length;
+  } catch (err) {
+    console.error("stale upload sweep failed", className(err));
+    return 0;
+  }
+}

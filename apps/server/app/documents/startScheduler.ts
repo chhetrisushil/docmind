@@ -18,7 +18,8 @@ export class StartScheduler {
     return `${identity.userId}:${documentId.toLowerCase()}`;
   }
 
-  fire(identity: Identity, documentId: string): void {
+  /** `label` names who fired the start in the failure log (a route, or the sweep); never an id. */
+  fire(identity: Identity, documentId: string, label = "POST /api/documents"): void {
     const key = StartScheduler.key(identity, documentId);
     const run = (async () => {
       try {
@@ -27,7 +28,7 @@ export class StartScheduler {
         console.error(
           "ingest start failed",
           err instanceof Error ? err.constructor.name : typeof err,
-          "POST /api/documents",
+          label,
         );
       }
     })();
