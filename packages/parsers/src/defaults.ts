@@ -1,3 +1,4 @@
+import { docParser } from "./doc";
 import { docxParser } from "./docx";
 import { mdParser } from "./md";
 import { orgParser } from "./org";
@@ -9,4 +10,5 @@ export const createDefaultParsers = (): DocumentParser[] => [
   mdParser,
   orgParser,
   docxParser,
+  docParser,
 ];
