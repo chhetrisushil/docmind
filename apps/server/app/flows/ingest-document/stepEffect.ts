@@ -45,6 +45,16 @@ export interface StepGuard {
 export const STEP_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
 
 /**
+ * The embed step's retry policy. An embedder outage (an Ollama restart, a model load) lasts seconds to
+ * minutes, far beyond STEP_RETRY's 1.5 s, and a failed document must be deleted and re-uploaded, so the
+ * embed step retries more often with a longer backoff: 1, 2, 4, 8 and 16 s between 6 attempts (31 s in
+ * all), each wait capped at EMBED_BACKOFF_CAP_MS. Changing a number changes the flow's identity (flowHash).
+ */
+export const EMBED_RETRY: RetryPolicy = { maxAttempts: 6, backoffMs: 1_000, backoffMultiplier: 2 };
+/** The longest single wait between embed attempts (Loom's RetryPolicy has no cap, so stepEffect applies it). */
+export const EMBED_BACKOFF_CAP_MS = 30_000;
+
+/**
  * The wall-clock bound of one attempt of a step that has no runner clock of its own (the chunk step;
  * parse is bounded by the parser runner's wall clock, DOCMIND_PARSE_TIMEOUT_MS). Generous: chunking is
  * CPU work over text already in memory. Recovery re-drives steps one by one, so a step that never
@@ -84,6 +94,8 @@ export interface StepOptions {
   /** Test seam: the settle wait after a timed-out attempt (default ATTEMPT_SETTLE_MS). */
   settleMs?: number;
   retry?: RetryPolicy;
+  /** The longest single wait between attempts (default: uncapped). */
+  maxBackoffMs?: number;
   /** Wall-clock bound of each attempt (guard, work and all); a hit is a transient failure. Unset: no bound. */
   timeoutMs?: number;
   /** Injectable wait between attempts; must reject if `signal` aborts. */
@@ -125,8 +137,13 @@ export interface StepSeams {
 }
 
 /** The retry, per-attempt timeout and shutdown options every ingest step runs under. */
-export const ingestStepOptions = (deps: StepSeams): StepOptions => ({
-  retry: STEP_RETRY,
+export const ingestStepOptions = (
+  deps: StepSeams,
+  retry: RetryPolicy = STEP_RETRY,
+  maxBackoffMs?: number,
+): StepOptions => ({
+  retry,
+  ...(maxBackoffMs !== undefined && { maxBackoffMs }),
   timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
   ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
   ...(deps.sleep && { sleep: deps.sleep }),
@@ -221,7 +238,10 @@ export function stepEffect(
           try {
             const base = options.retry?.backoffMs ?? 0;
             await sleep(
-              base * (options.retry?.backoffMultiplier ?? 1) ** Math.max(0, attempt - 1),
+              Math.min(
+                base * (options.retry?.backoffMultiplier ?? 1) ** Math.max(0, attempt - 1),
+                options.maxBackoffMs ?? Number.POSITIVE_INFINITY,
+              ),
               waitSignal,
             );
           } catch {

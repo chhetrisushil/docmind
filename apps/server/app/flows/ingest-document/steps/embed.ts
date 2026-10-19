@@ -6,6 +6,8 @@ import { DocumentGoneError, IngestConfigError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import {
+  EMBED_BACKOFF_CAP_MS,
+  EMBED_RETRY,
   type StepGuard,
   type StepOptions,
   type StepResult,
@@ -71,6 +73,6 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
       }
       return { count, model };
     },
-    ingestStepOptions(deps),
+    ingestStepOptions(deps, EMBED_RETRY, EMBED_BACKOFF_CAP_MS),
   );
 }

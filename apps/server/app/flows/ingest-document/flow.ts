@@ -1,7 +1,7 @@
 import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
-import { STEP_RETRY, StepResult } from "./stepEffect";
+import { EMBED_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 
 /**
  * Start input: ids only (never a filename, title or text), and strict so a field added later fails
@@ -42,7 +42,7 @@ export const ingestEmbedStep = step$({
   name: "IngestEmbed",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  retry: STEP_RETRY,
+  retry: EMBED_RETRY, // an embedder outage outlasts STEP_RETRY (see EMBED_RETRY)
 });
 
 // analyze, summarize and link are placeholders in part 1 (guard only); part 2 swaps their effects.
@@ -107,7 +107,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
   definition: flow$({
     id: "ingest-document",
     name: "IngestDocument",
-    version: "2.2.0", // Loom refuses a changed flow under an old version: the step list gained analyze, summarize, link and finalize
+    version: "2.3.0", // Loom refuses a changed flow under an old version: 2.3.0 gave the embed step its own retry policy (EMBED_RETRY)
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,
     steps: INGEST_STEPS,

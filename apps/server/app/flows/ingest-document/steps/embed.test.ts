@@ -4,6 +4,7 @@ import { InMemoryChunkVectors } from "@docmind/vector-pg";
 import { EmbeddingError, type EmbeddingProvider, HashingEmbeddingProvider } from "@loom/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentGoneError } from "../errors";
+import { EMBED_BACKOFF_CAP_MS, EMBED_RETRY } from "../stepEffect";
 import { type EmbedDeps, embedEffect } from "./embed";
 
 const T = randomUUID();
@@ -124,6 +125,32 @@ describe("embedEffect", () => {
     expect(h.embedCalls).toEqual([64, 36]); // the failed second call is retried, batch 1 is not redone
   });
 
+  it("an embedder outage of 10 s, on a fake clock, still reaches ready, with every wait within the cap", async () => {
+    const h = harness(2);
+    let now = 0;
+    const waits: number[] = [];
+    const real = h.deps.embedder;
+    const embedder: EmbeddingProvider = {
+      modelId: real.modelId,
+      dimensions: real.dimensions,
+      embed: async (texts, opts) => {
+        if (now < 10_000) throw new EmbeddingUnavailableError();
+        return real.embed(texts, opts);
+      },
+    };
+    const out = await embedEffect({
+      ...h.deps,
+      embedder,
+      sleep: async (ms) => {
+        waits.push(ms);
+        now += ms;
+      },
+    }).execute({ tenantId: T, userId: U, documentId: DOC }, {} as never);
+    expect(out).toMatchObject({ outcome: "done", count: 2 });
+    expect(waits).toEqual([1000, 2000, 4000, 8000]); // attempts at 0, 1, 3, 7 and 15 s
+    expect(waits.every((w) => w <= EMBED_BACKOFF_CAP_MS)).toBe(true);
+  });
+
   it("gives up an outage after the retry budget with the fixed message and the class logged", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = harness(2);
@@ -223,7 +250,7 @@ describe("embedEffect", () => {
     h.deps.vectors.upsert = async () => ({ written: 0, missing: [] });
     await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
     expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "Error");
-    expect(h.embedCalls).toHaveLength(3); // one batch per attempt: the bound stops the second
+    expect(h.embedCalls).toHaveLength(EMBED_RETRY.maxAttempts); // one batch per attempt, then the attempts run out
   });
 
   it.each([
@@ -270,13 +297,13 @@ describe("embedEffect", () => {
     expect(attempts()).toBeLessThanOrEqual(Math.ceil(200 / 64) + 3);
   });
 
-  it("a provider that never completes a batch exhausts the normal three attempts", async () => {
+  it("a provider that never completes a batch exhausts the embed retry attempts", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const h = harness(200);
     const attempts = onePerAttempt(h, false);
     await expect(run({ ...h.deps, stepTimeoutMs: 1 })).rejects.toThrow(
       /^ingest step failed: embed$/,
     );
-    expect(attempts()).toBe(3);
+    expect(attempts()).toBe(EMBED_RETRY.maxAttempts);
   });
 });

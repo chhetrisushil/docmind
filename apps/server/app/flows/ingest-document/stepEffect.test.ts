@@ -40,6 +40,25 @@ const throwing = (make: () => unknown) => async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("stepEffect backoff cap", () => {
+  it("never waits longer than maxBackoffMs between attempts", async () => {
+    const waits: number[] = [];
+    const eff = stepEffect(
+      "embed",
+      guard().port,
+      throwing(() => new Error("transient")),
+      {
+        retry: { maxAttempts: 5, backoffMs: 1000, backoffMultiplier: 10 },
+        maxBackoffMs: 3000,
+        sleep: async (ms) => void waits.push(ms),
+      },
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(eff.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(waits).toEqual([1000, 3000, 3000, 3000]);
+  });
+});
+
 describe("stepEffect", () => {
   it("fails a step whose result has a key outside StepResult: fixed message, one attempt, class logged, nothing returned", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
