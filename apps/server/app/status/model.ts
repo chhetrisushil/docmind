@@ -25,6 +25,14 @@ export const STATUS_OF_STEP: Record<IngestStep, DocumentStatus> = {
   finalize: "embedding",
 };
 
+/** Fixed text shown to the user for a failed document. It never includes content. */
+export const STATUS_MESSAGES: Record<StatusCode, string> = {
+  unsupported_content: "This file's content is not a supported document.",
+  corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
+  too_large: "This document is too large to process.",
+  internal: "Processing failed. Please try again later.",
+};
+
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // Exactly `executionIdFor(user, "ingest-<doc>")` plus an optional positive `.<generation>` (no leading zero).
 const INGEST_EXECUTION = new RegExp(`^u_(${UUID}):ingest-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`);
@@ -97,3 +105,16 @@ export function foldIngestStatus(events: readonly EventEnvelope[]): IngestStatus
     return handler ? handler(state, e) : state;
   }, INITIAL_STATUS);
 }
+
+export interface StatusView {
+  status: DocumentStatus;
+  step: IngestStep | null;
+  error: string | null;
+}
+export const UPLOADED: StatusView = { status: "uploaded", step: null, error: null };
+
+export const viewOf = (s: IngestStatusState): StatusView => ({
+  status: s.status,
+  step: s.step,
+  error: s.code === null ? null : STATUS_MESSAGES[s.code],
+});
