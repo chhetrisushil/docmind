@@ -125,7 +125,7 @@ Each interface has **one shared conformance test suite** that every implementati
 
 ### 4.2 Tables
 
-Every table carries `tenant_id`.
+Every table carries `tenant_id`, except the two folded-state tables of the ingest status model (`read_model_state`, `read_model_folds`, Loom's layout): their row-level security maps `scope` (a user id) to the tenant through `users`.
 
 - **`tenants`** `(id, name, created_at)`. Sign-up creates a personal tenant.
 - **`users`** `(id, tenant_id, email UNIQUE, password_hash, created_at)`. Passwords are hashed with
