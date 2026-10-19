@@ -20,6 +20,12 @@ const ev = (eventType: string, payload: unknown, over: Record<string, unknown> =
   }) as RawEvent;
 const started = { input: ref, stepId: "ingest-parse" };
 const done = { output: { outcome: "done", count: 3 }, stepId: "ingest-parse" };
+const SEALED = {
+  __loomEnc: "loom/aes-256-gcm",
+  iv: Buffer.alloc(12, 1).toString("base64"),
+  tag: Buffer.alloc(16, 2).toString("base64"),
+  data: Buffer.alloc(20, 3).toString("base64"),
+};
 const check = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref);
 
 describe("assertEventsAreContentFree (the proof has teeth)", () => {
@@ -180,8 +186,59 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
       }),
       /\.actor is not an id/,
     ],
+    [
+      "a step id outside the flow's steps",
+      ev("STEP_STARTED", { input: ref, stepId: "ingest-quarterly" }),
+      /\.stepId is not an id/,
+    ],
+    [
+      "a failure naming a step the flow does not have",
+      ev("EXECUTION_FAILED", { error: "Error: ingest step failed: quarterly" }),
+      /\.error is not an id/,
+    ],
+    [
+      "a sealed leaf that is not base64",
+      ev("EXECUTION_STARTED", {
+        input: ref,
+        flowHash: "fnv1a:41c3727d",
+        principal: {
+          v: 1,
+          identity: { actor: { ...SEALED, data: "Q3 report!" }, tenant: SEALED },
+        },
+      }),
+      /identity\.actor is not an id/,
+    ],
+    [
+      "a sealed iv of the wrong length",
+      ev("EXECUTION_STARTED", {
+        input: ref,
+        flowHash: "fnv1a:41c3727d",
+        principal: {
+          v: 1,
+          identity: {
+            actor: { ...SEALED, iv: Buffer.alloc(8).toString("base64") },
+            tenant: SEALED,
+          },
+        },
+      }),
+      /identity\.actor is not an id/,
+    ],
   ])("throws for %s", (_name, event, message) => {
     expect(() => check(event)).toThrow(message);
+  });
+
+  it("accepts the chunk step and its fixed failure message, and a well-formed sealed envelope", () => {
+    expect(() =>
+      check(
+        ev("EXECUTION_STARTED", {
+          input: ref,
+          flowHash: "fnv1a:41c3727d",
+          principal: { v: 1, identity: { actor: SEALED, tenant: SEALED } },
+        }),
+        ev("STEP_STARTED", { input: ref, stepId: "ingest-chunk" }),
+        ev("STEP_FAILED", { error: "Error: ingest step failed: chunk", stepId: "ingest-chunk" }),
+      ),
+    ).not.toThrow();
   });
 
   it("throws for an empty log, which would prove nothing", () => {
