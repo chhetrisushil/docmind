@@ -53,3 +53,11 @@ export function decodeText(bytes: Uint8Array): string {
   assertText(text);
   return text;
 }
+
+/** A heading title: trimmed, at most `max` UTF-16 units, never ending in half a surrogate pair. */
+export function cutHeading(s: string, max = 500): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  const last = t.charCodeAt(max - 1);
+  return t.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}

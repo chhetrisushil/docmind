@@ -1,9 +1,8 @@
 import { Lexer, type Token } from "marked";
-import { decodeText } from "./text";
+import { cutHeading, decodeText } from "./text";
 import type { DocumentParser, ParsedDocument, ParsedSection } from "./types";
 
 const MAX_DEPTH = 16; // ParsedSection.headingPath.max
-const MAX_HEADING = 500; // ParsedSection.headingPath element max
 
 /** The plain text of a heading's inline tokens: emphasis, links and code spans lose their markup. */
 function plain(tokens: Token[] | undefined, fallback: string): string {
@@ -63,11 +62,10 @@ export const mdParser: DocumentParser = {
       close(start);
       const depth = (token as { depth: number }).depth;
       while (stack.length > 0 && (stack.at(-1)?.depth ?? 0) >= depth) stack.pop();
-      const title = plain(
-        (token as { tokens?: Token[] }).tokens,
-        (token as { text: string }).text,
-      ).trim();
-      stack.push({ depth, text: title.slice(0, MAX_HEADING) });
+      const title = cutHeading(
+        plain((token as { tokens?: Token[] }).tokens, (token as { text: string }).text),
+      );
+      stack.push({ depth, text: title });
       open = { start: at, path: stack.map((s) => s.text).slice(0, MAX_DEPTH) };
     }
     if (at !== text.length) {
