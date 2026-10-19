@@ -13,6 +13,7 @@ overrides:
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
   '@loom/event-runtime': link:../loom/packages/event-runtime
   '@loom/fair-scheduler': link:../loom/packages/fair-scheduler
+  '@loom/llm': link:../loom/packages/llm
   '@loom/memory': link:../loom/packages/memory
   '@loom/plugin-content': link:../loom/plugins/content
   '@loom/plugin-crypto': link:../loom/plugins/crypto
@@ -198,6 +199,22 @@ importers:
       '@types/pg':
         specifier: ^8.11.0
         version: 8.23.1
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.5)
+
+  packages/llm-anthropic:
+    dependencies:
+      '@loom/llm':
+        specifier: link:../../../loom/packages/llm
+        version: link:../../../loom/packages/llm
+    devDependencies:
+      '@loom/conformance':
+        specifier: link:../../../loom/packages/conformance
+        version: link:../../../loom/packages/conformance
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.5)

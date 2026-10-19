@@ -1,0 +1,35 @@
+{
+  "name": "@docmind/llm-anthropic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Claude Messages API provider for Loom's LlmProvider SPI: typed transient/permanent errors, no content in errors",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/fakeAnthropic.d.ts",
+      "default": "./dist/testing/fakeAnthropic.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@loom/llm": "*"
+  },
+  "devDependencies": {
+    "@loom/conformance": "*",
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}
