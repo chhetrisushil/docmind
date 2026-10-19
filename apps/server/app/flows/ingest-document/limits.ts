@@ -1,6 +1,8 @@
 import { OllamaEmbeddingProvider } from "@docmind/embeddings";
+import { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
 import { ParseRunner, ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import type { ParseLimits } from "@docmind/parsers";
+import type { LlmProvider } from "@loom/llm";
 import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
 import { loadLimits, positiveInt } from "../../documents/limits";
 import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress";
@@ -21,6 +23,8 @@ export interface IngestWiring {
   gate: IngestGate;
   /** The parse limits the runner was built with; parse's attempt timeout derives from them. */
   runnerLimits: ParseLimits;
+  /** Claude providers; both are undefined without ANTHROPIC_API_KEY (summaries skipped, images fail as vision_unavailable). */
+  llm: { summary?: LlmProvider; vision?: LlmProvider; config: LlmConfig };
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -83,6 +87,67 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
   }
 }
 
+const MODEL_ID = /^[a-z0-9][a-z0-9.\-]{0,99}$/;
+const MAX_LLM_TIMEOUT_MS = 300_000;
+const SUMMARY_MAX_TOKENS = 2_048;
+const VISION_MAX_TOKENS = 16_000;
+
+export interface LlmConfig {
+  apiKey?: string;
+  baseUrl?: string;
+  summaryModel: string;
+  visionModel: string;
+  timeoutMs: number;
+}
+
+const modelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
+  const v = env[name]?.trim() || fallback;
+  if (!MODEL_ID.test(v)) throw new StartupConfigError(`${name} must be a model id`);
+  return v;
+};
+
+/** Claude settings. The key is optional (D7): without it summaries are skipped and images fail as vision_unavailable. */
+export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig {
+  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
+  const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || undefined;
+  return {
+    ...(apiKey && { apiKey }),
+    ...(baseUrl && { baseUrl }),
+    summaryModel: modelId(env, "DOCMIND_SUMMARY_MODEL", "claude-haiku-5-5"),
+    visionModel: modelId(env, "DOCMIND_VISION_MODEL", "claude-sonnet-5-5"),
+    timeoutMs: positiveInt(env, "DOCMIND_LLM_TIMEOUT_MS", 60_000, MAX_LLM_TIMEOUT_MS),
+  };
+}
+
+function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
+  const config = loadLlmConfig(env);
+  const { apiKey, baseUrl } = config;
+  if (!apiKey) return { config };
+  const make = (model: string, maxTokens: number) => {
+    try {
+      return new AnthropicMessagesProvider({
+        apiKey,
+        model,
+        maxTokens,
+        timeoutMs: config.timeoutMs,
+        ...(baseUrl && { baseUrl }),
+      });
+    } catch (err) {
+      // The provider's messages name an option, never a value; say which variable it came from.
+      if (err instanceof TypeError && /^baseUrl/.test(err.message))
+        throw new StartupConfigError(err.message.replace(/^baseUrl/, "ANTHROPIC_BASE_URL"));
+      if (err instanceof TypeError && /^apiKey/.test(err.message))
+        throw new StartupConfigError("ANTHROPIC_API_KEY must be a header-safe string");
+      throw err;
+    }
+  };
+  return {
+    config,
+    summary: make(config.summaryModel, SUMMARY_MAX_TOKENS),
+    vision: make(config.visionModel, VISION_MAX_TOKENS),
+  };
+}
+
 const MAX_INGEST_CONCURRENCY = 64;
 
 /** Gate limits from the environment; an invalid variable throws an error naming it, never its value. */
@@ -116,5 +181,6 @@ export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): Ingest
     embedder: createEmbedder(env),
     shutdown: new AbortController(),
     gate: new IngestGate(loadGateLimits(env)),
+    llm: createLlm(env),
   };
 }

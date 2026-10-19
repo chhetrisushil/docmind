@@ -16,7 +16,6 @@ import { ingestExecutionId } from "../../documents/ingest";
 import {
   DOCUMENT_FKEY_CONSTRAINTS,
   DocumentGoneError,
-  FAILURE_CODES,
   IngestAbortedError,
   IngestConfigError,
   PermanentIngestError,
@@ -123,15 +122,18 @@ describe("stepEffect", () => {
     expect(calls).toEqual(["begin:chunk"]);
   });
 
-  it.each(FAILURE_CODES)("maps a parser rejection %s to its code", async (code) => {
-    const { port } = guard();
-    expect(
-      await run(
-        throwing(() => new ParseRejectedError(code)),
-        port,
-      ),
-    ).toEqual({ outcome: "failed", code });
-  });
+  it.each(["unsupported_content", "corrupt_content", "too_large"] as const)(
+    "maps a parser rejection %s to its code",
+    async (code) => {
+      const { port } = guard();
+      expect(
+        await run(
+          throwing(() => new ParseRejectedError(code)),
+          port,
+        ),
+      ).toEqual({ outcome: "failed", code });
+    },
+  );
 
   it.each([
     ["an input limit", () => new ParseLimitError("input")],

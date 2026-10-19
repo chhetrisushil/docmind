@@ -5,6 +5,7 @@ import {
   IngestStep,
   ListDocumentsQuery,
   Locator,
+  ProgressDetail,
   RetryDocumentResponse,
 } from "./index";
 
@@ -106,5 +107,11 @@ describe("IngestStep", () => {
       "link",
       "finalize",
     ]);
+  });
+});
+
+describe("ProgressDetail", () => {
+  it("accepts vision_unavailable", () => {
+    expect(ProgressDetail.parse("vision_unavailable")).toBe("vision_unavailable");
   });
 });

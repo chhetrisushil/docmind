@@ -1,3 +1,4 @@
+import type { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
@@ -5,6 +6,7 @@ import {
   createIngestWiring,
   loadEmbedConfig,
   loadGateLimits,
+  loadLlmConfig,
   loadParseLimits,
   parseStepTimeoutMs,
 } from "./limits";
@@ -178,5 +180,44 @@ describe("loadGateLimits", () => {
 describe("parseStepTimeoutMs", () => {
   it("covers a slot wait, the run itself, and 30s of slack", () => {
     expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 })).toBe(90_000);
+  });
+});
+
+describe("LLM config and providers", () => {
+  it("loads LLM config with defaults and no providers when the key is unset or blank", () => {
+    for (const env of [{}, { ANTHROPIC_API_KEY: "   " }]) {
+      const w = createIngestWiring(env);
+      expect(w.llm.summary).toBeUndefined();
+      expect(w.llm.vision).toBeUndefined();
+      expect(w.llm.config).toMatchObject({
+        summaryModel: "claude-haiku-5-5",
+        visionModel: "claude-sonnet-5-5",
+        timeoutMs: 60_000,
+      });
+    }
+  });
+
+  it("builds both providers with their own models when the key is set", () => {
+    const w = createIngestWiring({
+      ANTHROPIC_API_KEY: "k-test",
+      DOCMIND_SUMMARY_MODEL: "claude-x-1",
+    });
+    expect((w.llm.summary as AnthropicMessagesProvider).model).toBe("claude-x-1");
+    expect((w.llm.vision as AnthropicMessagesProvider).model).toBe("claude-sonnet-5-5");
+  });
+
+  it("names the variable, never the value, for a bad model id, timeout, base URL or key", () => {
+    expect(() => loadLlmConfig({ DOCMIND_SUMMARY_MODEL: "bad model!" })).toThrow(
+      /^DOCMIND_SUMMARY_MODEL must be a model id$/,
+    );
+    expect(() => loadLlmConfig({ DOCMIND_LLM_TIMEOUT_MS: "0" })).toThrow(/DOCMIND_LLM_TIMEOUT_MS/);
+    expect(() =>
+      createIngestWiring({ ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "http://u:SECRETPW@h" }),
+    ).toThrow(
+      /^ANTHROPIC_BASE_URL must be an http\(s\) URL without credentials, query or fragment$/,
+    );
+    expect(() => createIngestWiring({ ANTHROPIC_API_KEY: "bad\nkey" })).toThrow(
+      /^ANTHROPIC_API_KEY must be a header-safe string$/,
+    );
   });
 });

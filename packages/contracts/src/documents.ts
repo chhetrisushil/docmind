@@ -108,6 +108,7 @@ export const ProgressDetail = z.enum([
   "unsupported_content",
   "corrupt_content",
   "too_large",
+  "vision_unavailable",
   "internal",
 ]);
 export type ProgressDetail = z.infer<typeof ProgressDetail>;

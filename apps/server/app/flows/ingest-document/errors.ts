@@ -1,5 +1,6 @@
 import { BlobKeyUnavailableError } from "@docmind/blob-store";
 import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
+import { LlmAbortedError, LlmRefusalError, LlmRequestError } from "@docmind/llm-anthropic";
 import {
   ParseAbortedError,
   ParseLimitError,
@@ -38,7 +39,12 @@ export class IngestAbortedError extends Error {
   }
 }
 
-export const FAILURE_CODES = ["unsupported_content", "corrupt_content", "too_large"] as const;
+export const FAILURE_CODES = [
+  "unsupported_content",
+  "corrupt_content",
+  "too_large",
+  "vision_unavailable",
+] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
 /** Retrying the same bytes cannot help (spec 5.2 "permanent"). */
@@ -74,7 +80,8 @@ const isDocumentFkViolation = (err: unknown): boolean => {
 export const isAbort = (err: unknown): boolean =>
   err instanceof ParseAbortedError ||
   err instanceof EmbeddingAbortedError ||
-  err instanceof IngestAbortedError;
+  err instanceof IngestAbortedError ||
+  err instanceof LlmAbortedError;
 
 /** Deployment misconfiguration (embedder and vector store disagree): deterministic, never retried. Names no values. */
 /** A step produced a result outside StepResult (an extra or malformed field): a programming fault, fatal, never retried. */
@@ -101,6 +108,10 @@ export const isFatal = (err: unknown): boolean =>
   err instanceof IngestConfigError ||
   err instanceof StepResultError ||
   err instanceof BlobMissingError ||
+  // a deployment fault (bad key, unknown model) or a model refusal: retrying the same request cannot
+  // help. Steps that can map a refusal to a content code do so before it reaches here.
+  err instanceof LlmRequestError ||
+  err instanceof LlmRefusalError ||
   (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError));
 
 export function isDocumentGone(err: unknown): boolean {

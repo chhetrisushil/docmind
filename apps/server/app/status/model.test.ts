@@ -113,6 +113,16 @@ describe("the fold", () => {
     expect(foldIngestStatus(specific).code).toBe("too_large");
   });
 
+  it("has the exact vision_unavailable text and folds it as a failed code", () => {
+    expect(STATUS_MESSAGES.vision_unavailable).toBe(
+      "Reading images needs a Claude API key on the server.",
+    );
+    expect(foldIngestStatus(ingestRun(exec(), "failed:vision_unavailable"))).toMatchObject({
+      status: "failed",
+      code: "vision_unavailable",
+    });
+  });
+
   it("ignores document_gone and plain done outcomes, foreign steps, other event kinds (even prototype names) and shredded payloads", () => {
     const events = [
       ...ingestRun(exec(), "parsed"),
