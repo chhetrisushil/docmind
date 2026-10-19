@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Pool, type PoolClient } from "pg";
@@ -34,6 +35,8 @@ const extensionAvailable = async (client: PoolClient, name: string): Promise<boo
   ((await client.query("SELECT 1 FROM pg_available_extensions WHERE name = $1", [name])).rowCount ??
     0) > 0;
 
+const checksumOf = (sql: string) => createHash("sha256").update(sql).digest("hex");
+
 /** Applies every `NNNN_name.sql` in `dir` not yet recorded in `schema_migrations`, in name order. */
 export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise<string[]> {
   const client = await pool.connect();
@@ -45,12 +48,32 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
          applied_at timestamptz NOT NULL DEFAULT now()
        )`,
     );
-    const done = await client.query<{ name: string }>("SELECT name FROM schema_migrations");
-    const seen = new Set(done.rows.map((r) => r.name));
-    const applied: string[] = [];
-    for (const file of readdirSync(dir)
+    // Added here, not by a migration: the runner must be able to read it before any migration runs.
+    await client.query("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text");
+    const done = await client.query<{ name: string; checksum: string | null }>(
+      "SELECT name, checksum FROM schema_migrations",
+    );
+    const seen = new Map(done.rows.map((r) => [r.name, r.checksum]));
+    const files = readdirSync(dir)
       .filter((f) => /^\d{4}_.+\.sql$/.test(f))
-      .sort()) {
+      .sort();
+    // An applied file that changed is never re-run, so refuse before anything else is applied. Rows
+    // from before checksums existed are backfilled from the file as it is now (recorded, not refused).
+    for (const file of files) {
+      if (!seen.has(file)) continue;
+      const sum = checksumOf(readFileSync(join(dir, file), "utf8"));
+      const recorded = seen.get(file);
+      if (recorded == null) {
+        await client.query("UPDATE schema_migrations SET checksum = $2 WHERE name = $1", [
+          file,
+          sum,
+        ]);
+      } else if (recorded !== sum) {
+        throw new Error(`migration ${file} was changed after it was applied`);
+      }
+    }
+    const applied: string[] = [];
+    for (const file of files) {
       if (seen.has(file)) continue;
       const sql = readFileSync(join(dir, file), "utf8");
       let missing: string | undefined;
@@ -71,7 +94,10 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
       try {
         await client.query("BEGIN");
         await client.query(sql);
-        await client.query("INSERT INTO schema_migrations (name) VALUES ($1)", [file]);
+        await client.query("INSERT INTO schema_migrations (name, checksum) VALUES ($1, $2)", [
+          file,
+          checksumOf(sql),
+        ]);
         await client.query("COMMIT");
       } catch (err) {
         await client.query("ROLLBACK");
