@@ -17,12 +17,12 @@ const insert = (
   tenant: string,
   owner: string,
   fingerprint: string,
-  extra: { status?: string; size?: number; address?: string } = {},
+  extra: { size?: number; address?: string } = {},
 ) =>
   tx.query(
     `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
-                            content_address, fingerprint, status)
-     VALUES ($1, $2, $3, '{"x":1}', '{"x":2}', 'text/plain', $4, $5, $6, $7)`,
+                            content_address, fingerprint)
+     VALUES ($1, $2, $3, '{"x":1}', '{"x":2}', 'text/plain', $4, $5, $6)`,
     [
       id,
       tenant,
@@ -30,7 +30,6 @@ const insert = (
       extra.size ?? 5,
       extra.address ?? `hmac-sha256:${fingerprint}`,
       fingerprint,
-      extra.status ?? "uploaded",
     ],
   );
 
@@ -105,15 +104,21 @@ describe.skipIf(!PG_URL)("documents table (needs DOCMIND_TEST_PG_URL)", () => {
   });
 
   it("rejects malformed values at the database", async () => {
-    const bad = (fp: string, extra: { status?: string; size?: number; address?: string }) =>
+    const bad = (fp: string, extra: { size?: number; address?: string }) =>
       withTenant(app, A, (tx) =>
         insert(tx, "10000000-0000-4000-8000-0000000000ff", A, USER_A, fp, extra),
       );
-    await expect(bad(HEX("d"), { status: "done" })).rejects.toThrow(/status/);
     await expect(bad(HEX("d"), { size: -1 })).rejects.toThrow(/size_bytes/);
     await expect(bad("NOT-HEX", { address: `hmac-sha256:${HEX("d")}` })).rejects.toThrow(
       /documents_fingerprint_check/,
     );
+  });
+
+  it("has no status or error column: the ingest-status model is the only source of a document's status", async () => {
+    const { rows } = await db.owner.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'documents' AND column_name IN ('status', 'error')",
+    );
+    expect(rows).toEqual([]);
   });
 
   it("accepts only keyed addresses and has no plaintext stats column", async () => {
