@@ -23,8 +23,15 @@ export const ingestStartInput = (identity: Identity, documentId: string): Ingest
     documentId: documentId.toLowerCase(),
   });
 
-/** 1 is the M2 stub's execution (bare name); a restart in part 2 bumps this. */
+/** The generation a new document starts at (0018's column default). Tests use it; production passes the row's. */
 export const INGEST_GENERATION = 2;
+const MAX_GENERATION = 999_999_999; // the status model's execution-id pattern allows 9 digits
+
+const checkGeneration = (generation: number): number => {
+  if (!Number.isSafeInteger(generation) || generation < 1 || generation > MAX_GENERATION)
+    throw new RangeError("generation must be an integer from 1 to 999999999");
+  return generation;
+};
 
 /** The execution that ingests one document. `name` is a fixed prefix plus a UUID: no content. */
 export const ingestExecutionId = (
@@ -39,17 +46,21 @@ export const ingestExecutionId = (
 
 /** What the document routes need from the flow engine. */
 export interface IngestPort {
-  /** Starts the document's ingest execution. `null`: it already exists (start-once). */
-  start(identity: Identity, documentId: string): Promise<ExecutionHandle | null>;
-  /** Cancels every generation. An unknown or already finished execution is not an error; safe to repeat. */
-  cancel(identity: Identity, documentId: string): Promise<void>;
+  /** Starts this generation of the document's ingest. `null`: it already exists (start-once). */
+  start(
+    identity: Identity,
+    documentId: string,
+    generation: number,
+  ): Promise<ExecutionHandle | null>;
+  /** Cancels generations 1..`generation` (pass the document's current one). Unknown or finished ones are not an error. */
+  cancel(identity: Identity, documentId: string, generation: number): Promise<void>;
 }
 
-const target = (identity: Identity, documentId: string) => {
+const target = (identity: Identity, documentId: string, generation: number) => {
   const ref = ingestStartInput(identity, documentId);
   return {
     ref,
-    executionId: ingestExecutionId(ref.userId, ref.documentId),
+    executionId: ingestExecutionId(ref.userId, ref.documentId, checkGeneration(generation)),
     principal: { tenant: ref.tenantId, actor: ref.userId },
   };
 };
@@ -59,8 +70,8 @@ const CANCEL_REASON = "document-deleted";
 
 export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): IngestPort {
   return {
-    async start(identity, documentId) {
-      const { ref, executionId, principal } = target(identity, documentId);
+    async start(identity, documentId, generation) {
+      const { ref, executionId, principal } = target(identity, documentId, generation);
       try {
         return await runtime.start(ingestDocumentFlow, ref, { executionId, principal });
       } catch (err) {
@@ -68,10 +79,10 @@ export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): 
         throw err;
       }
     },
-    async cancel(identity, documentId) {
-      const { ref, principal } = target(identity, documentId);
-      for (let generation = 1; generation <= INGEST_GENERATION; generation++) {
-        const executionId = ingestExecutionId(ref.userId, ref.documentId, generation);
+    async cancel(identity, documentId, generation) {
+      const { ref, principal } = target(identity, documentId, generation);
+      for (let g = 1; g <= generation; g++) {
+        const executionId = ingestExecutionId(ref.userId, ref.documentId, g);
         try {
           await runtime.cancel(executionId, CANCEL_REASON, { principal });
         } catch (err) {

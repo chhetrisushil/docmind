@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { DocumentDto } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
+import { INGEST_GENERATION } from "./ingest";
 import { ALICE, type DocumentHarness, T1, TEXT, U1, startDocumentServer } from "./testHarness";
 
 /** Makes the next `ingest.start` wait, and says when it has been reached (i.e. after COMMIT). */
@@ -30,13 +31,13 @@ describe.skipIf(!PG_URL)("delete races and the erasure shape (needs DOCMIND_TEST
         ...deps,
         ingest: {
           ...deps.ingest,
-          start: async (identity, documentId) => {
+          start: async (identity, documentId, generation) => {
             if (gate.state.armed) {
               gate.state.armed = false;
               gate.reached();
               await gate.state.opened;
             }
-            return deps.ingest.start(identity, documentId);
+            return deps.ingest.start(identity, documentId, generation);
           },
         },
       }),
@@ -188,7 +189,7 @@ describe.skipIf(!PG_URL)("delete races and the erasure shape (needs DOCMIND_TEST
     expect((await del(doc.id)).status).toBe(204);
     expect(await rows(fp)).toBe(0);
     // Stand-in for a start the delete could not see (another process, or a duplicate upload).
-    h.starts.fire(ALICE, doc.id);
+    h.starts.fire(ALICE, doc.id, INGEST_GENERATION);
     await h.starts.idle();
     const handle = h.ingest.handles.get(doc.id);
     expect(handle).toBeDefined();

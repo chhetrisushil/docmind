@@ -91,13 +91,13 @@ export async function startIngestStack(): Promise<IngestStack> {
     let failStarts = 0;
     const composed = buildServer({
       wrapIngest: (port) => ({
-        cancel: (identity, documentId) => port.cancel(identity, documentId),
-        async start(identity, documentId) {
+        cancel: (identity, documentId, generation) => port.cancel(identity, documentId, generation),
+        async start(identity, documentId, generation) {
           if (failStarts > 0) {
             failStarts--;
             throw new Error("synthetic-start-error");
           }
-          return port.start(identity, documentId);
+          return port.start(identity, documentId, generation);
         },
       }),
       pool: app,

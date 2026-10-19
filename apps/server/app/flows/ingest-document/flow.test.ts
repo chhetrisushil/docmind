@@ -8,7 +8,7 @@ import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflo
 import { recoverAbandoned } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
-import { ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { foldIngestStatus } from "../../status/model";
 import type { IngestDeps } from "./deps";
@@ -191,6 +191,7 @@ describe("ingest-document flow v2", () => {
     await loomIngest(app.runtime).cancel(
       { tenantId: input.tenantId, userId: input.userId },
       input.documentId,
+      INGEST_GENERATION,
     );
     await vi.waitFor(() => expect(handle.getState().status).toBe("cancelled"));
     expect(aborted).toBe(true);

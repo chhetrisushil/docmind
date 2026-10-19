@@ -13,7 +13,7 @@ import { buildApp } from "../../config";
 import { setRolePassword } from "../../db/migrate";
 import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
-import { ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { insertDocument } from "../../documents/repo";
 import { T1, U1, newDocument, twinOverPgChunks } from "../../documents/testHarness";
 import { foldIngestStatus } from "../../status/model";
@@ -348,7 +348,11 @@ describe.skipIf(!PG_URL)(
       const ref = await seedTxt("1".repeat(64));
       await start(ref);
       await entered;
-      await loomIngest(app.runtime).cancel({ tenantId: T1, userId: U1 }, ref.documentId);
+      await loomIngest(app.runtime).cancel(
+        { tenantId: T1, userId: U1 },
+        ref.documentId,
+        INGEST_GENERATION,
+      );
       // Loom appends the cancel, then the step's, after cancel() returns: wait on the log (bounded), then assert.
       await vi.waitFor(async () =>
         expect((await log(ref)).map((e) => e.eventType)).toContain("STEP_CANCELLED"),
