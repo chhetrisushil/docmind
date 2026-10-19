@@ -1,9 +1,4 @@
-import {
-  type DocumentDto,
-  DocumentStats,
-  type DocumentStatus,
-  DocumentSummary,
-} from "@docmind/contracts";
+import { type DocumentDto, DocumentStats, DocumentSummary } from "@docmind/contracts";
 import type { PoolClient } from "pg";
 import type { UserFieldCipher } from "../crypto/fields";
 import type { StatusView } from "../status/model";
@@ -14,7 +9,7 @@ export const statsBind = (id: string) => `document:${id}:stats`;
 export const summaryBind = (id: string) => `document:${id}:summary`;
 
 /** The SELECT/RETURNING list. `created_cursor` is the microsecond-exact keyset value. */
-export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, status, error, stats_enc,
+export const DOCUMENT_COLUMNS = `id, title_enc, filename_enc, mime, size_bytes, stats_enc,
   summary_enc, created_at, updated_at,
   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_cursor`;
 
@@ -24,8 +19,6 @@ export interface DocumentRow {
   filename_enc: unknown;
   mime: string;
   size_bytes: string; // bigint arrives as text
-  status: DocumentStatus;
-  error: string | null;
   stats_enc: unknown;
   summary_enc: unknown;
   created_at: Date;
