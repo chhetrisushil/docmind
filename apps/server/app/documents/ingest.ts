@@ -23,15 +23,25 @@ export const ingestStartInput = (identity: Identity, documentId: string): Ingest
     documentId: documentId.toLowerCase(),
   });
 
+/** 1 is the M2 stub's execution (bare name); a restart in part 2 bumps this. */
+export const INGEST_GENERATION = 2;
+
 /** The execution that ingests one document. `name` is a fixed prefix plus a UUID: no content. */
-export const ingestExecutionId = (userId: string, documentId: string): UserExecutionId =>
-  executionIdFor(userId, `ingest-${documentId.toLowerCase()}`);
+export const ingestExecutionId = (
+  userId: string,
+  documentId: string,
+  generation = INGEST_GENERATION,
+): UserExecutionId => {
+  const id = documentId.toLowerCase();
+  // Generation 1 is the bare name (the status model's parser never sees `.1`).
+  return executionIdFor(userId, generation === 1 ? `ingest-${id}` : `ingest-${id}.${generation}`);
+};
 
 /** What the document routes need from the flow engine. */
 export interface IngestPort {
   /** Starts the document's ingest execution. `null`: it already exists (start-once). */
   start(identity: Identity, documentId: string): Promise<ExecutionHandle | null>;
-  /** Cancels it. An unknown or already finished execution is not an error; safe to repeat. */
+  /** Cancels every generation. An unknown or already finished execution is not an error; safe to repeat. */
   cancel(identity: Identity, documentId: string): Promise<void>;
 }
 
@@ -59,13 +69,20 @@ export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): 
       }
     },
     async cancel(identity, documentId) {
-      const { executionId, principal } = target(identity, documentId);
-      try {
-        await runtime.cancel(executionId, CANCEL_REASON, { principal });
-      } catch (err) {
-        // Never started (the start failed after the upload committed): nothing to cancel.
-        if (err instanceof Error && err.message.startsWith("No execution found for id")) return;
-        throw err;
+      const { ref, principal } = target(identity, documentId);
+      for (let generation = 1; generation <= INGEST_GENERATION; generation++) {
+        const executionId = ingestExecutionId(ref.userId, ref.documentId, generation);
+        try {
+          await runtime.cancel(executionId, CANCEL_REASON, { principal });
+        } catch (err) {
+          // Loom throws a plain Error (no class or code) for an execution that never existed in
+          // this generation; match its exact message for this id and nothing else.
+          if (
+            !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
+          ) {
+            throw err;
+          }
+        }
       }
     },
   };
