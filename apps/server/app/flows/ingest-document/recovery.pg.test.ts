@@ -1,6 +1,7 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { ParseAbortedError } from "@docmind/parsers";
+import type { LeaseStore } from "@loom/event-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
@@ -117,5 +118,53 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });
     expect([state?.status, state?.variables._output]).toEqual(["completed", { outcome: "done" }]);
+  });
+
+  it("a crashed process (leases never released) is recovered by a lease-mode pass once its lease expires; a live lease elsewhere is left alone", async () => {
+    const mk = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
+    const [crashed, live] = [mk(), mk()];
+    const idOf = (i: typeof crashed) => ingestExecutionId(i.userId, i.documentId);
+    // Process 1 drives both and is then abandoned: no closeIngest, no closeHeartbeat.
+    let inStep = 0;
+    let bothIn: () => void = () => {};
+    const entered = new Promise<void>((resolve) => {
+      bothIn = resolve;
+    });
+    const one = await boot({
+      guard: {
+        begin: async () => {
+          if (++inStep === 2) bothIn();
+          await new Promise<never>(() => {});
+        },
+      },
+    });
+    for (const ids of [crashed, live]) {
+      await one.app.runtime.start(ingestDocumentFlow, ids, {
+        executionId: idOf(ids),
+        principal: { tenant: ids.tenantId, actor: ids.userId },
+      });
+    }
+    await entered;
+    expect(await one.durable.lease.get?.(idOf(crashed))).not.toBeNull(); // the crash left its lease row
+    // Its lease expires (the injected clock: the row's deadline moves into the past; no real wait).
+    await db.owner.query("UPDATE loom.leases SET expires_at = 0 WHERE execution_id = $1", [
+      idOf(crashed),
+    ]);
+
+    const two = await boot();
+    const leases = { store: two.durable.storage.leaseStore as LeaseStore, owner: "node-2" };
+    const summary = await recoverIngest(two.app.runtime, two.durable.storage.eventStore, {
+      graceMs: 0,
+      leases,
+    });
+    expect(summary).toMatchObject({ recovered: 1, failed: 0 });
+    const state = await two.app.runtime.loadState(idOf(crashed), {
+      principal: { tenant: crashed.tenantId, actor: crashed.userId },
+    });
+    expect(state?.status).toBe("completed");
+    const liveTypes = (await two.durable.storage.eventStore.read(idOf(live))).map(
+      (e) => e.eventType,
+    );
+    expect(liveTypes).not.toContain("EXECUTION_RECOVERED");
   });
 });

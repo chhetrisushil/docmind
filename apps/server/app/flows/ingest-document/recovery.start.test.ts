@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestExecutionId } from "../../documents/ingest";
-import { startRecovery } from "./recovery";
+import { FULL_SCAN_EVERY, startRecovery } from "./recovery";
 import { boot, hanging, input, keptLog, start } from "./recoveryHarness";
 import { fakeIngestDeps } from "./testing";
 
@@ -75,5 +75,25 @@ describe("startRecovery", () => {
     await recovery.idle();
     expect([listed.mock.calls.length, expired.mock.calls.length]).toEqual([1, 1]);
     recovery.stop();
+  });
+
+  it("every FULL_SCAN_EVERY-th periodic pass scans the whole log, the others the expired leases", async () => {
+    vi.useFakeTimers();
+    const listed = vi.fn(async () => []);
+    const expired = vi.fn(async () => []);
+    const leases = { store: { expired } as never, owner: "node-1" };
+    const app = boot(keptLog(), fakeIngestDeps());
+    const recovery = startRecovery(app.runtime, { listExecutions: listed } as never, {
+      intervalMs: 1000,
+      leases,
+    });
+    await recovery.idle(); // the boot pass: a full scan
+    for (let tick = 1; tick <= FULL_SCAN_EVERY; tick++) {
+      await vi.advanceTimersByTimeAsync(1000);
+      await recovery.idle();
+    }
+    recovery.stop();
+    // boot + the FULL_SCAN_EVERY-th periodic pass scanned the log; the other FULL_SCAN_EVERY - 1 read leases
+    expect([listed.mock.calls.length, expired.mock.calls.length]).toEqual([2, FULL_SCAN_EVERY - 1]);
   });
 });
