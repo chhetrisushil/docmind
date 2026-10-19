@@ -92,4 +92,81 @@ describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
       await fresh.drop();
     }
   });
+
+  describe("requires-extension", () => {
+    const dirWith = (files: Record<string, string>) => {
+      const d = mkdtempSync(join(tmpdir(), "dm-mig-"));
+      for (const [name, sql] of Object.entries(files)) writeFileSync(join(d, name), sql);
+      return d;
+    };
+    const FILES = {
+      "0001_a.sql": "CREATE TABLE a (x int);",
+      "0002_needs.sql":
+        "-- requires-extension: docmind_no_such_extension\nCREATE TABLE needs (x int);",
+      "0003_c.sql": "CREATE TABLE c (x int);",
+    };
+    const withFresh = async (fn: (owner: Pool) => Promise<void>) => {
+      const fresh = await createTestDb();
+      try {
+        await fn(fresh.owner);
+      } finally {
+        await fresh.drop();
+      }
+    };
+
+    it("refuses a migration whose extension the server does not offer, naming file and extension (no global skip, F08)", async () => {
+      await withFresh(async (owner) => {
+        await expect(migrate(owner, dirWith(FILES))).rejects.toThrow(
+          /^migration 0002_needs\.sql needs the docmind_no_such_extension extension, which this server does not offer$/,
+        );
+        const { rows } = await owner.query("SELECT name FROM schema_migrations ORDER BY name");
+        expect(rows.map((r) => r.name)).toEqual(["0001_a.sql"]);
+      });
+    });
+
+    it("with the test switch, skips it unrecorded and still applies the files after it", async () => {
+      await withFresh(async (owner) => {
+        process.env.DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS = "true";
+        try {
+          expect(await migrate(owner, dirWith(FILES))).toEqual(["0001_a.sql", "0003_c.sql"]);
+        } finally {
+          // biome-ignore lint/performance/noDelete: assigning undefined would set the string "undefined"
+          delete process.env.DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS;
+        }
+        expect((await owner.query("SELECT to_regclass('needs') AS t")).rows[0].t).toBeNull();
+        const { rows } = await owner.query("SELECT name FROM schema_migrations ORDER BY name");
+        expect(rows.map((r) => r.name)).toEqual(["0001_a.sql", "0003_c.sql"]);
+      });
+    });
+
+    it("applies it when the extension is available (plpgsql always is)", async () => {
+      await withFresh(async (owner) => {
+        const d = dirWith({
+          "0001_p.sql": "-- requires-extension: plpgsql\nCREATE TABLE p (x int);",
+        });
+        expect(await migrate(owner, d)).toEqual(["0001_p.sql"]);
+      });
+    });
+
+    it.each([
+      ["upper case", "-- requires-extension: Vector"],
+      ["a quote", `-- requires-extension: vec"tor`],
+      ["an injection", "-- requires-extension: x'; DROP TABLE a; --"],
+      ["no space", "-- requires-extension:vector"],
+      ["no name", "-- requires-extension: "],
+      ["trailing text", "-- requires-extension: vector extra"],
+      ["a misspelling", "-- requires-extensions: vector"],
+      ["leading whitespace", "  -- requires-extension: vector"],
+      ["no space after the dashes", "--requires-extension: vector"],
+      ["wrong case of the key", "-- Requires-Extension: vector"],
+    ])("rejects a malformed header (%s) with a fixed message", async (_n, header) => {
+      await withFresh(async (owner) => {
+        const d = dirWith({ "0001_bad.sql": `${header}\nCREATE TABLE bad (x int);` });
+        await expect(migrate(owner, d)).rejects.toThrow(
+          /^migration 0001_bad\.sql has a malformed requires-extension header$/,
+        );
+        expect((await owner.query("SELECT to_regclass('bad') AS t")).rows[0].t).toBeNull();
+      });
+    });
+  });
 });
