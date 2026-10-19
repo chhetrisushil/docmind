@@ -6,6 +6,7 @@ import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
+import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
@@ -18,10 +19,13 @@ async function main(): Promise<void> {
   // Configuration first, so a missing or invalid variable fails before any connection opens. The
   // errors name the variable and never include its value.
   const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) throw new Error("DATABASE_URL is not set (the docmind_app connection string)");
+  if (!databaseUrl)
+    throw new StartupConfigError("DATABASE_URL is not set (the docmind_app connection string)");
   const loomUrl = process.env.LOOM_DATABASE_URL;
   if (!loomUrl)
-    throw new Error("LOOM_DATABASE_URL is not set (the docmind_loom connection string)");
+    throw new StartupConfigError(
+      "LOOM_DATABASE_URL is not set (the docmind_loom connection string)",
+    );
   const keks = loadKeks();
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
@@ -89,7 +93,7 @@ async function main(): Promise<void> {
   const rawPort = process.env.PORT?.trim();
   const port = rawPort ? Number(rawPort) : 3000;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error("PORT must be an integer between 0 and 65535");
+    throw new StartupConfigError("PORT must be an integer between 0 and 65535");
   }
   const host = process.env.HOST ?? "127.0.0.1";
   server.listen(port, host, () =>
@@ -130,10 +134,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  // Class only: a startup error's message or stack can carry ids or connection details.
-  console.error(
-    "docmind server failed to start",
-    err instanceof Error ? err.constructor.name : typeof err,
-  );
+  reportStartupFailure(err);
   process.exit(1);
 });
