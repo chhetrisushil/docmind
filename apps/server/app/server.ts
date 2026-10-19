@@ -1,4 +1,5 @@
 import { type Server, createServer } from "node:http";
+import { type OriginGuardOptions, isSameOriginRequest } from "./http/originGuard";
 import { type Handler, type RouteContext, json, sendError } from "./http/respond";
 
 const baseRoutes: Record<string, Handler> = {
@@ -52,7 +53,10 @@ function match(
 }
 
 /** The HTTP edge. Routes are keyed "METHOD /path"; unknown routes are a JSON 404. */
-export function createHttpServer(extraRoutes: Record<string, Handler> = {}): Server {
+export function createHttpServer(
+  extraRoutes: Record<string, Handler> = {},
+  guard: OriginGuardOptions = { secure: false },
+): Server {
   const routes = { ...baseRoutes, ...extraRoutes };
   const patterns = compile(routes);
   // Parameterised keys never match literally: `GET /things/:id` as a request is a pattern match.
@@ -67,6 +71,13 @@ export function createHttpServer(extraRoutes: Record<string, Handler> = {}): Ser
       return sendError(res, 400, "bad_request", "invalid request target");
     }
     const method = req.method ?? "GET";
+    // The one place a state-changing request is checked, before routing, so no route can skip it.
+    if (!isSameOriginRequest(req, guard)) {
+      console.error("cross-origin request refused", method, path);
+      req.resume();
+      res.setHeader("connection", "close");
+      return json(res, 403, { error: { code: "cross_origin_request" } });
+    }
     const key = `${method} ${path}`;
     const exact = Object.hasOwn(exactRoutes, key) ? exactRoutes[key] : undefined;
     const found = exact
