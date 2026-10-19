@@ -1,0 +1,28 @@
+{
+  "name": "@docmind/vector-pg",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ChunkVectorStore: vectors written onto existing chunk rows, owner-scoped, with an in-memory twin.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "vitest": "^2.1.8"
+  }
+}

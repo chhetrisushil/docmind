@@ -67,7 +67,7 @@ packages/
   parsers/     DocumentParser registry, one file per format
   embeddings/  EmbeddingProvider implementations (Ollama default)
   llm-anthropic/ loom `llm` provider on @anthropic-ai/sdk (thinking, refusals)
-  vector-pg/   pgvector VectorIndex (implements @loom/memory VectorIndex)
+  vector-pg/   pgvector ChunkVectorStore (port, in-memory twin, shared conformance suite)
   blob-store/  encrypted filesystem ContentStore
 infra/         docker-compose, SQL migrations
 ```
@@ -84,7 +84,7 @@ Dependency rules:
 | `Authenticator` | packages/auth | `authenticate(req) → {tenantId, userId} \| null` | email+password, HTTP-only session cookie |
 | `DocumentParser` | packages/parsers | `accepts(mime, ext)`, `parse(bytes) → ParsedDocument` | one per format (§5.3) |
 | `EmbeddingProvider` | `@loom/memory` | `modelId`, `dimensions`, `embed(texts)` | Ollama `nomic-embed-text` |
-| `VectorIndex` | `@loom/memory` | upsert / query / delete | pgvector |
+| `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector |
 | `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
 | `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
 | `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` (§6.5) |
@@ -223,7 +223,7 @@ from the step that failed.
 |---|---|
 | **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in a child process under Node's permission model (no filesystem beyond the parser code, no child processes, empty environment, V8 heap cap, wall clock, 2 concurrent) with decompression caps (docx zip bombs). The permission model does not restrict network, and the heap cap does not bound external (Buffer) memory: the deployment must cap host memory (container/cgroup). |
 | **chunk** | App-local section-bounded chunker (`chunker.ts`). Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
-| **embed** | Batches of 64 → `EmbeddingProvider` → `VectorIndex.upsert`, idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
+| **embed** | Batches of 64 → `EmbeddingProvider` → `ChunkVectorStore.upsert` (onto the existing chunk rows), idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
 | **analyze** | Deterministic statistics: word and page counts, reading time, language, outline, notable dates and numbers. |
 | **summarize** | Map-reduce. Summarize each section in parallel, then reduce to structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest`. |
 | **finalize** | Set `status=ready`. |
