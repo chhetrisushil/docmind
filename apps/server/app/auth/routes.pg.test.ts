@@ -80,11 +80,12 @@ describe.skipIf(!PG_URL)("auth routes on Postgres (needs DOCMIND_TEST_PG_URL)", 
   it("lets at most the free budget of a concurrent wrong-password burst reach a 401", async () => {
     const email = "burst@example.com";
     expect((await post("/api/auth/sign-up", { email, password: PASSWORD })).status).toBe(202);
-    const burst = await Promise.all(
-      Array.from({ length: 15 }, () =>
-        post("/api/auth/login", { email, password: "wrong password!" }),
-      ),
-    );
+    const wrong = () => post("/api/auth/login", { email, password: "wrong password!" });
+    // The first attempt runs alone, so one 401 is certain. In a fully concurrent burst the attempts
+    // that count past the free budget can lock the account before the first ones check it, and
+    // every request then reads a lock (all 429, no 401), which made `rejected > 0` flaky.
+    const first = await wrong();
+    const burst = [first, ...(await Promise.all(Array.from({ length: 14 }, wrong)))];
     const statuses = burst.map((res) => res.status);
     const rejected = statuses.filter((s) => s === 401).length;
     expect(rejected).toBeGreaterThan(0);
