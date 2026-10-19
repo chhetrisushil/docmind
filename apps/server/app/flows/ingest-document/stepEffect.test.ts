@@ -17,7 +17,7 @@ import {
   PermanentIngestError,
 } from "./errors";
 import type { IngestStartInput } from "./flow";
-import { type StepGuard, StepResult, stepEffect } from "./stepEffect";
+import { STEP_TIMEOUT_MS, type StepGuard, StepResult, stepEffect } from "./stepEffect";
 
 const ref = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -292,5 +292,66 @@ describe("stepEffect", () => {
 
   it("keeps StepResult strict", () => {
     expect(StepResult.safeParse({ outcome: "done", text: "x" }).success).toBe(false);
+  });
+});
+
+describe("stepEffect per-attempt wall clock", () => {
+  const never = () => new Promise<never>(() => {});
+
+  it("has a generous default bound for the steps that use it", () => {
+    expect(STEP_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("treats a hit as transient: it is retried, then fails with the fixed message", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port, calls } = guard();
+    const effect = stepEffect("chunk", port, never, {
+      timeoutMs: 1,
+      retry: { maxAttempts: 2 },
+      sleep: async () => {},
+    });
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(calls).toEqual(["begin:chunk", "begin:chunk"]);
+  });
+
+  it("recovers when a later attempt settles in time", async () => {
+    const { port } = guard();
+    let n = 0;
+    const effect = stepEffect("chunk", port, async () => (++n === 1 ? never() : { count: 2 }), {
+      timeoutMs: 20,
+      retry: { maxAttempts: 2 },
+      sleep: async () => {},
+    });
+    expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "done", count: 2 });
+  });
+
+  it("aborts the signal the work received when the bound is hit", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    let seen: AbortSignal | undefined;
+    const effect = stepEffect(
+      "chunk",
+      port,
+      (_r, signal) => {
+        seen = signal;
+        return never();
+      },
+      { timeoutMs: 1 },
+    );
+    await expect(effect.execute(ref(), {} as never)).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it("a document gone inside the bound still wins", async () => {
+    const { port } = guard();
+    const effect = stepEffect(
+      "chunk",
+      port,
+      throwing(() => new DocumentGoneError()),
+      {
+        timeoutMs: 60_000,
+      },
+    );
+    expect(await effect.execute(ref(), {} as never)).toEqual({ outcome: "document_gone" });
   });
 });
