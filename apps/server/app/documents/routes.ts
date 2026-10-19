@@ -9,6 +9,7 @@ import {
 import {
   ListDocumentsQuery,
   type ListDocumentsResponse,
+  type RetryDocumentResponse,
   type UploadDocumentResponse,
   Uuid,
 } from "@docmind/contracts";
@@ -26,6 +27,7 @@ import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
 import {
+  type DocumentRow,
   deleteDocument,
   filenameBind,
   findByFingerprint,
@@ -37,6 +39,7 @@ import {
   toDto,
   usageOfTenant,
 } from "./repo";
+import { restartIfFailed } from "./restart";
 import { SNIFF_BYTES, type Sniffed, sanitizeFilename, sniff, titleFromFilename } from "./sniff";
 import type { StartScheduler } from "./startScheduler";
 
@@ -78,8 +81,12 @@ type Registered =
   | {
       kind: "stored";
       document: UploadDocumentResponse["document"];
+      /** The stored row: for a duplicate, the existing one. */
+      row: DocumentRow;
       generation: number;
       duplicate: boolean;
+      /** True once a failed duplicate has been given its next generation (and its start fired). */
+      restarted: boolean;
     }
   | { kind: "quota"; reason: "documents" | "storage" };
 
@@ -106,8 +113,10 @@ async function register(
         return {
           kind: "stored",
           document: await toDto(existing, cipher, UPLOADED),
+          row: existing,
           generation: existing.ingest_generation,
           duplicate: true,
+          restarted: false,
         };
       }
       const usage = await usageOfTenant(tx);
@@ -135,8 +144,10 @@ async function register(
         return {
           kind: "stored",
           document: await toDto(row, cipher, UPLOADED),
+          row,
           generation: row.ingest_generation,
           duplicate: false,
+          restarted: false,
         };
       } catch (err) {
         // Still under the tenant lock: take back a blob this upload created, so no concurrent
@@ -166,20 +177,27 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
       });
       const result = await register(deps, identity, store, staged, filename, sniffed);
       // A duplicate is an existing document, so its status is the model's (one log-tail read); a new
-      // one is `uploaded`. Resolved before the start decision below, which keys on it.
+      // one is `uploaded`. A failed duplicate is restarted under its next generation, which fires
+      // its own start (so `restarted` results are never fired again below).
       if (result.kind === "stored" && result.duplicate) {
-        const view = await deps.status.forDocument(identity, result.document.id, result.generation);
+        const out = await restartIfFailed(deps, identity, result.row, "POST /api/documents");
+        const view = out.restarted ? UPLOADED : out.view;
         result.document = { ...result.document, status: view.status, error: view.error };
+        if (out.restarted) {
+          result.restarted = true;
+          result.generation = out.row.ingest_generation;
+        }
       }
       // The row is committed (register returns after COMMIT). Fire now, before the body drain and
       // the response, so one round trip (withTenant's reset) separates COMMIT from the registration a
       // delete settles on.
       // A duplicate whose document never left `uploaded` re-attempts the start (Loom: start-once).
       // Not closed: another process's delete cannot see this scheduler; `document_gone` covers that.
-      if (
+      const fire =
         result.kind === "stored" &&
-        (!result.duplicate || result.document.status === "uploaded")
-      ) {
+        !result.restarted &&
+        (!result.duplicate || result.document.status === "uploaded");
+      if (result.kind === "stored" && fire) {
         deps.starts.fire(identity, result.document.id, result.generation);
       }
       return { rejected: false as const, result };
@@ -302,6 +320,26 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       const view = await deps.status.forDocument(identity, row.id, row.ingest_generation);
       json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view));
     }),
+
+    "POST /api/documents/:id/retry": requireAuth(
+      deps.authenticator,
+      async (_req, res, identity, ctx) => {
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const id = parsed.success ? parsed.data.toLowerCase() : null;
+        const row = id
+          ? await withTenant(deps.pool, identity.tenantId, (tx) =>
+              getDocument(tx, identity.userId, id),
+            )
+          : undefined;
+        if (!row) return sendError(res, 404, "not_found", "document not found");
+        const out = await restartIfFailed(deps, identity, row, "POST /api/documents/:id/retry");
+        if (!out.restarted) return sendError(res, 409, "not_failed", "the document has not failed");
+        const cipher = deps.fields.forUser(identity.userId);
+        json(res, 202, {
+          document: await toDto(out.row, cipher, UPLOADED),
+        } satisfies RetryDocumentResponse);
+      },
+    ),
 
     "DELETE /api/documents/:id": requireAuth(
       deps.authenticator,

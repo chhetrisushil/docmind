@@ -151,10 +151,8 @@ describe.skipIf(!PG_URL)(
       expect(await json("alice", `/api/documents/${id}`)).toMatchObject({ id, status: "ready" });
     });
 
-    it.each([
-      ["ready", "ready", null],
-      ["failed:corrupt_content", "failed", STATUS_MESSAGES.corrupt_content],
-    ] as const)(
+    // A failed duplicate is restarted instead (retry.pg.test.ts).
+    it.each([["ready", "ready", null]] as const)(
       "answers a duplicate upload with the model's status (%s) and starts nothing",
       async (spec, status, error) => {
         const bytes = TEXT(`dup ${spec}`);
