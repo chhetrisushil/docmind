@@ -1,3 +1,4 @@
+import { ParseAbortedError } from "@docmind/parsers";
 import type { Pool, PoolClient } from "pg";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
@@ -8,7 +9,11 @@ import type { IngestStartInput } from "./flow";
 export const chunkBind = (chunkId: string) => `chunk:${chunkId}:text`;
 
 export interface ChunkStore {
-  replace(ref: IngestStartInput, chunks: Chunk[]): Promise<number>;
+  /**
+   * `signal` is the attempt's: if it aborted (the attempt timed out or was cancelled), the transaction
+   * rolls back instead of committing, so an abandoned attempt never writes after its successor.
+   */
+  replace(ref: IngestStartInput, chunks: Chunk[], signal?: AbortSignal): Promise<number>;
   count(ref: IngestStartInput): Promise<number>;
   read(ref: IngestStartInput, ids: string[]): Promise<{ id: string; text: string }[]>;
 }
@@ -30,7 +35,7 @@ export class PgChunkStore implements ChunkStore {
     private readonly fields: FieldCrypto,
   ) {}
 
-  async replace(ref: IngestStartInput, chunks: Chunk[]): Promise<number> {
+  async replace(ref: IngestStartInput, chunks: Chunk[], signal?: AbortSignal): Promise<number> {
     const cipher = this.fields.forUser(ref.userId);
     const ids = chunks.map((c) => chunkIdFor(ref.documentId, c.ordinal));
     const sealed = await Promise.all(
@@ -41,7 +46,13 @@ export class PgChunkStore implements ChunkStore {
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
       await tx.query("DELETE FROM chunks WHERE document_id = $1", [ref.documentId]);
-      if (chunks.length === 0) return;
+      if (chunks.length > 0) await insertChunks(tx);
+      // The last statement before COMMIT: an abandoned attempt rolls back.
+      if (signal?.aborted) throw new ParseAbortedError();
+    });
+    return chunks.length;
+
+    async function insertChunks(tx: PoolClient) {
       await tx.query(
         `INSERT INTO chunks (id, tenant_id, document_id, ordinal, section_ordinal, text_enc, locator, token_count)
          SELECT u.id, $1, $2, u.ordinal, u.section, u.text_enc::jsonb, u.locator::jsonb, u.tokens
@@ -58,8 +69,7 @@ export class PgChunkStore implements ChunkStore {
           chunks.map((c) => c.tokenCount),
         ],
       );
-    });
-    return chunks.length;
+    }
   }
 
   async count(ref: IngestStartInput): Promise<number> {

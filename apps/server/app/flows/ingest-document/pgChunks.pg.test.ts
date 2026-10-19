@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ParsedDocument } from "@docmind/parsers";
+import { ParseAbortedError, type ParsedDocument } from "@docmind/parsers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../../db/testSupport";
 import { T2, U1B } from "../../documents/testHarness";
@@ -42,6 +42,17 @@ describe.skipIf(!PG_URL)("PgChunkStore replace and count (needs DOCMIND_TEST_PG_
         [documentId],
       )
     ).rows;
+
+  it("a replace whose attempt was abandoned (aborted signal) rolls back: nothing is deleted or written", async () => {
+    const ref = await fresh();
+    const store = new PgChunkStore(f.app, f.fields);
+    await store.replace(ref, chunkDocument(sample(2)));
+    const before = await store.count(ref);
+    await expect(
+      store.replace(ref, chunkDocument(sample(6)), AbortSignal.abort()),
+    ).rejects.toBeInstanceOf(ParseAbortedError);
+    expect(await store.count(ref)).toBe(before);
+  });
 
   it("stores sealed chunks under deterministic ids, with numeric locators and plaintext counts", async () => {
     const ref = await f.doc("7".repeat(64));

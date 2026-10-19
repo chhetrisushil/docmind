@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ParsedDocument } from "@docmind/parsers";
+import { ParseAbortedError, type ParsedDocument } from "@docmind/parsers";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
@@ -116,5 +116,16 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
     expect(e.message).toBe("the stored parsed document has an invalid shape");
     expect(e.cause).toBeUndefined();
     expect(JSON.stringify([e.message, e.cause])).not.toContain(secret);
+  });
+
+  it("a drop whose attempt was abandoned (aborted signal) rolls back and leaves the row", async () => {
+    const ref = await f.doc("a1".repeat(32));
+    const store = new PgParsedStore(f.app, f.fields);
+    await store.put(ref, parsed);
+    const abandoned = AbortSignal.abort();
+    await expect(store.drop(ref, abandoned)).rejects.toBeInstanceOf(ParseAbortedError);
+    expect(await rawBody(ref.documentId)).toBeDefined();
+    await store.drop(ref);
+    expect(await rawBody(ref.documentId)).toBeUndefined();
   });
 });
