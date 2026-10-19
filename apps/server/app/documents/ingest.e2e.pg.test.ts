@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { EncryptedFsContentStore } from "@docmind/blob-store";
 import type {
   DocumentDto,
   ListDocumentsResponse,
@@ -10,9 +11,12 @@ import { PG_URL } from "../db/testSupport";
 import { chunkBind } from "../flows/ingest-document/pgChunks";
 import { assertEventsAreContentFree } from "../flows/ingest-document/testing";
 import { STATUS_MESSAGES } from "../status/model";
+import { FLOW_MISMATCH_REASON } from "../status/model";
 import { ingestExecutionId } from "./ingest";
 import { type IngestStack, startIngestStack } from "./ingestStack";
-import { PDF } from "./testHarness";
+import { insertDocument } from "./repo";
+import { sweepStaleUploads } from "./sweep";
+import { PDF, newDocument } from "./testHarness";
 
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars.";
 const LONG_TEXT = Array.from(
@@ -402,6 +406,84 @@ describe.skipIf(!PG_URL)(
         await expectTombstoned(id);
         const log = await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id));
         expect(log.map((e) => e.eventType)).not.toContain("EXECUTION_COMPLETED"); // never ready
+        await assertLogContentFree(user, id);
+      },
+      WAIT,
+    );
+
+    // The sweep as main runs it, with a small age so a freshly stranded document is stale at once.
+    const sweepArgs = () => ({
+      pool: st.app,
+      starts: st.composed.starts,
+      olderThanMs: 1,
+      lookbackMs: 604_800_000,
+      limit: 10,
+    });
+    const backdate = (id: string) =>
+      st.db.owner.query(
+        "UPDATE documents SET created_at = now() - interval '10 minutes' WHERE id = $1",
+        [id],
+      );
+
+    it(
+      "the sweep starts a document stranded in uploaded and it reaches ready",
+      async () => {
+        const user = await st.signUpAndLogIn("sweep@example.com");
+        const stream = await st.events(user.cookie);
+        // Written the way an upload would, but with no flow start: store the blob, insert the row.
+        const store = new EncryptedFsContentStore({
+          root: st.root,
+          tenantId: user.tenantId,
+          userId: user.userId,
+          keys: st.keys,
+          maxBytes: 1 << 20,
+        });
+        const bytes = textOf("Stranded");
+        const ref = await store.put(bytes);
+        const doc = await newDocument(st.fields, user.tenantId, user.userId, "9".repeat(64), {
+          contentAddress: ref.__loomContent,
+          mime: "text/plain",
+          sizeBytes: bytes.length,
+        });
+        await withTenant(st.app, user.tenantId, (tx) => insertDocument(tx, doc));
+        await backdate(doc.id);
+        expect((await getDoc(user.cookie, doc.id)).status).toBe("uploaded");
+        expect(await sweepStaleUploads(sweepArgs())).toBe(1);
+        const seen = await st.until(stream, doc.id, (s) => s === "ready");
+        stream.close();
+        expect(seen.at(-1)?.status).toBe("ready");
+        await st.composed.starts.idle();
+        // It has a status row now, so no later sweep asks for it (nor for any other document of this run).
+        expect(await sweepStaleUploads(sweepArgs())).toBe(0);
+        await assertLogContentFree(user, doc.id);
+      },
+      WAIT,
+    );
+
+    it(
+      "the sweep does not restart a document that recovery gave up on",
+      async () => {
+        const user = await st.signUpAndLogIn("giveup@example.com");
+        const stream = await st.events(user.cookie);
+        const arrived = st.fake.hold();
+        const id = await idOf(await st.upload(user.cookie, "giveup.txt", textOf("Giveup")));
+        await arrived; // the embed step is in flight
+        // What recovery does to an execution it cannot resume: cancel it with the fixed reason.
+        const runtime = st.composed.app.runtime;
+        await runtime.cancel(
+          ingestExecutionId(user.userId, id),
+          FLOW_MISMATCH_REASON,
+          runtime.systemOptions(),
+        );
+        st.fake.release();
+        const seen = await st.until(stream, id, (s) => s === "failed");
+        stream.close();
+        expect(seen.at(-1)).toEqual({ documentId: id, status: "failed", detail: "internal" });
+        await backdate(id);
+        expect(await sweepStaleUploads(sweepArgs())).toBe(0); // failed is final: nothing is fired
+        await st.composed.starts.idle();
+        const doc = await getDoc(user.cookie, id);
+        expect([doc.status, doc.error]).toEqual(["failed", STATUS_MESSAGES.internal]);
         await assertLogContentFree(user, id);
       },
       WAIT,

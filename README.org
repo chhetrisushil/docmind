@@ -115,8 +115,10 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_TRUST_PROXY=                        | =true= to trust =X-Forwarded-For= behind one proxy    |
 | =DOCMIND_BLOB_DIR=                           | Directory for encrypted blobs                         |
 | =DOCMIND_MAX_UPLOAD_BYTES=, =DOCMIND_TENANT_MAX_BYTES=, =DOCMIND_TENANT_MAX_DOCUMENTS=, =DOCMIND_MAX_CONCURRENT_UPLOADS= | Upload limits and quotas |
+| =DOCMIND_PARSE_TIMEOUT_MS=, =DOCMIND_PARSE_MEMORY_MB=, =DOCMIND_PARSE_MAX_CHARS=, =DOCMIND_PARSE_CONCURRENCY= | Parser child limits (optional) |
+| =DOCMIND_OLLAMA_URL=, =DOCMIND_EMBED_MODEL=, =DOCMIND_EMBED_DIMENSIONS=, =DOCMIND_EMBED_TIMEOUT_MS= | Embeddings through Ollama (optional; dimensions must match the vector column) |
 | =DOCMIND_TEST_PG_URL=                        | Enables the Postgres test suites                      |
-| =OLLAMA_URL=, =ANTHROPIC_API_KEY=            | Listed in =.env.example= for M3 and M4; not read by code yet |
+| =ANTHROPIC_API_KEY=                          | Listed in =.env.example= for M4; not read by code yet |
 
 Generate the KEK as described in =.env.example=. Losing it makes all encrypted data unreadable.
 A =GET /healthz= endpoint reports liveness.
