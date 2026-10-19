@@ -32,6 +32,23 @@ const frame = (v) => {
   return Buffer.concat([h, b]);
 };
 exports.parsers.push(
+  {
+    id: "spin",
+    accepts: () => true,
+    parse: () => {
+      for (;;) {}
+    },
+  },
+  { id: "exit", accepts: () => true, parse: () => process.exit(3) },
+  { id: "signal", accepts: () => true, parse: () => process.kill(process.pid, "SIGKILL") },
+  {
+    id: "oom",
+    accepts: () => true,
+    parse: () => {
+      const hog = [];
+      for (;;) hog.push(new Array(1e6).fill(hog.length));
+    },
+  },
   { id: "garbage", ...raw(Buffer.from([0, 0, 0, 8, 0xff, 0xff, 0xff, 0xff, 1, 2, 3, 4])) },
   { id: "notjson", ...raw(frame("not json")) },
   { id: "oversized", ...raw(Buffer.from([0xff, 0xff, 0xff, 0xff, 1])) },
