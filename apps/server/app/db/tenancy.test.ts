@@ -103,6 +103,8 @@ describe.skipIf(!PG_URL)("tenant isolation (needs DOCMIND_TEST_PG_URL)", () => {
     );
   });
 
+  // schema_migrations holds only file names, timestamps and checksums (no tenant data); docmind_app
+  // may SELECT it (0017, the boot checksum check) and nothing else, so it is exempt from RLS.
   const unprotected = async () => {
     const { rows } = await db.owner.query<{ relname: string }>(
       `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
