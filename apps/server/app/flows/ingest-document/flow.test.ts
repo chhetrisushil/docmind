@@ -6,6 +6,7 @@ import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor } from "../../subject";
 import type { IngestDeps } from "./deps";
+import { DocumentGoneError } from "./errors";
 import { IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
 
 const ids = (): IngestStartInput => ({
@@ -16,9 +17,11 @@ const ids = (): IngestStartInput => ({
 const appWith = (exists: boolean) => {
   const seen: IngestStartInput[] = [];
   const deps: IngestDeps = {
-    documentExists: async (ref) => {
-      seen.push(ref);
-      return exists;
+    guard: {
+      begin: async (ref) => {
+        seen.push(ref);
+        if (!exists) throw new DocumentGoneError();
+      },
     },
   };
   return { app: buildApp({ kind: "memory" }, undefined, { ingest: deps }), seen };

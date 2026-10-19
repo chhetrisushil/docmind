@@ -118,9 +118,11 @@ function makeIngest(app: Pool): {
   const loom = buildApp({ kind: "custom", eventStore }, undefined, {
     onEvent: (e) => status.onEvent(e),
     ingest: {
-      documentExists: async (ref) => {
-        await gate;
-        return real.documentExists(ref);
+      guard: {
+        begin: async (ref, step) => {
+          await gate;
+          return real.guard.begin(ref, step);
+        },
       },
     },
   });

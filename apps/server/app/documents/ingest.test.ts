@@ -3,12 +3,21 @@ import type { Identity } from "@docmind/auth";
 import { ExecutionDeniedError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../config";
+import { DocumentGoneError } from "../flows/ingest-document/errors";
 import { generationOf, ingestKeyOf, ingestScopeOf } from "../status/model";
 import { ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
 
 const identity = () => ({ tenantId: randomUUID(), userId: randomUUID() });
-const appWith = (documentExists: () => Promise<boolean>) =>
-  buildApp({ kind: "memory" }, undefined, { ingest: { documentExists } });
+const appWith = (exists: () => Promise<boolean>) =>
+  buildApp({ kind: "memory" }, undefined, {
+    ingest: {
+      guard: {
+        begin: async () => {
+          if (!(await exists())) throw new DocumentGoneError();
+        },
+      },
+    },
+  });
 
 describe("ingest start input", () => {
   it("is exactly the three ids, validated, and names the execution without content", () => {
