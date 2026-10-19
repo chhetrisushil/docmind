@@ -117,6 +117,29 @@ describe("chunkDocument", () => {
   });
 });
 
+describe("chunkDocument options", () => {
+  it.each([0, -1, 1.5, Number.NaN])("rejects targetTokens %s", (targetTokens) => {
+    expect(() => chunkDocument(doc({ text: "x" }), { targetTokens })).toThrow(
+      new RangeError("targetTokens must be an integer >= 1"),
+    );
+  });
+  it.each([-0.1, 1, Number.NaN])("rejects overlap %s", (overlap) => {
+    expect(() => chunkDocument(doc({ text: "x" }), { overlap })).toThrow(
+      new RangeError("overlap must be a number in [0, 1)"),
+    );
+  });
+  it("terminates with the smallest target and keeps exact locators", () => {
+    const d = doc({ text: "😀😀😀 😀" });
+    const chunks = chunkDocument(d, { targetTokens: 1, overlap: 0 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(c.text.length).toBeGreaterThan(0);
+      if (c.locator.kind === "chars")
+        expect(d.text.slice(c.locator.start, c.locator.end)).toBe(c.text);
+    }
+  });
+});
+
 describe("estimateTokens", () => {
   it("estimates four characters per token, at least one", () => {
     expect([estimateTokens("a"), estimateTokens("abcd"), estimateTokens("abcde")]).toEqual([
