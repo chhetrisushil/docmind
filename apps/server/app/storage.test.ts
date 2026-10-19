@@ -3,7 +3,7 @@ import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { PayloadShreddedError, shredSubject } from "@loom/plugin-crypto";
 import { PostgresEventStore } from "@loom/plugin-postgres";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
 import {
@@ -36,6 +36,13 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     await stores?.close();
     await app?.end();
     await db?.drop();
+  });
+
+  it("logs an idle Loom connection error by class only", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    stores.pool.emit("error", new Error("connect ECONNREFUSED 10.1.2.3 as secret-user"));
+    expect(spy.mock.calls).toEqual([["idle Loom database connection failed", "Error"]]);
+    spy.mockRestore();
   });
 
   const note = (executionId: string, text: string) => ({

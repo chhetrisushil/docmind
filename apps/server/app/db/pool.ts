@@ -40,7 +40,13 @@ export async function assertUnprivilegedRole(pool: Pool): Promise<void> {
 export async function createAppPool(connectionString: string): Promise<Pool> {
   const pool = new Pool({ connectionString });
   // An idle connection dropped by the server must not crash the process.
-  pool.on("error", (err) => console.error("idle database connection failed:", err.message));
+  // The class only: a driver error message can carry a host or a user name.
+  pool.on("error", (err) =>
+    console.error(
+      "idle database connection failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    ),
+  );
   try {
     await assertUnprivilegedRole(pool);
   } catch (err) {

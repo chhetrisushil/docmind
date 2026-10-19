@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrate, setAppRolePassword } from "./migrate";
 import { createAppPool } from "./pool";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
@@ -21,6 +21,18 @@ describe.skipIf(!PG_URL)("createAppPool (needs DOCMIND_TEST_PG_URL)", () => {
     const pool = await createAppPool(db.appUrl);
     expect((await pool.query("SELECT current_user AS u")).rows[0].u).toBe("docmind_app");
     await pool.end();
+  });
+
+  it("logs an idle connection error by class only", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pool = await createAppPool(db.appUrl);
+    pool.emit(
+      "error",
+      new Error("password authentication failed for user secret-user at 10.1.2.3"),
+    );
+    await pool.end();
+    expect(spy.mock.calls).toEqual([["idle database connection failed", "Error"]]);
+    spy.mockRestore();
   });
 
   it("refuses the owner role (a superuser here)", async () => {

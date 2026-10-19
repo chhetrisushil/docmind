@@ -58,7 +58,12 @@ export function createDurableStorage({
   // Built here, not by the preset, so a dropped idle connection is logged instead of crashing the
   // process. The stores borrow it; `close()` ends it.
   const pool = new Pool(loomPoolConfig(loomUrl));
-  pool.on("error", (err) => console.error("idle Loom database connection failed:", err.message));
+  pool.on("error", (err) =>
+    console.error(
+      "idle Loom database connection failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    ),
+  );
   const pg = postgresStorage({ url: pool as never }); // pg typings differ between the linked Loom and this repo
   const events = new EncryptingEventStore(pg.eventStore, keys, {
     sensitive: { ...sensitive },
