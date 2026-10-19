@@ -47,7 +47,7 @@ export class ParseTimeoutError extends Error {
   }
 }
 export class ParseLimitError extends Error {
-  constructor(readonly limit: "input") {
+  constructor(readonly limit: "input" | "output") {
     super(`parse ${limit} over limit`);
     this.name = "ParseLimitError";
   }
@@ -307,6 +307,15 @@ export class ParseRunner {
           // The child checks too, but a compromised child cannot skip the parent's check.
           if (doc.text.length > this.options.limits.maxChars)
             throw new ParseRejectedError("too_large");
+          // Sections slice the text, so their text and count are bounded by it: without this a
+          // reply within the byte cap can carry about 12 times maxChars of section text.
+          let sectionChars = 0;
+          for (const s of doc.sections) sectionChars += s.text.length;
+          if (
+            sectionChars > this.options.limits.maxChars ||
+            doc.sections.length > this.options.limits.maxChars
+          )
+            throw new ParseLimitError("output");
           resolve(doc);
         } catch (err) {
           reject(err);
