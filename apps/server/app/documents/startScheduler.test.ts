@@ -43,6 +43,18 @@ describe("StartScheduler", () => {
     expect(JSON.stringify(spy.mock.calls)).not.toContain("doc-2");
   });
 
+  it("logs the label the caller gave instead of the upload route", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const s = new StartScheduler(
+      port(async () => {
+        throw new RangeError("x");
+      }),
+    );
+    s.fire(IDENTITY, "doc-4", "stale upload sweep");
+    await s.idle();
+    expect(spy).toHaveBeenCalledWith("ingest start failed", "RangeError", "stale upload sweep");
+  });
+
   it("never throws from fire() when the port throws synchronously", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const s = new StartScheduler(
