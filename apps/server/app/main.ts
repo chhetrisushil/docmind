@@ -77,7 +77,12 @@ async function main(): Promise<void> {
   });
 
   // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
-  await bootStatus(status, [() => app.close(), () => durable.close(), () => pool.end()]);
+  await bootStatus(status, [
+    () => ingest.runner.close(),
+    () => app.close(),
+    () => durable.close(),
+    () => pool.end(),
+  ]);
 
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>

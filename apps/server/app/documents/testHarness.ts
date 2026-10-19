@@ -17,6 +17,7 @@ import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import { type IngestWiring, createIngestWiring } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
+import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
 import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
@@ -250,7 +251,9 @@ export async function startDocumentServer(
       maxBytes: limits.maxFileBytes,
     });
   const wiring = createIngestWiring({});
-  const ingest = makeIngest(app, fields, blobs, wiring);
+  // The ingest source reads through whatever `deps` finally gives the routes (a failing store reaches both).
+  let effectiveBlobs = blobs;
+  const ingest = makeIngest(app, fields, (id) => effectiveBlobs(id), wiring);
   const inFlight = new InFlight();
   await ingest.status.boot();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
@@ -265,6 +268,7 @@ export async function startDocumentServer(
     starts: new StartScheduler(ingest.port),
     inFlight,
   });
+  effectiveBlobs = wrapped.blobs;
   // A wrapper that replaces `ingest` (an injected failure or gate) gets a scheduler over its port.
   const starts =
     wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
@@ -310,9 +314,12 @@ export async function startDocumentServer(
         server.closeAllConnections();
       });
       await starts.idle(); // after the server stops, nothing can fire anymore
-      await ingest.close();
-      await wiring.runner.close();
-      await app.end();
+      // The runner first (kills children, as main does), and a throw must not skip the rest.
+      await runAll(
+        () => wiring.runner.close(),
+        () => ingest.close(),
+        () => app.end(),
+      );
       await db.drop();
       rmSync(root, { recursive: true, force: true });
     },
