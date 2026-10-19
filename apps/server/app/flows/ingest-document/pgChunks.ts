@@ -10,6 +10,7 @@ export const chunkBind = (chunkId: string) => `chunk:${chunkId}:text`;
 export interface ChunkStore {
   replace(ref: IngestStartInput, chunks: Chunk[]): Promise<number>;
   count(ref: IngestStartInput): Promise<number>;
+  read(ref: IngestStartInput, ids: string[]): Promise<{ id: string; text: string }[]>;
 }
 
 const OWNED = "EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2)";
@@ -72,5 +73,35 @@ export class PgChunkStore implements ChunkStore {
     });
     if (!row?.owned) throw new DocumentGoneError();
     return row.n;
+  }
+
+  async read(ref: IngestStartInput, ids: string[]): Promise<{ id: string; text: string }[]> {
+    // One statement: the ownership check and the rows share a snapshot. Ids compare as text, so a
+    // malformed id is a miss and no driver error echoes it.
+    const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      const res = await tx.query<{ owned: boolean; id: string | null; text_enc: unknown }>(
+        `SELECT o.owned, c.id, c.text_enc FROM (SELECT ${OWNED} AS owned) o
+           LEFT JOIN chunks c ON o.owned AND c.document_id = $1 AND c.id::text = ANY($3::text[])
+          ORDER BY c.ordinal`,
+        [ref.documentId, ref.userId, ids],
+      );
+      return res.rows;
+    });
+    if (!rows[0]?.owned) throw new DocumentGoneError();
+    const cipher = this.fields.forUser(ref.userId);
+    const found = rows.filter((r): r is typeof r & { id: string } => r.id !== null);
+    return Promise.all(
+      found.map(async (r) => {
+        const opened = await cipher.open(chunkBind(r.id), r.text_enc);
+        // A fixed message: a schema error could carry decrypted content.
+        if (
+          typeof opened !== "object" ||
+          opened === null ||
+          typeof (opened as { text?: unknown }).text !== "string"
+        )
+          throw new Error("the stored chunk has an invalid shape");
+        return { id: r.id, text: (opened as { text: string }).text };
+      }),
+    );
   }
 }
