@@ -5,7 +5,7 @@ import { buildServer } from "./compose";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createIngestWiring } from "./flows/ingest-document/limits";
-import { shutdown } from "./shutdown";
+import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
 import { openDurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -94,11 +94,14 @@ async function main(): Promise<void> {
     clearInterval(sweepTimer);
     closing ??= shutdown(server, {
       close: async () => {
-        // The server has stopped accepting uploads; let every fired flow start settle before Loom closes.
-        await starts.idle();
-        await app.close();
-        await durable.close();
-        await pool.end();
+        // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
+        // start stuck on a dead database must not keep the stores open), then close everything.
+        await runAll(
+          () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
+          () => app.close(),
+          () => durable.close(),
+          () => pool.end(),
+        );
       },
     }).catch((err) => {
       console.error(err);
