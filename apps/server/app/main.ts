@@ -73,7 +73,14 @@ async function main(): Promise<void> {
     await (await createAppPool(loomUrl)).end();
   } catch (err) {
     await pool.end();
-    throw new Error(`LOOM_DATABASE_URL: ${err instanceof Error ? err.message : String(err)}`);
+    // The driver's message can carry a host or user name: log the class, name the variable.
+    console.error(
+      "loom database check failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    );
+    throw new StartupConfigError(
+      "LOOM_DATABASE_URL must connect as an unprivileged role (docmind_loom)",
+    );
   }
 
   const keys = new PostgresKeyStore(pool, keks);
