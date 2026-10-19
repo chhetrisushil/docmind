@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ingestExecutionId } from "../../documents/ingest";
 import { startRecovery } from "./recovery";
-import { boot, keptLog } from "./recoveryHarness";
+import { boot, hanging, input, keptLog, start } from "./recoveryHarness";
 import { fakeIngestDeps } from "./testing";
 
 afterEach(() => {
@@ -40,5 +41,21 @@ describe("startRecovery", () => {
     recovery.stop();
     expect(errors).toHaveBeenCalledWith("ingest recovery failed", "StoreDownError");
     expect(JSON.stringify(errors.mock.calls)).not.toMatch(/secret|postgres/);
+  });
+
+  it("the boot pass has no grace: an execution interrupted a moment ago is recovered at once, a periodic pass would wait", async () => {
+    const log = keptLog();
+    const ids = input();
+    const first = hanging();
+    await start(boot(log, first.deps), ids);
+    await first.inStep;
+    const app = boot(log, fakeIngestDeps());
+    const recovery = startRecovery(app.runtime, log.kept, { intervalMs: 3_600_000 });
+    await recovery.idle();
+    recovery.stop();
+    const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
+      principal: { tenant: ids.tenantId, actor: ids.userId },
+    });
+    expect(state?.status).toBe("completed");
   });
 });
