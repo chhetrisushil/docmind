@@ -4,6 +4,7 @@ import type { StepResult } from "./stepEffect";
 import { type ChunkDeps, chunkEffect } from "./steps/chunk";
 import { type EmbedDeps, embedEffect } from "./steps/embed";
 import { type ParseDeps, parseEffect } from "./steps/parse";
+import { PLACEHOLDER_STEPS, finalizeEffect, placeholderEffect } from "./steps/placeholders";
 
 /**
  * What the flow's steps need from the outside world. Loom has no per-flow dependency argument, so
@@ -19,4 +20,8 @@ export const ingestEffects = (
   "ingest-parse": parseEffect(deps),
   "ingest-chunk": chunkEffect(deps),
   "ingest-embed": embedEffect(deps),
+  ...Object.fromEntries(
+    PLACEHOLDER_STEPS.map((step) => [`ingest-${step}`, placeholderEffect(step, deps.guard, deps)]),
+  ),
+  "ingest-finalize": finalizeEffect(deps),
 });

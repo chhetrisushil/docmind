@@ -171,7 +171,7 @@ describe.skipIf(!PG_URL)(
         await get(ada, `/api/documents/${a1.document.id}`)
       ).json()) as DocumentDto;
       expect(read).toMatchObject({ filename: secretName, title: "Ada private diary" });
-      expect(["parsing", "embedding"]).toContain(read.status); // Task 92 sets it to `ready`
+      expect(read.status).toBe("ready");
       expect((await get(ada, `/api/documents/${graceDoc.id}`)).status).toBe(404);
       expect((await fetch(`${base}/api/documents`)).status).toBe(401);
 

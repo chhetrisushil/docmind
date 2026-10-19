@@ -10,7 +10,15 @@ import {
 // What `security.strict` refuses to start without. The table is keyed by workflow id; every flow
 // added later lists its step ids here (a step id doubles as its tool id).
 export const authorizer = new GrantTable({
-  "ingest-document": ["ingest-parse", "ingest-chunk", "ingest-embed"],
+  "ingest-document": [
+    "ingest-parse",
+    "ingest-chunk",
+    "ingest-embed",
+    "ingest-analyze",
+    "ingest-summarize",
+    "ingest-link",
+    "ingest-finalize",
+  ],
 });
 
 // The actor that starts an execution owns it; only that actor, in the same tenant, may resume,

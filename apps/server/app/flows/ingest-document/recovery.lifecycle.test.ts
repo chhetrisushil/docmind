@@ -72,7 +72,11 @@ describe("recoverIngest: resuming executions", () => {
       { ref: ids, step: "parse" },
       { ref: ids, step: "chunk" },
       { ref: ids, step: "embed" },
-    ]); // the hung parse is re-run, then chunk and embed, all for the recorded principal
+      { ref: ids, step: "analyze" },
+      { ref: ids, step: "summarize" },
+      { ref: ids, step: "link" },
+      { ref: ids, step: "finalize" },
+    ]); // the hung parse is re-run, then every later step, all for the recorded principal
     const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });

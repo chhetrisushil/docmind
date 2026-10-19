@@ -282,6 +282,34 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     expect(() => checkEmbed(embedDone(output))).toThrow(message);
   });
 
+  it.each(["analyze", "summarize", "link"])("accepts the %s placeholder's events", (name) => {
+    expect(() =>
+      check(
+        ev("STEP_STARTED", { input: ref, stepId: `ingest-${name}` }),
+        ev("STEP_COMPLETED", { output: { outcome: "done" }, stepId: `ingest-${name}` }),
+        ev("STEP_FAILED", {
+          error: `Error: ingest step failed: ${name}`,
+          stepId: `ingest-${name}`,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts finalize's count, including 0, and nothing but a non-negative integer", () => {
+    const finalized = (count: unknown) =>
+      ev("STEP_COMPLETED", { output: { outcome: "done", count }, stepId: "ingest-finalize" });
+    expect(() => check(finalized(0), finalized(12))).not.toThrow();
+    for (const bad of [-1, 1.5, "7", SENTENCE]) {
+      expect(() => check(finalized(bad))).toThrow(/output\.count is not an id/);
+    }
+  });
+
+  it("throws for a step id the flow does not have", () => {
+    expect(() => check(ev("STEP_STARTED", { input: ref, stepId: "ingest-publish" }))).toThrow(
+      /stepId is not an id/,
+    );
+  });
+
   it("throws for an empty log, which would prove nothing", () => {
     expect(() => check()).toThrow(/no events to check/);
   });
