@@ -8,6 +8,16 @@ export interface IngestWiring {
   registry: ParserRegistry;
   runner: ParseRunner;
   bus: ProgressBus;
+  /** Aborted by `closeIngest` before the runner closes, so steps treat what follows as an interruption, not a failure. */
+  shutdown: AbortController;
+  /** Test seam: the wait between retry attempts. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+/** The one way to stop ingest: signals the steps first, then kills the in-flight parses. */
+export function closeIngest(wiring: IngestWiring): Promise<void> {
+  wiring.shutdown.abort();
+  return wiring.runner.close();
 }
 
 // Ceilings that bound ONE child (and the wait for one slot); the host-wide cap is a deployment
@@ -36,5 +46,6 @@ export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): Ingest
     registry: new ParserRegistry(createDefaultParsers()),
     runner: new ParseRunner({ limits, maxConcurrent }),
     bus: new InMemoryProgressBus(),
+    shutdown: new AbortController(),
   };
 }

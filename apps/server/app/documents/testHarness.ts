@@ -14,7 +14,11 @@ import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
-import { type IngestWiring, createIngestWiring } from "../flows/ingest-document/limits";
+import {
+  type IngestWiring,
+  closeIngest,
+  createIngestWiring,
+} from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
@@ -316,7 +320,7 @@ export async function startDocumentServer(
       await starts.idle(); // after the server stops, nothing can fire anymore
       // The runner first (kills children, as main does), and a throw must not skip the rest.
       await runAll(
-        () => wiring.runner.close(),
+        () => closeIngest(wiring),
         () => ingest.close(),
         () => app.end(),
       );

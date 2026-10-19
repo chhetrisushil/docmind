@@ -20,6 +20,8 @@ export interface ParseDeps {
   runner: Pick<ParseRunner, "run">;
   /** Test seam: the wait between retry attempts (default: a real, abortable timer). */
   sleep?: StepOptions["sleep"];
+  /** Aborted by the composition root before the runner closes (see StepOptions). */
+  shutdown?: AbortSignal;
 }
 
 /** A parser that throws from accepts() is rejected with a fixed code; its message is never kept. */
@@ -37,7 +39,7 @@ function select(registry: ParserRegistry, mime: string): DocumentParser {
 /**
  * Parse step: guard first, pick a parser by mime, read the bytes, run the sandboxed parser, seal the
  * result. Rejections, memory and input limits map to codes in stepEffect (by class, never message);
- * timeouts too (errors.ts permanentCode). A crash is retried (PARSE_RETRY); a shutdown abort leaves the step un-completed.
+ * timeouts too (errors.ts permanentCode). A crash is retried (PARSE_RETRY); a shutdown leaves the step un-completed.
  */
 export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResult> {
   return stepEffect(
@@ -51,6 +53,10 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
       await deps.parsed.put(ref, parsed);
       return { count: parsed.sections.length };
     },
-    { retry: PARSE_RETRY, ...(deps.sleep && { sleep: deps.sleep }) },
+    {
+      retry: PARSE_RETRY,
+      ...(deps.sleep && { sleep: deps.sleep }),
+      ...(deps.shutdown && { shutdown: deps.shutdown }),
+    },
   );
 }
