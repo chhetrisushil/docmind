@@ -4,7 +4,7 @@
  * `exports` map hides this file from deep imports.
  */
 export interface RunnerInternals {
-  /** The compiled child entry. Default: `dist/runner/child.js` next to or above ParseRunner. */
+  /** The compiled child entry. Default: `dist/child/child.cjs` (the bundle); its directory is the read grant. */
   childEntry?: string;
   /** A CommonJS file exporting `parsers`. */
   parserModule?: string;

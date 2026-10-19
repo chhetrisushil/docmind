@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import {
@@ -69,31 +69,18 @@ export class ParseAbortedError extends Error {
     this.name = "ParseAbortedError";
   }
 }
-/** Bare specifiers the child's built code imports, resolved by the parent to real files. */
-const BARE_SPECIFIERS = ["@docmind/contracts", "zod"] as const;
-const real = (p: string): string => realpathSync(p);
-const specifierMap = (): Record<string, string> =>
-  Object.fromEntries(BARE_SPECIFIERS.map((name) => [name, real(require.resolve(name))]));
-/** Own built files and the real dirs of the two dependencies: no node_modules path, no src. */
-const readablePaths = (entry: string, map: Record<string, string>): string[] => {
-  const distDir = dirname(dirname(entry));
-  const contractsPkg = real(require.resolve("@docmind/contracts/package.json"));
-  return [
-    distDir,
-    join(dirname(distDir), "package.json"),
-    dirname(map["@docmind/contracts"] as string), // contracts' dist
-    contractsPkg,
-    dirname(real(require.resolve("zod/package.json"))),
-  ];
+const defaultEntry = (): string => {
+  const sibling = join(__dirname, "../child/child.cjs"); // dist/runner -> dist/child
+  return existsSync(sibling) ? sibling : join(__dirname, "../../dist/child/child.cjs"); // src/runner under vitest
 };
 
-const defaultEntry = (): string => {
-  const sibling = join(__dirname, "child.js");
-  return existsSync(sibling) ? sibling : join(__dirname, "../../dist/runner/child.js");
-};
+// The bundle inlines every dependency (D3): the only grant is its own directory.
+const readablePaths = (entry: string): string[] => [dirname(entry)];
 
 /**
- * Runs a parser on untrusted bytes in a fresh Node process: no filesystem beyond its own code, no
+ * Runs a parser on untrusted bytes in a fresh Node process: no filesystem beyond the directory of
+ * its one self-contained bundle (the `childEntry` test seam may point at any built entry; its
+ * directory is the grant), no
  * child processes, no inherited environment (the KEK and database URLs never reach it). There is no
  * Node IPC channel (a parser could poison it): the request is one length-prefixed JSON frame on
  * the child's stdin, the reply one frame on fd 3, read with a byte cap and validated strictly;
@@ -227,15 +214,13 @@ export class ParseRunner {
     const { limits } = this.options;
     const { childEntry, parserModule } = runnerInternals(this);
     const entry = childEntry ?? defaultEntry();
-    const map = specifierMap();
-    const readable = readablePaths(entry, map);
+    const readable = readablePaths(entry);
     if (parserModule) readable.push(dirname(parserModule));
     const args = [
       "--permission",
       ...readable.map((p) => `--allow-fs-read=${p}`),
       `--max-old-space-size=${limits.memoryMb}`,
       entry,
-      JSON.stringify(map),
     ];
     const launch = limitedSpawn(limits.wallClockMs, process.execPath, args);
     const child = spawn(launch.command, launch.args, {
