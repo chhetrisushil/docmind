@@ -18,6 +18,7 @@
     "@docmind/contracts": "workspace:*",
     "@docmind/keystore-pg": "workspace:*",
     "@docmind/parsers": "workspace:*",
+    "@docmind/vector-pg": "workspace:*",
     "@loom/app": "*",
     "@loom/core": "*",
     "@loom/effect-runtime": "*",
