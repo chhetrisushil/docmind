@@ -5,6 +5,7 @@ import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
 import { loadLimits, positiveInt } from "../../documents/limits";
 import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress";
 import { StartupConfigError } from "../../startupError";
+import { IngestGate } from "./gate";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
 
 /** The ingest flow's dependencies, built once by the composition root and passed down. */
@@ -16,6 +17,8 @@ export interface IngestWiring {
   embedder: EmbeddingProvider;
   /** Aborted by `closeIngest` before the runner closes, so steps treat what follows as an interruption, not a failure. */
   shutdown: AbortController;
+  /** Fair sharing of ingest work across tenants; every step attempt waits on it. */
+  gate: IngestGate;
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -75,6 +78,27 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
   }
 }
 
+const MAX_INGEST_CONCURRENCY = 64;
+
+/** Gate limits from the environment; an invalid variable throws an error naming it, never its value. */
+export function loadGateLimits(env: NodeJS.ProcessEnv = process.env): {
+  concurrency: number;
+  tenantConcurrency: number;
+} {
+  const concurrency = positiveInt(env, "DOCMIND_INGEST_CONCURRENCY", 4, MAX_INGEST_CONCURRENCY);
+  const tenantConcurrency = positiveInt(
+    env,
+    "DOCMIND_INGEST_TENANT_CONCURRENCY",
+    2,
+    MAX_INGEST_CONCURRENCY,
+  );
+  if (tenantConcurrency > concurrency)
+    throw new StartupConfigError(
+      "DOCMIND_INGEST_TENANT_CONCURRENCY must not exceed DOCMIND_INGEST_CONCURRENCY",
+    );
+  return { concurrency, tenantConcurrency };
+}
+
 export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): IngestWiring {
   const limits = loadParseLimits(env);
   // An explicit options object: nothing config-derived reaches the runner except these two fields.
@@ -85,5 +109,6 @@ export function createIngestWiring(env: NodeJS.ProcessEnv = process.env): Ingest
     bus: new InMemoryProgressBus(),
     embedder: createEmbedder(env),
     shutdown: new AbortController(),
+    gate: new IngestGate(loadGateLimits(env)),
   };
 }

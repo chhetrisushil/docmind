@@ -14,6 +14,7 @@ import {
   permanentCode,
 } from "./errors";
 import type { IngestStartInput } from "./flow";
+import type { IngestGate } from "./gate";
 
 /** What every step returns, and so what the event log holds: an outcome, a count, a model id, a code. Never text. */
 export const StepResult = z
@@ -104,6 +105,8 @@ export interface StepOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Aborted by the composition root just before the runner closes: whatever the step is doing is interrupted, not failed. */
   shutdown?: AbortSignal;
+  /** Each attempt waits here first. The wait is outside the attempt's timeout, and a cancel or shutdown aborts it. */
+  gate?: Pick<IngestGate, "run">;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -136,6 +139,8 @@ export interface StepSeams {
   stepTimeoutMs?: number;
   /** How long a timed-out attempt may take to settle before the step fails (default ATTEMPT_SETTLE_MS). */
   attemptSettleMs?: number;
+  /** Every attempt waits for the ingest gate (per-tenant fair share of the process). */
+  gate?: Pick<IngestGate, "run">;
 }
 
 /** The retry, per-attempt timeout and shutdown options every ingest step runs under. */
@@ -150,6 +155,7 @@ export const ingestStepOptions = (
   ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
   ...(deps.sleep && { sleep: deps.sleep }),
   ...(deps.shutdown && { shutdown: deps.shutdown }),
+  ...(deps.gate && { gate: deps.gate }),
 });
 
 export function stepEffect(
@@ -215,14 +221,18 @@ export function stepEffect(
         // Set by the work (after a committed unit) through `progress`; read only when this attempt times out.
         const made = { value: false };
         try {
-          return await attemptOnce(
-            ref,
-            ctx?.signal,
-            () => {
-              made.value = true;
-            },
-            generation,
-          );
+          const attemptNow = () =>
+            attemptOnce(
+              ref,
+              ctx?.signal,
+              () => {
+                made.value = true;
+              },
+              generation,
+            );
+          return await (options.gate
+            ? options.gate.run(ref.tenantId, waitSignal, attemptNow)
+            : attemptNow());
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
           if (isDocumentGone(err)) return { outcome: "document_gone" };

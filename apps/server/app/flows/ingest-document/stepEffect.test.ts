@@ -17,11 +17,12 @@ import {
   DOCUMENT_FKEY_CONSTRAINTS,
   DocumentGoneError,
   FAILURE_CODES,
+  IngestAbortedError,
   IngestConfigError,
   PermanentIngestError,
 } from "./errors";
 import type { IngestStartInput } from "./flow";
-import { type StepGuard, StepResult, stepEffect } from "./stepEffect";
+import { STEP_RETRY, type StepGuard, StepResult, stepEffect } from "./stepEffect";
 
 const ref = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -656,5 +657,76 @@ describe("stepEffect generation", () => {
       executionId: ingestExecutionId(r.userId, r.documentId, 2),
     } as never);
     expect(out).toEqual({ outcome: "document_gone" });
+  });
+});
+
+describe("stepEffect gate", () => {
+  it("runs each attempt through the gate, keyed by tenant, before the attempt timer starts", async () => {
+    const calls: string[] = [];
+    let open!: () => void;
+    const opened = new Promise<void>((r) => {
+      open = r;
+    });
+    const gate = {
+      run: async <T>(tenant: string, _s: AbortSignal | undefined, task: () => Promise<T>) => {
+        calls.push(tenant);
+        await opened; // the attempt has not started; its 1 ms timeout must not be running
+        return task();
+      },
+    };
+    const input = ref();
+    const effect = stepEffect("chunk", guard().port, async () => ({ count: 1 }), {
+      gate,
+      timeoutMs: 1,
+    });
+    const out = effect.execute(input, {} as never);
+    await Promise.resolve();
+    open();
+    expect(await out).toEqual({ outcome: "done", count: 1 });
+    expect(calls).toEqual([input.tenantId]);
+  });
+
+  it("a cancel while waiting for the gate is a cancel, not a retried failure", async () => {
+    const ac = new AbortController();
+    const gate = {
+      run: async () => {
+        ac.abort();
+        throw new IngestAbortedError();
+      },
+    };
+    let attempts = 0;
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const effect = stepEffect(
+      "chunk",
+      guard().port,
+      async () => {
+        attempts++;
+        return {};
+      },
+      { gate, retry: STEP_RETRY, sleep: async () => {} },
+    );
+    await expect(effect.execute(ref(), { signal: ac.signal } as never)).rejects.toThrow(
+      /^ingest step failed: chunk$/,
+    );
+    expect(attempts).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("a shutdown while waiting for the gate leaves the step interrupted (never settles)", async () => {
+    const shutdown = new AbortController();
+    const gate = {
+      run: async () => {
+        shutdown.abort();
+        throw new IngestAbortedError();
+      },
+    };
+    const effect = stepEffect("chunk", guard().port, async () => ({}), {
+      gate,
+      shutdown: shutdown.signal,
+    });
+    const settled = vi.fn();
+    void effect.execute(ref(), {} as never).then(settled, settled);
+    await new Promise((r) => setImmediate(r)); // only drains microtasks; asserts nothing about time
+    expect(settled).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
-import { createIngestWiring, loadEmbedConfig, loadParseLimits } from "./limits";
+import { createIngestWiring, loadEmbedConfig, loadGateLimits, loadParseLimits } from "./limits";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
 
 describe("loadParseLimits", () => {
@@ -135,5 +135,36 @@ describe("createIngestWiring embedder", () => {
     expect(run).toThrow(StartupConfigError);
     expect(run).toThrow(/^DOCMIND_OLLAMA_URL must be an http\(s\) URL/);
     expect(run).not.toThrow(/hunter2/);
+  });
+});
+
+describe("loadGateLimits", () => {
+  it("has defaults", () => {
+    expect(loadGateLimits({})).toEqual({ concurrency: 4, tenantConcurrency: 2 });
+  });
+  it("reads overrides", () => {
+    expect(
+      loadGateLimits({
+        DOCMIND_INGEST_CONCURRENCY: "8",
+        DOCMIND_INGEST_TENANT_CONCURRENCY: "3",
+      }),
+    ).toEqual({ concurrency: 8, tenantConcurrency: 3 });
+  });
+  it("refuses a tenant cap above the global cap, naming both variables", () => {
+    expect(() => loadGateLimits({ DOCMIND_INGEST_TENANT_CONCURRENCY: "5" })).toThrow(
+      new StartupConfigError(
+        "DOCMIND_INGEST_TENANT_CONCURRENCY must not exceed DOCMIND_INGEST_CONCURRENCY",
+      ),
+    );
+  });
+  it.each([
+    ["DOCMIND_INGEST_CONCURRENCY", "abc"],
+    ["DOCMIND_INGEST_CONCURRENCY", "65"],
+    ["DOCMIND_INGEST_TENANT_CONCURRENCY", "0"],
+  ])("rejects %s=%s naming the variable", (name, value) => {
+    expect(() => loadGateLimits({ [name]: value })).toThrow(new RegExp(name));
+  });
+  it("is built into the wiring", () => {
+    expect(createIngestWiring({}).gate.active).toBe(0);
   });
 });

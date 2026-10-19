@@ -29,7 +29,8 @@ import {
   ingestParseStep,
   runIngestSteps,
 } from "./flow";
-import { createIngestWiring } from "./limits";
+import { IngestGate } from "./gate";
+import { createIngestWiring, loadGateLimits } from "./limits";
 import { PgChunkStore } from "./pgChunks";
 import { pgIngestDeps } from "./pgDeps";
 import { type PgFixture, startPgFixture } from "./pgFixture";
@@ -377,7 +378,8 @@ describe.skipIf(!PG_URL)(
         vectors: twinOverPgChunks(f.app, wiring),
       });
       const a = buildApp(d.storage, d.crypto, {
-        ingest: { ...base, runner: { run }, ...over },
+        // Its own gate, as a restarted process has: the crashed origin's attempt never releases its slot.
+        ingest: { ...base, gate: new IngestGate(loadGateLimits({})), runner: { run }, ...over },
       });
       peers.push(async () => {
         await a.close();
