@@ -51,6 +51,17 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     expect(h.ingest.handles.has(id)).toBe(true); // the retry created the one execution
   });
 
+  it("does not restart a duplicate whose flow has already moved past uploaded", async () => {
+    const bytes = TEXT("dup after parse");
+    const first = await created("a.txt", bytes);
+    const id = first.body.document.id;
+    await h.starts.idle();
+    await h.ingest.handles.get(id)?.waitForCompletion();
+    expect((await created("again.txt", bytes)).res.status).toBe(200);
+    await h.starts.idle();
+    expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(1);
+  });
+
   it("starts nothing for an upload that is refused", async () => {
     const before = h.ingest.calls.length;
     const res = await h.upload("alice", "tool.exe", Buffer.from("MZ\u0090\u0000\u0003"));
