@@ -231,4 +231,60 @@ describe("IngestStatus", () => {
       error: STATUS_MESSAGES.internal,
     });
   });
+  it("forgetDocument tombstones the document's rows: gone from reads, and later events cannot bring it back", async () => {
+    const { store, log, status, feed } = setup();
+    log.append(...ingestRun(exec(D1), "parsed"));
+    await status.boot();
+    await status.forgetDocument(ALICE, D1);
+    expect((await status.forPage(ALICE, [D1])).size).toBe(0);
+    feed(
+      evt(exec(D1), 2, "STEP_COMPLETED", {
+        stepId: "ingest-parse",
+        output: { outcome: "failed", code: "too_large" },
+      }),
+    );
+    await status.close();
+    expect((await status.forPage(ALICE, [D1])).size).toBe(0);
+    expect((await store.getFolded(INGEST_STATUS_MODEL, [exec(D1)]))[0]).toMatchObject({
+      erased: true,
+      state: null,
+      scope: U,
+      sequence: 2,
+    });
+  });
+
+  it("forgetUser tombstones every row of one user and no other user's", async () => {
+    const { log, status } = setup();
+    const other = randomUUID();
+    const doc3 = randomUUID();
+    log.append(
+      ...ingestRun(exec(D1), "ready"),
+      ...ingestRun(exec(D2), "parsed"),
+      ...ingestRun(`u_${other}:ingest-${doc3}`, "parsed"),
+    );
+    await status.boot();
+    expect(await status.forgetUser(U)).toBe(2);
+    expect(await status.forgetUser(U)).toBe(0); // a retry changes nothing
+    expect((await status.forPage(ALICE, [D1, D2])).size).toBe(0);
+    expect(
+      (await status.forPage({ tenantId: ALICE.tenantId, userId: other }, [doc3])).get(doc3)?.status,
+    ).toBe("parsing");
+  });
+
+  it("forgetDocument purges only the caller's rows when another user's row shares the key", async () => {
+    const { log, status } = setup();
+    const other = randomUUID();
+    log.append(...ingestRun(exec(D1), "parsed"), ...ingestRun(`u_${other}:ingest-${D1}`, "parsed"));
+    await status.boot();
+    await status.forgetDocument(ALICE, D1);
+    expect((await status.forPage(ALICE, [D1])).size).toBe(0);
+    expect(
+      (await status.forPage({ tenantId: ALICE.tenantId, userId: other }, [D1])).get(D1)?.status,
+    ).toBe("parsing");
+  });
+
+  it("forgetUser refuses an id that is not a uuid", () => {
+    const { status } = setup();
+    expect(() => status.forgetUser("not-a-uuid")).toThrow(/forgetUser: userId must be a uuid/);
+  });
 });

@@ -36,11 +36,21 @@ export interface IngestStatusOptions {
   onError?(err: unknown): void;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 // Class name only: the message of a database or fold error could carry anything.
 const logClass = (err: unknown) =>
   console.error("ingest status failed", err instanceof Error ? err.constructor.name : typeof err);
 
-export class IngestStatus {
+/** What the document routes need from the status model. */
+export interface DocumentStatusReads {
+  forPage(identity: Identity, documentIds: readonly string[]): Promise<Map<string, StatusView>>;
+  forDocument(identity: Identity, documentId: string): Promise<StatusView>;
+  /** The document is being deleted: tombstone its rows (call after the delete commits and the flow is cancelled). */
+  forgetDocument(identity: Identity, documentId: string): Promise<void>;
+}
+
+export class IngestStatus implements DocumentStatusReads {
   private readonly service: ReadModelService;
   private readonly report: (err: unknown) => void;
   private publishing: Promise<void> = Promise.resolve();
@@ -128,6 +138,30 @@ export class IngestStatus {
       [this.o.source],
     );
     return (await this.forPage(identity, [documentId])).get(documentId) ?? UPLOADED;
+  }
+
+  /**
+   * Erasure of one document's rows (every generation), owner-scoped: the rows are read through the
+   * caller's tenant reader, only the caller's own are kept, and each is purged by execution id. A
+   * purge by key would tombstone every tenant's rows under the writer's cross-tenant policy.
+   * A tombstone keeps the sequence, execution id and scope (ids, not state) and nulls the state.
+   */
+  async forgetDocument(identity: Identity, documentId: string): Promise<void> {
+    const reader = this.o.readerFor(identity);
+    if (reader.getFoldedByKey === undefined)
+      throw new TypeError("the status reader store has no folded-state support");
+    const rows = await reader.getFoldedByKey(INGEST_STATUS_MODEL, [documentId.toLowerCase()]);
+    for (const row of rows) {
+      if (ingestScopeOf(row.executionId) !== identity.userId) continue;
+      await this.service.purgeFolded(INGEST_STATUS_MODEL, { executionId: row.executionId });
+    }
+  }
+
+  /** User erasure, after rows, blobs and key: the table has no foreign key to `users`, so nothing cascades. */
+  forgetUser(userId: string): Promise<number> {
+    const scope = userId.toLowerCase();
+    if (!UUID.test(scope)) throw new TypeError("forgetUser: userId must be a uuid");
+    return this.service.purgeFolded(INGEST_STATUS_MODEL, { scope });
   }
 
   /** Wait for every fold scheduled so far (shutdown, tests). Callers close the event feed first: events fed afterwards are not awaited. */
