@@ -6,7 +6,7 @@
 
 **Architecture:** One flow, `ingest-document`, with a durable `step$` per spec §5.2 plus `link` (linked-retrieval design note): `parse -> chunk -> embed -> analyze -> summarize -> link -> finalize`. Loom has no per-flow dependency argument, so each step's effect is registered by `buildApp` from an `IngestDeps` bundle that the composition root builds (blob store factory, `FieldCrypto`, parser registry and runner, chunk and vector stores, embedder, status store). Every effect is built by one wrapper, `stepEffect`, which turns "document, row, key or blob is gone" into the clean outcome `document_gone`, turns a permanent content problem into a terminal `failed` outcome with a fixed code, and rethrows anything else with a fixed message. No step writes a status: an `ingest-status` folded model (`@loom/plugin-read-model`, ADR 0132, in DocMind's own `public` tables under row-level security) folds the flow's events, feeds the SSE bus after each fold, and is what the list and detail routes read (Revision 2026-10-19). Steps pass ids and counts only; the parsed text travels between `parse` and `chunk` through a sealed row (`parsed_documents`) that the chunk step deletes, so no document text is ever in the event log. Parsers run in a short-lived Node child process under the Node permission model (no filesystem or process access), a heap limit and a wall-clock kill.
 
-**Tech Stack:** everything in M0-M2, plus Node >=22.13 (`--permission` child processes), `@loom/plugin-read-model` (folded-state read models, with the Postgres store from `@loom/plugin-postgres`), `@loom/memory` (the `EmbeddingProvider` type), `@loom/classify` (`sensitive(...)`), `@loom/conformance` (`runEmbeddingProviderConformance`), `typescript` (compiler API, used by one test), Ollama's `/api/embed` over `fetch`, and the Postgres `vector` extension (pgvector). Loom is linked from `../loom` at the commit CI pins: `8f9eab2492c85bb994d746855f06d2eccc9f45db` until Task 74b moves the pin to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132, folded-state read models).
+**Tech Stack:** everything in M0-M2, plus Node >=22.13 (`--permission` child processes), `@loom/plugin-read-model` (folded-state read models, with the Postgres store from `@loom/plugin-postgres`), `@loom/memory` (the `EmbeddingProvider` type), `@loom/conformance` (`runEmbeddingProviderConformance`), `typescript` (compiler API, used by one test), Ollama's `/api/embed` over `fetch`, and the Postgres `vector` extension (pgvector). Loom is linked from `../loom` at the commit CI pins: `8f9eab2492c85bb994d746855f06d2eccc9f45db` until Task 74b moves the pin to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132, folded-state read models).
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout and interfaces, §4.2 tables, §4.3 tenancy, §4.4 crypto-shredding, §5.2 flow, §5.3 parsers, §8 gates and PR rules, §9 items 12-14 and 21-23). Accepted design note this plan must not block: `/Users/such/workspace/docmind/docs/design/linked-retrieval.md`. Model plan for structure: `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m2-document-storage.md` (its sizes were badly low; the sizes here are counted, see the note under the task index). Executors read all of them.
 
@@ -21,14 +21,14 @@ This section **replaces Finding F5 and owner decision 4**. Loom now has durable 
 - **R3. Feed and boot order.** `observability.onEvent` (through `FlowDeps.onEvent` in `buildApp`) calls `IngestStatus.onEvent`, which calls `service.handleEvent`. `IngestStatus.boot()` runs `register -> catchUp([eventStore])`, and `main` awaits it after `buildServer` and before `listen` (the `onEvent` hook is already installed by then and is a no-op until `registerFolded` has run; events in between are healed by `catchUp`, ADR 0132 D13). `liveSource` is the node's own (decrypting) event store, because DocMind resumes executions and a resumed execution's first event on a fresh node is not sequence 0 (`plugins.md` note 4). A `catchUp` failure (poison event, sensitive-state refusal, gap) makes `boot()` throw, so the server does not start (Open question R5).
 - **R4. Sensitive map and compaction.** `ReadModelService` gets `sensitive` = `mergeSensitive(sensitivePathsFromSteps(allFlowSteps), sensitiveMapFromCovers(eventStore.sealingCapability()?.covers ?? []))`, computed **after** `defineConfig`, because only then have the framework-sealed paths (`EXECUTION_STARTED` `principal.identity.*`, `OUTCOME_RECORDED.recordedBy`) been registered with the encrypting store. Editing the map re-folds the model automatically (the version digest includes it). `buildApp` also sets `durability.retention.compactionExempt` to "is an ingest execution" (a fold needs the contiguous log; DocMind configures no retention yet, so this is the one line that keeps a later retention from breaking the model).
 - **R5. Reads.** The list fetches its page under tenant RLS (unchanged), then asks the **reader store** `getFoldedByKey("ingest-status", pageDocIds)` and `foldedStates(...)` (the recipe of `plugins.md`; every `service.*` call runs as the writer role, which has no tenant policy, so the list does not use it). One round trip, at most 100 keys. A document with no row yet is `uploaded`. `GET /api/documents/:id` and the duplicate-upload response read-repair the one document the request touched: `service.getMany("ingest-status", [executionId], { refreshFrom: [eventStore] })`, one log-tail read, then the reader.
-- **R6. SSE.** `IngestStatus.onEvent` calls `service.handleEvent(event)` and then schedules a publish on a single promise chain: `await service.drain()`, then `bus.publish(...)`. The progress event is derived by a pure function (`progressOf`) from the same handlers the model folds with. Chosen over publishing from the step effect (the previous design) because the effect runs **before** its `STEP_COMPLETED` is appended and cannot see crash recovery, resumed executions or a failure the kernel records; publishing after the node's durable apply means a client that refetches on an event never reads an older status, and the effects stay free of any bus (Open question R3). Limits: `drain()` waits for every in-flight apply on the node, so latency is the slowest concurrent apply (a database write); an apply that fails is reported to `onError` and the event is still published, since the log is the authority and the next `catchUp` heals the row; an unexpected `EXECUTION_FAILED` moves the state to `failed` but emits no SSE event in part 1 because the contract's `step` is required.
-- **R7. `documents.status` and `documents.error` are dropped** (migration `0013`, Task 79c). The status of a document is the model's state; a document with no row is `uploaded`; `error` is a fixed message derived from the code at read time. Only the pre-flow state needed anything stored, and it needs no column: the stale-upload sweep (Task 93) finds documents whose generation-2 execution has no row in `read_model_state`, by one anti-join in a `SECURITY DEFINER` function (both tables are in `public`). The sweep calling `start` for a document whose row has not been folded yet is harmless: `start` is start-once. Keeping a column that nothing writes would only be a second source of truth that can disagree (Open question R2).
+- **R6. SSE.** `IngestStatus.onEvent` calls `service.handleEvent(event)` and then schedules a publish on a single promise chain: `await service.drain()`, then `bus.publish(...)`. The progress event is derived by a pure function (`progressOf`) from the same handlers the model folds with. Chosen over publishing from the step effect (the previous design) because the effect runs **before** its `STEP_COMPLETED` is appended and cannot see crash recovery, resumed executions or a failure the kernel records; publishing after the node's durable apply means a client that refetches on an event never reads an older status, and the effects stay free of any bus (Open question R3). Limits: `drain()` waits for every in-flight apply on the node, so latency is the slowest concurrent apply (a database write); an apply that fails is reported to `onError` and the event is still published, since the log is the authority and the next `catchUp` heals the row; an unexpected `EXECUTION_FAILED` moves the state to `failed` and emits a terminal progress event without a `step` (the contract's `step` is optional, Task 65; `progressOf`, Task 74d).
+- **R7. `documents.status` and `documents.error` are dropped** (migration `0013`, Task 79d). The status of a document is the model's state; a document with no row is `uploaded`; `error` is a fixed message derived from the code at read time. Only the pre-flow state needed anything stored, and it needs no column: the stale-upload sweep (Task 93) finds documents whose generation-2 execution has no row in `read_model_state`, by one anti-join in a `SECURITY DEFINER` function (both tables are in `public`). The sweep calling `start` for a document whose row has not been folded yet is harmless: `start` is start-once. Keeping a column that nothing writes would only be a second source of truth that can disagree (Open question R2).
 - **R8. Erasure.** The delete route cancels the flow, then `forgetDocument` = `purgeFolded("ingest-status", { key: documentId })` (a tombstone that keeps `sequence`, `execution_id`, `scope`, and nulls the state; later events cannot resurrect it), then removes the row and blob. User erasure (M5) does rows, then blobs, then the key, **then `purgeFolded({ scope: userId })`** (`IngestStatus.forgetUser`); the table has no foreign key to `users`, so deleting the user does not cascade. Task 74e proves both. Carry-forward for M5: a model rebuild reads the log through the decrypting store; after a key is destroyed that read must use a shredding-tolerant source (the handlers already skip `{ $shredded: true }` payloads).
 - **R9. Pins and dependencies.** DocMind's CI `LOOM_REF` moves from `8f9eab24` to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (Task 74b), `@loom/plugin-read-model` joins the root `pnpm.overrides` and `apps/server` dependencies, and `@loom/event-runtime` joins both as a dev dependency for tests (Task 74b).
 
 **What does not change.** The step effects still do the work and nothing else; a step still stops with `document_gone` when its document is gone (a `StepGuard` check replaces the status write that used to double as that check); the flow returns early on `document_gone` or `failed`; execution ids, the ids-only start input and the content-free log are untouched.
 
-**Loom API notes (how DocMind wires the model; none needs a Loom change).** (1) Every execution's events reach the model; non-ingest executions get state-less rows that reads omit (R4). (2) "Highest generation wins" is DocMind's rule because the `.N` generation suffix is DocMind's convention. (3) `getManyByKey(..., { refreshFrom })` cannot discover an execution that has no row, so the one-document path refreshes by execution id. (4) `catchUp` is shared and stops loudly on a poisoned execution — Loom's documented stance (ADR 0132 operations note); watermarks keep the boot rescan cheap. (5) The service runs as the writer role, so the read-only request path uses a second store's `getFoldedByKey` plus `foldedStates`, as Loom's docs prescribe. (6) Sealing covers exist only after `defineConfig`, so `onEvent` closes over a service built afterwards; DocMind chains `drain()` itself for the progress publish. (7) A failed execution has no step, so DocMind's progress-event contract gains a terminal event without a step.
+**Loom API notes (how DocMind wires the model; none needs a Loom change).** (1) Every execution's events reach the model; non-ingest executions get rows too, and those rows **do** carry state: the engine runs a handler for every execution whose event type it handles (it does not look at the execution id), so a chat execution's `EXECUTION_STARTED` creates `{ status: "uploaded", step: null, code: null }` and its `EXECUTION_FAILED` makes it `failed` / `internal`; only `key` and `scope` are null (`keyOf` / `scopeOf` return `undefined` for it). Reads never see those rows: the reader looks rows up by key (null never matches) and `tenant_read` hides a null `scope`; `foldedStates` omits only erased or null-state rows, which these are not. Accepted cost: one small row per non-ingest execution (R4). (2) "Highest generation wins" is DocMind's rule because the `.N` generation suffix is DocMind's convention. (3) `getManyByKey(..., { refreshFrom })` cannot discover an execution that has no row, so the one-document path refreshes by execution id. (4) `catchUp` is shared and stops loudly on a poisoned execution — Loom's documented stance (ADR 0132 operations note); watermarks keep the boot rescan cheap. (5) The service runs as the writer role, so the read-only request path uses a second store's `getFoldedByKey` plus `foldedStates`, as Loom's docs prescribe. (6) Sealing covers exist only after `defineConfig`, so `onEvent` closes over a service built afterwards; DocMind chains `drain()` itself for the progress publish. (7) A failed execution has no step, so DocMind's progress-event contract gains a terminal event without a step.
 
 ## Global Constraints
 
@@ -36,7 +36,7 @@ Copied from the spec and the owner's standing rules; every task includes them.
 
 - **PR size:** at most **200 changed lines and 10 files** per PR (one task = one PR). `pnpm-lock.yaml`, the generated `apps/server/app/loom.gen.ts` and binary fixtures do not count but are listed in the PR description. Tests ship in the same PR as the code they test. The sizes in the task index were estimated by counting fenced code lines per task and adding 12% for Biome formatting; if `git diff --stat` shows more than 200 lines or 10 files, split along the seam named in that task's close-out step instead of trimming tests. Target is 120-160 lines.
 - **PR rules:** each PR leaves `main` green and has no half-built **reachable** path (an unreachable library that a later task wires up is fine); branch names `feat/<area>-<thing>`; Conventional Commits; PRs are **stacked** (each branch is cut from the previous task's branch), opened as **drafts** (`gh pr create --draft`; CI skips drafts), and the owner merges them with **rebase and merge** (`gh pr merge --rebase`, never squash or a merge commit). Executors never merge.
-- **Commit trailer:** every commit ends with the line `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`. Every PR description ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Commit trailer:** every commit ends with the `Co-Authored-By:` trailer of the model that executes the task (its own name, as given in its system reminder), not a fixed model name. Every PR description ends with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - **The local gate is the merge gate**, run with `DOCMIND_TEST_PG_URL` exported **in the same shell command** so the Postgres suites run instead of skipping:
   `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm lint:fix && pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm test`.
   Suites that need pgvector (Tasks 84, 89, 95a and 95b) additionally need a database with the `vector` extension; see Preconditions. A task whose Postgres suite is skipped has not passed its gate, and the PR description must say which tests skipped and why.
@@ -52,12 +52,12 @@ Copied from the spec and the owner's standing rules; every task includes them.
 - **Event payloads (M1 and M2 carry-forward):** a flow's start input is `{tenantId, userId, documentId}` and nothing else. Step outputs carry only `outcome`, a `count`, a `model` id and a fixed failure `code`. Any step whose input or output could carry content must mark it `sensitive(...)` and the matching paths must be registered through `apps/server/app/sensitive.ts` **in the same PR**; Task 81 proves, with a raw event-log read like M2's, that nothing sensitive is needed, and Tasks 83, 91 and 92 re-run that proof when they add steps. Execution ids are plaintext and survive erasure: `u_<userId>:ingest-<documentId>.<generation>` only. The `ingest-status` state holds enums and a failure code only; Loom's sensitive-state guard refuses anything else, and its sensitive map is the union of the steps' `sensitive(...)` paths and the encrypting store's sealing covers (Task 79b).
 - **Flow lifecycle:** the ingest execution is started **after** the upload transaction commits, never inside it, and a failed start never fails the upload. A delete **cancels the flow first**, then removes the row and blob, but the cancel does not wait for a running step, so **every step treats a missing document row, a foreign-key violation, a destroyed user key and a blob `get() -> null` as `document_gone`** (a clean stop, not a failure). That rule lives in one place (`stepEffect`, Task 73a) so a step cannot forget it. **Steps write no status** (Revision 2026-10-19): a document's status is the `ingest-status` folded model's state, recomputed from the log; routes read it through `IngestStatus` (Tasks 74c, 79c), and a document with no row is `uploaded`.
 - **Erasure shape:** `chunks` and `parsed_documents` reference `documents` with a composite `ON DELETE CASCADE` foreign key, so erasing a user (rows, then blobs, then key) removes them with the documents. The status table has no foreign key to `users`, so user erasure also runs `IngestStatus.forgetUser(userId)` (`purgeFolded` by scope, Task 74e); a document delete runs `forgetDocument` after cancelling the flow. `documents.updated_at` has no trigger and nothing updates it after the upload.
-- **Migrations:** never edit an applied migration; the next free number is `0010`. This plan adds `0010` (documents composite key), `0011` (chunks and parsed_documents), `0012` (the folded-state tables and their row-level security, Task 74a), `0013` (drops `documents.status` and `error`, Task 79c), `0014` (embedding column, needs pgvector) and `0015` (stale-upload function). Every table has RLS enabled (the M0 guard test fails otherwise). A migration that touches the `vector` type declares `-- requires-extension: vector` (Task 84).
+- **Migrations:** never edit an applied migration; the next free number is `0010`. This plan adds `0010` (documents composite key), `0011` (chunks and parsed_documents), `0012` (the folded-state tables and their row-level security, Task 74a), `0013` (drops `documents.status` and `error`, Task 79d), `0014` (embedding column, needs pgvector) and `0015` (stale-upload function). Every table has RLS enabled (the M0 guard test fails otherwise). A migration that touches the `vector` type declares `-- requires-extension: vector` (Task 84).
 - **Dependency rules:** packages never import from apps; only `loom.config.ts`, `app/config.ts`, `app/compose.ts` and `app/main.ts` choose which implementation backs an interface; no process globals (the parser registry, embedder, vector store, runner and progress bus are constructed in `compose.ts` and passed down; so is the `IngestStatus`, from the stores `main.ts` chooses).
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=22.13.0` from Task 69 on (the first task that spawns a `--permission` child; CI already runs Node 22).
 - **Loom pin:** the `ingest-status` model needs Loom at or after `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132); Task 74b moves the CI `LOOM_REF`, adds `@loom/plugin-read-model` (and, for tests, `@loom/event-runtime`) to `pnpm.overrides`, and runs the whole gate against it.
-- **Document status:** only the `ingest-status` model says what a document's status is; no code reads or writes a `documents.status` column (it is dropped in Task 79c), and no step effect publishes progress.
-- **Ollama and pgvector are never required by a default test run.** Ollama tests use a fake HTTP server that passes the same conformance suite; a real-Ollama suite runs only when `DOCMIND_TEST_OLLAMA_URL` is set. pgvector tests skip dynamically when the extension is absent (Task 84 provides the helper).
+- **Document status:** only the `ingest-status` model says what a document's status is; no code reads or writes a `documents.status` column (it is dropped in Task 79d), and no step effect publishes progress.
+- **Ollama is never required by a default test run; pgvector is required by the Postgres suites** (F08). Ollama tests use a fake HTTP server that passes the same conformance suite; a real-Ollama suite runs only when `DOCMIND_TEST_OLLAMA_URL` is set. pgvector is installed on the local test cluster and in CI's image, `0014` is applied by every `createTestDb()` (no global skip switch), and a database without it fails the migration loudly instead of letting vector suites pass vacuously. The `hasVector` guards in the vector tests are a second line of defence, not a supported configuration.
 
 ---
 
@@ -74,7 +74,7 @@ Read from `/Users/such/workspace/loom` (HEAD `8f9eab24`) and `main` of this repo
 | F5 | **Superseded 2026-10-19 (see Revision 2026-10-19).** Originally: Loom's `ProjectionRuntime` folds were in-memory and its durable read models indexed rows, so the status had to be written by each step's effect. Loom now has durable folded-state read models (`@loom/plugin-read-model`, ADR 0132). | The status is the `ingest-status` folded model over the flow's events; steps write nothing; `documents.status` is dropped. |
 | F6 | `step$` supports `retry`, `timeoutMs`, `errors` (typed failure channels) and a tool-level `idempotent` flag. An effect is at-least-once: a crash between the effect and its `STEP_COMPLETED` append re-runs it. | Every effect is written to be idempotent (deterministic chunk ids, delete-then-insert, `embedding IS NULL` work lists). Retry policy is part 2. |
 | F7 | `packages/contracts` already has `DocumentStatus`, `IngestStep` and `DocumentProgressEvent`, but `IngestStep` has no `link`. | Task 65 adds `link` (after `summarize`, before `finalize`) and the numeric `Locator` union. |
-| F8 | The test database on `127.0.0.1:55432` (PostgreSQL 17.2, superuser `docmind`) has **no `vector` extension** (`pg_available_extensions` returns 0 rows for it). CI and `docker-compose.yml` use `pgvector/pgvector:pg16`. | Migration `0014` is applied only where pgvector exists; locally it is skipped by an explicit, test-only switch and the vector suites skip dynamically (Task 84). Everything else (flow, chunk, embed logic) is tested against an in-memory `ChunkVectorStore` that passes the same conformance suite. |
+| F8 | The test database on `127.0.0.1:55432` (PostgreSQL 17.2, superuser `docmind`) has **no `vector` extension** (`pg_available_extensions` returns 0 rows for it). CI and `docker-compose.yml` use `pgvector/pgvector:pg16`. | **Superseded (F08):** pgvector is now installed locally (see Preconditions), so `0014` is applied everywhere and there is no global skip switch; the runner's `-- requires-extension` header and its test-only env switch remain, exercised by the migrate test alone (Task 84). Everything else (flow, chunk, embed logic) is tested against an in-memory `ChunkVectorStore` that passes the same conformance suite. |
 | F9 | `documents.updated_at` has no trigger (and, since 2026-10-19, nothing updates it after the upload); `documents` has no `UNIQUE (tenant_id, id)`, so a composite FK from `chunks` is impossible yet. | Migration `0010` (Task 64). |
 | F10 | `loomIngest.start` awaits `runtime.start`, which appends `EXECUTION_STARTED` to Postgres before returning; the upload handler awaits it before answering. | Task 77 makes the start fire-and-log with a drainable tracker; the sweep (Task 93) is the safety net. |
 | F11 | The `executionIdFor` ratchet (`executionIds.test.ts`) is a per-file regex: `runtime.start(` anywhere plus `executionIdFor(` anywhere in the same file passes, and `const { start } = runtime`, `runtime["start"](...)`, or a fork in a file that mentions `executionIdFor` once for something else all slip through. | Task 63 replaces it with a type-checker scan: every call that resolves to `WorkflowRuntime.start` or `.fork` must pass an `executionId` whose *type* is the branded `UserExecutionId` that only `executionIdFor` returns. |
@@ -94,7 +94,7 @@ Read from `/Users/such/workspace/loom` (HEAD `8f9eab24`) and `main` of this repo
 ## Preconditions
 
 - **Postgres:** `DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres` (superuser, PostgreSQL 17.2). Verified: `select * from pg_available_extensions where name='vector'` returns no rows there.
-- **pgvector suites:** Tasks 84, 89, 95a and 95b contain tests that need the `vector` extension. Where it is missing they **skip with a stated reason** (`ctx.skip()`), the in-memory twin still covers the logic, and CI (`pgvector/pgvector:pg16`) is the proof for the SQL. **Installed 2026-10-19:** pgvector 0.8.0 is built into the EDB PostgreSQL 17 at `/Library/PostgreSQL/17` that serves 55432 (verified: `CREATE EXTENSION vector` and a distance query succeed), so these suites run locally. To rebuild it, EDB's `pg_config` names a missing SDK (`MacOSX15.1.sdk`), so pass the local one: `make PG_CONFIG=/Library/PostgreSQL/17/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"`, then `sudo make install` with the same variables. Executors do not install anything on the host.
+- **pgvector suites:** Tasks 84, 89, 95a and 95b contain tests that need the `vector` extension. pgvector is required by every Postgres suite (`0014` is applied by `createTestDb()`; F08), CI's `pgvector/pgvector:pg16` is the second proof for the SQL, and the in-memory twin covers the logic without a database. **Installed 2026-10-19:** pgvector 0.8.0 is built into the EDB PostgreSQL 17 at `/Library/PostgreSQL/17` that serves 55432 (verified: `CREATE EXTENSION vector` and a distance query succeed), so these suites run locally. To rebuild it, EDB's `pg_config` names a missing SDK (`MacOSX15.1.sdk`), so pass the local one: `make PG_CONFIG=/Library/PostgreSQL/17/bin/pg_config PG_SYSROOT="$(xcrun --show-sdk-path)"`, then `sudo make install` with the same variables. Executors do not install anything on the host.
 - **Built Loom** at `/Users/such/workspace/loom`, **at or after `006dfdaf63319fa61594c42e2d5b2c8b87add2ca`** (ADR 0132; `pnpm build` there), as for M0-M2. DocMind's CI pin moves to that commit in Task 74b.
 - **Node >= 22.13** for the child-process runner (`node -v` is 24.18.0 here).
 - **No Ollama needed.** The opt-in real suite: `DOCMIND_TEST_OLLAMA_URL=http://127.0.0.1:11434` after `docker compose exec ollama ollama pull nomic-embed-text`.
@@ -103,7 +103,7 @@ Read from `/Users/such/workspace/loom` (HEAD `8f9eab24`) and `main` of this repo
 
 ```
 packages/parsers/                       NEW  @docmind/parsers: DocumentParser, ParsedDocument, registry, txt, ParseRunner
-  src/types.ts registry.ts index.ts
+  src/types.ts registry.ts defaults.ts index.ts
   src/txt.ts                            decode + validate + one section
   src/runner/{ParseRunner,child,protocol}.ts   fork + --permission + limits
   src/testing/conformance.ts            runDocumentParserConformance (exported as @docmind/parsers/testing)
@@ -115,6 +115,7 @@ apps/server/app/
   flows/ingest-document/
     flow.ts deps.ts                     steps, runner, IngestDeps (grows per task)
     stepEffect.ts errors.ts             document_gone / failed / fixed-message wrapper
+    testing.ts                          test fakes (fakeIngestDeps) and assertEventsAreContentFree; excluded from the production build
     chunker.ts                          pure chunker
     pgParsed.ts pgChunks.ts pgSource.ts pgGuard.ts   tenant-scoped ports
     steps/{parse,chunk,embed,placeholders}.ts   one effect each
@@ -130,52 +131,60 @@ Numbering continues from M2 (Task 62). "Est." is changed lines (see the note bel
 | # | Branch | What | Est. lines / files |
 |---|---|---|---|
 | 63 | `test/server-execution-id-ratchet` | type-checker ratchet for execution starts (carry-forward 6) | ~140 / 3 |
-| 64 | `feat/db-chunks-schema` | `0010` documents composite key, `0011` chunks and parsed_documents, Postgres test fixture (carry-forward 3) | ~180 / 4 |
-| 65 | `feat/contracts-locator` | `Locator` union, `link` in `IngestStep` | ~65 / 2 |
+| 64 | `feat/db-chunks-schema` | `0010` documents composite key, `0011` chunks and parsed_documents, Postgres test fixture (carry-forward 3) | ~185 / 6 |
+| 65 | `feat/contracts-locator` | `Locator` union, `link` in `IngestStep`, optional `step` in `DocumentProgressEvent` | ~80 / 2 |
 | 66 | `feat/parsers-registry` | `packages/parsers` scaffold, `DocumentParser`, `ParsedDocument`, registry | ~135 / 9 |
 | 67 | `feat/parsers-conformance` | `runDocumentParserConformance` with positive and negative self-tests | ~150 / 3 |
 | 68 | `feat/parsers-txt` | txt parser: BOM/UTF-16 detection, strict decode, binary rejection (carry-forward 9) | ~170 / 3 |
-| 69a | `feat/parsers-runner` | `ParseRunner` core: fork, protocol, wall clock, shape validation | ~195 / 6 |
+| 69a | `feat/parsers-runner` | `ParseRunner` core: fork, protocol, shape validation, rejection mapping; `defaults.ts`; barrel re-exports `ParseRunner.ts` wholesale (F11) | ~150 / 7 |
+| 69a2 | `feat/parsers-runner-timeout` | runner wall-clock kill and crash handling | ~45 / 3 |
 | 69b | `feat/parsers-runner-chars` | runner input cap, character cap, live-child count, noisy stdio | ~50 / 2 |
 | 70 | `feat/parsers-runner-limits` | runner heap limit, permission denial, concurrency cap, abort; spec §3.2 correction | ~95 / 4 |
-| 71 | `feat/ingest-chunker` | pure chunker: section-bounded packing, hard splits, exact locators | ~180 / 2 |
+| 71 | `feat/ingest-chunker` | pure chunker: section-bounded packing, hard splits, exact locators; spec §3.2 and §5.2 chunk corrections | ~185 / 4 |
 | 72 | `feat/ingest-chunker-overlap` | ~15% overlap inside sections; deterministic chunk ids | ~95 / 2 |
 | 73a | `feat/ingest-step-effect` | `stepEffect` (`StepGuard`, `document_gone` / `failed` result / fixed message) and ingest errors (carry-forward 2) | ~145 / 3 |
 | 73b | `feat/ingest-progress-bus` | `ProgressBus` (scope is the user id) | ~85 / 2 |
-| 74a | `feat/db-ingest-status-tables` | `0012` folded-state tables and their tenant row-level security (Revision R2) | ~120 / 2 |
-| 74b | `feat/status-model` | the `ingest-status` fold, id parsers and view; Loom pin bump and plugin dependency (Revision R1, R9) | ~185 / 6 |
+| 74a | `feat/db-ingest-status-tables` | `0012` folded-state tables and their tenant row-level security (Revision R2); spec §4.2 tenant_id exception | ~125 / 3 |
+| 74b | `feat/status-model` | the `ingest-status` fold and id parsers; Loom pin bump and plugin dependency (Revision R1, R9) | ~150 / 6 |
+| 74b2 | `feat/status-view` | `STATUS_MESSAGES`, `StatusView`, `UPLOADED`, `viewOf` | ~50 / 2 |
 | 74c | `feat/status-service` | `IngestStatus`: register, live feed, catch-up, page and one-document reads (R3, R5) | ~185 / 3 |
-| 74d | `feat/status-progress` | `progressOf`, and publish to the SSE bus after the fold (R6) | ~120 / 4 |
+| 74d | `feat/status-progress` | `progressOf` (with the step-less terminal event for `EXECUTION_FAILED`), and publish to the SSE bus after the fold (R6, F12) | ~140 / 4 |
 | 74e | `feat/status-pg-stores` | Postgres writer and tenant-bound reader stores; `forgetDocument` / `forgetUser` (R2, R8) | ~150 / 4 |
 | 75a | `feat/ingest-pg-parsed` | `PgParsedStore`: sealed parsed text | ~135 / 2 |
 | 75b | `feat/ingest-document-source` | `PgDocumentSource`: type lookup, blob read, null is gone | ~80 / 2 |
 | 75c | `feat/ingest-pg-guard` | `PgStepGuard`: the existence check every step runs first | ~80 / 2 |
-| 76 | `feat/ingest-execution-generations` | `ingestExecutionId(user, doc, generation)`, delete cancels both generations (carry-forward 1) | ~55 / 3 |
+| 76 | `feat/ingest-execution-generations` | `ingestExecutionId(user, doc, generation)`, delete cancels both generations; prints the fake runtime, fixes the two bare-id assertions (carry-forward 1, F03) | ~85 / 3 |
 | 77 | `feat/upload-fire-and-log-start` | start tracker: upload answers without waiting for Loom (carry-forward 8) | ~110 / 6 |
 | 78 | `feat/ingest-parse-step` | `parse` step effect over ports | ~120 / 3 |
 | 79 | `feat/ingest-wiring` | ingest dependencies through `buildServer` and `main` (carry-forward 5) | ~90 / 7 |
-| 79b | `feat/status-wiring` | the status model through `buildApp`, `buildServer` and `main`: feed, sensitive map, compaction exemption, boot order (R3, R4) | ~175 / 7 |
-| 79c | `feat/documents-status-from-model` | routes read the model; delete forgets it; `0013` drops `documents.status` and `error` (R5, R7, R8) | ~145 / 9 |
-| 80 | `feat/ingest-flow-v2-parse` | flow v2 with the `parse` step, stub retired (size exception, Open question 11) | ~260 / 9 |
+| 79b | `feat/status-wiring` | the status model through `buildApp`, `buildServer` and `main`: feed, sensitive map, compaction exemption (tested through `lifecycle.compact`, F20), boot order, shutdown order (R3, R4, F35) | ~195 / 7 |
+| 79c | `feat/documents-status-from-model` | routes read the model; delete forgets it after the commit; `toDto` takes the view; spec §4.1/§4.2 (R5, R8, F06, F13, F18) | ~150 / 9 |
+| 79d | `feat/documents-drop-status-columns` | `0013` drops `documents.status` and `error` (R7) | ~25 / 3 |
+| 80a | `refactor/ingest-stub-guard` | the stub step asks the `StepGuard`; `IngestDeps` is `{ guard }`; `pgDeps.pg.test.ts` deleted (F04) | ~175 / 6 |
+| 80b | `refactor/ingest-deps-ports` | `IngestDeps` carries the parse ports, `pgIngestDeps` takes the real args, `fakeIngestDeps`; stub-era `ingest.pg.test.ts` deleted (F04) | ~190 / 8 |
+| 80c | `feat/ingest-flow-v2-parse` | flow v2 with the `parse` step, stub retired; harness-test assertions made step-agnostic (F05); fallback seam named | ~215 / 8 |
 | 81 | `test/ingest-event-log-content-free` | raw event-log proof: ids, counts, codes only, and the status model folds the real log (carry-forward 4) | ~105 / 2 |
 | 82 | `feat/ingest-pg-chunks` | `PgChunkStore`: delete-then-insert, sealed text, gone on missing | ~160 / 2 |
-| 83 | `feat/ingest-chunk-step` | `chunk` step in the flow | ~130 / 9 |
-| 84 | `feat/db-embedding-column` | `0014` pgvector column + HNSW; migrations that require an extension | ~110 / 6 |
-| 85 | `feat/embeddings-ollama` | `packages/embeddings`: `OllamaEmbeddingProvider` | ~150 / 8 |
-| 86 | `feat/embeddings-conformance` | fake Ollama server, Loom's provider kit, opt-in real suite | ~145 / 4 |
-| 87 | `feat/vector-store-port` | `packages/vector-pg`: `ChunkVectorStore` port and in-memory twin; spec §3.1 correction | ~110 / 9 |
+| 83 | `feat/ingest-chunk-step` | `chunk` step in the flow | ~130 / 10 |
+| 84 | `feat/db-embedding-column` | `0014` pgvector column + HNSW + EXECUTE grant to the app role (F01); migrations that require an extension | ~125 / 5 |
+| 85 | `feat/embeddings-ollama` | `packages/embeddings`: `OllamaEmbeddingProvider` (body-cancel test, F23) | ~160 / 8 |
+| 86 | `feat/embeddings-conformance` | fake Ollama server (`nextAbort`), Loom's provider kit, opt-in real suite | ~160 / 4 |
+| 87 | `feat/vector-store-port` | `packages/vector-pg`: `ChunkVectorStore` port and in-memory twin; spec §3 layout, §3.1 and §5.2 embed-row corrections (F13) | ~115 / 9 |
 | 88 | `test/vector-store-conformance` | shared `ChunkVectorStore` conformance suite | ~140 / 2 |
-| 89 | `feat/vector-pg` | `PgChunkVectorStore` (needs pgvector) | ~190 / 5 |
-| 90 | `feat/ingest-embed-step` | `embed` step effect: batches of 64, resumable | ~135 / 4 |
-| 91 | `feat/ingest-embed-in-flow` | `embed` in the flow; embedder and vectors through the composition root | ~130 / 6 |
-| 92 | `feat/ingest-placeholders-finalize` | analyze/summarize/link placeholders; `finalize` completes the flow (the model folds `ready`) | ~110 / 7 |
+| 89 | `feat/vector-pg` | `PgChunkVectorStore` (needs pgvector; kit `seed` clears the document's chunks, F02) | ~180 / 5 |
+| 90 | `feat/ingest-embed-step` | `embed` step effect: batches of 64, resumable, no-progress guard tested (F26) | ~150 / 4 |
+| 91a | `feat/ingest-embedder-wiring` | `loadEmbedConfig`, `IngestWiring.embedder`, vector store through compose and `main`, `verify` at boot (F15) | ~75 / 6 |
+| 91b | `feat/ingest-embed-in-flow` | `embed` in the flow; `twinOverPgChunks` in the harness (F14) | ~80 / 9 |
+| 92 | `feat/ingest-placeholders-finalize` | analyze/summarize/link placeholders; `finalize` completes the flow (the model folds `ready`); the two harness-based tests move to `ready` | ~115 / 8 |
 | 93 | `feat/ingest-stale-upload-sweep` | `0015` stale-upload function (documents with no generation-2 status row) and sweeper (carry-forward 1) | ~135 / 4 |
-| 94a | `feat/api-event-stream-writer` | SSE stream writer with backpressure and heartbeat | ~120 / 2 |
-| 94b | `feat/api-document-events` | `GET /api/documents/events` route, per-user cap | ~175 / 4 |
-| 95a | `test/api-ingest-acceptance` | acceptance stack on the real roles; txt upload to `ready`; list through the RLS reader; isolation | ~195 / 5 |
-| 95b | `test/api-ingest-acceptance-delete-sweep` | acceptance: failures, delete, race, sweep; tombstones; `.env.example` | ~120 / 2 |
+| 94a | `feat/api-event-stream-writer` | SSE stream writer with backpressure and heartbeat; per-test bus | ~130 / 2 |
+| 94b | `feat/api-document-events` | `GET /api/documents/events` route, per-user cap, `closeAll()` (F10, F24) | ~185 / 4 |
+| 94c | `feat/api-events-shutdown` | `main` closes the event streams first; shutdown test with an open stream (F10) | ~30 / 2 |
+| 95a | `test/api-ingest-acceptance` | acceptance stack on the real roles; txt upload to `ready`; list through the RLS reader | ~140 / 2 |
+| 95a2 | `test/api-ingest-acceptance-isolation` | acceptance: another user sees nothing | ~30 / 1 |
+| 95b | `test/api-ingest-acceptance-delete-sweep` | acceptance: failures (incl. the embedder outage, F12), delete, race, sweep; tombstones; `.env.example` | ~140 / 2 |
 
-**How the sizes were estimated.** For each task the fenced code lines (tests, implementation, SQL) were counted by script and multiplied by 1.12 for Biome's formatting; edits described in prose rather than printed (harness wiring, `flow.ts` appends, package manifests) were added by hand. The code was not replayed, so treat every figure as +/-15%. Tasks 69, 73, 75, 94 and 95 were split into lettered pairs up front because their counted size exceeded the limit, and the 2026-10-19 revision added 74a-74e, 75c, 79b and 79c (sized the same way: counted fenced lines x 1.12, plus the edits described in prose); Task 80 is the one task that cannot be split (see Open question 11). If a task still overflows when measured, split along these seams rather than trimming tests, keeping the number with the next letter: 63 -> the `it.each` negative cases after the positive ones; 66 -> `registry.ts` and its test after the types; 68 -> BOM-less and big-endian UTF-16 after UTF-8 and BOM'd UTF-16; 71 -> hard splitting of oversize paragraphs after packing; 74b -> `viewOf`, `STATUS_MESSAGES` and the view test after the fold; 74c -> the generation and read-repair cases after boot and the live feed; 74d -> the failing-store case after the gated publish; 74e -> the erasure cases after the RLS read tests; 79c -> the harness and existing-test edits after the routes; 82 -> `read` after `replace` and `count`; 85 -> the three config files and `index.ts` first; 86 -> the real-Ollama block; 89 -> `verify` and the HNSW case after the kit-driven run; 94b -> the per-user cap after the happy path; 95a -> the isolation test.
+**How the sizes were estimated.** For each task the fenced code lines (tests, implementation, SQL) were counted by script and multiplied by 1.12 for Biome's formatting; edits described in prose rather than printed (harness wiring, `flow.ts` appends, package manifests) were added by hand. The code was not replayed, so treat every figure as +/-15%. Tasks 69, 73, 75, 94 and 95 were split into lettered pairs up front because their counted size exceeded the limit, and the 2026-10-19 revision added 74a-74e, 75c, 79b and 79c (sized the same way: counted fenced lines x 1.12, plus the edits described in prose); **Pre-flight (2026-10-19)** re-counted every task against the real code and applied the seams below: 69a -> 69a (core) and 69a2 (wall clock and crashes); 74b -> 74b (fold) and 74b2 (view); 79c -> 79c (routes) and 79d (drop the columns); 80 -> 80a (the stub asks the guard), 80b (the other ports through `IngestDeps`) and 80c (flow swap), so the size waiver of Open question 11 is gone; 91 -> 91a (wiring) and 91b (flow step); 94b -> 94b (route) and 94c (shutdown); 95a -> 95a (stack) and 95a2 (isolation). Their estimates above are the re-counted ones. If a task still overflows when measured, split along these seams rather than trimming tests, keeping the number with the next letter: 63 -> the `it.each` negative cases after the positive ones; 66 -> `registry.ts` and its test after the types; 68 -> BOM-less and big-endian UTF-16 after UTF-8 and BOM'd UTF-16; 71 -> hard splitting of oversize paragraphs after packing; 74c -> the generation and read-repair cases after boot and the live feed; 74d -> the failing-store case after the gated publish; 74e -> the erasure cases after the RLS read tests; 79b -> `status/compose.test.ts` to its own PR; 82 -> `read` after `replace` and `count`; 85 -> the three config files and `index.ts` first; 86 -> the real-Ollama block; 89 -> `verify` and the HNSW case after the kit-driven run; 94b -> the per-user cap after the happy path.
 
 ---
 
@@ -191,7 +200,7 @@ git switch -c <branch>            # cut from the previous task's branch
 git add <the files the task lists>
 git commit -m "<subject>
 
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: <the executing model's own trailer>"
 gh pr create --draft --base <previous task's branch> --title "<PR title>" --body "<what and why, tests that skipped and why, files excluded from the count>
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
@@ -395,6 +404,8 @@ Closes carry-forward 3. `documents` gets `UNIQUE (tenant_id, id)` so child table
 - Create: `infra/migrations/0011_chunks.sql`
 - Create: `apps/server/app/db/chunks.pg.test.ts`
 - Create: `apps/server/app/flows/ingest-document/pgFixture.ts` (the Postgres test fixture Tasks 74, 75a, 75b, 81, 82 and 83 share)
+- Modify: `apps/server/tsconfig.json` (keep test-only helpers out of the production build, F25)
+- Modify: `docs/specs/2026-10-18-docmind-design.md` (one line in §4.2, F13)
 
 **Interfaces:**
 - Consumes: `documents` (0009), `app_tenant_id()`, `docmind_app` default privileges (0001).
@@ -594,9 +605,24 @@ export async function startPgFixture(): Promise<PgFixture> {
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/db`
 Expected: PASS, including the M0 guard that every table has RLS.
 
-- [ ] **Step 5: Close-out**
+- [ ] **Step 5: Keep test-only helpers out of the production build (F25)**
 
-Branch `feat/db-chunks-schema`; subject `feat(db): chunks and parsed_documents with a composite document key`. Files: the two migrations and the test. Seam if over: `0011` and its test after `0010`.
+`pgFixture.ts` (and, in later tasks, the `testing.ts` helpers of `status/` and `flows/ingest-document/`, and `ingestStack.ts`) import test-only code but sit under `app/`, which the production `tsconfig.json` includes and the ratchet of Task 63 scans. The production config excludes them; `tsconfig.test.json` overrides `exclude`, so `typecheck:tests` still checks them. In `apps/server/tsconfig.json` change the last line to:
+
+```json
+  "exclude": ["**/*.test.ts", "**/testing.ts", "**/pgFixture.ts", "**/ingestStack.ts", "dist"]
+```
+
+Run: `pnpm --filter @docmind/server build && pnpm --filter @docmind/server typecheck:tests`
+Expected: PASS (nothing in production code imports these files).
+
+- [ ] **Step 6: Correct the spec (F13)**
+
+In `docs/specs/2026-10-18-docmind-design.md` §4.2, in the `chunks` bullet change `ordinal, text_enc, locator jsonb,` to `ordinal, section_ordinal, text_enc, locator jsonb,` and add under it the sub-bullet: ``- `locator` holds numbers and a kind only; the heading path is content and is sealed inside `text_enc` as `{text, headingPath}`. `section_ordinal` is the chunker's section index (Decision D3).``
+
+- [ ] **Step 7: Close-out**
+
+Branch `feat/db-chunks-schema`; subject `feat(db): chunks and parsed_documents with a composite document key`. Files: the two migrations, the test, the fixture, `apps/server/tsconfig.json` and the spec. Seam if over: `0011` and its test after `0010`.
 
 ---
 
@@ -608,7 +634,7 @@ Branch `feat/db-chunks-schema`; subject `feat(db): chunks and parsed_documents w
 
 **Interfaces:**
 - Consumes: zod.
-- Produces: `Locator` (zod) and `type Locator`, a discriminated union on `kind` (D3); `IngestStep` is now `parse | chunk | embed | analyze | summarize | link | finalize`.
+- Produces: `Locator` (zod) and `type Locator`, a discriminated union on `kind` (D3); `IngestStep` is now `parse | chunk | embed | analyze | summarize | link | finalize`; `DocumentProgressEvent.step` is **optional** (F12): a terminal event for a run that failed without a step (an unexpected `EXECUTION_FAILED`, Task 74d) carries `{documentId, status: "failed", detail}` and no `step`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -637,6 +663,14 @@ describe("Locator", () => {
   });
 });
 
+describe("progress events without a step", () => {
+  it("accepts a terminal failed event that names no step, and still rejects an unknown step", () => {
+    const failed = { documentId: ID, status: "failed", detail: "internal" };
+    expect(DocumentProgressEvent.parse(failed)).toEqual(failed);
+    expect(DocumentProgressEvent.safeParse({ ...failed, step: "ocr" }).success).toBe(false);
+  });
+});
+
 describe("IngestStep", () => {
   it("lists the steps in flow order, with link after summarize", () => {
     expect(IngestStep.options).toEqual([
@@ -649,7 +683,7 @@ describe("IngestStep", () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `pnpm --filter @docmind/contracts exec vitest run src/documents.test.ts`
-Expected: FAIL (`Locator` is not exported; `IngestStep.options` lacks `link`).
+Expected: FAIL (`Locator` is not exported; `IngestStep.options` lacks `link`; the step-less event does not parse).
 
 - [ ] **Step 3: Implement**
 
@@ -659,6 +693,17 @@ In `packages/contracts/src/documents.ts` replace the `IngestStep` line and add `
 export const IngestStep = z.enum([
   "parse", "chunk", "embed", "analyze", "summarize", "link", "finalize",
 ]);
+```
+
+and make `step` optional in `DocumentProgressEvent` (the rest of the object is unchanged):
+
+```ts
+export const DocumentProgressEvent = z.object({
+  documentId: Uuid,
+  step: IngestStep.optional(),
+  status: DocumentStatus,
+  detail: z.string().optional(),
+});
 ```
 
 ```ts
@@ -699,7 +744,7 @@ Expected: PASS; nothing else in the repo switches exhaustively over `IngestStep`
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/contracts-locator`; subject `feat(contracts): numeric Locator and the link ingest step`.
+Branch `feat/contracts-locator`; subject `feat(contracts): numeric Locator, the link ingest step and step-less progress events`.
 
 ---
 
@@ -1272,7 +1317,7 @@ Branch `feat/parsers-txt`; subject `feat(parsers): txt parser with strict decodi
 
 ### Task 69a: `ParseRunner` core
 
-Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` and returns a validated `ParsedDocument`. This task: the process, the message protocol, the wall-clock kill, shape validation, and cleanup on every path (no zombie, no listener left). Task 69b adds the input cap, the output character cap and the noisy-stdio proof; Task 70 adds the heap limit, permission-denial proof, concurrency and abort. See Finding F1 for why this is not `@loom/plugin-sandbox`.
+Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` and returns a validated `ParsedDocument`. This task: the process, the message protocol, shape validation, the rejection mapping, and the kill of the child on every path that reaches the `finally`. Task 69a2 adds the paths that end a run **without** a reply (the wall-clock kill, a child that exits or errors); Task 69b adds the input cap, the output character cap and the noisy-stdio proof; Task 70 adds the heap limit, permission-denial proof, concurrency and abort. See Finding F1 for why this is not `@loom/plugin-sandbox`. Split from the first draft along the seam the preflight named (F16): the original 69a counted 181 lines plus 18 over Biome's width and 7 files.
 
 **Files:**
 - Create: `packages/parsers/src/runner/protocol.ts`
@@ -1280,15 +1325,17 @@ Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` a
 - Create: `packages/parsers/src/runner/ParseRunner.ts`
 - Create: `packages/parsers/src/runner/ParseRunner.test.ts`
 - Create: `packages/parsers/test-fixtures/hostile.cjs`
-- Modify: `packages/parsers/src/index.ts` (exports; move `createDefaultParsers` to `src/defaults.ts` and re-export it)
+- Create: `packages/parsers/src/defaults.ts` (`createDefaultParsers`, moved out of `index.ts`; F16)
+- Modify: `packages/parsers/src/index.ts` (re-exports; the `createDefaultParsers` body moves to `defaults.ts`)
 
 **Interfaces:**
 - Consumes: `ParserRegistry`, `ParsedDocument`, `ParseRejectedError`, `createDefaultParsers` (66, 68).
 - Produces:
-  - `interface ParseLimits { wallClockMs: number; memoryMb: number }` (69b adds `maxInputBytes` and `maxChars`).
+  - `interface ParseLimits { wallClockMs: number; memoryMb: number }` (declared here, enforced by 69a2; 69b adds `maxInputBytes` and `maxChars`).
   - `interface ParseRunnerOptions { limits: ParseLimits; childEntry?: string; parserModule?: string }` (`parserModule`: a CommonJS file exporting `parsers: DocumentParser[]`, replaces the default parsers in the child; used by tests).
   - `class ParseRunner { constructor(options: ParseRunnerOptions); run(parserId: string, bytes: Uint8Array): Promise<ParsedDocument> }`.
-  - Errors, both `extends Error` with fixed messages: `ParseTimeoutError` (`parse timed out`), `ParseCrashedError` (`parse crashed`); `ParseRejectedError` is re-thrown for `rejected` replies.
+  - Errors, `extends Error` with fixed messages: `ParseCrashedError` (`parse crashed`; 69a2 adds `ParseTimeoutError`, `parse timed out`); `ParseRejectedError` is re-thrown for `rejected` replies.
+  - **`index.ts` re-exports `./runner/ParseRunner` wholesale** (`export * from "./runner/ParseRunner";`) and `createDefaultParsers` from `./defaults`, so every class or type that Tasks 69a2, 69b and 70 add to `ParseRunner.ts` (`ParseTimeoutError`, `ParseLimitError`, `ParseMemoryError`, `ParseAbortedError`) is exported from `@docmind/parsers` with no further edit to `index.ts` (F11; Task 78 imports all five).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1299,8 +1346,6 @@ Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` a
 const ok = (text) => ({ text, sections: [], media: [] });
 exports.parsers = [
   { id: "echo", accepts: () => true, parse: (b) => ok(Buffer.from(b).toString("utf8")) },
-  { id: "spin", accepts: () => true, parse: () => { for (;;) {} } },
-  { id: "exit", accepts: () => true, parse: () => process.exit(3) },
 ];
 ```
 
@@ -1309,7 +1354,7 @@ exports.parsers = [
 ```ts
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ParseCrashedError, ParseRunner, ParseTimeoutError } from "./ParseRunner";
+import { ParseRunner } from "./ParseRunner";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
@@ -1319,27 +1364,21 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 
 describe("ParseRunner", () => {
   it("runs the real txt parser in a child and returns a validated document", async () => {
-    const r = runner({}, undefined);
-    const doc = await r.run("txt", bytes("hello\nworld"));
+    const doc = await runner({}, undefined).run("txt", bytes("hello\nworld"));
     expect(doc.text).toBe("hello\nworld");
     expect(doc.sections).toHaveLength(1);
   });
 
+  it("runs a test-module parser and returns its text", async () => {
+    expect((await runner().run("echo", bytes("echoed"))).text).toBe("echoed");
+  });
+
   it("maps a parser's rejection to ParseRejectedError with its code", async () => {
-    await expect(runner({}, undefined).run("txt", Uint8Array.from([0x41, 0, 0x42]))).rejects.toMatchObject({
+    const run = runner({}, undefined).run("txt", Uint8Array.from([0x41, 0, 0x42]));
+    await expect(run).rejects.toMatchObject({
       name: "ParseRejectedError",
       code: "unsupported_content",
     });
-  });
-
-  it("kills a parser that never returns", async () => {
-    const r = runner({ wallClockMs: 200 });
-    await expect(r.run("spin", bytes("x"))).rejects.toBeInstanceOf(ParseTimeoutError);
-  });
-
-  it("reports a child that exits without answering as a crash", async () => {
-    const r = runner();
-    await expect(r.run("exit", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
   });
 });
 ```
@@ -1388,7 +1427,11 @@ process.once("message", async (request: ChildRequest) => {
     if (!parser) return reply({ ok: false, kind: "failed" });
     reply({ ok: true, doc: await parser.parse(request.bytes) });
   } catch (err) {
-    reply(err instanceof ParseRejectedError ? { ok: false, kind: "rejected", code: err.code } : { ok: false, kind: "failed" });
+    reply(
+      err instanceof ParseRejectedError
+        ? { ok: false, kind: "rejected", code: err.code }
+        : { ok: false, kind: "failed" },
+    );
   }
 });
 ```
@@ -1414,12 +1457,6 @@ export interface ParseRunnerOptions {
   parserModule?: string;
 }
 
-export class ParseTimeoutError extends Error {
-  constructor() {
-    super("parse timed out");
-    this.name = "ParseTimeoutError";
-  }
-}
 export class ParseCrashedError extends Error {
   constructor() {
     super("parse crashed");
@@ -1453,7 +1490,11 @@ export class ParseRunner {
       ...(this.options.parserModule ? [dirname(this.options.parserModule)] : []),
     ];
     const child = fork(entry, [], {
-      execArgv: ["--permission", ...readable.map((p) => `--allow-fs-read=${p}`), `--max-old-space-size=${limits.memoryMb}`],
+      execArgv: [
+        "--permission",
+        ...readable.map((p) => `--allow-fs-read=${p}`),
+        `--max-old-space-size=${limits.memoryMb}`,
+      ],
       stdio: ["ignore", "ignore", "ignore", "ipc"],
       serialization: "advanced",
       env: {},
@@ -1470,7 +1511,103 @@ export class ParseRunner {
 
   private exchange(child: ChildProcess, request: ChildRequest): Promise<ParsedDocument> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new ParseTimeoutError()), this.options.limits.wallClockMs);
+      child.once("message", (raw: ChildReply) => {
+        if (raw && raw.ok === true) {
+          const doc = ParsedDocument.safeParse(raw.doc);
+          return doc.success ? resolve(doc.data) : reject(new ParseCrashedError());
+        }
+        if (raw && raw.ok === false && raw.kind === "rejected") {
+          return reject(new ParseRejectedError(raw.code));
+        }
+        reject(new ParseCrashedError());
+      });
+      child.send(request, (err) => {
+        if (err) reject(new ParseCrashedError());
+      });
+    });
+  }
+}
+```
+
+In `packages/parsers/src/index.ts` move the `createDefaultParsers` function (Task 68) into the new `packages/parsers/src/defaults.ts` unchanged, and export both from the index:
+
+```ts
+export * from "./runner/ParseRunner";
+export { createDefaultParsers } from "./defaults";
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `pnpm --filter @docmind/parsers build && pnpm --filter @docmind/parsers exec vitest run`
+Expected: PASS. The child reads only `dist` (its own code), the contracts package and zod; Task 70's permission probe proves nothing else is readable. `require.resolve` returns real paths, which is what `--allow-fs-read` needs under pnpm's symlinked `node_modules`; `@docmind/contracts` has no `exports` map and `zod` exports `package.json`. A child that never answers or dies without answering would hang `run` until Task 69a2 adds the wall clock and the exit handler; nothing calls the runner before then.
+
+- [ ] **Step 5: Close-out**
+
+Branch `feat/parsers-runner`; subject `feat(parsers): child-process parse runner core`. Files: the seven above.
+
+---
+
+### Task 69a2: wall-clock kill and crashes
+
+Completes the runner's no-reply paths: a parser that never returns is killed at `wallClockMs` and reported as `ParseTimeoutError`; a child that exits or errors before answering is a `ParseCrashedError`. Every path ends with the child gone (the `finally` of Task 69a).
+
+**Files:**
+- Modify: `packages/parsers/src/runner/ParseRunner.ts`, `packages/parsers/src/runner/ParseRunner.test.ts`
+- Modify: `packages/parsers/test-fixtures/hostile.cjs`
+
+**Interfaces:**
+- Consumes: Task 69a.
+- Produces: `class ParseTimeoutError extends Error` (message `parse timed out`), exported through the barrel's `export *`; `ParseLimits.wallClockMs` is now enforced.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `hostile.cjs`'s list:
+
+```js
+  { id: "spin", accepts: () => true, parse: () => { for (;;) {} } },
+  { id: "exit", accepts: () => true, parse: () => process.exit(3) },
+```
+
+In `ParseRunner.test.ts` change the import to `import { ParseCrashedError, ParseRunner, ParseTimeoutError } from "./ParseRunner";` and add inside the `describe`:
+
+```ts
+  it("kills a parser that never returns", async () => {
+    const r = runner({ wallClockMs: 200 });
+    await expect(r.run("spin", bytes("x"))).rejects.toBeInstanceOf(ParseTimeoutError);
+  });
+
+  it("reports a child that exits without answering as a crash", async () => {
+    await expect(runner().run("exit", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+  });
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pnpm --filter @docmind/parsers build 2>&1 | tail -3; pnpm --filter @docmind/parsers exec vitest run src/runner`
+Expected: FAIL (`ParseTimeoutError` is not exported; the two runs never settle and hit the test timeout).
+
+- [ ] **Step 3: Implement**
+
+In `ParseRunner.ts` add beside `ParseCrashedError`:
+
+```ts
+export class ParseTimeoutError extends Error {
+  constructor() {
+    super("parse timed out");
+    this.name = "ParseTimeoutError";
+  }
+}
+```
+
+and replace `exchange` with a version that arms the timer and settles on exit and error:
+
+```ts
+  private exchange(child: ChildProcess, request: ChildRequest): Promise<ParsedDocument> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new ParseTimeoutError()),
+        this.options.limits.wallClockMs,
+      );
       const done = () => clearTimeout(timer);
       child.once("message", (raw: ChildReply) => {
         done();
@@ -1478,7 +1615,9 @@ export class ParseRunner {
           const doc = ParsedDocument.safeParse(raw.doc);
           return doc.success ? resolve(doc.data) : reject(new ParseCrashedError());
         }
-        if (raw && raw.ok === false && raw.kind === "rejected") return reject(new ParseRejectedError(raw.code));
+        if (raw && raw.ok === false && raw.kind === "rejected") {
+          return reject(new ParseRejectedError(raw.code));
+        }
         reject(new ParseCrashedError());
       });
       child.once("exit", () => {
@@ -1497,19 +1636,16 @@ export class ParseRunner {
       });
     });
   }
-}
 ```
-
-Export from `index.ts`: `ParseRunner`, `ParseLimits`, `ParseRunnerOptions`, the two error classes, `createDefaultParsers` (from `defaults.ts`).
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter @docmind/parsers build && pnpm --filter @docmind/parsers exec vitest run`
-Expected: PASS. The child reads only `dist` (its own code), the contracts package and zod; Task 70's permission probe proves nothing else is readable. `require.resolve` returns real paths, which is what `--allow-fs-read` needs under pnpm's symlinked `node_modules`; `@docmind/contracts` has no `exports` map and `zod` exports `package.json`.
+Expected: PASS.
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/parsers-runner`; subject `feat(parsers): resource-limited child-process parse runner`.
+Branch `feat/parsers-runner-timeout`; subject `feat(parsers): runner wall-clock kill and crash handling`.
 
 ---
 
@@ -1522,8 +1658,8 @@ The cap on what may go into a parse (`maxInputBytes`, refused before any process
 - Modify: `packages/parsers/test-fixtures/hostile.cjs`, `packages/parsers/src/runner/ParseRunner.test.ts`
 
 **Interfaces:**
-- Consumes: Task 69a.
-- Produces: `ParseRunner.active(): number` (children currently alive); `ParseLimits.maxInputBytes: number` and `ParseLimits.maxChars: number`; `class ParseLimitError { readonly limit: "input" }` (message `parse input over limit`); `ChildRequest.maxChars`; an input over `maxInputBytes` is refused with `ParseLimitError` before any process starts; a parse whose `text.length` exceeds `maxChars` is `ParseRejectedError("too_large")`, checked in the child (before the reply is serialised) and again in the parent.
+- Consumes: Tasks 69a and 69a2 (the tests import `ParseTimeoutError` and `ParseCrashedError` from them).
+- Produces: `ParseRunner.active(): number` (children currently alive); `ParseLimits.maxInputBytes: number` and `ParseLimits.maxChars: number`; `class ParseLimitError { readonly limit: "input" }` (message `parse input over limit`); `ChildRequest.maxChars`; `ParseLimitError` reaches `@docmind/parsers` through the barrel's `export *` of `ParseRunner.ts` (Task 69a; `index.ts` is not touched, F11); an input over `maxInputBytes` is refused with `ParseLimitError` before any process starts; a parse whose `text.length` exceeds `maxChars` is `ParseRejectedError("too_large")`, checked in the child (before the reply is serialised) and again in the parent.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1611,8 +1747,8 @@ Branch `feat/parsers-runner-chars`; subject `feat(parsers): runner character cap
 - Modify: `docs/specs/2026-10-18-docmind-design.md` (§3.2 sandbox row, §5.2 parse row)
 
 **Interfaces:**
-- Consumes: Task 69.
-- Produces: `ParseRunnerOptions.maxConcurrent?: number` (default 2); `active()` now counts runs that hold a slot (including one whose child is still starting), `queued()` runs waiting for one; `ParseRunner.run(parserId, bytes, opts?: { signal?: AbortSignal })`; `ParseRunner.queued(): number`; `class ParseMemoryError`, `class ParseAbortedError` (fixed messages `parse ran out of memory`, `parse aborted`).
+- Consumes: Tasks 69a, 69a2 and 69b.
+- Produces: `ParseRunnerOptions.maxConcurrent?: number` (default 2); `active()` now counts runs that hold a slot (including one whose child is still starting), `queued()` runs waiting for one; `ParseRunner.run(parserId, bytes, opts?: { signal?: AbortSignal })`; `ParseRunner.queued(): number`; `class ParseMemoryError`, `class ParseAbortedError` (fixed messages `parse ran out of memory`, `parse aborted`); both are exported from `@docmind/parsers` by the barrel's `export *` of `ParseRunner.ts` (Task 69a; `index.ts` is not touched, F11).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1690,7 +1826,7 @@ Expected: FAIL (`ParseMemoryError` etc. not exported; `maxConcurrent` unknown).
 
 - [ ] **Step 3: Implement**
 
-In `ParseRunner.ts`: add the two error classes (same shape as Task 69's); add `maxConcurrent?: number` to the options; add a private waiting list and `queued()`; make `run` take `opts?: { signal?: AbortSignal }`, acquire a slot before forking, release it in `finally`, and handle abort:
+In `ParseRunner.ts`: add the two error classes (same shape as Task 69a's); add `maxConcurrent?: number` to the options; add a private waiting list and `queued()`; make `run` take `opts?: { signal?: AbortSignal }`, acquire a slot before forking, release it in `finally`, and handle abort:
 
 ```ts
   private slots = 0;
@@ -1745,6 +1881,8 @@ Spec §9 item 21, first half; Finding F2 explains why this is not `packParagraph
 **Files:**
 - Create: `apps/server/app/flows/ingest-document/chunker.ts`
 - Create: `apps/server/app/flows/ingest-document/chunker.test.ts`
+- Modify: `apps/server/package.json` (the `@docmind/parsers` dependency)
+- Modify: `docs/specs/2026-10-18-docmind-design.md` (§3.2 row and §5.2 chunk row, F13)
 
 **Interfaces:**
 - Consumes: `ParsedDocument` from `@docmind/parsers`; `Locator` from `@docmind/contracts`. (Add `"@docmind/parsers": "workspace:*"` to `apps/server/package.json` here, since this is the first server import; lockfile not counted.)
@@ -1941,9 +2079,13 @@ The `overlap` option is accepted and ignored until Task 72; the tests above pass
 Run: `pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/chunker.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Close-out**
+- [ ] **Step 5: Correct the spec (F13)**
 
-Branch `feat/ingest-chunker`; subject `feat(server): section-bounded chunker with exact locators`. Files: `chunker.ts`, `chunker.test.ts`, and `apps/server/package.json` (+ lockfile).
+In `docs/specs/2026-10-18-docmind-design.md`: in §3.2 change the row `| Chunking, idempotent sync, grounding, \`checkCitations\` | \`@loom/knowledge\` |` to `| Idempotent sync, grounding, \`checkCitations\` (chunking is app-local: \`@loom/knowledge\` has no overlap, offsets or token budget) | \`@loom/knowledge\` |`; in §5.2 change the chunk row's `\`@loom/knowledge\` chunker.` to `App-local section-bounded chunker (\`chunker.ts\`).`
+
+- [ ] **Step 6: Close-out**
+
+Branch `feat/ingest-chunker`; subject `feat(server): section-bounded chunker with exact locators`. Files: `chunker.ts`, `chunker.test.ts`, `apps/server/package.json` (+ lockfile) and the spec. Seam if over: hard splitting of oversize paragraphs after packing.
 
 ---
 
@@ -2405,6 +2547,7 @@ Revision R2. DocMind's own migration creates the tables Loom's folded read model
 **Files:**
 - Create: `infra/migrations/0012_ingest_status_model.sql`
 - Create: `apps/server/app/db/ingestStatusTables.pg.test.ts`
+- Modify: `docs/specs/2026-10-18-docmind-design.md` (§4.2, one line, F13)
 
 **Interfaces:**
 - Consumes: `app_tenant_id()` (`0002`), `users` (`0002`), the `docmind_loom` role (`0008`), `foldedStateDdl` (`@loom/plugin-postgres`), `MIGRATIONS_DIR`, `migrate`, `setAppRolePassword`, `setRolePassword`, `createTestDb`, `seedUsers`, `T1`, `T2`, `U1`, `U1B`, `U2` (the harness).
@@ -2552,15 +2695,19 @@ CREATE POLICY tenant_read ON "public"."read_model_state" FOR SELECT TO docmind_a
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/db`
 Expected: PASS, including M0's "row-level security on every table" guard and the `docmind_loom` role tests (it still cannot read `users` or `data_keys`).
 
-- [ ] **Step 5: Close-out**
+- [ ] **Step 5: Correct the spec (F13)**
 
-Branch `feat/db-ingest-status-tables`; subject `feat(db): folded-state tables for the ingest status model, with tenant row-level security`.
+In `docs/specs/2026-10-18-docmind-design.md` §4.2 change `Every table carries \`tenant_id\`.` to `Every table carries \`tenant_id\`, except the two folded-state tables of the ingest status model (\`read_model_state\`, \`read_model_folds\`, Loom's layout): their row-level security maps \`scope\` (a user id) to the tenant through \`users\`.`
+
+- [ ] **Step 6: Close-out**
+
+Branch `feat/db-ingest-status-tables`; subject `feat(db): folded-state tables for the ingest status model, with tenant row-level security`. Files: the migration, the test and the spec.
 
 ---
 
-### Task 74b: the `ingest-status` model: the fold, the key, the scope, the view
+### Task 74b: the `ingest-status` model: the fold, the key, the scope
 
-Revision R1 and R9. The pure half of the status design: one `projection$` fold over the ingest flow's events, the two id parsers Loom's folded model needs, and the mapping from a state to what the API returns. No database, no Loom service yet (`progressOf`, the SSE event derived from the same handlers, joins in Task 74d). This task also moves DocMind onto the Loom commit that has ADR 0132 and adds the plugin as a dependency.
+Revision R1 and R9. The pure half of the status design: one `projection$` fold over the ingest flow's events and the id parsers Loom's folded model needs. No database, no Loom service yet (`progressOf`, the SSE event derived from the same handlers, joins in Task 74d; the mapping from a state to what the API returns is Task 74b2). This task also moves DocMind onto the Loom commit that has ADR 0132 and adds the plugin as a dependency. Split from the first draft along the seam the preflight named (F16): the view half is Task 74b2.
 
 **Files:**
 - Create: `apps/server/app/status/model.ts`
@@ -2574,10 +2721,9 @@ Revision R1 and R9. The pure half of the status design: one `projection$` fold o
 - Consumes: `FAILURE_CODES`, `FailureCode` (73a), `DocumentStatus`, `IngestStep` (contracts; `IngestStep` has `link` from Task 65), `projection$`, `EventEnvelope` (`@loom/core`).
 - Produces (all in `status/model.ts`):
   - `INGEST_STATUS_MODEL = "ingest-status"`; `type StatusCode = FailureCode | "internal"`; `interface IngestStatusState { status: DocumentStatus; step: IngestStep | null; code: StatusCode | null }`; `INITIAL_STATUS`.
-  - `STATUS_OF_STEP: Record<IngestStep, DocumentStatus>` (Decision D7, amended: `finalize` is `embedding` while it runs; `ready` is set by its completion); `STATUS_MESSAGES: Record<StatusCode, string>` (the fixed text shown for a failure; never content).
+  - `STATUS_OF_STEP: Record<IngestStep, DocumentStatus>` (Decision D7, amended: `finalize` is `embedding` while it runs; `ready` is set by its completion).
   - `ingestKeyOf(executionId): string | undefined` (the document id; the `.<generation>` suffix is dropped), `ingestScopeOf(executionId): string | undefined` (the user id), `generationOf(executionId): number` (no suffix is generation 1), `isIngestExecution(executionId): boolean`.
   - `ingestHandlers` (event type -> `(state, event) => state`), `ingestStatus` (the `projection$` definition, `version: "1"`), `foldIngestStatus(events: readonly EventEnvelope[]): IngestStatusState` (pure; for tests and for proving the model against a real log).
-  - `interface StatusView { status: DocumentStatus; step: IngestStep | null; error: string | null }`, `UPLOADED: StatusView`, `viewOf(state: IngestStatusState): StatusView`.
 - Produces (`status/testing.ts`): `evt(executionId, sequence, eventType, payload?): EventEnvelope`; `ingestRun(executionId, spec: "started" | "parsed" | "ready" | "failed:<code>"): EventEnvelope[]` (a realistic run from sequence 0).
 
 - [ ] **Step 1: Write the failing test**
@@ -2587,10 +2733,9 @@ Revision R1 and R9. The pure half of the status design: one `projection$` fold o
 ```ts
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { FAILURE_CODES } from "../flows/ingest-document/errors";
 import {
-  INITIAL_STATUS, STATUS_MESSAGES, STATUS_OF_STEP, UPLOADED, foldIngestStatus, generationOf, ingestKeyOf,
-  ingestScopeOf, ingestStatus, isIngestExecution, viewOf,
+  INITIAL_STATUS, STATUS_OF_STEP, foldIngestStatus, generationOf, ingestKeyOf,
+  ingestScopeOf, ingestStatus, isIngestExecution,
 } from "./model";
 import { evt, ingestRun } from "./testing";
 
@@ -2619,10 +2764,9 @@ describe("the fold", () => {
     expect(foldIngestStatus(ingestRun(exec(), "ready"))).toEqual({ status: "ready", step: "finalize", code: null });
   });
 
-  it("ends failed with the code of a permanent failure, and the view carries the fixed message", () => {
+  it("ends failed with the code of a permanent failure", () => {
     const state = foldIngestStatus(ingestRun(exec(), "failed:corrupt_content"));
     expect(state).toEqual({ status: "failed", step: "parse", code: "corrupt_content" });
-    expect(viewOf(state)).toEqual({ status: "failed", step: "parse", error: STATUS_MESSAGES.corrupt_content });
   });
 
   it("maps an unknown failure code to internal, and an execution failure to failed/internal without overwriting a specific code", () => {
@@ -2647,11 +2791,9 @@ describe("the fold", () => {
     expect(foldIngestStatus(events)).toEqual({ status: "parsing", step: "parse", code: null });
   });
 
-  it("is registered as one durable fold, with enums and codes only: a message per code, no content", () => {
+  it("is registered as one durable fold, with enums and codes only", () => {
     expect([ingestStatus.id, ingestStatus.version, ingestStatus.initialState]).toEqual(["ingest-status", "1", INITIAL_STATUS]);
     expect(Object.keys(ingestStatus.handlers).sort()).toEqual(["EXECUTION_FAILED", "EXECUTION_STARTED", "STEP_COMPLETED", "STEP_STARTED"]);
-    expect(Object.keys(STATUS_MESSAGES).sort()).toEqual([...FAILURE_CODES, "internal"].sort());
-    expect(UPLOADED).toEqual({ status: "uploaded", step: null, error: null });
   });
 });
 ```
@@ -2687,14 +2829,6 @@ export const INITIAL_STATUS: IngestStatusState = { status: "uploaded", step: nul
 export const STATUS_OF_STEP: Record<IngestStep, DocumentStatus> = {
   parse: "parsing", chunk: "parsing", embed: "embedding", analyze: "embedding",
   summarize: "embedding", link: "embedding", finalize: "embedding",
-};
-
-/** Fixed text shown to the user for a failed document. It never includes content. */
-export const STATUS_MESSAGES: Record<StatusCode, string> = {
-  unsupported_content: "This file's content is not a supported document.",
-  corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
-  too_large: "This document is too large to process.",
-  internal: "Processing failed. Please try again later.",
 };
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -2748,19 +2882,6 @@ export function foldIngestStatus(events: readonly EventEnvelope[]): IngestStatus
   const handlers: Record<string, Handler> = ingestHandlers;
   return events.reduce((state, e) => handlers[e.eventType]?.(state, e) ?? state, INITIAL_STATUS);
 }
-
-export interface StatusView {
-  status: DocumentStatus;
-  step: IngestStep | null;
-  error: string | null;
-}
-export const UPLOADED: StatusView = { status: "uploaded", step: null, error: null };
-
-export const viewOf = (s: IngestStatusState): StatusView => ({
-  status: s.status,
-  step: s.step,
-  error: s.code === null ? null : STATUS_MESSAGES[s.code],
-});
 ```
 
 `status/testing.ts`:
@@ -2805,7 +2926,85 @@ Expected: PASS. The event type names (`STEP_STARTED`, `STEP_COMPLETED`, `EXECUTI
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/status-model`; subject `feat(server): the ingest-status fold, keys and view`. Files excluded from the count: `pnpm-lock.yaml`. The `LOOM_REF` bump follows the procedure in the workflow's own comment: rebuild `../loom` at that commit, run the whole gate, then change the line.
+Branch `feat/status-model`; subject `feat(server): the ingest-status fold and keys`. Files excluded from the count: `pnpm-lock.yaml`. The `LOOM_REF` bump follows the procedure in the workflow's own comment: rebuild `../loom` at that commit, run the whole gate, then change the line.
+
+---
+
+### Task 74b2: the status view and its fixed messages
+
+The mapping from a folded state to what the API returns (Revision R5, Decision D7). Split from Task 74b (F16). `error` is a fixed message chosen by the failure code; it is never content.
+
+**Files:**
+- Modify: `apps/server/app/status/model.ts`
+- Modify: `apps/server/app/status/model.test.ts`
+
+**Interfaces:**
+- Consumes: `StatusCode`, `IngestStatusState`, `INITIAL_STATUS`, `foldIngestStatus` (74b), `FAILURE_CODES` (73a).
+- Produces (all in `status/model.ts`): `STATUS_MESSAGES: Record<StatusCode, string>` (the fixed text shown for a failure; never content); `interface StatusView { status: DocumentStatus; step: IngestStep | null; error: string | null }`; `UPLOADED: StatusView`; `viewOf(state: IngestStatusState): StatusView`.
+
+- [ ] **Step 1: Write the failing test**
+
+In `status/model.test.ts` extend the `./model` import with `STATUS_MESSAGES, UPLOADED, viewOf`, add `import { FAILURE_CODES } from "../flows/ingest-document/errors";`, and append:
+
+```ts
+describe("the view", () => {
+  it("carries the fixed message of a failure code, and no error for a healthy state", () => {
+    const state = foldIngestStatus(ingestRun(exec(), "failed:corrupt_content"));
+    expect(viewOf(state)).toEqual({ status: "failed", step: "parse", error: STATUS_MESSAGES.corrupt_content });
+    expect(viewOf(INITIAL_STATUS)).toEqual(UPLOADED);
+  });
+
+  it("has a message for every failure code and for internal, and UPLOADED carries no error", () => {
+    expect(Object.keys(STATUS_MESSAGES).sort()).toEqual([...FAILURE_CODES, "internal"].sort());
+    expect(UPLOADED).toEqual({ status: "uploaded", step: null, error: null });
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/status/model.test.ts`
+Expected: FAIL (`STATUS_MESSAGES`, `UPLOADED` and `viewOf` are not exported).
+
+- [ ] **Step 3: Implement**
+
+In `status/model.ts`, below `STATUS_OF_STEP` add:
+
+```ts
+/** Fixed text shown to the user for a failed document. It never includes content. */
+export const STATUS_MESSAGES: Record<StatusCode, string> = {
+  unsupported_content: "This file's content is not a supported document.",
+  corrupt_content: "This file could not be read; it may be damaged or use an unsupported encoding.",
+  too_large: "This document is too large to process.",
+  internal: "Processing failed. Please try again later.",
+};
+```
+
+and at the end of the file:
+
+```ts
+export interface StatusView {
+  status: DocumentStatus;
+  step: IngestStep | null;
+  error: string | null;
+}
+export const UPLOADED: StatusView = { status: "uploaded", step: null, error: null };
+
+export const viewOf = (s: IngestStatusState): StatusView => ({
+  status: s.status,
+  step: s.step,
+  error: s.code === null ? null : STATUS_MESSAGES[s.code],
+});
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/status/model.test.ts && pnpm typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Close-out**
+
+Branch `feat/status-view`; subject `feat(server): the status view and its fixed messages`.
 
 ---
 
@@ -2819,7 +3018,7 @@ Revision R3 and R5. One class owns the Loom `ReadModelService` for the `ingest-s
 - Modify: `apps/server/app/status/testing.ts` (`MemoryLog`)
 
 **Interfaces:**
-- Consumes: `ReadModelService`, `ReadModelStore`, `ReadModelEventSource`, `SensitiveMap`, `foldedStates` (`@loom/plugin-read-model`); `INGEST_STATUS_MODEL`, `ingestStatus`, `ingestKeyOf`, `ingestScopeOf`, `generationOf`, `viewOf`, `UPLOADED`, `StatusView`, `IngestStatusState`, `evt`, `ingestRun` (74b); `ingestExecutionId(userId, documentId)` (`documents/ingest.ts`; the current generation, which Task 76 turns into generation 2); `Identity` (`@docmind/auth`).
+- Consumes: `ReadModelService`, `ReadModelStore`, `ReadModelEventSource`, `SensitiveMap`, `foldedStates` (`@loom/plugin-read-model`); `INGEST_STATUS_MODEL`, `ingestStatus`, `ingestKeyOf`, `ingestScopeOf`, `generationOf`, `IngestStatusState`, `evt`, `ingestRun` (74b); `viewOf`, `UPLOADED`, `StatusView` (74b2); `ingestExecutionId(userId, documentId)` (`documents/ingest.ts`; the current generation, which Task 76 turns into generation 2); `Identity` (`@docmind/auth`).
 - Produces: `interface IngestStatusOptions { writer: ReadModelStore; readerFor(identity: Identity): ReadModelStore; source: ReadModelEventSource; sensitive: SensitiveMap; onError?(err: unknown): void }` and `class IngestStatus` with `boot(): Promise<{ rebuilt: boolean; executionsScanned: number }>`, `onEvent: (event: EventEnvelope) => void` (an arrow property: pass it as is; it never throws), `forPage(identity, documentIds: readonly string[]): Promise<Map<string, StatusView>>`, `forDocument(identity, documentId): Promise<StatusView>`, `close(): Promise<void>`; and, in `status/testing.ts`, `class MemoryLog implements ReadModelEventSource { append(...events: EventEnvelope[]): void; listExecutions(): Promise<string[]>; readFrom(id, from): Promise<EventEnvelope[]> }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3049,8 +3248,8 @@ Revision R6. The SSE half of the status design. `progressOf` derives the contrac
 - Modify: `apps/server/app/status/ingestStatus.test.ts`
 
 **Interfaces:**
-- Consumes: `ProgressBus` (73b), `foldIngestStatus`, `ingestKeyOf`, `ingestScopeOf` (74b), `IngestStatus` (74c), `DocumentProgressEvent` (contracts).
-- Produces: `progressOf(event: EventEnvelope): { userId: string; progress: DocumentProgressEvent } | null`; `IngestStatusOptions.bus: ProgressBus` (required); `IngestStatus.onEvent` now also schedules the publish.
+- Consumes: `ProgressBus` (73b), `foldIngestStatus`, `ingestKeyOf`, `ingestScopeOf` (74b), `STATUS_MESSAGES` (74b2), `IngestStatus` (74c), `DocumentProgressEvent` (contracts; `step` is optional since Task 65).
+- Produces: `progressOf(event: EventEnvelope): { userId: string; progress: DocumentProgressEvent } | null`, which returns the **terminal** event `{ documentId, status: "failed", detail: "internal" }` (no `step`) for an `EXECUTION_FAILED` (F12: an unexpected failure such as an embedder outage or a crash leaves the browser at the last step otherwise); `IngestStatusOptions.bus: ProgressBus` (required); `IngestStatus.onEvent` now also schedules the publish.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3069,11 +3268,18 @@ describe("progressOf", () => {
     });
   });
 
-  it("derives nothing for events that do not move the status, for other executions, or for an execution failure", () => {
+  it("derives a terminal failed event, without a step, for an execution failure (an embedder outage, a crash)", () => {
+    expect(progressOf(evt(exec(".2"), 3, "EXECUTION_FAILED", {}))).toEqual({
+      userId: U,
+      progress: { documentId: D, status: "failed", detail: "internal" },
+    });
+  });
+
+  it("derives nothing for events that do not move the status, or for other executions", () => {
     expect(progressOf(evt(exec(), 1, "EXECUTION_STARTED", {}))).toBeNull();
     expect(progressOf(evt(exec(), 2, "STEP_COMPLETED", { stepId: "ingest-parse", output: { outcome: "done" } }))).toBeNull();
-    expect(progressOf(evt(exec(), 3, "EXECUTION_FAILED", {}))).toBeNull(); // the contract's `step` is required
     expect(progressOf(evt(`u_${U}:chat-${D}`, 1, "STEP_STARTED", { stepId: "ingest-parse" }))).toBeNull();
+    expect(progressOf(evt(`u_${U}:chat-${D}`, 2, "EXECUTION_FAILED", {}))).toBeNull();
   });
 });
 ```
@@ -3147,6 +3353,18 @@ class GatedStore extends InMemoryReadModelStore {
     await status.close();
     expect(seen).toEqual([]);
   });
+
+  it("publishes a terminal failed event without a step when an execution fails unexpectedly, and the model reads failed/internal", async () => {
+    const { status, feed, seen } = setup();
+    await status.boot();
+    feed(...ingestRun(exec(D1), "parsed"), evt(exec(D1), 2, "EXECUTION_FAILED", {}));
+    await status.close();
+    expect(seen).toEqual([
+      { documentId: D1, step: "parse", status: "parsing" },
+      { documentId: D1, status: "failed", detail: "internal" },
+    ]);
+    expect(await status.forDocument(ALICE, D1)).toEqual({ status: "failed", step: "parse", error: STATUS_MESSAGES.internal });
+  });
 ```
 
 (`GatedStore` goes at module level, the three tests go inside `describe("IngestStatus", ...)`.)
@@ -3166,8 +3384,13 @@ export function progressOf(e: EventEnvelope): { userId: string; progress: Docume
   const documentId = ingestKeyOf(e.executionId);
   const userId = ingestScopeOf(e.executionId);
   if (documentId === undefined || userId === undefined) return null;
+  // An unexpected failure (STEP_FAILED then EXECUTION_FAILED: an embedder outage, a crash) names no
+  // step: the terminal event carries none (the contract's `step` is optional, F12).
+  if (e.eventType === "EXECUTION_FAILED") {
+    return { userId, progress: { documentId, status: "failed", detail: "internal" } };
+  }
   const next = foldIngestStatus([e]);
-  if (next.step === null) return null; // not a step transition (the contract's `step` is required)
+  if (next.step === null) return null; // not a step transition
   const detail = next.status === "failed" && next.code !== null ? { detail: next.code } : {};
   return { userId, progress: { documentId, step: next.step, status: next.status, ...detail } };
 }
@@ -3206,7 +3429,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/status-progress`; subject `feat(server): progress events follow the fold`.
+Branch `feat/status-progress`; subject `feat(server): progress events follow the fold, with a terminal event for a failed run`.
 
 ---
 
@@ -3309,9 +3532,9 @@ describe.skipIf(!PG_URL)("ingest-status over Postgres, with the two real roles (
     expect(states[0]?.state).toEqual({ status: "parsing", step: "parse", code: null });
   });
 
-  it("gives another flow's rows no key and no scope, so no tenant can read them", async () => {
-    const { rows } = await db.owner.query("SELECT app_key, scope FROM read_model_state WHERE execution_id = $1", [`u_${U1}:chat-1`]);
-    expect(rows).toEqual([{ app_key: null, scope: null }]);
+  it("gives another flow's rows state but no key and no scope, so no tenant can read them", async () => {
+    const { rows } = await db.owner.query("SELECT app_key, scope, state FROM read_model_state WHERE execution_id = $1", [`u_${U1}:chat-1`]);
+    expect(rows).toEqual([{ app_key: null, scope: null, state: { status: "uploaded", step: null, code: null } }]);
     const visible = await withTenant(app, T1, async (tx) => (await tx.query("SELECT count(*)::int AS n FROM read_model_state WHERE app_key IS NULL")).rows[0].n);
     expect(visible).toBe(0);
   });
@@ -3323,7 +3546,7 @@ describe.skipIf(!PG_URL)("ingest-status over Postgres, with the two real roles (
   });
 
   it("purges one user's rows by scope: tombstones that keep the ids, leave other users alone, and survive a later event", async () => {
-    expect(await service.purgeFolded(INGEST_STATUS_MODEL, { scope: U1 })).toBe(1); // the chat row has no scope
+    expect(await service.purgeFolded(INGEST_STATUS_MODEL, { scope: U1 })).toBe(1); // the chat row has state but no scope
     expect(await keys(T1, D1, D2)).toEqual([D2]);
     expect((await db.owner.query("SELECT erased, state, scope, sequence FROM read_model_state WHERE app_key = $1", [D1])).rows).toEqual([
       { erased: true, state: null, scope: U1, sequence: "1" },
@@ -3466,7 +3689,7 @@ describe.skipIf(!PG_URL)("PgParsedStore (needs DOCMIND_TEST_PG_URL)", () => {
     expect(raw.__loomEnc).toBe("loom/aes-256-gcm");
   });
 
-  it("does not open without the owner's data key (a destroyed or unknown key reads as the document being gone)", async () => {
+  it("throws FieldKeyUnavailableError without the owner's data key (stepEffect maps it to document_gone)", async () => {
     const ref = await f.doc("4".repeat(64));
     await new PgParsedStore(f.app, f.fields).put(ref, parsed);
     const strangers = new FieldCrypto(new InMemoryKeyStore());
@@ -3816,7 +4039,7 @@ Decision D5 and carry-forward 1. The M2 stub used `u_<user>:ingest-<doc>`; its e
 **Files:**
 - Modify: `apps/server/app/documents/ingest.ts`
 - Modify: `apps/server/app/documents/ingest.test.ts`
-- Modify: `apps/server/app/documents/testHarness.ts` (only the `calls` expectations that name an execution id, if any)
+- Modify: `apps/server/app/documents/documents.e2e.pg.test.ts` (line 128: the id regex ends at the document uuid and now needs the generation suffix, F03)
 
 **Interfaces:**
 - Consumes: `executionIdFor` / `UserExecutionId` (Task 63).
@@ -3824,9 +4047,41 @@ Decision D5 and carry-forward 1. The M2 stub used `u_<user>:ingest-<doc>`; its e
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `ingest.test.ts` (it already builds a fake runtime with recorded `start`/`cancel` calls; use its helper):
+In `ingest.test.ts` (it builds real in-memory Loom apps through `appWith(documentExists)`; it has no fake runtime yet, so this step prints one). First, the existing assertion that pins the bare id now names generation 1 explicitly; change line 16 from `.toBe(\`u_${who.userId}:ingest-${documentId}\`)` on `ingestExecutionId(who.userId, documentId)` to:
 
 ```ts
+    expect(ingestExecutionId(who.userId, documentId, 1)).toBe(`u_${who.userId}:ingest-${documentId}`);
+```
+
+Then add the imports `import type { Identity } from "@docmind/auth";` and `import type { WorkflowRuntime } from "@loom/workflow-runtime";` (merge with the existing `ExecutionDeniedError` import), these module-level helpers after `appWith`, and the new tests:
+
+```ts
+const IDENTITY: Identity = identity();
+const DOC = randomUUID();
+
+/**
+ * A runtime that records the ids it is asked to start and cancel. An id in `unknown` is answered the
+ * way Loom answers an execution that never existed; `failWith` makes every cancel throw it.
+ */
+function fakeRuntime(opts: { unknown?: string[]; failWith?: Error } = {}) {
+  const calls = { starts: [] as { executionId: string }[], cancels: [] as { executionId: string }[] };
+  const runtime = {
+    start: async (_flow: unknown, _input: unknown, o: { executionId: string }) => {
+      calls.starts.push({ executionId: o.executionId });
+      return {} as never;
+    },
+    cancel: async (executionId: string) => {
+      calls.cancels.push({ executionId });
+      if (opts.failWith) throw opts.failWith;
+      if (opts.unknown?.includes(executionId)) {
+        throw new Error(`No execution found for id: ${executionId}`);
+      }
+    },
+  } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+  return { runtime, calls };
+}
+
+describe("execution id generations", () => {
   it("names generation 1 as the M2 stub did and later generations with a counter, never content", () => {
     const [u, d] = [randomUUID(), randomUUID()];
     expect(ingestExecutionId(u, d, 1)).toBe(`u_${u}:ingest-${d}`);
@@ -3837,11 +4092,15 @@ Add to `ingest.test.ts` (it already builds a fake runtime with recorded `start`/
   it("starts the current generation", async () => {
     const { runtime, calls } = fakeRuntime();
     await loomIngest(runtime).start(IDENTITY, DOC);
-    expect(calls.starts.map((s) => s.executionId)).toEqual([ingestExecutionId(IDENTITY.userId, DOC)]);
+    expect(calls.starts.map((s) => s.executionId)).toEqual([
+      ingestExecutionId(IDENTITY.userId, DOC),
+    ]);
   });
 
   it("cancels every generation, tolerating one that never existed, and still throws a real failure", async () => {
-    const { runtime, calls } = fakeRuntime({ unknown: [ingestExecutionId(IDENTITY.userId, DOC, 1)] });
+    const { runtime, calls } = fakeRuntime({
+      unknown: [ingestExecutionId(IDENTITY.userId, DOC, 1)],
+    });
     await loomIngest(runtime).cancel(IDENTITY, DOC);
     expect(calls.cancels.map((c) => c.executionId)).toEqual([
       ingestExecutionId(IDENTITY.userId, DOC, 1),
@@ -3850,14 +4109,19 @@ Add to `ingest.test.ts` (it already builds a fake runtime with recorded `start`/
     const boom = fakeRuntime({ failWith: new Error("storage down") });
     await expect(loomIngest(boom.runtime).cancel(IDENTITY, DOC)).rejects.toThrow(/^storage down$/);
   });
+});
 ```
 
-(`fakeRuntime` and `IDENTITY`, `DOC` exist in the current `ingest.test.ts`, which records `start`/`cancel` and can be told to throw `Error("No execution found for id: ...")` for given ids; extend it with `unknown` and `failWith` options in this step.)
+In `documents.e2e.pg.test.ts` line 128 loosen the regex so it accepts the generation suffix:
+
+```ts
+      expect(started?.executionId).toMatch(/^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}(\.\d+)?$/);
+```
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `pnpm --filter @docmind/server exec vitest run app/documents/ingest.test.ts`
-Expected: FAIL (`ingestExecutionId` takes two arguments and returns the bare id; cancel cancels one id).
+Expected: FAIL (`ingestExecutionId` takes two arguments and returns the bare id, so the generation assertions fail; cancel cancels one id). The edited line-16 assertion already passes.
 
 - [ ] **Step 3: Implement**
 
@@ -3891,18 +4155,18 @@ export const ingestExecutionId = (userId: string, documentId: string, generation
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `pnpm --filter @docmind/server exec vitest run app/documents app/executionIds.test.ts`
-Expected: PASS; if `ingestStart.pg.test.ts` pins the old id it passes unchanged, because it calls `ingestExecutionId(U1, id)` with the default.
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/documents app/executionIds.test.ts`
+Expected: PASS. The real in-memory tests of `ingest.test.ts` start and cancel through the default generation, so they pass unchanged; `ingestStart.pg.test.ts:27` calls `ingestExecutionId(U1, id)` with the default and passes; `flow.test.ts:113` builds its id through `executionIdFor` directly and is unaffected. The two assertions that pinned the bare form (`ingest.test.ts:16`, `documents.e2e.pg.test.ts:128`) are the edits above.
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/ingest-execution-generations`; subject `feat(server): ingest execution generations and cancel across them`.
+Branch `feat/ingest-execution-generations`; subject `feat(server): ingest execution generations and cancel across them`. Files: `ingest.ts`, `ingest.test.ts`, `documents.e2e.pg.test.ts`.
 
 ---
 
 ### Task 77: upload answers without waiting for Loom to start the flow
 
-Carry-forward 8 (Finding F10). The M2 handler awaits `ingest.start`, so a slow event store holds the HTTP response. Decision: **fire and log** with a tracker the tests and shutdown can drain; the stale-upload sweep (Task 91) is the safety net for a start that never lands.
+Carry-forward 8 (Finding F10). The M2 handler awaits `ingest.start`, so a slow event store holds the HTTP response. Decision: **fire and log** with a tracker the tests and shutdown can drain; the stale-upload sweep (Task 93) is the safety net for a start that never lands.
 
 **Files:**
 - Create: `apps/server/app/documents/startScheduler.ts`
@@ -3955,13 +4219,14 @@ describe("StartScheduler", () => {
   });
 
   it("idle() is already resolved when nothing is pending, and covers starts fired while waiting", async () => {
-    const s = new StartScheduler(port(async () => null));
-    await s.idle();
+    const started: string[] = [];
+    const s = new StartScheduler(port(async (_i, doc) => { started.push(doc); return null; }));
+    await s.idle(); // nothing pending: resolves at once
     s.fire(IDENTITY, "a");
     const waiting = s.idle();
-    s.fire(IDENTITY, "b");
+    s.fire(IDENTITY, "b"); // fired while idle() is already waiting
     await waiting;
-    await s.idle();
+    expect(started).toEqual(["a", "b"]);
   });
 });
 ```
@@ -4035,15 +4300,14 @@ Branch `feat/upload-fire-and-log-start`; subject `feat(api): upload answers with
 
 ### Task 78: the `parse` step effect
 
-Spec §5.2 parse, as a library over ports (not yet reachable; Task 80 puts it in the flow). Reads the document's type, picks a parser, reads the bytes (`null` is gone), runs the parser in the sandbox, seals the result, and reports the section count.
+Spec §5.2 parse, as a library over ports (not yet reachable; Task 80c puts it in the flow). Reads the document's type, picks a parser, reads the bytes (`null` is gone), runs the parser in the sandbox, seals the result, and reports the section count.
 
 **Files:**
 - Create: `apps/server/app/flows/ingest-document/steps/parse.ts`
 - Create: `apps/server/app/flows/ingest-document/steps/parse.test.ts`
-- Modify: `apps/server/package.json` (`@docmind/parsers` already added in Task 71)
 
 **Interfaces:**
-- Consumes: `stepEffect`, `StepGuard`, `DocumentSource`, `ParsedStore`, `ParserRegistry`, `ParseRunner`, the runner's errors, `PermanentIngestError`.
+- Consumes: `stepEffect`, `StepGuard`, `DocumentSource`, `ParsedStore`, `ParserRegistry`, `ParseRunner`, the runner's errors (`ParseTimeoutError`, `ParseCrashedError`, `ParseLimitError`, `ParseMemoryError`, `ParseAbortedError`, all exported by the barrel since 69a, 69a2, 69b and 70), `PermanentIngestError`.
 - Produces: `interface ParseDeps { guard: StepGuard; source: DocumentSource; parsed: ParsedStore; registry: ParserRegistry; runner: Pick<ParseRunner, "run"> }` and `parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResult>`. Mapping: no parser for the mime -> `PermanentIngestError("unsupported_content")`; `ParseRejectedError` -> `PermanentIngestError(err.code)`; `ParseTimeoutError`, `ParseMemoryError`, `ParseLimitError` -> `PermanentIngestError("too_large")`; `ParseCrashedError`/`ParseAbortedError` propagate (unexpected: the step fails).
 
 - [ ] **Step 1: Write the failing test**
@@ -4130,7 +4394,7 @@ Expected: FAIL (module not found).
 - [ ] **Step 3: Implement**
 
 ```ts
-import { ParseAbortedError, ParseLimitError, ParseMemoryError, ParseRejectedError, ParseTimeoutError, type ParseRunner, type ParserRegistry } from "@docmind/parsers";
+import { ParseLimitError, ParseMemoryError, ParseRejectedError, ParseTimeoutError, type ParseRunner, type ParserRegistry } from "@docmind/parsers";
 import type { Effect } from "@loom/effect-runtime";
 import { PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
@@ -4168,7 +4432,7 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
 }
 ```
 
-(`ParseAbortedError` is imported only if the implementer's lint needs it; the `throw err` path covers it. Remove the unused import.)
+`ParseAbortedError` (like `ParseCrashedError`) is not imported here: the `throw err` path covers it. All the runner's error classes are exported from `@docmind/parsers` by the barrel's `export * from "./runner/ParseRunner"` (Task 69a), which is what the test's import list relies on (F11).
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -4183,7 +4447,7 @@ Branch `feat/ingest-parse-step`; subject `feat(server): parse step effect over p
 
 ### Task 79: ingest dependencies through `buildServer` and `main`
 
-Carry-forward 5. `ComposeOptions` gains the parser registry, the runner, the progress bus and the parse limits' loader; `main.ts` builds them from the environment; `testHarness` builds fakes. Nothing uses them until Task 80, so `main` stays green.
+Carry-forward 5. `ComposeOptions` gains the parser registry, the runner, the progress bus and the parse limits' loader; `main.ts` builds them from the environment; `testHarness` builds fakes. Nothing uses them until Task 80b, so `main` stays green.
 
 **Files:**
 - Create: `apps/server/app/flows/ingest-document/limits.ts`
@@ -4216,7 +4480,6 @@ describe("loadParseLimits", () => {
     ["DOCMIND_PARSE_TIMEOUT_MS", "0"],
     ["DOCMIND_PARSE_MEMORY_MB", "-1"],
     ["DOCMIND_PARSE_MAX_CHARS", "abc"],
-    ["DOCMIND_PARSE_CONCURRENCY", "1.5"],
   ])("rejects %s=%s naming the variable but not the value", (name, value) => {
     expect(() => loadParseLimits({ [name]: value })).toThrow(new RegExp(`^${name} must be a positive integer$`));
   });
@@ -4227,6 +4490,13 @@ describe("createIngestWiring", () => {
     const w = createIngestWiring({});
     expect(w.registry.ids()).toEqual(["txt"]);
     expect(w.runner.active()).toBe(0);
+  });
+
+  // The concurrency variable goes to the runner, not to the limits, so it is read (and refused) here (F07).
+  it.each(["1.5", "0", "abc"])("rejects DOCMIND_PARSE_CONCURRENCY=%s naming the variable but not the value", (value) => {
+    expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: value })).toThrow(
+      /^DOCMIND_PARSE_CONCURRENCY must be a positive integer$/,
+    );
   });
 });
 ```
@@ -4337,9 +4607,35 @@ describe("flows and retention", () => {
     expect(flowSteps().map((s) => s.id)).toEqual(ingestDocumentFlow.definition.steps.map((s) => s.id));
   });
 
-  it("exempts every generation of an ingest execution from compaction, and nothing else", () => {
+  it("recognises every generation of an ingest execution, and nothing else", () => {
     const [u, d] = [randomUUID(), randomUUID()];
     expect([`u_${u}:ingest-${d}`, `u_${u}:ingest-${d}.2`, `u_${u}:chat-${d}`].map(isIngestExecution)).toEqual([true, true, false]);
+  });
+
+  // The wiring itself (F20): Loom's `lifecycle.compact` consults the config's `compactionExempt`.
+  it("keeps an ingest execution's whole log through compaction while compacting another flow's", async () => {
+    const [u, d] = [randomUUID(), randomUUID()];
+    const app = buildApp({ kind: "memory" });
+    const log = app.stores.eventStore;
+    const ingestId = `u_${u}:ingest-${d}.2`;
+    const chatId = `u_${u}:chat-${d}`;
+    for (const executionId of [ingestId, chatId]) {
+      for (let sequence = 0; sequence < 4; sequence++) {
+        await log.append({
+          id: `${executionId}-${sequence}`,
+          workflowId: "wf",
+          executionId,
+          eventType: sequence === 0 ? "EXECUTION_STARTED" : "STEP_STARTED",
+          sequence,
+          timestamp: sequence,
+          payload: { input: {} },
+        });
+      }
+    }
+    expect(await app.lifecycle.compact(ingestId)).toBeNull(); // exempt: nothing reclaimed
+    expect(await log.read(ingestId)).toHaveLength(4);
+    expect(await app.lifecycle.compact(chatId)).not.toBeNull(); // the control: compaction does run here
+    await app.close();
   });
 });
 ```
@@ -4389,7 +4685,8 @@ describe("buildServer and the ingest-status model", () => {
       executionId: ingestExecutionId(identity.userId, documentId),
       principal: { tenant: identity.tenantId, actor: identity.userId },
     });
-    await handle.waitForCompletion().catch(() => {}); // the stub step cannot reach the stub pool, so the execution fails
+    // The stub step cannot reach the stub pool, so the execution fails: pin that it rejects with an Error.
+    await expect(handle.waitForCompletion()).rejects.toBeInstanceOf(Error);
     await composed.status.close();
     const views = await composed.status.forPage(identity, [documentId]);
     expect(views.get(documentId)).toMatchObject({ status: "failed", error: STATUS_MESSAGES.internal });
@@ -4470,7 +4767,7 @@ export interface StatusStores {
   });
 ```
 
-and the returned object gains `status`. (`pgIngestDeps(pool)` is whatever Task 79 and Task 80 make it at the time; this task changes only the extra `onEvent` property.)
+and the returned object gains `status`. (`pgIngestDeps(...)` is whatever Task 79 and Task 80b make it at the time; this task changes only the extra `onEvent` property.)
 
 `storage.ts`: `DurableStorage` gains `pool: Pool;` and `createDurableStorage` returns `pool` (the Loom pool it already builds; `close` still ends it).
 
@@ -4491,6 +4788,8 @@ and the returned object gains `status`. (`pgIngestDeps(pool)` is whatever Task 7
 
 with `status: { writer: pgStatusWriter(durable.pool), readerFor: pgStatusReaderFor(pool), source: durable.storage.eventStore }` added to the `buildServer({...})` options and `status` destructured from its result; in `stop()` add `await status.close();` right before `await app.close();`.
 
+**Shutdown order (F35), stated once for Tasks 77, 79, 79b, 93 and 94c.** `main.ts`'s `stop()` runs: clear the timers (the hourly session sweep and Task 93's stale-upload sweep); `events.closeAll()` (Task 94c: an open `text/event-stream` response would keep `shutdown()` waiting forever, and it must happen before the server starts draining); then `shutdown(server, { close })`, which stops accepting requests and waits for the in-flight ones, and whose `close` callback runs, in this order, `await starts.idle()` (Tasks 77 and 79: every fired start has settled), `await status.close()` (this task: every fold and publish has landed), `await app.close()`, `await durable.close()`, `await pool.end()`. Task 79 adds `starts.idle()` to the callback; this task inserts `status.close()` after it and before `app.close()`; Task 94c adds `closeAll()` ahead of `shutdown`. (The preflight listed `closeAll` after `status.close`; the real `shutdown()` drains the server before it calls the callback, so the streams have to end first.)
+
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
@@ -4502,24 +4801,24 @@ Branch `feat/status-wiring`; subject `feat(server): the ingest-status model thro
 
 ---
 
-### Task 79c: the document API reads its status from the model; `documents.status` and `documents.error` are dropped
+### Task 79c: the document API reads its status from the model
 
-Revision R5, R7 and R8. The list, `GET /:id` and the duplicate-upload answer take their status from `IngestStatus`; the delete route forgets the document's status rows after cancelling its flow; the two columns nothing will ever write again are removed. Until Task 80 the flow is still the M2 stub, which never moves a document out of `uploaded`, so the API answers exactly what it answered before.
+Revision R5 and R8. The list, `GET /:id` and the duplicate-upload answer take their status from `IngestStatus`; the delete route forgets the document's status rows once the delete has committed. Until Task 80 the flow is still the M2 stub, which never moves a document out of `uploaded`, so the API answers exactly what it answered before. The two columns nothing reads any more are dropped in Task 79d. Split from the first draft (F06, F13): with `repo.pg.test.ts` and the spec edit the single task was 11 files.
 
 **Files:**
-- Create: `infra/migrations/0013_documents_drop_status.sql`
-- Modify: `apps/server/app/documents/repo.ts` (columns, `DocumentRow`, `toDto`)
+- Modify: `apps/server/app/documents/repo.ts` (`toDto` takes the view)
 - Modify: `apps/server/app/documents/routes.ts` (list, get, duplicate upload, delete)
 - Modify: `apps/server/app/compose.ts` (pass `status` to `documentRoutes`)
 - Modify: `apps/server/app/documents/testHarness.ts` (in-memory event store, status model; exposes `status`, `statusStore` and `bus`)
-- Modify: `apps/server/app/db/documents.pg.test.ts` (the `status` column is gone)
 - Modify: `apps/server/app/documents/ingestStart.pg.test.ts` (the stub test reads the model)
 - Modify: `apps/server/app/documents/documents.e2e.pg.test.ts` (custom in-memory storage and status stores)
+- Modify: `apps/server/app/documents/repo.pg.test.ts` (`toDto` now takes the view; three calls, F06)
 - Create: `apps/server/app/documents/status.pg.test.ts`
+- Modify: `docs/specs/2026-10-18-docmind-design.md` (§4.1 and §4.2, F13)
 
 **Interfaces:**
 - Consumes: `DocumentStatusReads` (74e), `UPLOADED`, `StatusView`, `INGEST_STATUS_MODEL` (74b), `IngestStatus` (74c, 74d), `evt`, `ingestRun` (74b).
-- Produces: `toDto(row: DocumentRow, cipher: UserFieldCipher, view: StatusView): Promise<DocumentDto>` (the view is required, so no caller can forget it); `DocumentRoutesDeps.status: DocumentStatusReads`; `DocumentHarness.status: IngestStatus`, `DocumentHarness.statusStore: InMemoryReadModelStore` and `DocumentHarness.bus: InMemoryProgressBus` (the bus the status publisher uses; Task 94b mounts the event route on it); migration `0013`.
+- Produces: `toDto(row: DocumentRow, cipher: UserFieldCipher, view: StatusView): Promise<DocumentDto>` (the view is required, so no caller can forget it); `DocumentRoutesDeps.status: DocumentStatusReads`; `DocumentHarness.status: IngestStatus`, `DocumentHarness.statusStore: InMemoryReadModelStore` and `DocumentHarness.bus: InMemoryProgressBus` (the bus the status publisher uses; Task 94b mounts the event route on it).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4527,7 +4826,7 @@ Revision R5, R7 and R8. The list, `GET /:id` and the duplicate-upload answer tak
 
 ```ts
 import type { DocumentDto, ListDocumentsResponse } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
@@ -4595,12 +4894,25 @@ describe.skipIf(!PG_URL)("document status comes from the ingest-status model (ne
     expect(row).toMatchObject({ erased: true, state: null });
     expect((await h.status.forPage(ALICE, [id])).size).toBe(0);
   });
+
+  it("answers 204 and leaves no document when forgetting its status fails after the delete committed (F18)", async () => {
+    const id = await seed(ALICE, "7".repeat(64));
+    await feed(ALICE, id, "ready");
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const purge = vi.spyOn(h.statusStore, "purgeFolded").mockRejectedValueOnce(new RangeError("store down"));
+    expect((await fetch(`${h.base}/api/documents/${id}`, { method: "DELETE", headers: { "x-test-user": "alice" } })).status).toBe(204);
+    expect(purge).toHaveBeenCalledTimes(1);
+    expect((await fetch(`${h.base}/api/documents/${id}`, { headers: { "x-test-user": "alice" } })).status).toBe(404);
+    expect(spy).toHaveBeenCalledWith("forget document status failed", "RangeError", "DELETE /api/documents/:id");
+    expect(JSON.stringify(spy.mock.calls)).not.toContain("store down");
+    vi.restoreAllMocks();
+  });
 });
 ```
 
 Edits to existing tests, each the smallest that states the new behaviour:
-- `db/documents.pg.test.ts`: the `insert` helper loses the `status` column (`... content_address, fingerprint) VALUES ($1, $2, $3, '{"x":1}', '{"x":2}', 'text/plain', $4, $5, $6)`, the seventh parameter and `extra.status`), its `extra` type becomes `{ size?: number; address?: string }`, and the line `await expect(bad(HEX("d"), { status: "done" })).rejects.toThrow(/status/);` is deleted.
 - `ingestStart.pg.test.ts`, first test: the last three lines (the comment, the `SELECT status` query and its assertion) become `expect(await h.status.forDocument(ALICE, id)).toEqual(UPLOADED); // the stub writes nothing`, with `ALICE` from the harness and `UPLOADED` from `../status/model`.
+- `repo.pg.test.ts` (lines 44, 83 and 110): each `toDto(row, cipher)` becomes `toDto(row, cipher, UPLOADED)` (`import { UPLOADED } from "../status/model"`); nothing else in the file reads the dropped columns.
 - `documents.e2e.pg.test.ts`: `storage: { kind: "memory" }` becomes `storage: { kind: "custom", eventStore }` with `const eventStore = new InMemoryAsyncEventStore(); const statusStore = new InMemoryReadModelStore();` above it, and `buildServer` gets `ingest: createIngestWiring({})` (if Task 79 has not added it yet) and `status: { writer: statusStore, readerFor: () => statusStore, source: eventStore }`; after `buildServer` the test awaits `composed.status.boot()`.
 
 - [ ] **Step 2: Run to verify they fail**
@@ -4610,16 +4922,7 @@ Expected: FAIL (`h.status` is undefined; the list still reads `documents.status`
 
 - [ ] **Step 3: Implement**
 
-`infra/migrations/0013_documents_drop_status.sql`:
-
-```sql
--- A document's status is the ingest-status model's state (0012): a document with no row there is
--- `uploaded`, and the failure text is derived from the failure code at read time. A column that
--- nothing writes would only be a second source of truth that can disagree with the log.
-ALTER TABLE documents DROP COLUMN status, DROP COLUMN error;
-```
-
-`repo.ts`: `DOCUMENT_COLUMNS` drops `status, error,`; `DocumentRow` loses `status` and `error` (and the `DocumentStatus` import); `toDto` becomes
+`repo.ts`: `toDto` becomes (the columns and `DocumentRow` are untouched here; Task 79d drops them)
 
 ```ts
 export async function toDto(row: DocumentRow, cipher: UserFieldCipher, view: StatusView): Promise<DocumentDto> {
@@ -4643,7 +4946,7 @@ export async function toDto(row: DocumentRow, cipher: UserFieldCipher, view: Sta
   let { document } = result;
   // A duplicate is an existing document, so its status is the model's (one log-tail read); a new one is `uploaded`.
   if (duplicate) {
-    const view = await deps.guard.forDocument(identity, document.id);
+    const view = await deps.status.forDocument(identity, document.id);
     document = { ...document, status: view.status, error: view.error };
   }
 ```
@@ -4651,56 +4954,410 @@ export async function toDto(row: DocumentRow, cipher: UserFieldCipher, view: Sta
 (the existing `!duplicate || document.status === "uploaded"` start condition and the `json(...)` answer then use this `document`). The list handler becomes
 
 ```ts
-      const views = await deps.guard.forPage(identity, page.rows.map((row) => row.id));
+      const views = await deps.status.forPage(identity, page.rows.map((row) => row.id));
       json(res, 200, {
         items: await Promise.all(page.rows.map((row) => toDto(row, cipher, views.get(row.id) ?? UPLOADED))),
         nextCursor: page.next ? encodeCursor(page.next) : null,
       } satisfies ListDocumentsResponse);
 ```
 
-`GET /api/documents/:id` calls `await deps.guard.forDocument(identity, row.id)` and passes the view to `toDto`. In `DELETE`, between the cancel and the row removal: `await deps.guard.forgetDocument(identity, mine.id);` with a comment that the flow is already cancelled, so the purge drains the node's in-flight folds first. `compose.ts` passes `status` (the `IngestStatus` built in Task 79b) to `documentRoutes`.
+`GET /api/documents/:id` calls `await deps.status.forDocument(identity, row.id)` and passes the view to `toDto`. In `DELETE`, **after** the delete transaction has committed and `removed` is true, before the 204 (F18; a tombstone written before the delete could outlive a delete that then fails, leaving a surviving document that reads `uploaded` forever, because later events cannot repair a tombstoned row):
+
+```ts
+        // The row and blob are gone (committed) and the flow is cancelled: now forget the status rows.
+        // A failure here must not turn a completed delete into an error: log the class only and answer
+        // 204; M5's forgetUser tombstones whatever is left.
+        try {
+          await deps.status.forgetDocument(identity, mine.id);
+        } catch (err) {
+          console.error(
+            "forget document status failed",
+            err instanceof Error ? err.constructor.name : typeof err,
+            "DELETE /api/documents/:id",
+          );
+        }
+        res.writeHead(204);
+        res.end();
+``` `compose.ts` passes `status` (the `IngestStatus` built in Task 79b) to `documentRoutes`.
 
 `testHarness.ts`: `makeIngest` builds `const eventStore = new InMemoryAsyncEventStore(); const statusStore = new InMemoryReadModelStore();`, builds its Loom app with `buildApp({ kind: "custom", eventStore }, undefined, { ingest: ..., onEvent: (e) => status?.onEvent(e) })`, creates `status = new IngestStatus({ writer: statusStore, readerFor: () => statusStore, source: eventStore, sensitive: {}, bus: new InMemoryProgressBus(), onError: () => {} })`, returns it with `statusStore` and its bus, and `startDocumentServer` awaits `status.boot()`, passes `status` to `documentRoutes`, and exposes all three on the harness; `close()` awaits `status.close()` before closing Loom.
 
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
-Expected: PASS: the whole server suite, including every M2 document test (a document answers `uploaded` with no error, as before).
+Expected: PASS: the whole server suite, including every M2 document test (a document answers `uploaded` with no error, as before; the `documents.status` column still exists and is simply no longer read).
 
-- [ ] **Step 5: Close-out**
+- [ ] **Step 5: Correct the spec (F13)**
 
-Branch `feat/documents-status-from-model`; subject `feat(api): document status comes from the ingest-status model; drop documents.status and error`. Seam if over: the harness and the three existing-test edits after the routes.
+In `docs/specs/2026-10-18-docmind-design.md` (the column itself is dropped by Task 79d, the next PR in the stack): in §4.1 change `\`documents.status\` is a projection of it.` to `A document's status is the \`ingest-status\` folded read model's state (a document with no row is \`uploaded\`); there is no \`documents.status\` column.`; in §4.2 delete `status, error,` from the `documents` column list and replace the bullet `\`status\` is one of \`uploaded | parsing | embedding | ready | failed\`.` with `Status (\`uploaded | parsing | embedding | ready | failed\`) is the \`ingest-status\` model's, not a column; the failure message is derived from its code at read time.`
+
+- [ ] **Step 6: Close-out**
+
+Branch `feat/documents-status-from-model`; subject `feat(api): document status comes from the ingest-status model`. Files: the nine above (including the spec). Seam if over: the harness and the existing-test edits after the routes.
 
 ---
 
-### Task 80: `ingest-document` v2 with the `parse` step; the stub is retired
+### Task 79d: drop `documents.status` and `documents.error`
 
-Spec §9 item 14 (skeleton). The flow becomes `[parse]` here; Tasks 83, 91 and 92 append `chunk`, `embed` and the rest. Until Task 92 a document that parses stays `parsing`; nothing reaches `ready` by accident. The stub (`ingest-begin`, `IngestDeps.documentExists`, `pgIngestDeps(pool)`) is deleted.
+Revision R7. After Task 79c nothing reads the two columns and nothing writes a value other than the default; a column that nothing writes would only be a second source of truth that can disagree with the log. The stale-upload sweep (Task 93) does not read them either.
 
-**Size exception (Open question 11).** This is the one task that cannot be split without leaving `main` red: the new `pgIngestDeps` signature, the harness that builds it, the stub's assertions in the two pg tests, and the flow swap must land together. Counting deletions (the stub's `flow.test.ts` assertions and `pgDeps.pg.test.ts`, about 170 lines), expect **about 250 changed lines in 9 to 10 files**. The plan asks the owner for a one-time waiver; the executor keeps the diff as small as possible by editing `flow.test.ts` in place (keep the start-once, no-principal and ids-only tests, change only what they run against) rather than rewriting it, and by changing the pg tests' assertions with the smallest edits that state the v2 behaviour.
+**Files:**
+- Create: `infra/migrations/0013_documents_drop_status.sql`
+- Modify: `apps/server/app/documents/repo.ts` (`DOCUMENT_COLUMNS`, `DocumentRow`)
+- Modify: `apps/server/app/db/documents.pg.test.ts` (the `status` column is gone)
+
+**Interfaces:**
+- Consumes: Task 79c (no reader is left); `0009` `documents`.
+- Produces: migration `0013`; `DocumentRow` without `status` and `error`.
+
+- [ ] **Step 1: Write the failing test**
+
+In `db/documents.pg.test.ts`: the `insert` helper loses the `status` column (`... content_address, fingerprint) VALUES ($1, $2, $3, '{"x":1}', '{"x":2}', 'text/plain', $4, $5, $6)`, the seventh parameter and `extra.status`), its `extra` type becomes `{ size?: number; address?: string }`, and the line `await expect(bad(HEX("d"), { status: "done" })).rejects.toThrow(/status/);` is deleted. Add:
+
+```ts
+  it("has no status or error column: the ingest-status model is the only source of a document's status", async () => {
+    const { rows } = await db.owner.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'documents' AND column_name IN ('status', 'error')",
+    );
+    expect(rows).toEqual([]);
+  });
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/db/documents.pg.test.ts`
+Expected: FAIL (the columns still exist).
+
+- [ ] **Step 3: Implement**
+
+`infra/migrations/0013_documents_drop_status.sql`:
+
+```sql
+-- A document's status is the ingest-status model's state (0012): a document with no row there is
+-- `uploaded`, and the failure text is derived from the failure code at read time. A column that
+-- nothing writes would only be a second source of truth that can disagree with the log.
+ALTER TABLE documents DROP COLUMN status, DROP COLUMN error;
+```
+
+`repo.ts`: `DOCUMENT_COLUMNS` drops `status, error,`; `DocumentRow` loses `status` and `error` (and the `DocumentStatus` import).
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
+Expected: PASS: the whole server suite (grep confirmed that `repo.ts`, `routes.ts`, `db/documents.pg.test.ts` and `ingestStart.pg.test.ts` were the only readers, all handled by 79c and this task).
+
+- [ ] **Step 5: Close-out**
+
+Branch `feat/documents-drop-status-columns`; subject `feat(db): drop documents.status and documents.error`.
+
+---
+
+### Task 80a: the stub step asks the guard (the dependency shape starts to change)
+
+Spec §9 item 14 (skeleton), first third. Preflight F04: the first draft of Task 80 touched 13 files and about 270 lines (the flow swap, a new dependency shape, the harness and four M2 tests), so it is split in three, each leaving `main` green. This task changes only **how the stub step checks that the document exists**: it asks the `StepGuard` (`PgStepGuard`, Task 75c) instead of `IngestDeps.documentExists`. `IngestDeps` shrinks to `{ guard }` for now, `pgIngestDeps(pool)` keeps its signature, and the stub flow, its output (`accepted`) and every other test are unchanged. Task 80b brings in the other ports, Task 80c swaps the flow.
+
+**Files:**
+- Modify: `apps/server/app/flows/ingest-document/deps.ts`
+- Modify: `apps/server/app/flows/ingest-document/pgDeps.ts`
+- Delete: `apps/server/app/flows/ingest-document/pgDeps.pg.test.ts` (superseded by Task 75c's `PgStepGuard` tests: owner, tenant, gone and the fixed message)
+- Modify: `apps/server/app/flows/ingest-document/flow.test.ts` (the stub tests' `appWith` only)
+- Modify: `apps/server/app/documents/ingest.test.ts` (`appWith` only)
+- Modify: `apps/server/app/documents/testHarness.ts` (the probe gate wraps `guard.begin`)
+
+**Interfaces:**
+- Consumes: `StepGuard`, `isDocumentGone` (73a), `PgStepGuard` (75c).
+- Produces: `interface IngestDeps { guard: StepGuard }` (it replaces `{ documentExists }` and grows by one port per later task); `ingestBeginEffect(deps: IngestDeps)` (the stub, retired in 80c) asks `deps.guard.begin(input, "parse")` and answers `{ outcome: "accepted" }`, or `{ outcome: "document_gone" }` when `isDocumentGone(err)`, and rethrows anything else; `pgIngestDeps(pool: Pool): IngestDeps` = `{ guard: new PgStepGuard(pool) }`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`flow.test.ts`: only the stub tests' helper changes (the tests keep running against the stub flow; add `import { DocumentGoneError } from "./errors";`):
+
+```ts
+const appWith = (exists: boolean) => {
+  const seen: IngestStartInput[] = [];
+  const deps: IngestDeps = {
+    guard: {
+      begin: async (ref) => {
+        seen.push(ref);
+        if (!exists) throw new DocumentGoneError();
+      },
+    },
+  };
+  return { app: buildApp({ kind: "memory" }, undefined, { ingest: deps }), seen };
+};
+```
+
+`documents/ingest.test.ts`: `appWith` takes the same guard shape (the parameter is renamed `exists` so that `documentExists` appears nowhere in `apps/`; its callers pass the same functions as before):
+
+```ts
+import { DocumentGoneError } from "../flows/ingest-document/errors";
+
+const appWith = (exists: () => Promise<boolean>) =>
+  buildApp({ kind: "memory" }, undefined, {
+    ingest: {
+      guard: {
+        begin: async () => {
+          if (!(await exists())) throw new DocumentGoneError();
+        },
+      },
+    },
+  });
+```
+
+`testHarness.ts`: `makeIngest` builds its Loom app with the real guard, gated where `documentExists` was gated:
+
+```ts
+  const real = pgIngestDeps(app);
+  const loom = buildApp({ kind: "memory" }, undefined, {
+    ingest: {
+      guard: {
+        begin: async (ref, step) => {
+          await gate;
+          return real.guard.begin(ref, step);
+        },
+      },
+    },
+  });
+```
+
+(If Task 79c's `onEvent` option is already on this call, keep it.)
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/flow.test.ts app/documents/ingest.test.ts`
+Expected: FAIL (the stub effect still calls `deps.documentExists`, which the guard-shaped deps do not have).
+
+- [ ] **Step 3: Implement**
+
+`deps.ts`:
+
+```ts
+import type { Effect } from "@loom/effect-runtime";
+import { isDocumentGone } from "./errors";
+import type { IngestOutput, IngestStartInput } from "./flow";
+import type { StepGuard } from "./stepEffect";
+
+/**
+ * What the flow's steps need from the outside world. Loom has no per-flow dependency argument, so
+ * `buildApp` hands these to the runtime as effects (`execution.registerEffects`), one per step id.
+ * The composition root (`main.ts`, or a test) supplies them per app; nothing is process-global.
+ */
+export interface IngestDeps {
+  guard: StepGuard;
+}
+
+/** The stub step (retired by Task 80c): the same guard question the real steps ask; it writes nothing. */
+export function ingestBeginEffect(deps: IngestDeps): Effect<IngestStartInput, IngestOutput> {
+  return {
+    kind: "tool",
+    execute: async (input) => {
+      try {
+        await deps.guard.begin(input, "parse");
+        return { outcome: "accepted" };
+      } catch (err) {
+        if (isDocumentGone(err)) return { outcome: "document_gone" };
+        throw err;
+      }
+    },
+  };
+}
+```
+
+`pgDeps.ts` (the existence check and its fixed-message rethrow now live in `PgStepGuard`):
+
+```ts
+import type { Pool } from "pg";
+import type { IngestDeps } from "./deps";
+import { PgStepGuard } from "./pgGuard";
+
+export const pgIngestDeps = (pool: Pool): IngestDeps => ({ guard: new PgStepGuard(pool) });
+```
+
+Delete `pgDeps.pg.test.ts`.
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run && grep -rn "documentExists" apps/`
+Expected: PASS; the grep finds nothing. The M2 acceptance tests still pass: the stub answers `accepted` through the guard exactly as it did through `documentExists`; `documents/ingest.pg.test.ts` still calls `pgIngestDeps(pool)` and still sees `accepted`.
+
+- [ ] **Step 5: Close-out**
+
+Branch `refactor/ingest-stub-guard`; subject `refactor(server): the ingest stub step asks the StepGuard`. Files: the six above (one deleted).
+
+---
+
+### Task 80b: the other ingest ports through `IngestDeps` and `pgIngestDeps`
+
+Spec §9 item 14 (skeleton), second third. `IngestDeps` becomes the bundle the real steps need (`ParseDeps`: guard, source, parsed store, registry, runner), `pgIngestDeps` builds it from the stores of Tasks 75a-75c and the wiring of Task 79, and the harness and compose pass what it needs. The flow is still the M2 stub (it only uses the guard), so behaviour does not change. The stub-era `documents/ingest.pg.test.ts` is deleted here (F04): its `pgIngestDeps(pool)` call no longer exists, and Task 81 replaces it with the same proof over the real flow.
+
+**Files:**
+- Modify: `apps/server/app/flows/ingest-document/deps.ts`
+- Modify: `apps/server/app/flows/ingest-document/pgDeps.ts`
+- Create: `apps/server/app/flows/ingest-document/testing.ts` (`fakeIngestDeps`; Task 81 adds `assertEventsAreContentFree` to the same file)
+- Modify: `apps/server/app/compose.ts`
+- Modify: `apps/server/app/documents/testHarness.ts`
+- Modify: `apps/server/app/flows/ingest-document/flow.test.ts` (the stub tests' `appWith` only)
+- Modify: `apps/server/app/documents/ingest.test.ts` (`appWith` only)
+- Delete: `apps/server/app/documents/ingest.pg.test.ts` (superseded by Task 81)
+
+**Interfaces:**
+- Consumes: `ParseDeps` (78), `PgStepGuard` (75c), `PgParsedStore` (75a), `PgDocumentSource` (75b), `IngestWiring` (79).
+- Produces:
+  - `deps.ts`: `interface IngestDeps extends ParseDeps {}` (grows by one interface per later task).
+  - `pgDeps.ts`: `pgIngestDeps(args: { pool: Pool; fields: FieldCrypto; blobs: Blobs; wiring: IngestWiring }): IngestDeps`.
+  - `testing.ts`: `fakeIngestDeps(over?: Partial<IngestDeps>): IngestDeps` (in-memory fakes of every port; nothing touches a database, a blob or a child process).
+
+- [ ] **Step 1: Write the failing tests**
+
+`testing.ts`:
+
+```ts
+import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
+import type { IngestDeps } from "./deps";
+
+/** Fakes of every ingest port, for tests that run the flow over an in-memory Loom app. */
+export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
+  return {
+    guard: { begin: async () => {} },
+    source: {
+      meta: async () => ({ mime: "text/plain", contentAddress: "a" }),
+      read: async () => new Uint8Array([104]),
+    },
+    parsed: { put: async () => {}, take: async () => undefined, drop: async () => {} },
+    registry: new ParserRegistry(createDefaultParsers()),
+    runner: {
+      run: async () => ({
+        text: "h",
+        sections: [{ headingPath: [], text: "h", locator: { kind: "chars" as const, start: 0, end: 1 } }],
+        media: [],
+      }),
+    },
+    ...over,
+  };
+}
+```
+
+`flow.test.ts` and `documents/ingest.test.ts`: the `appWith` helpers of Task 80a now build the complete bundle (they would no longer typecheck with `{ guard }` alone). In `flow.test.ts` (add `import { fakeIngestDeps } from "./testing";`):
+
+```ts
+  const deps: IngestDeps = fakeIngestDeps({
+    guard: {
+      begin: async (ref) => {
+        seen.push(ref);
+        if (!exists) throw new DocumentGoneError();
+      },
+    },
+  });
+```
+
+In `documents/ingest.test.ts` (add `import { fakeIngestDeps } from "../flows/ingest-document/testing";`):
+
+```ts
+const appWith = (exists: () => Promise<boolean>) =>
+  buildApp({ kind: "memory" }, undefined, {
+    ingest: fakeIngestDeps({
+      guard: {
+        begin: async () => {
+          if (!(await exists())) throw new DocumentGoneError();
+        },
+      },
+    }),
+  });
+```
+
+`testHarness.ts`: `makeIngest(app, fields, blobs, wiring)` builds the real ports and keeps the gate on the guard:
+
+```ts
+  const real = pgIngestDeps({ pool: app, fields, blobs, wiring });
+  const loom = buildApp({ kind: "memory" }, undefined, {
+    ingest: {
+      ...real,
+      guard: {
+        begin: async (ref, step) => {
+          await gate;
+          return real.guard.begin(ref, step);
+        },
+      },
+    },
+  });
+```
+
+(`startDocumentServer` already has the `FieldCrypto`, the blob factory over the harness's blob root, and builds `createIngestWiring({})`; it passes them in. If Task 79c's `onEvent` option is already on this call, keep it.) Delete `documents/ingest.pg.test.ts`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document app/documents/ingest.test.ts && pnpm typecheck:tests`
+Expected: FAIL (`./testing` not found; `pgIngestDeps` takes a pool, not the argument object).
+
+- [ ] **Step 3: Implement**
+
+`deps.ts`: `IngestDeps` becomes `export interface IngestDeps extends ParseDeps {}` (with `import type { ParseDeps } from "./steps/parse";`); the stub effect is unchanged.
+
+`pgDeps.ts`:
+
+```ts
+import type { Pool } from "pg";
+import type { FieldCrypto } from "../../crypto/fields";
+import type { IngestDeps } from "./deps";
+import type { IngestWiring } from "./limits";
+import { PgStepGuard } from "./pgGuard";
+import { PgParsedStore } from "./pgParsed";
+import { PgDocumentSource } from "./pgSource";
+
+export interface PgIngestArgs {
+  pool: Pool;
+  fields: FieldCrypto;
+  blobs: (identity: { tenantId: string; userId: string }) => {
+    get(ref: { __loomContent: string }): Promise<Uint8Array | null>;
+  };
+  wiring: IngestWiring;
+}
+
+export const pgIngestDeps = ({ pool, fields, blobs, wiring }: PgIngestArgs): IngestDeps => ({
+  guard: new PgStepGuard(pool),
+  source: new PgDocumentSource(pool, blobs),
+  parsed: new PgParsedStore(pool, fields),
+  registry: wiring.registry,
+  runner: wiring.runner,
+});
+```
+
+`compose.ts`: build `blobs` once (it already is a closure for the routes) and call `pgIngestDeps({ pool, fields: new FieldCrypto(keys), blobs, wiring: options.ingest })` where it called `pgIngestDeps(pool)`.
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
+Expected: PASS (the stub flow still answers `accepted`; the harness now holds the real ports it will need in Task 80c).
+
+- [ ] **Step 5: Close-out**
+
+Branch `refactor/ingest-deps-ports`; subject `refactor(server): ingest dependencies carry the parse ports; retire the stub-era pg test`. Files: the eight above (one deleted).
+
+---
+
+### Task 80c: `ingest-document` v2 with the `parse` step; the stub is retired
+
+Spec §9 item 14 (skeleton), last third. The flow becomes `[parse]` here; Tasks 83, 91b and 92 append `chunk`, `embed` and the rest. Until Task 92 a document that parses stays `parsing`; nothing reaches `ready` by accident. The stub (`ingest-begin`, `ingestBeginEffect`, the `accepted` output) is deleted. No size waiver is needed any more (F04: the first draft's single Task 80 was 13 files; it is Tasks 80a to 80c). `flow.test.ts` is edited **in place**: the start-once, no-principal and ids-only tests keep their bodies, and only the tests named below change. If `git diff --stat` shows more than 200 lines, move the new "does not restart a duplicate whose flow has already moved past uploaded" test to Task 81.
 
 **Files:**
 - Modify: `apps/server/app/flows/ingest-document/flow.ts`
 - Modify: `apps/server/app/flows/ingest-document/deps.ts`
-- Modify: `apps/server/app/flows/ingest-document/pgDeps.ts`
 - Modify: `apps/server/app/config.ts`
 - Modify: `apps/server/app/security.ts`
-- Modify: `apps/server/app/compose.ts`
 - Modify: `apps/server/app/flows/ingest-document/flow.test.ts` (rewritten)
-- Delete: `apps/server/app/flows/ingest-document/pgDeps.pg.test.ts` (superseded by Tasks 75a-75c)
-- Modify: `apps/server/app/documents/testHarness.ts`, `ingestStart.pg.test.ts`, `documents.e2e.pg.test.ts` (what they assert about the stub)
+- Modify: `apps/server/app/documents/ingestStart.pg.test.ts`, `apps/server/app/documents/documents.e2e.pg.test.ts` (what they assert about the stub; F05)
+- Modify: `apps/server/app/status/compose.test.ts` (its comments and the pinned rejection now describe the real guard, F29)
 
 **Interfaces:**
-- Consumes: `parseEffect`/`ParseDeps` (78), `StepGuard` (73a), `PgStepGuard` (75c), `IngestStatus` (74c-74d, wired by 79b), `PgParsedStore` (75a), `PgDocumentSource` (75b), `IngestWiring` (79), `StepResult` (73).
+- Consumes: `parseEffect`/`ParseDeps` (78), `StepGuard` (73a), `IngestDeps`, `pgIngestDeps`, `fakeIngestDeps` (80a, 80b), `IngestStatus` (74c-74d, wired by 79b), `StepResult` (73).
 - Produces:
   - `flow.ts`: `IngestStartInput` (unchanged), `IngestOutput = z.object({ outcome: StepResult.shape.outcome, code: StepResult.shape.code }).strict()`, `ingestParseStep` (`id: "ingest-parse"`, input `IngestStartInput`, output `StepResult`), `INGEST_STEPS` (an ordered array, `[ingestParseStep]` now), the flow `ingestDocumentFlow` (version `2.0.0`) whose runner runs each step in order and returns early on `document_gone` or `failed`.
-  - `deps.ts`: `interface IngestDeps extends ParseDeps {}` (grows by one interface per later task) and `ingestEffects(deps: IngestDeps): Record<string, Effect<IngestStartInput, StepResult>>` keyed by step id.
-  - `pgDeps.ts`: `pgIngestDeps(args: { pool: Pool; fields: FieldCrypto; blobs: Blobs; wiring: IngestWiring }): IngestDeps`.
+  - `deps.ts`: `ingestEffects(deps: IngestDeps): Record<string, Effect<IngestStartInput, StepResult>>` keyed by step id (replaces `ingestBeginEffect`).
   - `security.ts`: `authorizer` lists `"ingest-document": ["ingest-parse"]`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Rewrite `flow.test.ts` (in-memory Loom app with fake `IngestDeps`, as the stub's did):
+Edit `flow.test.ts` in place to this final content (in-memory Loom app with the fake ports of 80b, as the stub's did; the `appWith` helper of 80b becomes `fakeDeps`):
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -4711,23 +5368,31 @@ import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor } from "../../subject";
 import { ingestExecutionId } from "../../documents/ingest";
-import { ParseRejectedError, ParserRegistry, createDefaultParsers } from "@docmind/parsers";
+import { ParseRejectedError } from "@docmind/parsers";
 import { DocumentGoneError } from "./errors";
 import { INGEST_STEPS, IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
 import type { IngestDeps } from "./deps";
 import { StepResult } from "./stepEffect";
+import { fakeIngestDeps } from "./testing";
 
 const ids = (): IngestStartInput => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
 
 function fakeDeps(over: Partial<{ gone: boolean; reject: boolean }> = {}) {
   const seen: string[] = [];
-  const deps: IngestDeps = {
-    guard: { begin: async (_r, step) => { seen.push(`begin:${step}`); if (over.gone) throw new DocumentGoneError(); } },
-    source: { meta: async () => ({ mime: "text/plain", contentAddress: "a" }), read: async () => new Uint8Array([104]) },
-    parsed: { put: async () => {}, take: async () => undefined, drop: async () => {} },
-    registry: new ParserRegistry(createDefaultParsers()),
-    runner: { run: async () => { if (over.reject) throw new ParseRejectedError("corrupt_content"); return { text: "h", sections: [{ headingPath: [], text: "h", locator: { kind: "chars", start: 0, end: 1 } }], media: [] }; } },
-  };
+  const deps: IngestDeps = fakeIngestDeps({
+    guard: {
+      begin: async (_r, step) => {
+        seen.push(`begin:${step}`);
+        if (over.gone) throw new DocumentGoneError();
+      },
+    },
+    runner: {
+      run: async () => {
+        if (over.reject) throw new ParseRejectedError("corrupt_content");
+        return { text: "h", sections: [{ headingPath: [], text: "h", locator: { kind: "chars", start: 0, end: 1 } }], media: [] };
+      },
+    },
+  });
   return { deps, seen };
 }
 type App = ReturnType<typeof buildApp>;
@@ -4815,11 +5480,46 @@ describe("what the flow may carry", () => {
 });
 ```
 
-For the harness and the existing pg tests: `makeIngest` in `testHarness.ts` builds its Loom app with `pgIngestDeps({ pool: app, fields, blobs, wiring })` over the harness's real blob root, wrapping `guard.begin` with the `probe` gate (where `documentExists` was gated). `ingestStart.pg.test.ts`'s first test now expects, after `waitForCompletion` for a `.txt` upload, `_output` `{ outcome: "done" }` and `await h.status.forDocument(ALICE, id)` equal to `{ status: "parsing", step: "parse", error: null }`; uploads of non-txt types (the harness `PDF`/`PNG` helpers) end `{ status: "failed", step: "parse", error: STATUS_MESSAGES.unsupported_content }`, and the tests that only care about start/cancel use `TEXT(...)`. `documents.e2e.pg.test.ts`: "the stub leaves the document uploaded" assertions become the txt expectations.
+For the existing pg tests (F05): the harness already builds the real ports (80b), so only their assertions change.
+
+- `ingestStart.pg.test.ts`, first test: after `waitForCompletion` for a `.txt` upload, `_output` is `{ outcome: "done" }` and the status is read from the model, **step-agnostic until Task 92** (later tasks append `chunk` and `embed`, so a step-specific assertion would be edited in each of them): `const view = await h.status.forDocument(ALICE, id); expect(["parsing", "embedding"]).toContain(view.status); expect(view.error).toBeNull();` (with `ALICE` from the harness). Uploads of non-txt types (the harness `PDF`/`PNG` helpers) end `{ status: "failed", step: "parse", error: STATUS_MESSAGES.unsupported_content }`; the tests that only care about start and cancel use `TEXT(...)`.
+- `ingestStart.pg.test.ts`, second test (F05): "re-attempts the start for a duplicate that is still uploaded" is no longer true for a document whose flow already started (the status has moved past `uploaded`, so the duplicate path correctly stops restarting). Rewrite it so the first start never creates an execution, and add the opposite case:
+
+```ts
+  it("re-attempts the start for a duplicate that is still uploaded, which creates no second execution", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    h.ingest.failNext("start"); // no execution is created, so the document stays `uploaded`
+    const bytes = TEXT("dup flow");
+    const first = await created("a.txt", bytes);
+    const id = first.body.document.id;
+    await h.starts.idle();
+    spy.mockRestore();
+    expect(h.ingest.handles.has(id)).toBe(false);
+    const again = await created("again.txt", bytes);
+    expect(again.res.status).toBe(200);
+    await h.starts.idle();
+    expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(2);
+    expect(h.ingest.handles.has(id)).toBe(true); // the retry created the one execution
+  });
+
+  it("does not restart a duplicate whose flow has already moved past uploaded", async () => {
+    const bytes = TEXT("dup after parse");
+    const first = await created("a.txt", bytes);
+    const id = first.body.document.id;
+    await h.starts.idle();
+    await h.ingest.handles.get(id)?.waitForCompletion();
+    expect((await created("again.txt", bytes)).res.status).toBe(200);
+    await h.starts.idle();
+    expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(1);
+  });
+```
+
+- `documents.e2e.pg.test.ts`: the txt upload's `_output` is now `{ outcome: "done" }` (it was `{ outcome: "accepted" }`), and the read-back assertion `status: "uploaded"` of the first document becomes step-agnostic like the others: `expect(["parsing", "embedding"]).toContain(read.status)` next to the `toMatchObject` of the filename and title (the PNG and PDF uploads are not read back). Task 92 sets it to `ready`.
+- `status/compose.test.ts`: its stub pool now reaches the real `PgStepGuard`, whose existence check fails with the fixed message (`document existence check failed`) before the step does any work, so the execution still fails and the model still shows `failed` / `internal`. Update the comments that say "the stub step" to say so; the assertion `rejects.toBeInstanceOf(Error)` and the `failed` / `STATUS_MESSAGES.internal` expectation stay.
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/flow.test.ts`
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/flow.test.ts`
 Expected: FAIL (`INGEST_STEPS` undefined; `StepResult` not the step output).
 
 - [ ] **Step 3: Implement**
@@ -4870,7 +5570,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
 };
 ```
 
-`deps.ts`:
+`deps.ts` (the stub effect and its imports are deleted; `IngestDeps extends ParseDeps` since Task 80b):
 
 ```ts
 import type { Effect } from "@loom/effect-runtime";
@@ -4886,43 +5586,25 @@ export const ingestEffects = (deps: IngestDeps): Record<string, Effect<IngestSta
 });
 ```
 
-`pgDeps.ts` replaces the stub:
-
-```ts
-export interface PgIngestArgs {
-  pool: Pool;
-  fields: FieldCrypto;
-  blobs: (identity: { tenantId: string; userId: string }) => { get(ref: { __loomContent: string }): Promise<Uint8Array | null> };
-  wiring: IngestWiring;
-}
-export const pgIngestDeps = ({ pool, fields, blobs, wiring }: PgIngestArgs): IngestDeps => ({
-  guard: new PgStepGuard(pool),
-  source: new PgDocumentSource(pool, blobs),
-  parsed: new PgParsedStore(pool, fields),
-  registry: wiring.registry,
-  runner: wiring.runner,
-});
-```
-
-`config.ts`: `registerEffects` loops `for (const [id, effect] of Object.entries(ingestEffects(deps.ingest))) effects.register(id, effect)`. `security.ts`: `"ingest-document": ["ingest-parse"]`. `compose.ts`: build `blobs` once (it already is a closure for the routes), call `pgIngestDeps({ pool, fields: new FieldCrypto(keys), blobs, wiring: options.ingest })`.
+`config.ts`: `registerEffects` loops `for (const [id, effect] of Object.entries(ingestEffects(deps.ingest))) effects.register(id, effect)` in place of the `ingest-begin` registration. `security.ts`: `"ingest-document": ["ingest-parse"]`.
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run`
-Expected: PASS. The M2 acceptance test passes with the harness updates above. If Loom refuses to start because a stale in-memory app registered `ingest-begin`, search for the string and delete it; nothing outside the files above may mention `ingest-begin` afterwards (`grep -rn "ingest-begin\|documentExists" apps/ docs/superpowers/plans/2026-10-18-m3a*` must find only this plan).
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run && grep -rn "ingest-begin\|documentExists" apps/`
+Expected: PASS; the grep finds nothing (nothing outside the plan may mention `ingest-begin` afterwards). If Loom refuses to start because a stale in-memory app registered `ingest-begin`, search for the string and delete it.
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/ingest-flow-v2-parse`; subject `feat(server): ingest-document v2 with a real parse step, stub retired`. If the owner declines the waiver, the only split that keeps `main` green is to move the "what the flow may carry" describe block of `flow.test.ts` (about 30 lines, it asserts schema shapes only) into a PR before this one that tests the new `StepResult` and `IngestOutput` schemas in a new file, and to keep the rest together.
+Branch `feat/ingest-flow-v2-parse`; subject `feat(server): ingest-document v2 with a real parse step, stub retired`. Files: the eight above (the rewritten `deps.ts` no longer has the stub effect).
 
 ---
 
 ### Task 81: the event log holds ids, counts and codes only
 
-Carry-forward 4, proven the way M2 did: a real Loom app on the durable (Postgres) storage, a raw read of the event store, and a structural assertion over every event. This PR adds no production code; it is the standing proof that Tasks 83, 91 and 92 extend.
+Carry-forward 4, proven the way M2 did: a real Loom app on the durable (Postgres) storage, a raw read of the event store, and a structural assertion over every event. This PR adds no production code; it replaces the stub-era `ingest.pg.test.ts` that Task 80b deleted, and it is the standing proof that Tasks 83, 91 and 92 extend.
 
 **Files:**
-- Create: `apps/server/app/flows/ingest-document/testing.ts` (`assertEventsAreContentFree`, shared with Task 95a)
+- Modify: `apps/server/app/flows/ingest-document/testing.ts` (created by Task 80b with `fakeIngestDeps`; this task adds `assertEventsAreContentFree`, shared with Task 95a)
 - Create: `apps/server/app/flows/ingest-document/eventLog.pg.test.ts`
 
 **Interfaces:**
@@ -4931,10 +5613,9 @@ Carry-forward 4, proven the way M2 did: a real Loom app on the durable (Postgres
 
 - [ ] **Step 1: Write the failing test**
 
-`testing.ts`:
+Add to `testing.ts` (add `import { expect } from "vitest";` at the top of the file):
 
 ```ts
-import { expect } from "vitest";
 
 const ALLOWED_OUTPUT_KEYS = new Set(["outcome", "count", "model", "code"]);
 const REF_KEYS = ["documentId", "tenantId", "userId"];
@@ -5038,7 +5719,7 @@ describe.skipIf(!PG_URL)("the ingest event log holds ids, counts and codes only 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/eventLog.pg.test.ts`
-Expected: FAIL only if Task 80's flow leaks (it should not); a first run that passes is the expected outcome for a proof-only task. To see the proof bite, temporarily make `parseEffect` return `{ count: 1, model: parsed.text }`, confirm the first test fails, then revert.
+Expected: FAIL only if Task 80c's flow leaks (it should not); a first run that passes is the expected outcome for a proof-only task. To see the proof bite, temporarily make `parseEffect` return `{ count: 1, model: parsed.text }`, confirm the first test fails, then revert.
 
 - [ ] **Step 3: Implement**
 
@@ -5088,7 +5769,6 @@ it("stores sealed chunks under deterministic ids, with numeric locators and plai
   expect(rows.map((r) => r.id)).toEqual(chunks.map((c) => chunkIdFor(ref.documentId, c.ordinal)));
   expect(rows[0].text_enc.__loomEnc).toBe("loom/aes-256-gcm");
   expect(rows[0].locator).toEqual(chunks[0]?.locator);
-  expect(JSON.stringify(rows[0].locator)).not.toContain("Intro"); // the heading path is sealed with the text
   expect(rows[0].token_count).toBe(chunks[0]?.tokenCount);
   const opened = await fields.forUser(ref.userId).open(chunkBind(rows[0].id), rows[0].text_enc);
   expect(opened).toEqual({ text: chunks[0]?.text, headingPath: ["Intro", "Part"] });
@@ -5250,7 +5930,8 @@ Spec §9 item 21, second half. Reads the sealed parsed document, chunks it, stor
 - Modify: `apps/server/app/flows/ingest-document/deps.ts` (`IngestDeps extends ParseDeps, ChunkDeps`; effect map)
 - Modify: `apps/server/app/flows/ingest-document/pgDeps.ts` (`chunks: new PgChunkStore(pool, fields)`)
 - Modify: `apps/server/app/security.ts` (grant `ingest-chunk`)
-- Modify: `apps/server/app/flows/ingest-document/flow.test.ts` (fake deps gain `chunks`; expectation `begin:parse, begin:chunk`)
+- Modify: `apps/server/app/flows/ingest-document/flow.test.ts` (expectation `begin:parse, begin:chunk`)
+- Modify: `apps/server/app/flows/ingest-document/testing.ts` (`fakeIngestDeps` gains the `chunks` fake)
 - Modify: `apps/server/app/flows/ingest-document/eventLog.pg.test.ts` (nothing new is allowed in outputs; add the chunk count assertion; the folded status of the log becomes `{ status: "parsing", step: "chunk", code: null }`)
 
 **Interfaces:**
@@ -5376,12 +6057,12 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
 }
 ```
 
-`flow.ts`: `export const ingestChunkStep = stepOf("ingest-chunk", "IngestChunk"); export const INGEST_STEPS = [ingestParseStep, ingestChunkStep];`. `deps.ts`: `export interface IngestDeps extends ParseDeps, ChunkDeps {}` with `"ingest-chunk": chunkEffect(deps)` in the map. `security.ts`: `["ingest-parse", "ingest-chunk"]`. `pgDeps.ts`: `chunks: new PgChunkStore(pool, fields)`. In `flow.test.ts`'s `fakeDeps`, add `chunks` and a `parsed.take` that returns a document; the first test now expects `["begin:parse", "begin:chunk"]`.
+`flow.ts`: `export const ingestChunkStep = stepOf("ingest-chunk", "IngestChunk"); export const INGEST_STEPS = [ingestParseStep, ingestChunkStep];`. `deps.ts`: `export interface IngestDeps extends ParseDeps, ChunkDeps {}` with `"ingest-chunk": chunkEffect(deps)` in the map. `security.ts`: `["ingest-parse", "ingest-chunk"]`. `pgDeps.ts`: `chunks: new PgChunkStore(pool, fields)`. In `testing.ts`, `fakeIngestDeps` gains a `chunks` fake (`replace` returning the length, `count` 0, `read` empty) and its `parsed.take` returns a one-section document; `flow.test.ts`'s first test now expects `["begin:parse", "begin:chunk"]`.
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run`
-Expected: PASS (whole server suite; the harness-based tests now end `parsing` after the chunk step).
+Expected: PASS (whole server suite). The harness-based tests (`ingestStart.pg.test.ts`, `documents.e2e.pg.test.ts`) assert a step-agnostic status since Task 80c, so the new step needs no edit to them (F05).
 
 - [ ] **Step 5: Close-out**
 
@@ -5391,19 +6072,18 @@ Branch `feat/ingest-chunk-step`; subject `feat(server): chunk step stores sealed
 
 ### Task 84: `0014` embedding column, and migrations that need an extension
 
-Spec §4.2: `chunks.embedding vector(N)` with an HNSW cosine index, `N` fixed per deployment by migration. **N = 768** (`nomic-embed-text`; Open question 2). Finding F8: the local test database has no pgvector, so the runner learns to recognise `-- requires-extension: <name>`. In production, a missing extension is a hard error. In tests only, `DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS=true` skips such a migration without recording it, so it applies later when the extension appears. A migration that declares a requirement may be followed by ones that do not depend on it.
+Spec §4.2: `chunks.embedding vector(N)` with an HNSW cosine index, `N` fixed per deployment by migration. **N = 768** (`nomic-embed-text`; Open question 2). Finding F8 (the local test database had no pgvector; it now has, see Preconditions): the runner learns to recognise `-- requires-extension: <name>`. In production, a missing extension is a hard error, and so it is in tests: pgvector is installed on the local cluster and in CI's image, so **no global skip switch is set** (F08; a global `DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS` in `vitest.config.ts` would make the runner's own "refuses to run" test skip instead of throw). The switch stays in `migrate.ts`, and the one test that exercises it sets it itself. A migration that declares a requirement may be followed by ones that do not depend on it. **F01:** migration `0001` runs `ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`, which also strips EXECUTE from the extension's own functions, so without a grant `docmind_app` fails with `permission denied for function vector` on any write to a `vector(768)` column and `permission denied for function cosine_distance` on a search. `0014` therefore ends by granting EXECUTE to `docmind_app` on the extension's member functions only (not on all functions), and this task's test exercises the app role, not just the owner.
 
 **Files:**
 - Create: `infra/migrations/0014_chunk_embeddings.sql`
 - Modify: `apps/server/app/db/migrate.ts`
 - Modify: `apps/server/app/db/migrate.test.ts`
 - Modify: `apps/server/app/db/testSupport.ts` (`hasVector`)
-- Modify: `apps/server/vitest.config.ts` (`test.env`)
 - Create: `apps/server/app/db/embeddings.pg.test.ts`
 
 **Interfaces:**
 - Consumes: `migrate(pool, dir)` (M0).
-- Produces: `hasVector(owner: Pool): Promise<boolean>` (is the extension installed in this database); `migrate` honours the header and env switch; `chunks.embedding vector(768)`, `chunks.embedding_model text`, constraint `chunks_embedding_pair` (both null or both set), index `chunks_embedding_hnsw` (`vector_cosine_ops`) exist exactly when the extension does.
+- Produces: `hasVector(owner: Pool): Promise<boolean>` (is the extension installed in this database); `migrate` honours the header and the env switch; `chunks.embedding vector(768)`, `chunks.embedding_model text`, constraint `chunks_embedding_pair` (both null or both set), index `chunks_embedding_hnsw` (`vector_cosine_ops`) exist exactly when the extension does; `docmind_app` holds EXECUTE on the `vector` extension's member functions (F01).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5422,7 +6102,7 @@ Add to `migrate.test.ts` (it already creates temp migration directories and a te
       "0003_c.sql": "CREATE TABLE c (x int);",
     };
 
-    it("refuses to run a migration whose extension the server does not offer, naming file and extension", async () => {
+    it("refuses to run a migration whose extension the server does not offer, naming file and extension (no global skip switch is set, F08)", async () => {
       await expect(migrate(owner, dirWith(FILES))).rejects.toThrow(
         /^migration 0002_needs\.sql needs the docmind_no_such_extension extension, which this server does not offer$/,
       );
@@ -5448,7 +6128,7 @@ Add to `migrate.test.ts` (it already creates temp migration directories and a te
 
 (Each case needs a fresh database; the existing file already provides `createTestDb()` per `it` or `beforeEach`; follow it.)
 
-`embeddings.pg.test.ts`:
+`embeddings.pg.test.ts` (a `describe.skipIf(!PG_URL)` block with a migrated `db`, as in Task 64's test, plus `await setAppRolePassword(db.owner, APP_PASSWORD)` and `app = new Pool({ connectionString: db.appUrl })` in `beforeAll`):
 
 ```ts
 it("has the embedding column, pair constraint and HNSW index exactly when the extension is installed", async () => {
@@ -5465,12 +6145,27 @@ it("requires a model whenever there is a vector (needs pgvector)", async (ctx) =
   await expect(insertChunkWithVector(db.owner, { embeddingModel: "m", dims: 3 })).rejects.toMatchObject({ code: "22000" });
   await expect(insertChunkWithVector(db.owner, { embeddingModel: "m" })).resolves.toBeUndefined();
 });
+
+// F01: the owner passes without the grant, so this one runs as docmind_app, which is who writes and searches.
+it("lets the app role write a vector and rank by cosine distance (the extension's functions are granted to it)", async (ctx) => {
+  if (!(await hasVector(db.owner))) ctx.skip();
+  const { chunkId } = await insertBareChunk(db.owner); // a chunk with no vector yet
+  const vector = `[${Array.from({ length: 768 }, () => "0.5").join(",")}]`;
+  const ranked = await withTenant(app, T1, async (tx) => {
+    // the assignment coerces to vector(768): the typmod function `vector(vector,integer,boolean)`
+    await tx.query("UPDATE chunks SET embedding = $1::vector, embedding_model = 'm' WHERE id = $2", [vector, chunkId]);
+    // `<=>` runs cosine_distance
+    return (await tx.query("SELECT id FROM chunks WHERE embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 1", [vector])).rows;
+  });
+  expect(ranked).toEqual([{ id: chunkId }]);
+});
 ```
 
 ```ts
-// A document and one chunk carrying `dims` numbers as its embedding; the owner role bypasses RLS.
-async function insertChunkWithVector(owner: Pool, o: { embeddingModel: string | null; dims?: number }) {
+// A document owned by U1 (the owner role bypasses RLS) and, in it, one chunk.
+async function insertBareChunk(owner: Pool, o: { embedding?: { vector: string; model: string | null } } = {}) {
   const doc = randomUUID();
+  const chunkId = randomUUID();
   await owner.query(`INSERT INTO tenants (id, name) VALUES ($1, 'x') ON CONFLICT DO NOTHING`, [T1]);
   await owner.query(`INSERT INTO users (id, tenant_id, email, password_hash) VALUES ($1, $2, $3, 'x') ON CONFLICT DO NOTHING`, [U1, T1, "u@example.com"]);
   await owner.query(
@@ -5478,16 +6173,21 @@ async function insertChunkWithVector(owner: Pool, o: { embeddingModel: string | 
      VALUES ($1, $2, $3, '{}', '{}', 'text/plain', 1, $4, $5)`,
     [doc, T1, U1, `hmac-sha256:${doc.replaceAll("-", "").repeat(2)}`, doc.replaceAll("-", "").repeat(2)],
   );
-  const vector = `[${Array.from({ length: o.dims ?? 768 }, () => "0.5").join(",")}]`;
   await owner.query(
     `INSERT INTO chunks (id, tenant_id, document_id, ordinal, section_ordinal, text_enc, locator, token_count, embedding, embedding_model)
      VALUES ($1, $2, $3, 0, 0, '{}', '{"kind":"section","index":0}', 1, $4::vector, $5)`,
-    [randomUUID(), T1, doc, vector, o.embeddingModel],
+    [chunkId, T1, doc, o.embedding?.vector ?? null, o.embedding?.model ?? null],
   );
+  return { doc, chunkId };
+}
+
+async function insertChunkWithVector(owner: Pool, o: { embeddingModel: string | null; dims?: number }): Promise<void> {
+  const vector = `[${Array.from({ length: o.dims ?? 768 }, () => "0.5").join(",")}]`;
+  await insertBareChunk(owner, { embedding: { vector, model: o.embeddingModel } });
 }
 ```
 
-pgvector reports a wrong-size vector as `22000` ("expected 768 dimensions, not 3"); confirm on the first run against pgvector and pin what it reports. (`T1`, `U1` are the harness constants; import them from `../documents/testHarness`.)
+pgvector reports a wrong-size vector as `22000` ("expected 768 dimensions, not 3"); confirm on the first run against pgvector and pin what it reports. (`T1`, `U1` are the harness constants; import them from `../documents/testHarness`, and `withTenant` from `./tenant`.)
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -5511,7 +6211,33 @@ ALTER TABLE chunks
   ADD CONSTRAINT chunks_embedding_pair CHECK ((embedding IS NULL) = (embedding_model IS NULL));
 
 CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops);
+
+-- F01. 0001 revokes EXECUTE on every new function from PUBLIC (a global default privilege), and that
+-- also reaches the extension's own functions created above. The app role would then fail with
+-- "permission denied for function vector" (the typmod coercion on every write to vector(768)) and
+-- "permission denied for function cosine_distance" (every search). Grant it EXECUTE on the
+-- extension's member functions only, never on all functions (aggregates are skipped: prokind 'f').
+DO $$
+DECLARE f regprocedure;
+BEGIN
+  FOR f IN
+    SELECT p.oid::regprocedure
+    FROM pg_depend d
+    JOIN pg_extension e ON e.oid = d.refobjid
+    JOIN pg_proc p ON p.oid = d.objid
+    WHERE d.refclassid = 'pg_extension'::regclass
+      AND d.classid = 'pg_proc'::regclass
+      AND d.deptype = 'e'
+      AND e.extname = 'vector'
+      AND p.prokind = 'f'
+  LOOP
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO docmind_app', f);
+  END LOOP;
+END
+$$;
 ```
+
+The grant block was run against the local PostgreSQL 17 + pgvector 0.8 while writing this plan: as `docmind_app`, an `UPDATE ... SET embedding = ...::vector(768)` and an `ORDER BY embedding <=> ...` both succeed with it.
 
 `migrate.ts` inside the loop, before `BEGIN`:
 
@@ -5524,16 +6250,16 @@ CREATE INDEX chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine
       }
 ```
 
-with `const extensionAvailable = async (client: PoolClient, name: string) => ((await client.query("SELECT 1 FROM pg_available_extensions WHERE name = $1", [name])).rowCount ?? 0) > 0;` and `await client.query(sql)` using the already-read text. `testSupport.ts`: `export const hasVector = async (owner: Pool) => ((await owner.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).rowCount ?? 0) > 0;`. `vitest.config.ts`: `test: { ..., env: { DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS: "true" } }`. Production never sets it (`main`'s `db:migrate` path), so a server without pgvector refuses to migrate.
+with `const extensionAvailable = async (client: PoolClient, name: string) => ((await client.query("SELECT 1 FROM pg_available_extensions WHERE name = $1", [name])).rowCount ?? 0) > 0;` and `await client.query(sql)` using the already-read text. `testSupport.ts`: `export const hasVector = async (owner: Pool) => ((await owner.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'")).rowCount ?? 0) > 0;`. `vitest.config.ts` is **not** touched (F08): nothing sets `DOCMIND_MIGRATE_SKIP_MISSING_EXTENSIONS` globally, so every `createTestDb()` applies `0014` and a server without pgvector refuses to migrate, in tests and in production alike.
 
 - [ ] **Step 4: Run to verify they pass**
 
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/db`
-Expected: PASS on 55432 with the second `embeddings` test **skipped** (state it in the PR). Re-run once against a pgvector database (`docker compose up -d postgres`, `DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:5432/postgres`) and confirm it runs and passes; if Docker is unavailable, say so in the PR and rely on CI.
+Expected: PASS on 55432 (pgvector 0.8.0 is installed there, see Preconditions), with the two pgvector-only `embeddings` tests running. Nothing is skipped; if one is, the environment is wrong (stop, do not open the PR).
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/db-embedding-column`; subject `feat(db): chunk embeddings column and extension-aware migrations`. Files: the six above.
+Branch `feat/db-embedding-column`; subject `feat(db): chunk embeddings column, app-role grants and extension-aware migrations`. Files: the five above.
 
 ---
 
@@ -5615,6 +6341,19 @@ describe("OllamaEmbeddingProvider", () => {
     const err = await provider(async () => ok(embeddings as number[][])).embed(["a", "b"]).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EmbeddingError);
     expect(err).not.toBeInstanceOf(EmbeddingUnavailableError);
+  });
+
+  it("cancels the body of an error response instead of leaving it open (F23)", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    await expect(
+      provider(async () => new Response(body, { status: 500 })).embed(["a"]),
+    ).rejects.toBeInstanceOf(EmbeddingUnavailableError);
+    expect(cancelled).toBe(true);
   });
 
   it("never puts the url, the text or the response body into an error message", async () => {
@@ -5731,7 +6470,7 @@ Spec §9 item 22, second half; "each interface has one shared conformance suite"
 
 **Interfaces:**
 - Consumes: `OllamaEmbeddingProvider` (85); `runEmbeddingProviderConformance` from `@loom/conformance`; `HashingEmbeddingProvider` from `@loom/memory` (the fake server's embedding function).
-- Produces: `startFakeOllama(options: { dimensions: number; model?: string }): Promise<{ url: string; close(): Promise<void>; batches: number[]; failNext(status: number): void; hold(): void; release(): void }>` (`batches` records each request's input count, never the texts). Server binds `127.0.0.1`, answers `POST /api/embed`, 404 for any other path or unknown model.
+- Produces: `startFakeOllama(options: { dimensions: number; model?: string }): Promise<{ url: string; close(): Promise<void>; batches: number[]; failNext(status: number): void; hold(): Promise<void>; release(): void; nextAbort(): Promise<void> }>` (`batches` records each request's input count, never the texts; `hold()` returns a promise that resolves when a request has arrived at the gate; `nextAbort()` returns a promise that resolves when a request's connection closes before its answer was sent: F22, F23). Server binds `127.0.0.1`, answers `POST /api/embed`, 404 for any other path or unknown model.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5789,11 +6528,13 @@ it("treats an unknown model as a permanent error", async () => {
 });
 it("stops waiting when the caller aborts, without leaving the request open", async () => {
   const arrived = fake.hold();
+  const aborted = fake.nextAbort();
   const controller = new AbortController();
   const pending = good().embed(["a"], { signal: controller.signal });
   await arrived; // the request is on the server, parked at the gate
   controller.abort();
   await expect(pending).rejects.toBeInstanceOf(EmbeddingUnavailableError);
+  await aborted; // the server saw the connection close: the request was not left open (F23)
   fake.release();
 });
 ```
@@ -5820,6 +6561,8 @@ export interface FakeOllama {
   /** Holds the next request(s) at the gate; the promise resolves when one has arrived there. */
   hold(): Promise<void>;
   release(): void;
+  /** Resolves when a request's connection closes before the answer was sent (the caller aborted). */
+  nextAbort(): Promise<void>;
 }
 
 const MAX_BODY = 8 * 1024 * 1024;
@@ -5832,7 +6575,11 @@ export async function startFakeOllama(options: { dimensions: number; model?: str
   let gate: Promise<void> | null = null;
   let open: () => void = () => {};
   let arrive: () => void = () => {};
+  let onAbort: () => void = () => {};
   const server: Server = createServer((req, res) => {
+    res.on("close", () => {
+      if (!res.writableFinished) onAbort();
+    });
     if (req.method !== "POST" || req.url !== "/api/embed") {
       req.resume();
       res.writeHead(404).end();
@@ -5876,6 +6623,10 @@ export async function startFakeOllama(options: { dimensions: number; model?: str
       open();
       gate = null;
     },
+    nextAbort: () =>
+      new Promise<void>((resolve) => {
+        onAbort = resolve;
+      }),
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -5885,7 +6636,7 @@ export async function startFakeOllama(options: { dimensions: number; model?: str
 }
 ```
 
-No `exports` entry is needed for it: the server's `vitest.config.ts` aliases `@docmind/embeddings/testing` to `packages/embeddings/src/testing/fakeOllama.ts` (Task 91), as it already does for `@docmind/auth/testing`.
+No `exports` entry is needed for it: the server's `vitest.config.ts` aliases `@docmind/embeddings/testing` to `packages/embeddings/src/testing/fakeOllama.ts` (Task 91b), as it already does for `@docmind/auth/testing`.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -5911,7 +6662,7 @@ Spec §9 item 23, first part. Finding F4 explains why this is not Loom's `Vector
 - Create: `packages/vector-pg/src/inMemory.ts`
 - Create: `packages/vector-pg/src/inMemory.test.ts`
 - Create: `packages/vector-pg/src/index.ts`
-- Modify: `docs/specs/2026-10-18-docmind-design.md` (§3.1 `VectorIndex` row)
+- Modify: `docs/specs/2026-10-18-docmind-design.md` (§3 layout line 70, §3.1 `VectorIndex` row, §5.2 embed row; F13)
 
 **Interfaces:**
 - Produces (from `@docmind/vector-pg`):
@@ -5960,6 +6711,8 @@ Expected: FAIL (module not found).
 
 `types.ts` carries the interfaces above. `inMemory.ts`: a `Map<chunkId, {vector, model}>`; `upsert` validates every vector first (`VectorDimensionError`), asks `chunkIds(scope, documentId)` for the set of existing chunks, writes the ones in the set with `model = this.modelId`, returns `{ written, missing: ids not in the set }`; `missing` returns `chunkIds(...)` filtered to those with no row or a row whose model differs from `modelId`, sliced to `limit`; `search` scans the rows whose model equals `modelId` and whose id is in the scope's chunk ids (the twin has only the per-document lister, so `search` takes the union over documents the twin has seen via `upsert`/`missing`; document that limitation in a comment: the twin's search is for tests of ranking, not for scope), ranks by cosine, applies `minScore`, slices to `limit`. Package config as in Task 85 (`dependencies` none; devDependencies node types, vitest, and `@types/pg` for Task 89). Spec §3.1: replace the `VectorIndex` row with `| \`ChunkVectorStore\` | packages/vector-pg | \`upsert\`, \`missing\`, \`search\` over the \`chunks\` rows (Loom's \`VectorIndex\` cannot add a vector for an id that has no row, and has no document scope) | pgvector |`.
 
+Two more one-line spec edits in the same step (F13): the §3 layout line `  vector-pg/   pgvector VectorIndex (implements @loom/memory VectorIndex)` becomes `  vector-pg/   pgvector ChunkVectorStore (port, in-memory twin, shared conformance suite)`; and the §5.2 embed row's `\`VectorIndex.upsert\`` becomes `\`ChunkVectorStore.upsert\` (onto the existing chunk rows)`.
+
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter @docmind/vector-pg build && pnpm --filter @docmind/vector-pg exec vitest run`
@@ -5979,7 +6732,7 @@ Branch `feat/vector-store-port`; subject `feat(vector-pg): ChunkVectorStore port
 
 **Interfaces:**
 - Consumes: `ChunkVectorStore`, `VectorScope`, `VectorDimensionError`, `InMemoryChunkVectors`.
-- Produces: `interface VectorHarness { store: ChunkVectorStore; /** makes `ids` exist as the chunk rows of `documentId`, in ordinal order, for this scope */ seed(scope: VectorScope, documentId: string, ids: string[]): Promise<void>; /** a second store over the same rows with a different modelId */ withModel(modelId: string): ChunkVectorStore }`; `runChunkVectorStoreConformance(factory: () => Promise<VectorHarness>, label?: string): void`.
+- Produces: `interface VectorHarness { store: ChunkVectorStore; /** makes `ids` exist as the chunk rows of `documentId`, in ordinal order, for this scope */ seed(scope: VectorScope, documentId: string, ids: string[]): Promise<void>; /** a second store over the same rows with a different modelId */ withModel(modelId: string): ChunkVectorStore }`; `runChunkVectorStoreConformance(factory: () => Promise<VectorHarness>, label?: string): void`. The cases share one database when a Postgres implementation runs them, and reuse `DOC_A` across cases, so a harness's `seed` must leave the document with exactly the chunk rows it is given (the Postgres harness deletes the document's chunks first, Task 89; F02).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -6010,7 +6763,7 @@ import { type ChunkVectorStore, VectorDimensionError, type VectorScope } from ".
 
 export interface VectorHarness {
   store: ChunkVectorStore;
-  /** Makes `ids` exist as the chunk rows of `documentId` (ordinals in array order) for this scope. */
+  /** Makes `ids` exist as the chunk rows of `documentId` (ordinals in array order) for this scope, and no others (the kit reuses the document across cases). */
   seed(scope: VectorScope, documentId: string, ids: string[]): Promise<void>;
   /** A second store over the same rows with another model id. */
   withModel(modelId: string): ChunkVectorStore;
@@ -6034,11 +6787,9 @@ const uuids = (n: number) => Array.from({ length: n }, () => randomUUID());
 export function runChunkVectorStoreConformance(
   factory: () => Promise<VectorHarness>,
   label = "ChunkVectorStore",
-  options: { skip?: () => boolean | Promise<boolean> } = {},
 ): void {
   const test = (name: string, body: (h: VectorHarness) => Promise<void>) =>
-    it(name, async (ctx) => {
-      if (await options.skip?.()) ctx.skip();
+    it(name, async () => {
       await body(await factory());
     });
 
@@ -6140,7 +6891,7 @@ Branch `test/vector-store-conformance`; subject `test(vector-pg): shared ChunkVe
 
 ### Task 89: `PgChunkVectorStore`
 
-Spec §9 item 23, second part. Runs the Task 88 kit against pgvector. **Needs the `vector` extension**: where it is missing the cases skip dynamically (Preconditions). The test lives in the server app, where the real migrations and `withTenant` already are (a package must not import an app, and must not copy the schema).
+Spec §9 item 23, second part. Runs the Task 88 kit against pgvector. **Needs the `vector` extension** (installed locally and in CI; `0014` is applied by `createTestDb()`, see Preconditions). It also relies on `0014`'s EXECUTE grant to `docmind_app` on the extension's functions (F01): without it the very first `upsert` fails with `permission denied for function vector`. The test lives in the server app, where the real migrations and `withTenant` already are (a package must not import an app, and must not copy the schema).
 
 **Files:**
 - Create: `packages/vector-pg/src/pg.ts`
@@ -6165,17 +6916,15 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { withTenant } from "../../db/tenant";
-import { APP_PASSWORD, PG_URL, type TestDb, createTestDb, hasVector } from "../../db/testSupport";
+import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
 
-describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL; the cases need pgvector)", () => {
+describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgvector)", () => {
   let db: TestDb;
   let app: Pool;
-  let vector = false;
   beforeAll(async () => {
     db = await createTestDb();
     await migrate(db.owner);
     await setAppRolePassword(db.owner, APP_PASSWORD);
-    vector = await hasVector(db.owner);
     app = new Pool({ connectionString: db.appUrl });
   });
   afterAll(async () => {
@@ -6186,7 +6935,9 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL; the cas
   const make = (modelId: string, dimensions = 768) =>
     new PgChunkVectorStore({ tenant: (t, fn) => withTenant(app, t, fn), modelId, dimensions });
 
-  // The tenant, user, document and chunk rows the kit asks for, written as the owner role.
+  // The tenant, user, document and chunk rows the kit asks for, written as the owner role. The kit
+  // reuses DOC_A across its cases in this one database, and chunks are unique on (tenant, document,
+  // ordinal), so each seed first removes the document's chunks (F02): a case then sees exactly its own.
   const seed: VectorHarness["seed"] = async (scope, documentId, ids) => {
     const hex = documentId.replaceAll("-", "").repeat(2);
     await db.owner.query("INSERT INTO tenants (id, name) VALUES ($1, 'kit') ON CONFLICT DO NOTHING", [scope.tenantId]);
@@ -6199,6 +6950,7 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL; the cas
        VALUES ($1, $2, $3, '{}', '{}', 'text/plain', 1, $4, $5) ON CONFLICT DO NOTHING`,
       [documentId, scope.tenantId, scope.ownerId, `hmac-sha256:${hex}`, hex],
     );
+    await db.owner.query("DELETE FROM chunks WHERE document_id = $1", [documentId]);
     for (const [ordinal, id] of ids.entries()) {
       await db.owner.query(
         `INSERT INTO chunks (id, tenant_id, document_id, ordinal, section_ordinal, text_enc, locator, token_count)
@@ -6211,22 +6963,14 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL; the cas
   runChunkVectorStoreConformance(
     async () => ({ store: make("m1"), withModel: (m) => make(m), seed }),
     "PgChunkVectorStore",
-    { skip: () => !vector },
   );
 
-  it("verify() accepts the column it was built for and rejects another size (needs pgvector)", async (ctx) => {
-    if (!vector) ctx.skip();
+  it("verify() accepts the column it was built for and rejects another size", async () => {
     await expect(make("m").verify(randomUUID())).resolves.toBeUndefined();
     await expect(make("m", 8).verify(randomUUID())).rejects.toThrow(/^chunks\.embedding is not vector\(8\)$/);
   });
 
-  it("verify() reports a database without the column (no pgvector) the same way", async (ctx) => {
-    if (vector) ctx.skip();
-    await expect(make("m").verify(randomUUID())).rejects.toThrow(/^chunks\.embedding is not vector\(768\)$/);
-  });
-
-  it("a cosine search can use the HNSW index (needs pgvector)", async (ctx) => {
-    if (!vector) ctx.skip();
+  it("a cosine search can use the HNSW index", async () => {
     const client = await db.owner.connect();
     try {
       await client.query("BEGIN");
@@ -6245,8 +6989,8 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL; the cas
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `export DOCMIND_TEST_PG_URL=<pgvector url> && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/pgVectors.pg.test.ts`
-Expected: FAIL (`@docmind/vector-pg` exports no `PgChunkVectorStore`). On 55432 the kit cases skip and only the "no pgvector" `verify` case runs; do the failing-first check against a pgvector URL.
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/pgVectors.pg.test.ts`
+Expected: FAIL (`@docmind/vector-pg` exports no `PgChunkVectorStore`).
 
 - [ ] **Step 3: Implement**
 
@@ -6336,8 +7080,8 @@ export class PgChunkVectorStore implements ChunkVectorStore {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `export DOCMIND_TEST_PG_URL=<pgvector url> && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/pgVectors.pg.test.ts`
-Expected: PASS against pgvector. On 55432: the seven kit cases, the size check and the HNSW case report skipped with the reason "pgvector not installed", and the no-pgvector `verify` case passes; say so in the PR.
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/pgVectors.pg.test.ts`
+Expected: PASS: the seven kit cases, the size check and the HNSW case all run (nothing is skipped).
 
 - [ ] **Step 5: Close-out**
 
@@ -6347,7 +7091,7 @@ Branch `feat/vector-pg`; subject `feat(vector-pg): pgvector ChunkVectorStore pas
 
 ### Task 90: the `embed` step effect
 
-Spec §5.2 embed: batches of 64, idempotent by `chunkId`, the log records `{count, model}` only. A library over ports (like Task 78); Task 91 puts it in the flow.
+Spec §5.2 embed: batches of 64, idempotent by `chunkId`, the log records `{count, model}` only. A library over ports (like Task 78); Task 91b puts it in the flow.
 
 **Files:**
 - Create: `apps/server/app/flows/ingest-document/steps/embed.ts`
@@ -6377,7 +7121,7 @@ Spec §5.2 embed: batches of 64, idempotent by `chunkId`, the log records `{coun
 ```ts
 it("embeds in batches of 64 and reports {count, model}", async () => {
   const h = harness(150);
-  expect(await run(h.deps)).toEqual({ outcome: "done", count: 150, model: "hashing-8" });
+  expect(await run(h.deps)).toEqual({ outcome: "done", count: 150, model: h.deps.embedder.modelId }); // Loom's hashing embedder names itself loom-hashing-embedder/1;dims=8, so compare to the instance (F09)
   expect(h.embedCalls).toEqual([64, 64, 22]);
   expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toEqual([]);
 });
@@ -6425,6 +7169,15 @@ it("stops as document_gone when the vector store says the chunk rows are gone (d
   const h = harness(3);
   h.deps.vectors.upsert = async (_s, _d, items) => ({ written: 0, missing: items.map((i) => i.chunkId) });
   expect(await run(h.deps)).toEqual({ outcome: "document_gone" });
+});
+
+it("fails the step instead of spinning when the vector store writes nothing and reports nothing missing (F26)", async () => {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+  const h = harness(3);
+  h.deps.vectors.upsert = async () => ({ written: 0, missing: [] });
+  await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+  expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "Error");
+  spy.mockRestore();
 });
 
 it("an empty document embeds nothing and reports count 0", async () => {
@@ -6494,8 +7247,11 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
       const rows = await deps.chunks.read(ref, ids);
       if (rows.length !== ids.length) throw new DocumentGoneError(); // chunks deleted or replaced under us
       const vectors = await embed(deps.embedder, rows.map((r) => r.text));
-      const { missing } = await deps.vectors.upsert(scope, ref.documentId, rows.map((r, i) => ({ chunkId: r.id, vector: vectors[i] as number[] })));
+      const { written, missing } = await deps.vectors.upsert(scope, ref.documentId, rows.map((r, i) => ({ chunkId: r.id, vector: vectors[i] as number[] })));
       if (missing.length > 0) throw new DocumentGoneError();
+      // A store that writes nothing and reports nothing missing would make the next `missing` call return
+      // the same ids and the loop spin forever: fail the step (stepEffect rethrows with the fixed message).
+      if (written === 0) throw new Error("embedding made no progress");
     }
     return { count: await deps.chunks.count(ref), model: deps.embedder.modelId };
   });
@@ -6511,7 +7267,7 @@ async function embed(embedder: EmbeddingProvider, texts: string[]): Promise<numb
 }
 ```
 
-Termination: each loop either shrinks `missing` or throws (an `upsert` that wrote nothing and reported nothing missing cannot happen; if a store ever does, the next `missing` call returns the same ids and the loop would spin, so the code adds `if (written === 0) throw new Error("embedding made no progress")` after the upsert; it maps to the fixed step failure).
+Termination: each loop either shrinks `missing` or throws; the `written === 0` guard above turns the one remaining way to spin (a store that reports nothing written and nothing missing) into the fixed step failure, and the test above proves it.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -6524,23 +7280,24 @@ Branch `feat/ingest-embed-step`; subject `feat(server): embed step in batches of
 
 ---
 
-### Task 91: embed in the flow, and the embedder and vector store through the composition root
+### Task 91a: the embedder and the vector store through the composition root
+
+Preflight F15: the first draft of Task 91 touched 13 files, so it is split. This half wires the embedder and the vector store through `createIngestWiring`, `buildServer` and `main` and checks them at composition and at boot; Task 91b puts `embed` in the flow. Nothing reachable changes: the flow has no embed step yet.
 
 **Files:**
-- Modify: `apps/server/app/flows/ingest-document/flow.ts` (`ingestEmbedStep`)
-- Modify: `apps/server/app/flows/ingest-document/deps.ts`, `pgDeps.ts`
 - Modify: `apps/server/app/flows/ingest-document/limits.ts` (embedder config, `IngestWiring.embedder`)
-- Modify: `apps/server/app/security.ts`, `apps/server/app/compose.ts`, `apps/server/app/main.ts`
-- Modify: `apps/server/app/documents/testHarness.ts` (fake Ollama embedder, twin vector store over the pg chunk store)
-- Modify: `apps/server/app/flows/ingest-document/flow.test.ts`, `eventLog.pg.test.ts`
+- Modify: `apps/server/app/flows/ingest-document/limits.test.ts`
+- Modify: `apps/server/app/flows/ingest-document/pgDeps.ts` (`vectors?` argument and the mismatch refusal)
+- Create: `apps/server/app/flows/ingest-document/pgDeps.test.ts`
+- Modify: `apps/server/app/compose.ts`, `apps/server/app/main.ts`
 
 **Interfaces:**
-- Consumes: `embedEffect` (90), `OllamaEmbeddingProvider` (85), `PgChunkVectorStore` (89), `InMemoryChunkVectors` (87).
-- Produces: `ingestEmbedStep` (`id: "ingest-embed"`); `IngestDeps extends ParseDeps, ChunkDeps, EmbedDeps`; `IngestWiring.embedder: EmbeddingProvider`; `loadEmbedConfig(env): { baseUrl: string; model: string; dimensions: number; timeoutMs: number }` reading `DOCMIND_OLLAMA_URL` (default `http://127.0.0.1:11434`), `DOCMIND_EMBED_MODEL` (`nomic-embed-text`), `DOCMIND_EMBED_DIMENSIONS` (768), `DOCMIND_EMBED_TIMEOUT_MS` (30000); `ComposeOptions.vectors?: ChunkVectorStore` (test seam; default `new PgChunkVectorStore({ tenant: (t, fn) => withTenant(pool, t, fn), modelId: embedder.modelId, dimensions: embedder.dimensions })`); `main` calls `vectors.verify(NIL_TENANT)` before listening so a dimension mismatch fails the boot.
+- Consumes: `OllamaEmbeddingProvider` (85), `PgChunkVectorStore` (89), `InMemoryChunkVectors` (87).
+- Produces: `IngestWiring.embedder: EmbeddingProvider`; `loadEmbedConfig(env): { baseUrl: string; model: string; dimensions: number; timeoutMs: number }` reading `DOCMIND_OLLAMA_URL` (default `http://127.0.0.1:11434`), `DOCMIND_EMBED_MODEL` (`nomic-embed-text`), `DOCMIND_EMBED_DIMENSIONS` (768), `DOCMIND_EMBED_TIMEOUT_MS` (30000); `PgIngestArgs.vectors?: ChunkVectorStore` (checked against `wiring.embedder` when given; Task 91b makes it required and returns it in the deps); `ComposeOptions.vectors?: ChunkVectorStore` (test seam; default `new PgChunkVectorStore({ tenant: (t, fn) => withTenant(pool, t, fn), modelId: embedder.modelId, dimensions: embedder.dimensions })`), returned by `buildServer` as `vectors`; `main` calls `vectors.verify(NIL_TENANT)` before listening so a dimension mismatch fails the boot.
 
 - [ ] **Step 1: Write the failing tests**
 
-`flow.test.ts`: the fake deps gain `chunks`, `vectors` (an `InMemoryChunkVectors` whose `chunkIds` returns `[]`) and `embedder` (`HashingEmbeddingProvider({dimensions: 8})`), and the completing test expects `["begin:parse", "begin:chunk", "begin:embed"]`. `limits.test.ts` gains:
+`limits.test.ts` gains:
 
 ```ts
 describe("loadEmbedConfig", () => {
@@ -6566,19 +7323,18 @@ it("refuses an embedder and a vector store that disagree on the model, at compos
     /^embedder and vector store disagree on the model$/,
   );
 });
-```
 
-`eventLog.pg.test.ts` (whose folded-status assertion becomes `{ status: "embedding", step: "embed", code: null }`) stops using the default (real-Ollama) wiring: its `beforeAll` starts `startFakeOllama({ dimensions: 64, model: "fake-embed" })`, builds `wiring = createIngestWiring({ DOCMIND_OLLAMA_URL: fake.url, DOCMIND_EMBED_MODEL: "fake-embed", DOCMIND_EMBED_DIMENSIONS: "64" })` and passes `vectors: twinOverPgChunks(f.app, wiring)` to `pgIngestDeps` (and closes the fake in `afterAll`). Its first test then also asserts the embed step's output in the raw log:
-
-```ts
-const outputs = raw.filter((e) => e.eventType === "STEP_COMPLETED").map((e) => (e.payload as { output: Record<string, unknown> }).output);
-expect(outputs.at(-1)).toEqual({ outcome: "done", count: expect.any(Number), model: "ollama/fake-embed" });
+it("accepts a vector store that matches the embedder", () => {
+  const wiring = createIngestWiring({ DOCMIND_EMBED_MODEL: "a", DOCMIND_EMBED_DIMENSIONS: "8" });
+  const vectors = new InMemoryChunkVectors({ modelId: wiring.embedder.modelId, dimensions: 8, chunkIds: async () => [] });
+  expect(() => pgIngestDeps({ pool: {} as Pool, fields: {} as FieldCrypto, blobs: () => ({ get: async () => null }), wiring, vectors })).not.toThrow();
+});
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document`
-Expected: FAIL (no embed step; `loadEmbedConfig` missing).
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/limits.test.ts app/flows/ingest-document/pgDeps.test.ts`
+Expected: FAIL (`loadEmbedConfig` missing; `wiring.embedder` undefined).
 
 - [ ] **Step 3: Implement**
 
@@ -6616,35 +7372,85 @@ const ingestDeps = pgIngestDeps({ pool, fields, blobs, wiring: options.ingest, v
 return { app, server, store, throttle, starts, ingest: options.ingest, vectors };
 ```
 
-`pgIngestDeps` adds `chunks`, `vectors`, `embedder: wiring.embedder` and refuses a mismatch at composition time:
+`pgIngestDeps` accepts the optional `vectors` and refuses a mismatch at composition time:
 
 ```ts
-if (vectors.modelId !== wiring.embedder.modelId || vectors.dimensions !== wiring.embedder.dimensions) {
+if (vectors && (vectors.modelId !== wiring.embedder.modelId || vectors.dimensions !== wiring.embedder.dimensions)) {
   throw new Error("embedder and vector store disagree on the model");
 }
 ```
 
-`main.ts` calls `await composed.vectors.verify(NIL_TENANT)` (`NIL_TENANT = "00000000-0000-4000-8000-000000000000"`, which owns no rows) before `server.listen`, so a database whose `chunks.embedding` is not `vector(<DOCMIND_EMBED_DIMENSIONS>)` stops the boot with `chunks.embedding is not vector(768)` instead of failing the first upload. `ComposeOptions.vectors?: ChunkVectorStore` is the test seam. Add `ingestEmbedStep = stepOf("ingest-embed", "IngestEmbed")` after the chunk step, `"ingest-embed": embedEffect(deps)` to the effect map, and `"ingest-embed"` to the grants.
-
-In `testHarness.ts` the harness starts `startFakeOllama({ dimensions: 64, model: "fake-embed" })`, builds `createIngestWiring({ DOCMIND_OLLAMA_URL: fake.url, DOCMIND_EMBED_MODEL: "fake-embed", DOCMIND_EMBED_DIMENSIONS: "64" })` and passes `vectors: new InMemoryChunkVectors({ modelId: wiring.embedder.modelId, dimensions: 64, chunkIds })` with
-
-```ts
-const chunkIds = (scope: VectorScope, documentId: string) =>
-  withTenant(app, scope.tenantId, async (tx) =>
-    (await tx.query<{ id: string }>("SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id AND d.tenant_id = c.tenant_id WHERE c.document_id = $1 AND d.owner_id = $2 ORDER BY c.ordinal", [documentId, scope.ownerId])).rows.map((r) => r.id),
-  );
-```
-
-so the whole pipeline runs against the real `chunks` table where pgvector is absent. `apps/server/vitest.config.ts` gains the aliases `@docmind/embeddings/testing` (to `packages/embeddings/src/testing/fakeOllama.ts`) and, from Task 89, `@docmind/vector-pg/testing`.
+`main.ts` calls `await composed.vectors.verify(NIL_TENANT)` (`NIL_TENANT = "00000000-0000-4000-8000-000000000000"`, which owns no rows) before `server.listen`, so a database whose `chunks.embedding` is not `vector(<DOCMIND_EMBED_DIMENSIONS>)` stops the boot with `chunks.embedding is not vector(768)` instead of failing the first upload. `ComposeOptions.vectors?: ChunkVectorStore` is the test seam.
 
 - [ ] **Step 4: Run to verify they pass**
 
-Run: `export DOCMIND_TEST_PG_URL=... && pnpm --filter @docmind/server exec vitest run`
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
+Expected: PASS (the whole server suite; the default wiring now builds an `OllamaEmbeddingProvider` that nothing calls yet).
+
+- [ ] **Step 5: Close-out**
+
+Branch `feat/ingest-embedder-wiring`; subject `feat(server): embedder and vector store through the composition root`. Files: the six above.
+
+---
+
+### Task 91b: `embed` in the flow
+
+**Files:**
+- Modify: `apps/server/app/flows/ingest-document/flow.ts` (`ingestEmbedStep`)
+- Modify: `apps/server/app/flows/ingest-document/deps.ts`, `pgDeps.ts` (`vectors` becomes required; returns `vectors` and `embedder`)
+- Modify: `apps/server/app/security.ts`
+- Modify: `apps/server/app/documents/testHarness.ts` (fake Ollama embedder; `twinOverPgChunks`, F14: created here, used by this task's tests and by `eventLog.pg.test.ts`; the acceptance tasks run the production store instead)
+- Modify: `apps/server/app/flows/ingest-document/flow.test.ts`, `eventLog.pg.test.ts`, `testing.ts` (`fakeIngestDeps` gains `vectors` and `embedder`)
+- Modify: `apps/server/vitest.config.ts` (the `@docmind/embeddings/testing` alias)
+
+**Interfaces:**
+- Consumes: `embedEffect` (90), `loadEmbedConfig`, `IngestWiring.embedder`, `PgIngestArgs.vectors` (91a), `InMemoryChunkVectors` (87), `startFakeOllama` (86).
+- Produces: `ingestEmbedStep` (`id: "ingest-embed"`); `IngestDeps extends ParseDeps, ChunkDeps, EmbedDeps`; `PgIngestArgs.vectors: ChunkVectorStore` (required); `twinOverPgChunks(app: Pool, wiring: IngestWiring): ChunkVectorStore` exported from `testHarness.ts` (an `InMemoryChunkVectors` for the wiring's model whose `chunkIds` read the real `chunks` table through `withTenant`, so the whole pipeline runs against the real table without the pgvector SQL).
+
+- [ ] **Step 1: Write the failing tests**
+
+`flow.test.ts` and `testing.ts`: `fakeIngestDeps` (Task 80b's) gains `vectors` (an `InMemoryChunkVectors` whose `chunkIds` returns `[]`) and `embedder` (`HashingEmbeddingProvider({dimensions: 8})`) defaults, and the completing test expects `["begin:parse", "begin:chunk", "begin:embed"]`.
+
+`eventLog.pg.test.ts` (whose folded-status assertion becomes `{ status: "embedding", step: "embed", code: null }`) stops using the default (real-Ollama) wiring: its `beforeAll` starts `startFakeOllama({ dimensions: 64, model: "fake-embed" })`, builds `wiring = createIngestWiring({ DOCMIND_OLLAMA_URL: fake.url, DOCMIND_EMBED_MODEL: "fake-embed", DOCMIND_EMBED_DIMENSIONS: "64" })` and passes `vectors: twinOverPgChunks(f.app, wiring)` to `pgIngestDeps` (and closes the fake in `afterAll`). Its first test then also asserts the embed step's output in the raw log:
+
+```ts
+const outputs = raw.filter((e) => e.eventType === "STEP_COMPLETED").map((e) => (e.payload as { output: Record<string, unknown> }).output);
+expect(outputs.at(-1)).toEqual({ outcome: "done", count: expect.any(Number), model: "ollama/fake-embed" });
+```
+
+The harness-based tests (`ingestStart.pg.test.ts`, `documents.e2e.pg.test.ts`) assert a step-agnostic status since Task 80c, so the new step needs no edit to them (F05).
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run app/flows/ingest-document`
+Expected: FAIL (no embed step in the flow; `twinOverPgChunks` missing).
+
+- [ ] **Step 3: Implement**
+
+Add `ingestEmbedStep = stepOf("ingest-embed", "IngestEmbed")` after the chunk step in `INGEST_STEPS`, `"ingest-embed": embedEffect(deps)` to the effect map, `"ingest-embed"` to the grants in `security.ts`, `export interface IngestDeps extends ParseDeps, ChunkDeps, EmbedDeps {}`, and in `pgDeps.ts` make `vectors` required and return `vectors` and `embedder: wiring.embedder` (the mismatch refusal of 91a stays, now unconditional).
+
+In `testHarness.ts` the harness starts `startFakeOllama({ dimensions: 64, model: "fake-embed" })`, builds `createIngestWiring({ DOCMIND_OLLAMA_URL: fake.url, DOCMIND_EMBED_MODEL: "fake-embed", DOCMIND_EMBED_DIMENSIONS: "64" })`, passes `vectors: twinOverPgChunks(app, wiring)` and closes the fake in `close()`; the function is exported:
+
+```ts
+export function twinOverPgChunks(app: Pool, wiring: IngestWiring): ChunkVectorStore {
+  const chunkIds = (scope: VectorScope, documentId: string) =>
+    withTenant(app, scope.tenantId, async (tx) =>
+      (await tx.query<{ id: string }>("SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id AND d.tenant_id = c.tenant_id WHERE c.document_id = $1 AND d.owner_id = $2 ORDER BY c.ordinal", [documentId, scope.ownerId])).rows.map((r) => r.id),
+    );
+  return new InMemoryChunkVectors({ modelId: wiring.embedder.modelId, dimensions: wiring.embedder.dimensions, chunkIds });
+}
+```
+
+so the flow tests run end to end through the real `chunks` table with an in-memory vector store (the acceptance tasks 95a to 95b run the real `PgChunkVectorStore` instead). `apps/server/vitest.config.ts` gains the alias `@docmind/embeddings/testing` (to `packages/embeddings/src/testing/fakeOllama.ts`); `@docmind/vector-pg/testing` was added by Task 89.
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm --filter @docmind/server exec vitest run`
 Expected: PASS (txt uploads in the harness now stop at status `embedding` until Task 92).
 
 - [ ] **Step 5: Close-out**
 
-Branch `feat/ingest-embed-in-flow`; subject `feat(server): embed step in the flow, embedder and vectors through the composition root`. Seam if over: `loadEmbedConfig` + its test, then the flow change.
+Branch `feat/ingest-embed-in-flow`; subject `feat(server): embed step in the flow`. Files: the nine above.
 
 ---
 
@@ -6661,7 +7467,7 @@ Spec §9 item 14 completes the skeleton. The three placeholders are real, named,
 - Modify: `apps/server/app/security.ts`
 - Modify: `apps/server/app/flows/ingest-document/flow.test.ts`
 - Modify: `apps/server/app/flows/ingest-document/eventLog.pg.test.ts` (the folded status of the real log)
-- Modify: `apps/server/app/documents/ingestStart.pg.test.ts`
+- Modify: `apps/server/app/documents/ingestStart.pg.test.ts`, `apps/server/app/documents/documents.e2e.pg.test.ts` (the step-agnostic status of Task 80c becomes `ready`; F05)
 
 **Interfaces:**
 - Consumes: `stepEffect`, `StepGuard` (73a), `ChunkStore` (82), `foldIngestStatus`, `STATUS_MESSAGES` (74b), `IngestStatus.forDocument` through the harness (79c).
@@ -6719,7 +7525,9 @@ describe("finalize", () => {
 
 `eventLog.pg.test.ts`: the folded-status assertion of Task 81 (which Tasks 83 and 91 moved to `chunk` and `embed`) now expects the finished run: `expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null })`. This is the proof that the model's handlers match the kernel's real events.
 
-`ingestStart.pg.test.ts`: the first test now ends with:
+`documents.e2e.pg.test.ts`: the read-back of the txt document now expects `status: "ready"` in its `toMatchObject` (replacing the step-agnostic `["parsing", "embedding"]` check of Task 80c).
+
+`ingestStart.pg.test.ts`: the first test now ends with (replacing the step-agnostic assertion of Task 80c):
 
 ```ts
     const state = await handle?.waitForCompletion();
@@ -6786,7 +7594,7 @@ Branch `feat/ingest-placeholders-finalize`; subject `feat(server): analyze, summ
 
 ### Task 93: sweep documents the flow never started
 
-Carry-forward 1 (crash between the upload commit and the flow start; also a start that failed or was slow, now that Task 77 stopped waiting for it). **Revised 2026-10-19:** `documents.status` is gone (Task 79c), so "stranded" means: the document has **no row for its current-generation ingest execution** in the status model's table, and it is older than a grace period. A `SECURITY DEFINER` function finds them across tenants by one anti-join (the model's tables are in `public`, Revision R2); the sweeper asks the (start-once) port to start each. Calling start for a document whose execution exists but whose row has not been folded yet is a no-op, so the sweep needs no execution lookup and cannot double-start. Stub (generation 1) executions are not consulted: a generation-1 row does not count, because the stub never ran a real step. To keep the scan from walking the whole table every minute it looks only at documents created within a lookback window (default 7 days, newest first, using a new index on `created_at`); an operator who needs older strays swept passes a longer `lookbackMs`.
+Carry-forward 1 (crash between the upload commit and the flow start; also a start that failed or was slow, now that Task 77 stopped waiting for it). **Revised 2026-10-19:** `documents.status` is gone (Tasks 79c and 79d), so "stranded" means: the document has **no row for its current-generation ingest execution** in the status model's table, and it is older than a grace period. A `SECURITY DEFINER` function finds them across tenants by one anti-join (the model's tables are in `public`, Revision R2); the sweeper asks the (start-once) port to start each. Calling start for a document whose execution exists but whose row has not been folded yet is a no-op, so the sweep needs no execution lookup and cannot double-start. Stub (generation 1) executions are not consulted: a generation-1 row does not count, because the stub never ran a real step. To keep the scan from walking the whole table every minute it looks only at documents created within a lookback window (default 7 days, newest first, using a new index on `created_at`); an operator who needs older strays swept passes a longer `lookbackMs`.
 
 **Files:**
 - Create: `infra/migrations/0015_stale_uploads.sql`
@@ -6967,11 +7775,15 @@ The piece of the SSE route that can be tested without a socket: `openStream` wir
 ```ts
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openStream } from "./events";
 import { InMemoryProgressBus } from "./progress";
 
-const bus = new InMemoryProgressBus();
+// A bus per test (F32): a module-level bus would keep every earlier test's subscribers attached.
+let bus = new InMemoryProgressBus();
+beforeEach(() => {
+  bus = new InMemoryProgressBus();
+});
 const scope = { userId: randomUUID() };
 const ev = (documentId = randomUUID()) => ({ documentId, step: "chunk", status: "parsing" }) as const;
 const fakeResponse = (accepts: boolean) => {
@@ -6991,6 +7803,14 @@ describe("openStream", () => {
       `id: 1\nevent: progress\ndata: ${JSON.stringify(a)}\n\n`,
       `id: 2\nevent: progress\ndata: ${JSON.stringify(b)}\n\n`,
     ]);
+  });
+
+  it("frames a terminal event that has no step (an unexpected failure, F12)", () => {
+    const { res, written } = fakeResponse(true);
+    openStream(res, () => {}, bus, scope, () => () => {}, 15_000);
+    const failed = { documentId: randomUUID(), status: "failed", detail: "internal" } as const;
+    bus.publish(scope, failed);
+    expect(written).toEqual([`id: 1\nevent: progress\ndata: ${JSON.stringify(failed)}\n\n`]);
   });
 
   it("sends a heartbeat comment each time the scheduler fires", () => {
@@ -7102,14 +7922,14 @@ Branch `feat/api-event-stream-writer`; subject `feat(api): server-sent-event str
 Spec §5.2 progress. Authenticated by the session cookie like every route (`EventSource` sends cookies); owner-scoped (the bus key is the user); a per-user cap on open streams; no `Last-Event-ID` replay in part 1 (the document list is the source of truth after a reconnect).
 
 **Files:**
-- Modify: `apps/server/app/documents/events.ts` (the route)
+- Modify: `apps/server/app/documents/events.ts` (the route, its live-stream registry and `closeAll()`)
 - Create: `apps/server/app/documents/eventsRoute.test.ts`
-- Modify: `apps/server/app/compose.ts` (mount the route)
+- Modify: `apps/server/app/compose.ts` (mount the route; `buildServer` returns `events`)
 - Modify: `apps/server/app/documents/testHarness.ts` (export `openSse`, expose `bus`, mount the route)
 
 **Interfaces:**
 - Consumes: `openStream`, `Schedule`, `intervalSchedule` (94a), `ProgressBus`, `requireAuth`, `Authenticator`.
-- Produces: `documentEventRoutes(deps: { authenticator: Authenticator; bus: ProgressBus; maxStreamsPerUser?: number; heartbeatMs?: number; schedule?: Schedule }): Record<string, Handler>` defining `GET /api/documents/events`. Responses: `200 text/event-stream` (`cache-control: no-store`, `x-accel-buffering: no`), `401` from `requireAuth`, `429 {error:{code:"too_many_streams"}}` over the cap (default 4); `openSse(url, headers)` in `testHarness.ts`.
+- Produces: `documentEventRoutes(deps: { authenticator: Authenticator; bus: ProgressBus; maxStreamsPerUser?: number; heartbeatMs?: number; schedule?: Schedule; onStreamEnd?: () => void }): { routes: Record<string, Handler>; closeAll(): void }`, where `routes` defines `GET /api/documents/events` and `closeAll()` stops and ends every open stream (F10: `shutdown()` waits for in-flight requests, and an event-stream response never ends on its own, so SIGTERM would otherwise hang); `onStreamEnd` is called after a stream has released its per-user slot (tests await it instead of polling, F24). Responses: `200 text/event-stream` (`cache-control: no-store`, `x-accel-buffering: no`), `401` from `requireAuth`, `429 {error:{code:"too_many_streams"}}` over the cap (default 4); `openSse(url, headers)` in `testHarness.ts`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7118,7 +7938,7 @@ Spec §5.2 progress. Authenticated by the session cookie like every route (`Even
 ```ts
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHttpServer } from "../server";
 import { documentEventRoutes } from "./events";
 import { InMemoryProgressBus } from "./progress";
@@ -7126,7 +7946,9 @@ import { U1, U1B, U2, openSse, startDocumentServer, testAuthenticator } from "./
 import { ingestRun } from "../status/testing";
 
 const bus = new InMemoryProgressBus();
-const server = createHttpServer(documentEventRoutes({ authenticator: testAuthenticator, bus, maxStreamsPerUser: 2 }));
+let onStreamEnd: () => void = () => {};
+const events = documentEventRoutes({ authenticator: testAuthenticator, bus, maxStreamsPerUser: 2, onStreamEnd: () => onStreamEnd() });
+const server = createHttpServer(events.routes);
 let base = "";
 beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -7170,13 +7992,25 @@ describe("GET /api/documents/events", () => {
     const [a, b] = [await open("alice2"), await open("alice2")];
     const refused = await fetch(`${base}/api/documents/events`, { headers: { "x-test-user": "alice2" } });
     expect([refused.status, (await refused.json()).error.code]).toEqual([429, "too_many_streams"]);
+    const freed = new Promise<void>((resolve) => (onStreamEnd = resolve)); // the server-side end of the first stream
     a.close();
-    await vi.waitFor(async () => {
-      const again = await open("alice2");
-      expect(again.res.status).toBe(200);
-      again.close();
-    });
+    await freed; // a condition the code settles, not a poll (F24)
+    const again = await open("alice2");
+    expect(again.res.status).toBe(200);
+    again.close();
     b.close();
+  });
+
+  it("closeAll ends every open stream, frees their slots, and leaves later streams possible", async () => {
+    const s = await open("alice3");
+    expect(await s.next()).toBe("retry: 5000");
+    const freed = new Promise<void>((resolve) => (onStreamEnd = resolve));
+    events.closeAll();
+    await freed;
+    await expect(s.next()).rejects.toThrow(/^stream ended$/);
+    const again = await open("alice3");
+    expect(again.res.status).toBe(200);
+    again.close();
   });
 
   it("is matched before the :id route, so 'events' is never treated as a document id", async () => {
@@ -7200,7 +8034,7 @@ describe("GET /api/documents/events", () => {
 });
 ```
 
-`alice2` maps to `ALICE2` in `testAuthenticator`, which lets the cap test use a user no other test uses. `openSse` is added to `testHarness.ts` in this task (Task 95 reuses it):
+`alice2` maps to `ALICE2` in `testAuthenticator`. `openSse` is added to `testHarness.ts` in this task (Task 95 reuses it):
 
 ```ts
 /** Opens a server-sent-event stream; `next()` resolves with the next complete frame, without its blank line. */
@@ -7241,11 +8075,14 @@ export interface EventRoutesDeps {
   maxStreamsPerUser?: number;
   heartbeatMs?: number;
   schedule?: Schedule;
+  /** Called after a stream has released its slot (tests await it). */
+  onStreamEnd?: () => void;
 }
 
-export function documentEventRoutes(deps: EventRoutesDeps): Record<string, Handler> {
+export function documentEventRoutes(deps: EventRoutesDeps): { routes: Record<string, Handler>; closeAll(): void } {
   const open = new Map<string, number>(); // streams per user, owned by this route set (no module global)
-  return {
+  const live = new Map<ServerResponse, () => void>(); // every open stream's end function, for closeAll()
+  const routes: Record<string, Handler> = {
     "GET /api/documents/events": requireAuth(deps.authenticator, (req, res, identity) => {
       const count = open.get(identity.userId) ?? 0;
       if (count >= (deps.maxStreamsPerUser ?? 4)) {
@@ -7264,12 +8101,15 @@ export function documentEventRoutes(deps: EventRoutesDeps): Record<string, Handl
         (stop) => {
           const end = () => {
             stop();
+            live.delete(res);
             if (released) return;
             released = true;
             const left = (open.get(identity.userId) ?? 1) - 1;
             if (left <= 0) open.delete(identity.userId);
             else open.set(identity.userId, left);
+            deps.onStreamEnd?.();
           };
+          live.set(res, end);
           req.on("close", end);
           res.on("close", end);
         },
@@ -7280,10 +8120,20 @@ export function documentEventRoutes(deps: EventRoutesDeps): Record<string, Handl
       );
     }),
   };
+  return {
+    routes,
+    /** Unsubscribes, then ends every open stream, so `server.close()` can finish (F10). */
+    closeAll() {
+      for (const [res, end] of [...live]) {
+        end(); // first: after this no bus event writes to a response that is ending
+        res.end();
+      }
+    },
+  };
 }
 ```
 
-`compose.ts` spreads `...documentEventRoutes({ authenticator, bus: options.ingest.bus })` into `createHttpServer` after `documentRoutes`; `testHarness.ts` mounts the same route on `h.bus` (the bus its status model publishes to, Task 79c).
+`compose.ts`: `const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });` spreads `...events.routes` into `createHttpServer` after `documentRoutes` and returns `events` from `buildServer`; `testHarness.ts` mounts the same routes on `h.bus` (the bus its status model publishes to, Task 79c) and calls `events.closeAll()` in `close()`. `main.ts` calls `closeAll()` in Task 94c.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -7296,18 +8146,71 @@ Branch `feat/api-document-events`; subject `feat(api): GET /api/documents/events
 
 ---
 
-### Task 95a: acceptance stack and the txt upload to `ready`
+### Task 94c: close the event streams at shutdown
 
-The runnable result of part 1: sign up over real HTTP, upload a txt, watch it reach `ready` on the SSE stream, find sealed chunks with embeddings, and (in Task 95b) see failures end `failed` with fixed messages, deletes cascade and the sweep recover stranded uploads. The stack is the production composition (`buildServer`) with the real child-process parser (needs `pnpm build` first, which the gate runs), the fake Ollama server, Loom on durable Postgres storage, the pg `chunks` table, and the pgvector store when the extension exists (otherwise the in-memory twin over the real `chunks` table; the test names say which ran).
+F10. `shutdown()` stops accepting requests and waits for the in-flight ones; an open `text/event-stream` response never ends by itself, so SIGTERM would hang with a browser connected. `main` ends the streams first.
 
 **Files:**
-- Create: `apps/server/app/documents/ingestStack.ts` (shared by 95a and 95b)
-- Create: `apps/server/app/documents/ingest.e2e.pg.test.ts`
-- Modify: `apps/server/app/documents/testHarness.ts` (`twinOverPgChunks`)
+- Modify: `apps/server/app/main.ts` (`events.closeAll()` first in `stop()`)
+- Modify: `apps/server/app/shutdown.test.ts` (a case with an open event stream)
 
 **Interfaces:**
-- Consumes: everything above; `buildServer`, `openDurableStorage`, `PostgresKeyStore`, `startFakeOllama`, `hasVector`, `createIngestWiring`, `openSse`, `pgStatusWriter`, `pgStatusReaderFor` (74e; the real two-role stores, so the acceptance test exercises the `0012` policies end to end).
-- Produces: `startIngestStack(): Promise<IngestStack>` with `interface IngestStack { base: string; db: TestDb; app: Pool; keys: PostgresKeyStore; fields: FieldCrypto; durable: DurableStorage; fake: FakeOllama; composed: ReturnType<typeof buildServer>; root: string; vector: boolean; signUpAndLogIn(email: string): Promise<{ cookie: string; userId: string; tenantId: string }>; upload(cookie: string, name: string, data: Uint8Array): Promise<Response>; events(cookie: string): ReturnType<typeof openSse>; until(stream, documentId: string, done: (status: string) => boolean): Promise<{ step: string; status: string; detail?: string }[]>; close(): Promise<void> }`; `twinOverPgChunks(app: Pool, wiring: IngestWiring): InMemoryChunkVectors` (Task 91's `chunkIds` query packaged as a function); `assertEventsAreContentFree` comes from Task 81's `flows/ingest-document/testing.ts`.
+- Consumes: `documentEventRoutes(...).closeAll()` (94b), `buildServer`'s `events` (94b), `shutdown` (M2).
+- Produces: nothing new; `stop()` order (F35, the whole order is stated in Task 79b).
+
+- [ ] **Step 1: Write the failing test**
+
+`shutdown.test.ts` gains a case (imports `AddressInfo` is already there; add `documentEventRoutes` from `./documents/events`, `InMemoryProgressBus` from `./documents/progress`, `createHttpServer` from `./server`, `openSse` and `testAuthenticator` from `./documents/testHarness`):
+
+```ts
+  it("finishes with an event stream open once the streams are closed first (F10)", async () => {
+    const events = documentEventRoutes({ authenticator: testAuthenticator, bus: new InMemoryProgressBus() });
+    const server = createHttpServer(events.routes);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const stream = await openSse(`${url}/api/documents/events`, { "x-test-user": "alice" });
+    expect(await stream.next()).toBe("retry: 5000");
+    let closed = false;
+    events.closeAll(); // what main does first; without it server.close() would wait for this response forever
+    await shutdown(server, { close: async () => { closed = true; } });
+    expect(closed).toBe(true);
+    await expect(stream.next()).rejects.toThrow(/^stream ended$/);
+  });
+```
+
+- [ ] **Step 2: Run to verify it passes, and that main's order is the one the test models**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/shutdown.test.ts`
+Expected: PASS (the behaviour is Task 94b's `closeAll`; this test pins it against the real `shutdown`). Remove the `events.closeAll();` line, run again, and confirm the case does not finish (it hits the test timeout: the stream is never ended), then restore it.
+
+- [ ] **Step 3: Implement**
+
+`main.ts`: destructure `events` from `buildServer`'s result and, in `stop()`, call `events.closeAll();` **first**, before `closing ??= shutdown(...)`, with the comment `// an open event stream never ends by itself: end them before the server drains`.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/shutdown.test.ts && pnpm typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Close-out**
+
+Branch `feat/api-events-shutdown`; subject `fix(api): close the event streams before the server drains`.
+
+---
+
+### Task 95a: acceptance stack and the txt upload to `ready`
+
+The runnable result of part 1: sign up over real HTTP, upload a txt, watch it reach `ready` on the SSE stream, find sealed chunks with embeddings, and (in Task 95b) see failures end `failed` with fixed messages, deletes cascade and the sweep recover stranded uploads. The stack is the production composition (`buildServer`) with the real child-process parser (needs `pnpm build` first, which the gate runs), the fake Ollama server, Loom on durable Postgres storage, the pg `chunks` table and the production pgvector store (`PgChunkVectorStore`: pgvector is a precondition of every Postgres suite, F08, so the stack needs no in-memory twin; `twinOverPgChunks` of Task 91b is not used here).
+
+Split along the seam the plan named (F16): this task is the stack and the happy path; Task 95a2 adds the isolation test, which is self-contained (the first draft's second test only worked after the first had run).
+
+**Files:**
+- Create: `apps/server/app/documents/ingestStack.ts` (shared by 95a, 95a2 and 95b)
+- Create: `apps/server/app/documents/ingest.e2e.pg.test.ts`
+
+**Interfaces:**
+- Consumes: everything above; `buildServer`, `openDurableStorage`, `PostgresKeyStore`, `startFakeOllama`, `createIngestWiring`, `openSse`, `pgStatusWriter`, `pgStatusReaderFor` (74e; the real two-role stores, so the acceptance test exercises the `0012` policies end to end).
+- Produces: `startIngestStack(): Promise<IngestStack>` with `interface IngestStack { base: string; db: TestDb; app: Pool; keys: PostgresKeyStore; fields: FieldCrypto; durable: DurableStorage; fake: FakeOllama; composed: ReturnType<typeof buildServer>; root: string; signUpAndLogIn(email: string): Promise<{ cookie: string; userId: string; tenantId: string }>; upload(cookie: string, name: string, data: Uint8Array): Promise<Response>; events(cookie: string): ReturnType<typeof openSse>; until(stream, documentId: string, done: (status: string) => boolean): Promise<{ documentId: string; step?: string; status: string; detail?: string }[]>; close(): Promise<void> }` (`step` is optional: a run that fails without a step ends with a terminal event that has none, F12); `assertEventsAreContentFree` comes from Task 81's `flows/ingest-document/testing.ts`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -7319,18 +8222,16 @@ export async function startIngestStack(): Promise<IngestStack> {
   await migrate(db.owner);
   await setAppRolePassword(db.owner, APP_PASSWORD);
   await setRolePassword(db.owner, "docmind_loom", LOOM_PASSWORD);
-  const vector = await hasVector(db.owner);
   const app = new Pool({ connectionString: db.appUrl });
   const root = mkdtempSync(join(tmpdir(), "dm-ingest-e2e-"));
   const keys = new PostgresKeyStore(app, [{ id: "kek-1", key: createSecretKey(randomBytes(32)) }]);
   const fields = new FieldCrypto(keys);
   const durable = await openDurableStorage({ loomUrl: db.loomUrl, keys });
-  const dimensions = vector ? 768 : 64; // the migration fixes 768 where pgvector exists
-  const fake = await startFakeOllama({ dimensions, model: "fake-embed" });
+  const fake = await startFakeOllama({ dimensions: 768, model: "fake-embed" }); // the migration fixes 768
   const wiring = createIngestWiring({
     DOCMIND_OLLAMA_URL: fake.url,
     DOCMIND_EMBED_MODEL: "fake-embed",
-    DOCMIND_EMBED_DIMENSIONS: String(dimensions),
+    DOCMIND_EMBED_DIMENSIONS: "768",
   });
   const composed = buildServer({
     pool: app,
@@ -7343,8 +8244,7 @@ export async function startIngestStack(): Promise<IngestStack> {
     trustProxy: false,
     ingest: wiring,
     status: { writer: pgStatusWriter(durable.pool), readerFor: pgStatusReaderFor(app), source: durable.storage.eventStore },
-    // pgvector where it exists (the production store); otherwise the twin over the real chunks table
-    ...(vector ? {} : { vectors: twinOverPgChunks(app, wiring) }),
+    // no `vectors`: the production PgChunkVectorStore over the real chunks table
   });
   await composed.status.boot(); // register, then catch up, before serving (ADR 0132 D13)
   await new Promise<void>((resolve) => composed.server.listen(0, "127.0.0.1", resolve));
@@ -7367,7 +8267,7 @@ export async function startIngestStack(): Promise<IngestStack> {
   const events = (cookie: string) => openSse(`${base}/api/documents/events`, { cookie });
   /** Reads progress events until one satisfies `done`, returning every event for that document. */
   async function until(stream: Awaited<ReturnType<typeof events>>, id: string, done: (status: string) => boolean) {
-    const seen: { step: string; status: string; detail?: string }[] = [];
+    const seen: { documentId: string; step?: string; status: string; detail?: string }[] = [];
     for (;;) {
       const frame = await stream.next();
       const data = frame.split("\n").find((l) => l.startsWith("data: "));
@@ -7380,11 +8280,12 @@ export async function startIngestStack(): Promise<IngestStack> {
   }
 
   return {
-    base, db, app, keys, fields, durable, fake, composed, root, vector,
+    base, db, app, keys, fields, durable, fake, composed, root,
     signUpAndLogIn, upload, events, until,
     async close() {
       await composed.starts.idle();
       await composed.status.close();
+      composed.events.closeAll(); // F10: open event streams would keep server.close() pending
       await new Promise<void>((resolve) => {
         composed.server.close(() => resolve());
         composed.server.closeAllConnections();
@@ -7450,37 +8351,23 @@ describe.skipIf(!PG_URL)("M3 part 1 acceptance: a txt upload reaches ready (need
     // the raw event log of that ingest holds ids, outcomes, counts and the model id only
     assertEventsAreContentFree(await st.durable.raw.eventStore.read(ingestExecutionId(ada.userId, id)));
   }, WAIT);
-
-  it("shows another user nothing: not the document, not its events", async () => {
-    const grace = await st.signUpAndLogIn("grace@example.com");
-    const stream = await st.events(grace.cookie);
-    const mine = await st.upload(grace.cookie, "mine.txt", Buffer.from(LONG_TEXT.replace("Nocturne", "Graceful")));
-    const myId = ((await mine.json()) as UploadDocumentResponse).document.id;
-    const seen = await st.until(stream, myId, (status) => status === "ready");
-    stream.close();
-    expect(seen.at(-1)?.status).toBe("ready");
-    const ada = (await st.db.owner.query("SELECT id FROM documents WHERE owner_id <> $1", [grace.userId])).rows[0].id;
-    expect((await fetch(`${st.base}/api/documents/${ada}`, { headers: { cookie: grace.cookie } })).status).toBe(404);
-    const graces = (await (await fetch(`${st.base}/api/documents`, { headers: { cookie: grace.cookie } })).json()) as ListDocumentsResponse;
-    expect(graces.items.map((d) => d.id)).toEqual([myId]); // her list, statuses and all, holds only her document
-  }, WAIT);
 });
 ```
 
-Test names for the vector path say which store ran: add `${st.vector ? "pgvector" : "in-memory twin"}` to the first test's title. (Imports: `PG_URL`, `UploadDocumentResponse`, `DocumentDto`, `ListDocumentsResponse`, `chunkBind`, `ingestExecutionId`, `assertEventsAreContentFree`, `startIngestStack`, `IngestStack`, and vitest's `describe/it/expect/beforeAll/afterAll`.)
+(Imports: `PG_URL`, `UploadDocumentResponse`, `DocumentDto`, `ListDocumentsResponse`, `chunkBind`, `ingestExecutionId`, `assertEventsAreContentFree`, `startIngestStack`, `IngestStack`, and vitest's `describe/it/expect/beforeAll/afterAll`.)
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm build && pnpm --filter @docmind/server exec vitest run app/documents/ingest.e2e.pg.test.ts`
-Expected: FAIL only where Tasks 63-94b left a gap (a missing export, a status that does not match); this file is the integration check of the stack. A first run that passes unchanged is the best outcome; investigate any pass that took a shortcut.
+Expected: FAIL only where Tasks 63-94c left a gap (a missing export, a status that does not match); this file is the integration check of the stack. A first run that passes unchanged is the best outcome; investigate any pass that took a shortcut.
 
 - [ ] **Step 3: Implement**
 
 Fix what the run exposes in the owning module, not in the test.
 
-- [ ] **Step 4: Run to verify it passes, twice**
+- [ ] **Step 4: Run to verify it passes**
 
-Run the file on 55432 (the twin path runs) and once more against a pgvector database (`docker compose up -d postgres`, URL on 5432) so the `PgChunkVectorStore` path runs end to end. Expected: PASS both times; report both in the PR (if Docker is unavailable, say so and rely on CI's pgvector service).
+Run the file on 55432 (pgvector is installed there; the production `PgChunkVectorStore` runs end to end). Expected: PASS; nothing skipped.
 
 - [ ] **Step 5: Close-out**
 
@@ -7488,14 +8375,67 @@ Branch `test/api-ingest-acceptance`; subject `test(api): M3 part 1 acceptance, t
 
 ---
 
-### Task 95b: acceptance: delete, race and sweep, and `.env.example`
+### Task 95a2: acceptance: another user sees nothing
+
+The isolation half of the acceptance, split from Task 95a (F16) and made self-contained: it creates its own document for the first user instead of relying on an earlier test having run.
+
+**Files:**
+- Modify: `apps/server/app/documents/ingest.e2e.pg.test.ts`
+
+**Interfaces:**
+- Consumes: `IngestStack` (95a).
+
+- [ ] **Step 1: Write the failing test**
+
+Inside the same `describe`:
+
+```ts
+  it("shows another user nothing: not the document, not its events, not its list entry", async () => {
+    const ada = await st.signUpAndLogIn("ada-iso@example.com");
+    const grace = await st.signUpAndLogIn("grace@example.com");
+    const adaStream = await st.events(ada.cookie);
+    const graceStream = await st.events(grace.cookie);
+    const adaId = ((await (await st.upload(ada.cookie, "ada.txt", Buffer.from(LONG_TEXT))).json()) as UploadDocumentResponse).document.id;
+    await st.until(adaStream, adaId, (status) => status === "ready"); // ada's document is done before grace uploads
+    adaStream.close();
+    const graceId = ((await (await st.upload(grace.cookie, "grace.txt", Buffer.from(LONG_TEXT.replace("Nocturne", "Graceful")))).json()) as UploadDocumentResponse).document.id;
+    const seen = await st.until(graceStream, graceId, (status) => status === "ready");
+    graceStream.close();
+    expect(seen.every((e) => e.documentId === graceId)).toBe(true); // `until` skips others; grace's stream held none of ada's
+    expect(seen.at(-1)?.status).toBe("ready");
+    expect((await fetch(`${st.base}/api/documents/${adaId}`, { headers: { cookie: grace.cookie } })).status).toBe(404);
+    const graces = (await (await fetch(`${st.base}/api/documents`, { headers: { cookie: grace.cookie } })).json()) as ListDocumentsResponse;
+    expect(graces.items.map((d) => d.id)).toEqual([graceId]); // her list, statuses and all, holds only her document
+  }, WAIT);
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `export DOCMIND_TEST_PG_URL=postgres://docmind:docmind@127.0.0.1:55432/postgres && pnpm build && pnpm --filter @docmind/server exec vitest run app/documents/ingest.e2e.pg.test.ts`
+Expected: FAIL only where a gap remains (as in 95a); a first-run pass is the expected outcome.
+
+- [ ] **Step 3: Implement**
+
+Fix what the run exposes in the owning module, not in the test.
+
+- [ ] **Step 4: Run to verify it passes**
+
+As in 95a. Expected: PASS.
+
+- [ ] **Step 5: Close-out**
+
+Branch `test/api-ingest-acceptance-isolation`; subject `test(api): M3 part 1 acceptance, isolation between users`.
+
+---
+
+### Task 95b: acceptance: failures, delete, race and sweep, and `.env.example`
 
 **Files:**
 - Modify: `apps/server/app/documents/ingest.e2e.pg.test.ts`
 - Modify: `.env.example`
 
 **Interfaces:**
-- Consumes: `IngestStack` (95a), `sweepStaleUploads` (93), `FakeOllama.hold/release` (86).
+- Consumes: `IngestStack` (95a), `sweepStaleUploads` (93), `FakeOllama.hold/release/failNext` (86), `STATUS_MESSAGES` (74b2).
 - Produces: `.env.example` entries `DOCMIND_PARSE_TIMEOUT_MS=30000`, `DOCMIND_PARSE_MEMORY_MB=512`, `DOCMIND_PARSE_MAX_CHARS=20000000`, `DOCMIND_PARSE_CONCURRENCY=2`, `DOCMIND_OLLAMA_URL=http://127.0.0.1:11434`, `DOCMIND_EMBED_MODEL=nomic-embed-text`, `DOCMIND_EMBED_DIMENSIONS=768`, `DOCMIND_EMBED_TIMEOUT_MS=30000`, each commented out with its default.
 
 - [ ] **Step 1: Write the failing test**
@@ -7514,6 +8454,21 @@ Inside the same `describe`:
     const doc = (await (await fetch(`${st.base}/api/documents/${id}`, { headers: { cookie: user.cookie } })).json()) as DocumentDto;
     expect([doc.status, doc.error]).toEqual(["failed", STATUS_MESSAGES.corrupt_content]);
     expect((await st.db.owner.query("SELECT 1 FROM chunks WHERE document_id = $1", [id])).rowCount).toBe(0);
+  }, WAIT);
+
+  it("an embedder outage ends the run failed/internal: a terminal event without a step, and a failed document (F12)", async () => {
+    const user = await st.signUpAndLogIn("outage@example.com");
+    const stream = await st.events(user.cookie);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {}); // the step's fixed-message failure is logged by class
+    st.fake.failNext(503); // the embed step's first request: EmbeddingUnavailableError, which fails the step (part 2 adds the retry)
+    const id = ((await (await st.upload(user.cookie, "outage.txt", Buffer.from(LONG_TEXT.replace("Nocturne", "Outage")))).json()) as UploadDocumentResponse).document.id;
+    const seen = await st.until(stream, id, (status) => status === "failed");
+    stream.close();
+    spy.mockRestore();
+    expect(seen.at(-1)).toEqual({ documentId: id, status: "failed", detail: "internal" }); // EXECUTION_FAILED names no step
+    expect(seen.some((e) => e.step === "embed" && e.status === "embedding")).toBe(true); // it got as far as embed
+    const doc = (await (await fetch(`${st.base}/api/documents/${id}`, { headers: { cookie: user.cookie } })).json()) as DocumentDto;
+    expect([doc.status, doc.error]).toEqual(["failed", STATUS_MESSAGES.internal]);
   }, WAIT);
 
   it("ends a pdf as failed with unsupported_content until part 2 adds the parser", async () => {
@@ -7545,6 +8500,8 @@ Inside the same `describe`:
     expect((await fetch(`${st.base}/api/documents/${id}`, { method: "DELETE", headers: { cookie: user.cookie } })).status).toBe(204);
     st.fake.release();
     const principal = { tenant: user.tenantId, actor: user.userId };
+    // vi.waitFor polls on a timer: acceptable here (F24), because Loom reaches `cancelled` asynchronously
+    // after the step in flight returns and offers no hook to await; it is a condition, never a sleep.
     await vi.waitFor(async () => {
       const state = await st.composed.app.runtime.loadState(ingestExecutionId(user.userId, id), { principal });
       expect(state.status).toBe("cancelled");
@@ -7589,9 +8546,9 @@ Expected: FAIL only where a gap remains; as in 95a.
 
 Fix what the run exposes in the owning module. Add the `.env.example` entries.
 
-- [ ] **Step 4: Run to verify it passes, twice**
+- [ ] **Step 4: Run to verify it passes**
 
-As in 95a (twin path, then a pgvector database).
+As in 95a.
 
 - [ ] **Step 5: Close-out**
 
@@ -7601,13 +8558,13 @@ Branch `test/api-ingest-acceptance-delete-sweep`; subject `test(api): M3 part 1 
 
 ## Self-review
 
-**Spec coverage.** Item 12 (interface, registry, conformance, txt): Tasks 66-68. Item 13 (sandboxed runner, limits): Tasks 69a-70, with the `@loom/plugin-sandbox` correction (F1, D1). Item 14 (flow skeleton, status projection, progress SSE): Tasks 73a, 74a-74e, 75c, 79b-79c, 80, 92, 94a-94b (the status projection is Loom's folded model, Revision 2026-10-19). Item 21 (chunk step, `chunks` table): Tasks 64, 71-72, 82-83. Item 22 (Ollama provider and suite): Tasks 85-86. Item 23 (`vector-pg`, embed step): Tasks 84, 87-91. Carry-forwards: 1 sweep and stub executions (Tasks 76, 93), 2 `document_gone` everywhere (Task 73a, plus each step's own tests and the pg race tests in Tasks 83 and 95b), 3 composite key (Task 64), 4 sensitive paths and the raw event-log proof (Tasks 80-81, 83, 91, 92, 95a), 5 deps through `buildServer` (Tasks 79, 91), 6 ratchet (Task 63), 7 `deriveKey` (D9, deliberately not done), 8 bounded start (Task 77), 9 UTF-16 bypass (Task 68). Linked retrieval: chunk ids are deterministic (D4), `chunks` has `ordinal`, `section_ordinal` and a numeric locator, `chunks` has `UNIQUE (tenant_id, id)` for the later `chunk_links` composite foreign keys, the `link` step exists as a placeholder, and `deriveKey` is left for the step that needs it. Out of scope and designed to slot in: md/org/docx/doc/pdf/image parsers (append to `createDefaultParsers`, add fixtures to the kit), analyze/summarize/link (replace three entries in `ingestEffects`), retry policy and retry endpoint (`TransientIngestError`, `FAILURE_CODES`, execution generations, `PermanentIngestError` -> `failed` already exist), fair scheduling (the child runner's `maxConcurrent` is the per-process cap; per-tenant fairness sits in front of `runtime.start`).
+**Spec coverage.** Item 12 (interface, registry, conformance, txt): Tasks 66-68. Item 13 (sandboxed runner, limits): Tasks 69a-70, with the `@loom/plugin-sandbox` correction (F1, D1). Item 14 (flow skeleton, status projection, progress SSE): Tasks 73a, 74a-74e, 75c, 79b-79d, 80a-80c, 92, 94a-94c (the status projection is Loom's folded model, Revision 2026-10-19). Item 21 (chunk step, `chunks` table): Tasks 64, 71-72, 82-83. Item 22 (Ollama provider and suite): Tasks 85-86. Item 23 (`vector-pg`, embed step): Tasks 84, 87-91b. Carry-forwards: 1 sweep and stub executions (Tasks 76, 93), 2 `document_gone` everywhere (Task 73a, plus each step's own tests and the pg race tests in Tasks 83 and 95b), 3 composite key (Task 64), 4 sensitive paths and the raw event-log proof (Tasks 80-81, 83, 91, 92, 95a), 5 deps through `buildServer` (Tasks 79, 91a), 6 ratchet (Task 63), 7 `deriveKey` (D9, deliberately not done), 8 bounded start (Task 77), 9 UTF-16 bypass (Task 68). Linked retrieval: chunk ids are deterministic (D4), `chunks` has `ordinal`, `section_ordinal` and a numeric locator, `chunks` has `UNIQUE (tenant_id, id)` for the later `chunk_links` composite foreign keys, the `link` step exists as a placeholder, and `deriveKey` is left for the step that needs it. Out of scope and designed to slot in: md/org/docx/doc/pdf/image parsers (append to `createDefaultParsers`, add fixtures to the kit), analyze/summarize/link (replace three entries in `ingestEffects`), retry policy and retry endpoint (`TransientIngestError`, `FAILURE_CODES`, execution generations, `PermanentIngestError` -> `failed` already exist), fair scheduling (the child runner's `maxConcurrent` is the per-process cap; per-tenant fairness sits in front of `runtime.start`).
 
-**Placeholder scan.** Tests and implementations are printed for every task except where a change is a small edit to a file shown earlier (harness wiring in Tasks 77, 79, 79b, 79c, 91 and 94b, `flow.ts` step appends in Tasks 83, 91 and 92, package manifests); those are described precisely enough to apply (file, symbol, what changes). The assertions of the M2 pg tests that Task 80 must change are named but not printed; the executor reads those files in the same step, and Task 80 is flagged as the size exception partly for that reason. Anything that turns out ambiguous on contact with the code is a question for the owner, not a guess.
+**Placeholder scan.** Tests and implementations are printed for every task except where a change is a small edit to a file shown earlier (harness wiring in Tasks 77, 79, 79b, 79c, 80a, 80b, 91b and 94b, `flow.ts` step appends in Tasks 83, 91b and 92, package manifests); those are described precisely enough to apply (file, symbol, what changes). The assertions of the M2 pg tests that Task 80c changes are named, and the rewritten duplicate-upload test is printed; the executor reads those files in the same step. Anything that turns out ambiguous on contact with the code is a question for the owner, not a guess.
 
-**Type consistency.** `IngestStartInput` is the `ref` everywhere; `StepResult` is every step's output; `StepGuard.begin(ref, step)` matches `PgStepGuard` (75c) and every fake (78, 80, 83, 90, 92); `IngestStatus` implements `DocumentStatusReads` (74e) exactly as the routes use it (79c); `StatusView`, `UPLOADED` and `viewOf` (74b) are what `toDto` takes; `progressOf` (74d) is what the publisher sends and Task 94b frames; `ingestKeyOf`/`ingestScopeOf` (74b) parse exactly what `ingestExecutionId` (76) builds, and the sweep's SQL (93) builds the same string again, pinned by a test; `ChunkStore.replace/count/read` match Tasks 82, 83, 90, 92; `ChunkVectorStore.upsert(scope, documentId, items)` matches Tasks 87-90 (the twin, the kit, the pg store and the embed step); `ingestExecutionId(userId, documentId, generation?)` matches Tasks 63, 76, 80, 95; `ParseLimits` grows across 69a (`wallClockMs`, `memoryMb`), 69b (`maxInputBytes`, `maxChars`) and matches `loadParseLimits` in Task 79; `PgIngestArgs` is `{ pool, fields, blobs, wiring }` in Task 80 and gains `vectors` in Task 91; the step ids are `ingest-parse`, `ingest-chunk`, `ingest-embed`, `ingest-analyze`, `ingest-summarize`, `ingest-link`, `ingest-finalize` in `flow.ts`, `deps.ts` and `security.ts`.
+**Type consistency.** `IngestStartInput` is the `ref` everywhere; `StepResult` is every step's output; `StepGuard.begin(ref, step)` matches `PgStepGuard` (75c) and every fake (78, 80a, 80b, 83, 90, 92); `IngestStatus` implements `DocumentStatusReads` (74e) exactly as the routes use it (79c); `StatusView`, `UPLOADED` and `viewOf` (74b2) are what `toDto` takes; `progressOf` (74d) is what the publisher sends and Task 94b frames; `ingestKeyOf`/`ingestScopeOf` (74b) parse exactly what `ingestExecutionId` (76) builds, and the sweep's SQL (93) builds the same string again, pinned by a test; `ChunkStore.replace/count/read` match Tasks 82, 83, 90, 92; `ChunkVectorStore.upsert(scope, documentId, items)` matches Tasks 87-90 (the twin, the kit, the pg store and the embed step); `ingestExecutionId(userId, documentId, generation?)` matches Tasks 63, 76, 80c, 95; `ParseLimits` grows across 69a (`wallClockMs`, `memoryMb`), 69b (`maxInputBytes`, `maxChars`) and matches `loadParseLimits` in Task 79 (`maxConcurrent` is read by `createIngestWiring`, F07); `PgIngestArgs` is `{ pool, fields, blobs, wiring }` in Task 80b, gains an optional `vectors` in Task 91a and a required one in Task 91b; `DocumentProgressEvent.step` is optional from Task 65 on, which `progressOf` (74d) and the SSE frames (94a) rely on; the step ids are `ingest-parse`, `ingest-chunk`, `ingest-embed`, `ingest-analyze`, `ingest-summarize`, `ingest-link`, `ingest-finalize` in `flow.ts`, `deps.ts` and `security.ts`.
 
-**Revision self-review (2026-10-19).** *Spec coverage:* the brief's items map to tasks as follows: model, key and scope (74b); the tables, RLS policy on `scope`, grants and `manageSchema: false` (74a, 74e); wiring through `buildServer`, boot order, `onEvent`, `liveSource`, sensitive union, compaction exemption (79b); list page then `getFoldedByKey`, read-your-writes with `refreshFrom` (74c, 79c); SSE after the fold (74d); the `documents.status` decision (79c, `0013`); erasure by key, by scope (74e, 79c); the sweep (93); acceptance on the real roles (95a, 95b). *Loom API:* every name used exists in the Loom checkout at `006dfdaf`: `projection$` (`@loom/core`), `ReadModelService.{registerFolded, handleEvent, catchUp, getMany, purgeFolded, drain}`, `InMemoryReadModelStore`, `foldedStates`, `mergeSensitive`, `sensitiveMapFromCovers`, `ReadModelStore.{getFoldedByKey, getFolded, applyFolded}`, `FoldedApply`, `PostgresReadModelStore(pool, { schema, manageSchema })`, `foldedStateDdl` (`@loom/plugin-postgres`), `sensitivePathsFromSteps` (`@loom/plugin-crypto`), `EventStore.sealingCapability`, `defineConfig({ observability.onEvent, durability.retention.compactionExempt })`. *Not used on purpose:* `service.getManyByKey` (it runs as the writer role, Revision R5). *Placeholders:* none; the prose-only edits are the harness, `compose.ts`, `main.ts` and `config.ts` changes of 79b and 79c, each with the file, the symbol and the code that changes. *Types:* `StatusCode = FailureCode | "internal"` (74b) is the only code type the model, `STATUS_MESSAGES`, `viewOf` and the DTO use; `IngestStatusOptions.bus` becomes required in 74d, and 74c's tests are edited there.
+**Revision self-review (2026-10-19).** *Spec coverage:* the brief's items map to tasks as follows: model, key and scope (74b); the tables, RLS policy on `scope`, grants and `manageSchema: false` (74a, 74e); wiring through `buildServer`, boot order, `onEvent`, `liveSource`, sensitive union, compaction exemption (79b); list page then `getFoldedByKey`, read-your-writes with `refreshFrom` (74c, 79c); SSE after the fold (74d); the `documents.status` decision (79c, 79d, `0013`); erasure by key, by scope (74e, 79c); the sweep (93); acceptance on the real roles (95a, 95a2, 95b). *Loom API:* every name used exists in the Loom checkout at `006dfdaf`: `projection$` (`@loom/core`), `ReadModelService.{registerFolded, handleEvent, catchUp, getMany, purgeFolded, drain}`, `InMemoryReadModelStore`, `foldedStates`, `mergeSensitive`, `sensitiveMapFromCovers`, `ReadModelStore.{getFoldedByKey, getFolded, applyFolded}`, `FoldedApply`, `PostgresReadModelStore(pool, { schema, manageSchema })`, `foldedStateDdl` (`@loom/plugin-postgres`), `sensitivePathsFromSteps` (`@loom/plugin-crypto`), `EventStore.sealingCapability`, `defineConfig({ observability.onEvent, durability.retention.compactionExempt })`. *Not used on purpose:* `service.getManyByKey` (it runs as the writer role, Revision R5). *Placeholders:* none; the prose-only edits are the harness, `compose.ts`, `main.ts` and `config.ts` changes of 79b and 79c, each with the file, the symbol and the code that changes. *Types:* `StatusCode = FailureCode | "internal"` (74b) is the only code type the model, `STATUS_MESSAGES`, `viewOf` and the DTO use; `IngestStatusOptions.bus` becomes required in 74d, and 74c's tests are edited there. *Pre-flight (2026-10-19):* findings F01 to F35 are applied as ruled (see the commit that introduced them); the "non-ingest executions get state-less rows" claim was wrong and is corrected in Loom API note 1 and Open question R4.
 
 ## Owner decisions
 
@@ -7619,11 +8576,11 @@ Settled 2026-10-19: the owner accepted the recommended default for each question
 4. **`documents.status` as a "projection". Replaced 2026-10-19 (see Revision 2026-10-19).** The owner decided that the status must use Loom's folded-state read models (ADR 0132). The status is the state of an `ingest-status` folded model, folded from the flow's events, read by the routes and published to SSE after each fold; no step writes it and `documents.status` is dropped. The questions that decision left open are at the end of this file. (The earlier answer, a status written by each step's effect, is withdrawn.)
 5. **Locator content (spec §4.2).** Heading paths are content, so the plaintext `chunks.locator` holds numbers only (kind and offsets/page), the heading path is sealed inside `text_enc`, and a plaintext integer `section_ordinal` carries the section tree id for linked retrieval's `structure` links. Default: accept. Alternative: seal the whole locator and add a plaintext section column anyway.
 6. **SSE auth, backpressure and resume.** Default: session cookie auth like every route; events scoped to tenant and user; at most 4 concurrent streams per user (429 beyond); heartbeat comment every 15 s; a consumer whose socket buffer fills is dropped (the browser's `EventSource` reconnects and re-lists documents); no `Last-Event-ID` replay in part 1 because the document list is authoritative; in-process bus (one server process). Alternatives: replay from a small ring buffer, or Postgres `LISTEN/NOTIFY` for multiple processes.
-7. **What happens to M2 stub executions.** Default: nothing is migrated. The stub wrote nothing and completes in milliseconds; the new flow uses execution generation 2 (`...ingest-<doc>.2`), delete cancels generations 1 and 2, and the stale-upload sweep starts documents still in `uploaded`. A stub execution that is somehow still live when the new flow is deployed fails on recovery with a determinism error and writes nothing; cancel any such executions before the first deploy that contains Task 80 if there are shared dev databases. Alternative: a one-off script that cancels all generation-1 executions.
-8. **Interim states between merged PRs.** Because the flow grows one step per PR (Tasks 80, 83, 91, 92), a document stays in `parsing`/`embedding` on `main` until Task 92 merges. Default: the owner merges Tasks 63-95b in order before any release; nothing is deployed from the middle of the stack. Alternative: hold the flow swap (Task 80) until the chunk and embed steps are ready and merge steps 78-92 as library code first (more half-built-but-unreachable code on `main`).
+7. **What happens to M2 stub executions.** Default: nothing is migrated. The stub wrote nothing and completes in milliseconds; the new flow uses execution generation 2 (`...ingest-<doc>.2`), delete cancels generations 1 and 2, and the stale-upload sweep starts documents still in `uploaded`. A stub execution that is somehow still live when the new flow is deployed fails on recovery with a determinism error and writes nothing; cancel any such executions before the first deploy that contains Task 80c if there are shared dev databases. Alternative: a one-off script that cancels all generation-1 executions.
+8. **Interim states between merged PRs.** Because the flow grows one step per PR (Tasks 80c, 83, 91b, 92), a document stays in `parsing`/`embedding` on `main` until Task 92 merges. Default: the owner merges Tasks 63-95b (every lettered task in the index) in order before any release; nothing is deployed from the middle of the stack. Alternative: hold the flow swap (Task 80c) until the chunk and embed steps are ready and merge steps 78-92 as library code first (more half-built-but-unreachable code on `main`).
 9. **Non-UTF text files.** Default: strict UTF-8 and UTF-16 (BOM or BOM-less ASCII-range), anything else is `corrupt_content`. Windows-1252 and other legacy encodings are common in old `.txt` files; a heuristic fallback is a follow-up if real uploads need it.
 10. **Parsed-text size cap.** Default: 20 million characters (about the text of a 50 MB file); a larger result is the permanent failure `too_large`. It bounds the sealed `parsed_documents` row (Decision D2).
-11. **Size waiver for Task 80.** The flow swap (Task 80) deletes the stub and its tests and updates the harness and two pg tests in the same change, so it is the one task expected over the line limit (about 250 changed lines, 9 to 10 files). Default: approve a one-time waiver. Alternative: the partial split described in that task's close-out, which still leaves the task near the limit.
+11. **Size waiver for Task 80. Withdrawn 2026-10-19 (pre-flight F04).** The first draft counted 13 files and about 270 lines for the flow swap, which was never inside any waiver. It is split in three instead: Task 80a makes the stub step ask the guard (about 175 lines, 6 files), Task 80b gives `IngestDeps` the other ports and retires the stub-era pg tests (about 190 lines, 8 files), Task 80c swaps the flow (about 215 lines, 8 files, with a named fallback seam); `main` stays green after each. No waiver is needed.
 
 ---
 
@@ -7634,5 +8591,5 @@ The owner accepted every default below. R4 was settled as **no Loom change**: th
 R1. **Which database and schema hold the folded tables?** Default: DocMind's own database, schema `public`, created by DocMind migration `0012` and owned by the migrator; written by `docmind_loom` (the existing Loom pool, `FOR ALL` policy on those two tables only) and read by `docmind_app` through a tenant policy (`scope` -> `users` -> `app_tenant_id()`). Why: the server refuses to start if `docmind_loom` owns a table with row-level security, the policy needs `users`, and the sweep can anti-join the table. Alternatives: schema `loom` (rejected for those reasons, and `docmind_app` would need access to schema `loom`), or a separate database (no policy join to `users`, no anti-join, a second connection to run and back up).
 R2. **Does `documents.status` keep `uploaded`?** Default: no. Both `status` and `error` are dropped (`0013`); a document with no row in the model is `uploaded`, and the stale-upload sweep finds documents with no generation-2 row. Why: a column nothing writes after the upload is a second source of truth that can disagree with the log. Alternative: keep `status` with `CHECK (status = 'uploaded')` as a pre-flow marker and make the sweep select on it (a smaller sweep query, a column that never changes).
 R3. **Where does SSE publish?** Default: `IngestStatus` publishes after the fold has landed (a chain over `drain()`), derived from the log event, so effects know nothing of the bus. Alternative: the step effect publishes after its work, as the previous design did (no `drain` latency, but progress can run ahead of the log, and nothing publishes for recovered or kernel-recorded events).
-R4. **Loom's folded models fold every execution, and have no execution filter.** Decision: accept the extra rows; no Loom change. No ingest handler matches another flow's events, so those rows carry no state and are omitted by `foldedStates` / `getMany`; the cost is one small row per non-ingest execution. Revisit only if that cost becomes real, and then only by having Loom honour the `sourceFlowId` that `projection$` already declares (no new API).
+R4. **Loom's folded models fold every execution, and have no execution filter.** Decision: accept the extra rows; no Loom change. The ingest handlers match by event type, not by flow, so another flow's execution is folded too: a chat execution gets a row whose state is `{ status: "uploaded", step: null, code: null }` (and `failed` / `internal` after an `EXECUTION_FAILED`), with `key` and `scope` null (verified against `FoldedModelEngine.ts`: `keyOf` / `scopeOf` return `undefined`, the engine stores null; `foldedStates` omits only erased or null-state rows). Reads and row-level security never expose them: reads go by key and `tenant_read` needs a `scope` that maps to a user. The cost is one small row per non-ingest execution (a future chat execution adds one each); accepted. Revisit only if that cost becomes real, and then only by having Loom honour the `sourceFlowId` that `projection$` already declares (no new API).
 R5. **What should the server do when the boot catch-up fails?** Default: refuse to start (`IngestStatus.boot()` throws, `main` closes everything and exits). Why: catch-up is shared, so one poisoned execution would otherwise leave every status stale without a signal. Alternative: start, serve reads from whatever is folded, log the failure by class, and retry catch-up on a timer.
