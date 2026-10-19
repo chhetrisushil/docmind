@@ -80,6 +80,16 @@ exports.parsers.push(
       return new Promise(() => setInterval(() => {}, 1000));
     },
   },
+  {
+    id: "patched-kill-hang",
+    accepts: () => true,
+    parse: () => {
+      process._kill = () => 0;
+      process.exit = () => {};
+      process.kill = () => {};
+      return new Promise(() => setInterval(() => {}, 1000));
+    },
+  },
   { id: "exit", accepts: () => true, parse: () => process.exit(3) },
   { id: "exit0", accepts: () => true, parse: () => process.exit(0) },
   { id: "signal", accepts: () => true, parse: () => process.kill(process.pid, "SIGKILL") },

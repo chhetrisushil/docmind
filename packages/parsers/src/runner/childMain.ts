@@ -2,11 +2,18 @@ import { createWriteStream } from "node:fs";
 import { createDefaultParsers } from "../defaults";
 import { ParserRegistry } from "../registry";
 import { type DocumentParser, ParseRejectedError } from "../types";
-import { CHILD_GRACE_MS, type ChildReply, type ChildRequest, encodeFrame } from "./protocol";
+import {
+  CHILD_DEADLINE_EXIT,
+  CHILD_GRACE_MS,
+  type ChildReply,
+  type ChildRequest,
+  encodeFrame,
+} from "./protocol";
 
-// Captured before any parser module loads, so a parser cannot replace them.
-const kill = process.kill.bind(process);
-const selfPid = process.pid;
+// Captured before any parser module loads, so replacing process.exit, process.kill or
+// process._kill cannot disarm the deadline timer. A parser that reaches the native binding by other
+// means is not stopped here; a CPU-burning one is still reaped by the kernel limit (limitedSpawn).
+const reallyExit = (process as unknown as { reallyExit(code: number): never }).reallyExit;
 
 const reply = (message: ChildReply) => {
   createWriteStream("", { fd: 3 }).end(encodeFrame(message), () => process.exit(0));
@@ -20,7 +27,7 @@ async function main(): Promise<void> {
   // Second layer behind the kernel CPU limit (see limitedSpawn): ends an idle hang when the parent
   // is gone. Unref'd, so it never keeps a finished child alive; it cannot fire in a synchronous loop.
   const deadlineMs = Math.min(request.wallClockMs + CHILD_GRACE_MS, 2_147_483_647); // setTimeout's ceiling
-  setTimeout(() => kill(selfPid, "SIGKILL"), deadlineMs).unref();
+  setTimeout(() => reallyExit.call(process, CHILD_DEADLINE_EXIT), deadlineMs).unref();
   const parsers: DocumentParser[] = request.module
     ? (require(request.module) as { parsers: DocumentParser[] }).parsers
     : createDefaultParsers();

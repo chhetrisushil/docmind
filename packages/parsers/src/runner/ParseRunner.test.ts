@@ -511,8 +511,9 @@ describe("ParseRunner concurrency and abort", () => {
   // the parent has stopped reading. The child must end itself (POSIX only).
   it.each([
     ["spin", "SIGXCPU"], // a synchronous loop: the kernel CPU limit, 3 s soft limit
-    ["hang", "SIGKILL"], // idle but alive: the child's own timer
-    ["patched-hang", "SIGKILL"], // the parser replaced process.exit and process.kill
+    ["hang", "exit 124"], // idle but alive: the child's own timer
+    ["patched-hang", "exit 124"], // the parser replaced process.exit and process.kill
+    ["patched-kill-hang", "exit 124"], // ... and process._kill too
   ])(
     "an orphaned %s child ends itself (%s)",
     async (parserId, signal) => {
@@ -529,7 +530,9 @@ describe("ParseRunner concurrency and abort", () => {
         cwd: dirname(entry),
       });
       handSpawned.push(child);
-      const exited = new Promise<string | null>((res) => child.once("exit", (_c, sig) => res(sig)));
+      const exited = new Promise<string | null>((res) =>
+        child.once("exit", (code, sig) => res(sig ?? `exit ${code}`)),
+      );
       const request = { parserId, bytes: "", module: hostile, maxChars: 500, wallClockMs: 1 };
       child.stdin?.end(encodeFrame(request));
       expect(await exited).toBe(signal);
