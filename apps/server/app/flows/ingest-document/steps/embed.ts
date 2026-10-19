@@ -42,7 +42,7 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
   return stepEffect(
     "embed",
     deps.guard,
-    async (ref, signal) => {
+    async (ref, signal, progress) => {
       const model = deps.embedder.modelId;
       if (model !== deps.vectors.modelId || deps.embedder.dimensions !== deps.vectors.dimensions)
         throw new IngestConfigError(); // before any batch; fatal, not retried
@@ -68,6 +68,7 @@ export function embedEffect(deps: EmbedDeps): Effect<IngestStartInput, StepResul
           rows.map((r, i) => ({ chunkId: r.id, vector: vectors[i] as number[] })),
         );
         if (missing.length > 0) throw new DocumentGoneError();
+        progress?.(); // a committed batch: a timeout after this does not use the retry budget (at most ceil(count / 64) such attempts)
       }
       return { count, model };
     },

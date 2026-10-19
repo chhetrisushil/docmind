@@ -241,4 +241,42 @@ describe("embedEffect", () => {
       expect(h.embedCalls).toEqual([]);
     },
   );
+
+  /** An embedder that serves one batch per attempt, then hangs until the attempt is abandoned. */
+  function onePerAttempt(h: ReturnType<typeof harness>, serve: boolean) {
+    const real = h.deps.embedder.embed.bind(h.deps.embedder);
+    let last: AbortSignal | undefined;
+    let attempts = 0;
+    h.deps.embedder.embed = async (t, o) => {
+      if (o?.signal !== last) attempts++;
+      const fresh = o?.signal !== last;
+      last = o?.signal;
+      if (serve && fresh) return real(t, o);
+      await new Promise<void>((r) =>
+        o?.signal?.addEventListener("abort", () => r(), { once: true }),
+      );
+      throw new EmbeddingAbortedError();
+    };
+    return () => attempts;
+  }
+
+  it("completes a slow provider that finishes one batch per attempt (<= ceil(count/64) + 3 attempts)", async () => {
+    const h = harness(200); // 4 batches
+    const attempts = onePerAttempt(h, true);
+    expect(await run({ ...h.deps, stepTimeoutMs: 1 })).toMatchObject({
+      outcome: "done",
+      count: 200,
+    });
+    expect(attempts()).toBeLessThanOrEqual(Math.ceil(200 / 64) + 3);
+  });
+
+  it("a provider that never completes a batch exhausts the normal three attempts", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(200);
+    const attempts = onePerAttempt(h, false);
+    await expect(run({ ...h.deps, stepTimeoutMs: 1 })).rejects.toThrow(
+      /^ingest step failed: embed$/,
+    );
+    expect(attempts()).toBe(3);
+  });
 });
