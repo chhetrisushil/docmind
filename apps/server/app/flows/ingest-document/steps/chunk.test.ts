@@ -44,6 +44,7 @@ function deps(over: Partial<ChunkDeps> = {}, counts: number[] = [0]) {
         return counts.shift() ?? 0;
       },
       read: async () => [],
+      sectionsOf: async () => [],
     },
     sleep: async () => {},
     ...over,
@@ -115,6 +116,7 @@ describe("the chunk step", () => {
           },
           count: async () => 0,
           read: async () => [],
+          sectionsOf: async () => [],
         },
       },
     ],
@@ -128,6 +130,7 @@ describe("the chunk step", () => {
             throw new DocumentGoneError();
           },
           read: async () => [],
+          sectionsOf: async () => [],
         },
       },
     ],

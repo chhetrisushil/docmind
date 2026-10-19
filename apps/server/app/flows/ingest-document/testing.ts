@@ -47,7 +47,12 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       drop: async () => {},
     },
     results: fakeResults(),
-    chunks: { replace: async (_r, c) => c.length, count: async () => 0, read: async () => [] },
+    chunks: {
+      replace: async (_r, c) => c.length,
+      count: async () => 0,
+      read: async () => [],
+      sectionsOf: async () => [],
+    },
     vectors: new InMemoryChunkVectors({
       modelId: EMBEDDER.modelId,
       dimensions: EMBEDDER.dimensions,

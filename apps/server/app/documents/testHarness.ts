@@ -154,6 +154,7 @@ export function twinOverPgChunks(app: Pool, wiring: IngestWiring): ChunkVectorSt
 function makeIngest(
   app: Pool,
   fields: FieldCrypto,
+  keys: InMemoryKeyStore,
   blobs: DocumentRoutesDeps["blobs"],
   wiring: IngestWiring,
   vectors: ChunkVectorStore,
@@ -172,7 +173,7 @@ function makeIngest(
   let open: () => void = () => {};
   let startGate: Promise<void> | null = null;
   let openStart: () => void = () => {};
-  const real = pgIngestDeps({ pool: app, fields, blobs, wiring, vectors });
+  const real = pgIngestDeps({ pool: app, fields, keys, blobs, wiring, vectors });
   const loom = buildApp({ kind: "custom", eventStore }, undefined, {
     onEvent: (e) => status.onEvent(e),
     ingest: {
@@ -315,6 +316,7 @@ export async function startDocumentServer(
     const ingest = makeIngest(
       app,
       fields,
+      keys,
       (id) => effectiveBlobs(id),
       wiring,
       twinOverPgChunks(app, wiring),
