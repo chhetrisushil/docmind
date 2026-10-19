@@ -51,6 +51,46 @@ describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
     }
   });
 
+  it("records a checksum, passes an unchanged file and refuses an edited applied one, naming the file only", async () => {
+    const fresh = await createTestDb();
+    const d = mkdtempSync(join(tmpdir(), "docmind-checksums-"));
+    try {
+      writeFileSync(join(d, "0001_a.sql"), "CREATE TABLE a (id int);");
+      expect(await migrate(fresh.owner, d)).toEqual(["0001_a.sql"]);
+      const { rows } = await fresh.owner.query("SELECT checksum FROM schema_migrations");
+      expect(rows[0].checksum).toMatch(/^[0-9a-f]{64}$/);
+      expect(await migrate(fresh.owner, d)).toEqual([]);
+      writeFileSync(join(d, "0001_a.sql"), "CREATE TABLE a (id int, secret_edit text);");
+      await expect(migrate(fresh.owner, d)).rejects.toThrow(
+        /^migration 0001_a\.sql was changed after it was applied$/,
+      );
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
+  it("backfills a legacy table with no checksum column, then enforces it", async () => {
+    const fresh = await createTestDb();
+    const d = mkdtempSync(join(tmpdir(), "docmind-legacy-"));
+    try {
+      writeFileSync(join(d, "0001_a.sql"), "CREATE TABLE a (id int);");
+      await fresh.owner.query(
+        "CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
+      );
+      await fresh.owner.query("INSERT INTO schema_migrations (name) VALUES ('0001_a.sql')");
+      await fresh.owner.query("CREATE TABLE a (id int)");
+      expect(await migrate(fresh.owner, d)).toEqual([]); // recorded, not refused, not re-run
+      const { rows } = await fresh.owner.query("SELECT checksum FROM schema_migrations");
+      expect(rows[0].checksum).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(d, "0001_a.sql"), "CREATE TABLE a (id bigint);");
+      await expect(migrate(fresh.owner, d)).rejects.toThrow(/migration 0001_a\.sql was changed/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+      await fresh.drop();
+    }
+  });
+
   it("refuses a tampered docmind_app; else unprivileged, no PUBLIC function execute", async () => {
     const fresh = await createTestDb();
     const q = (sql: string) => fresh.owner.query(sql);
