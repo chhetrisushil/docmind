@@ -23,6 +23,7 @@ import {
   type INGEST_STEPS,
   IngestOutput,
   type IngestStartInput,
+  ingestChunkStep,
   ingestDocumentFlow,
   ingestParseStep,
   runIngestSteps,
@@ -263,25 +264,31 @@ describe.skipIf(!PG_URL)(
           return wiring.embedder.embed(texts, options);
         },
       };
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       const ref = await seedTxt("7".repeat(64));
       const raw = proven(await run(ref), ref);
       expect(attempts).toBe(2);
+      expect(JSON.stringify(logged.mock.calls)).not.toContain(SENTENCE);
       expect(types(raw)).toEqual(FULL_RUN);
       expect(raw[9]?.payload).toMatchObject({ output: { model: modelId }, stepId: "ingest-embed" });
     });
 
     it("a fatal embedding error records a fixed message, not the error text, and the document fails as internal", async () => {
+      let calls = 0;
       embedder = {
         modelId: wiring.embedder.modelId,
         dimensions: wiring.embedder.dimensions,
         embed: async () => {
+          calls++;
           throw new EmbeddingError(`rejected ${SENTENCE}`);
         },
       };
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       const ref = await seedTxt("8".repeat(64));
       const raw = proven(await run(ref), ref);
+      expect(calls).toBe(1); // fatal: not retried
+      // The class name only: no message, cause or id in what the process logs.
+      expect(logged.mock.calls).toEqual([["ingest step failed", "embed", "EmbeddingError"]]);
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
       expect(raw.at(-1)?.payload).toEqual({ error: "Error: ingest step failed: embed" });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
@@ -430,6 +437,31 @@ describe.skipIf(!PG_URL)(
       const raw = proven(await log(ref), ref);
       expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-flow-mismatch" });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
+    });
+
+    it("an execution started under the parse+chunk flow is a mismatch for the flow with embed", async () => {
+      const before = [ingestParseStep, ingestChunkStep] as unknown as typeof INGEST_STEPS;
+      const old = {
+        runner: runIngestSteps(before) as never,
+        definition: flow$({
+          id: "ingest-document",
+          name: "IngestDocument",
+          version: "2.0.0", // the version that shipped parse and chunk only
+          inputSchema: ingestDocumentFlow.definition.inputSchema,
+          outputSchema: IngestOutput,
+          steps: before,
+        }),
+      };
+      const ref = await seedTxt("a1".repeat(32));
+      await crashed(ref, old);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const next = await peer(never);
+      expect(await recoverIngest(next.app.runtime, next.source, { graceMs: 0 })).toMatchObject({
+        failed: 1,
+        recovered: 0,
+      });
+      const raw = proven(await log(ref), ref);
+      expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-flow-mismatch" });
     });
 
     it("a recovery re-run that succeeds leaves the recovery marker and a normal finish", async () => {

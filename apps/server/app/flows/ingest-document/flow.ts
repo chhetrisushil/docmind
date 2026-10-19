@@ -65,7 +65,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
   definition: flow$({
     id: "ingest-document",
     name: "IngestDocument",
-    version: "2.0.0",
+    version: "2.1.0", // Loom refuses a changed flow under an old version: the step list gained embed
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,
     steps: INGEST_STEPS,
