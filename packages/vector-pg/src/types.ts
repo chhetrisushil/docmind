@@ -34,6 +34,29 @@ export interface ChunkVectorStore {
     limit: number,
     minScore?: number,
   ): Promise<{ chunkId: string; score: number }[]>;
+  /**
+   * For each listed chunk of `documentId` (the scope's own), its nearest chunks among the scope's OTHER
+   * documents, by cosine similarity over this modelId's vectors: at most `perChunk` each, score >= minScore,
+   * best first, ties by neighbour id. Unknown, foreign or unembedded source ids yield nothing.
+   * `perChunk` is an integer from 1 to 100 and `minScore` is finite in [-1, 1]; otherwise RangeError.
+   */
+  neighbours(
+    scope: VectorScope,
+    documentId: string,
+    chunkIds: string[],
+    perChunk: number,
+    minScore: number,
+  ): Promise<{ chunkId: string; neighbourId: string; score: number }[]>;
+}
+
+/** Shared by both stores so they reject the same inputs. The message names the parameter, never a value. */
+export function checkNeighbourParams(perChunk: number, minScore: number): void {
+  if (!Number.isInteger(perChunk) || perChunk < 1 || perChunk > 100) {
+    throw new RangeError("neighbours: perChunk must be an integer from 1 to 100");
+  }
+  if (!Number.isFinite(minScore) || minScore < -1 || minScore > 1) {
+    throw new RangeError("neighbours: minScore must be a finite number in [-1, 1]");
+  }
 }
 
 /** Largest magnitude float4 (pgvector's element type) holds; beyond it Postgres rejects the value. */

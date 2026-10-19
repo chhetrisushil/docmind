@@ -2,6 +2,7 @@ import {
   type ChunkVectorStore,
   VectorDimensionError,
   type VectorScope,
+  checkNeighbourParams,
   isValidVector,
 } from "./types";
 
@@ -105,6 +106,39 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
     }
     hits.sort((a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : 1));
     return hits.slice(0, Math.max(0, limit));
+  }
+
+  async neighbours(
+    scope: VectorScope,
+    documentId: string,
+    chunkIds: string[],
+    perChunk: number,
+    minScore: number,
+  ): Promise<{ chunkId: string; neighbourId: string; score: number }[]> {
+    checkNeighbourParams(perChunk, minScore);
+    if (chunkIds.length === 0) return [];
+    const p = prefix(scope);
+    await this.prune(
+      scope,
+      [...this.rows].filter(([key]) => key.startsWith(p)).map(([, row]) => row.documentId),
+    );
+    const out: { chunkId: string; neighbourId: string; score: number }[] = [];
+    for (const chunkId of new Set(chunkIds)) {
+      const source = this.rows.get(p + chunkId);
+      if (!source || source.model !== this.modelId || source.documentId !== documentId) continue;
+      const hits: { neighbourId: string; score: number }[] = [];
+      for (const [key, row] of this.rows) {
+        if (!key.startsWith(p) || row.model !== this.modelId || row.documentId === documentId) {
+          continue;
+        }
+        const score = cosine(source.vector, row.vector);
+        if (score === null || score < minScore) continue;
+        hits.push({ neighbourId: key.slice(p.length), score });
+      }
+      hits.sort((a, b) => b.score - a.score || (a.neighbourId < b.neighbourId ? -1 : 1));
+      for (const h of hits.slice(0, perChunk)) out.push({ chunkId, ...h });
+    }
+    return out.sort((a, b) => (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0));
   }
 }
 

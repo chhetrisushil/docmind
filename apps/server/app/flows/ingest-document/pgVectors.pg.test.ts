@@ -4,6 +4,7 @@ import {
   A,
   B,
   DOC_A,
+  DOC_A2,
   DOC_B,
   type VectorHarness,
   runChunkVectorStoreConformance,
@@ -86,6 +87,7 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     const store = make("m1");
     const a = randomUUID();
     const b = randomUUID();
+    await seed(A, DOC_A2, []); // the kit's neighbours cases leave vectors in A's second document
     await seed(A, DOC_A, [a]);
     await seed(B, DOC_B, [b]);
     expect(await store.missing(B, DOC_A, 10)).toEqual([]); // while A's chunk has no vector yet
@@ -118,6 +120,20 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     const items = ids.map((chunkId, i) => ({ chunkId, vector: basis(i % 768) }));
     expect(await store.upsert(A, DOC_A, items)).toEqual({ written: 300, missing: [] });
     expect(await store.missing(A, DOC_A, 1000)).toEqual([]);
+  });
+
+  it("neighbours with no source ids never opens a transaction", async () => {
+    let calls = 0;
+    const store = new PgChunkVectorStore({
+      tenant: (t, fn) => {
+        calls += 1;
+        return withTenant(app, t, fn);
+      },
+      modelId: "m1",
+      dimensions: 768,
+    });
+    expect(await store.neighbours(A, DOC_A, [], 5, 0)).toEqual([]);
+    expect(calls).toBe(0);
   });
 
   it("verify() accepts the column it was built for and rejects another size", async () => {

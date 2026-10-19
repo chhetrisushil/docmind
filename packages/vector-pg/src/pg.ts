@@ -4,6 +4,7 @@ import {
   VectorDimensionError,
   VectorSchemaError,
   type VectorScope,
+  checkNeighbourParams,
   isValidVector,
 } from "./types";
 
@@ -111,6 +112,46 @@ export class PgChunkVectorStore implements ChunkVectorStore {
         [literal(query), scope.ownerId, this.modelId, minScore ?? -1, limit],
       );
       return rows.map((r) => ({ chunkId: r.id, score: Number(r.score) }));
+    });
+  }
+
+  async neighbours(
+    scope: VectorScope,
+    documentId: string,
+    chunkIds: string[],
+    perChunk: number,
+    minScore: number,
+  ): Promise<{ chunkId: string; neighbourId: string; score: number }[]> {
+    scoped(scope);
+    uuid("documentId", documentId);
+    checkNeighbourParams(perChunk, minScore);
+    if (chunkIds.length === 0) return [];
+    // Exact scan per source chunk (the HNSW index is not used by this SQL); the link step batches 64
+    // sources. M4's index-friendly search (part 1 carry: iterative HNSW scan) will serve it too.
+    // Ids compare as text, so a malformed id is a miss rather than a cast error.
+    return this.options.tenant(scope.tenantId, async (tx) => {
+      const { rows } = await tx.query<{ chunk_id: string; neighbour_id: string; score: number }>(
+        `SELECT s.id AS chunk_id, n.id AS neighbour_id, n.score
+           FROM chunks s
+           JOIN documents sd ON sd.id = s.document_id AND sd.tenant_id = s.tenant_id AND sd.owner_id = $2
+          CROSS JOIN LATERAL (
+            SELECT c.id, 1 - (c.embedding <=> s.embedding) AS score
+              FROM chunks c ${JOIN_OWNER}
+             WHERE d.owner_id = $2 AND c.document_id <> $1 AND c.embedding_model = $3
+               AND vector_norm(c.embedding) > 0
+             ORDER BY c.embedding <=> s.embedding, c.id
+             LIMIT $5) n
+          WHERE s.document_id = $1 AND s.id::text = ANY($4::text[])
+            AND s.embedding_model = $3 AND vector_norm(s.embedding) > 0
+            AND n.score >= $6
+          ORDER BY s.id, n.score DESC, n.id`,
+        [documentId, scope.ownerId, this.modelId, chunkIds, perChunk, minScore],
+      );
+      return rows.map((r) => ({
+        chunkId: r.chunk_id,
+        neighbourId: r.neighbour_id,
+        score: Number(r.score),
+      }));
     });
   }
 
