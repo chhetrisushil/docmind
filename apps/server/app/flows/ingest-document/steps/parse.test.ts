@@ -289,6 +289,14 @@ describe("parse step: images", () => {
     ]);
   });
 
+  it("allows an image whose base64 is exactly 5 MiB and just under it", async () => {
+    for (const n of [3_932_160, 3_932_159]) {
+      const vision = { readImage: vi.fn(async () => ({ text: "t", description: "d" })) };
+      const { d } = deps({ source: imageSource(png(10, 10, n), "image/png"), vision });
+      expect(await run(d)).toEqual({ outcome: "done", count: 2 });
+    }
+  });
+
   it("fails as vision_unavailable without a vision reader", async () => {
     const { d } = deps({ source: imageSource(png(640, 480), "image/png") });
     expect(await run(d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
@@ -298,6 +306,8 @@ describe("parse step: images", () => {
     const vision = { readImage: vi.fn() };
     const failed = async (bytes: Uint8Array) =>
       run(deps({ source: imageSource(bytes, "image/png"), vision }).d);
+    // base64 crosses 5 MiB at 3,932,160 raw bytes (exactly 5,242,880 encoded): that is allowed.
+    expect(await failed(png(10, 10, 3_932_161))).toMatchObject({ code: "too_large" });
     expect(await failed(png(10, 10, 5 * 1024 * 1024 + 1))).toMatchObject({ code: "too_large" });
     expect(await failed(png(8001, 10))).toMatchObject({ code: "too_large" });
     expect(await failed(new Uint8Array([0x89, 0x50]))).toMatchObject({ code: "corrupt_content" });

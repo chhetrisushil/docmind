@@ -13,7 +13,7 @@ import {
   ingestStepOptions,
   stepEffect,
 } from "../stepEffect";
-import { VISION_MAX_BYTES, VISION_MAX_SIDE, type VisionReader } from "../vision";
+import { VISION_MAX_BYTES, VISION_MAX_SIDE, type VisionReader, base64Length } from "../vision";
 
 export interface ParseDeps extends StepSeams {
   guard: StepGuard;
@@ -54,7 +54,7 @@ async function readImageDocument(
   signal?: AbortSignal,
 ): Promise<ParsedResult> {
   if (!deps.vision) throw new PermanentIngestError("vision_unavailable");
-  if (bytes.length > VISION_MAX_BYTES) throw new PermanentIngestError("too_large");
+  if (base64Length(bytes.length) > VISION_MAX_BYTES) throw new PermanentIngestError("too_large");
   const size = imageSize(bytes, mime);
   if (!size) throw new PermanentIngestError("corrupt_content");
   if (size.width > VISION_MAX_SIDE || size.height > VISION_MAX_SIDE)

@@ -53,4 +53,12 @@ describe("VisionReader.readImage", () => {
     const out = await reader.readImage(PNG_BYTES, "image/png");
     expect([out.text.length, out.description.length]).toEqual([200_000, 20_000]);
   });
+
+  it("refuses an image whose base64 exceeds the API limit, without sending a request", async () => {
+    const before = fake.requests.length;
+    await expect(reader.readImage(new Uint8Array(3_932_161), "image/png")).rejects.toThrow(
+      /^image exceeds the size limit$/,
+    );
+    expect(fake.requests.length).toBe(before);
+  });
 });

@@ -2,12 +2,15 @@ import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@
 import { z } from "zod";
 import { jsonAnswer } from "./llmJson";
 
-export const VISION_MAX_BYTES = 5 * 1024 * 1024; // the Messages API's per-image limit
+/** The Messages API's per-image limit, which applies to the base64 `source.data`, not the raw bytes. */
+export const VISION_MAX_BYTES = 5 * 1024 * 1024;
+/** Length of the base64 encoding of `n` raw bytes. */
+export const base64Length = (n: number): number => 4 * Math.ceil(n / 3);
 export const VISION_MAX_SIDE = 8000;
 const TEXT_CAP = 200_000;
 const DESCRIPTION_CAP = 20_000;
 // guardRequest's inline caps are for the event log's sake; these requests never reach the log, and
-// the reader enforces its own limits (VISION_MAX_BYTES; 32 MiB for a PDF) before building them.
+// the reader enforces the API's size limit itself (readImage checks VISION_MAX_BYTES before building).
 const GUARD = { maxInlineBytes: 48 * 1024 * 1024, maxInlineTotalBytes: 48 * 1024 * 1024 };
 
 const SYSTEM = [
@@ -32,6 +35,9 @@ export class VisionReader {
     mime: string,
     signal?: AbortSignal,
   ): Promise<{ text: string; description: string }> {
+    // Defense in depth: the parse step checks first, so it never reaches this.
+    if (base64Length(bytes.length) > VISION_MAX_BYTES)
+      throw new RangeError("image exceeds the size limit");
     const request = guardRequest(
       {
         system: `${SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
