@@ -401,3 +401,24 @@ export const seedRow = (
     "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, $2, $3, 0, $4)",
     [executionId, key, scope, state],
   );
+
+/** Opens a server-sent-event stream; `next()` resolves with the next complete frame, without its blank line. */
+export async function openSse(url: string, headers: Record<string, string>) {
+  const controller = new AbortController();
+  const res = await fetch(url, { headers, signal: controller.signal });
+  const reader = res.body?.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const next = async (): Promise<string> => {
+    while (!buffer.includes("\n\n")) {
+      const { value, done } = (await reader?.read()) ?? { done: true, value: undefined };
+      if (done) throw new Error("stream ended");
+      buffer += decoder.decode(value);
+    }
+    const end = buffer.indexOf("\n\n");
+    const frame = buffer.slice(0, end);
+    buffer = buffer.slice(end + 2);
+    return frame;
+  };
+  return { res, next, close: () => controller.abort() };
+}
