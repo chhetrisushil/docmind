@@ -2,6 +2,7 @@ import type { ExecutionEnumerable, LeaseStore } from "@loom/event-runtime";
 import {
   FlowCodeMismatchError,
   type WorkflowRuntime,
+  collectGhostLeases,
   recoverAbandoned,
 } from "@loom/workflow-runtime";
 import {
@@ -30,6 +31,10 @@ export const ABANDON_GRACE_MS = 60_000;
  * default interval): a re-drive that failed before its claim won leaves no expired lease to find.
  */
 export const FULL_SCAN_EVERY = 60;
+
+/** Loom's ghost-lease GC examines this many expired leases per call; a pass repeats while it collects. */
+const GHOST_GC_BATCH = 100;
+const GHOST_GC_MAX_ROUNDS = 20;
 
 const errorClass = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
@@ -64,6 +69,17 @@ export async function recoverIngest(
   source: ExecutionEnumerable,
   { graceMs, maxRecoveries = MAX_RECOVERIES, now = Date.now, leases }: RecoverOptions,
 ) {
+  if (!leases) {
+    // A full scan also clears ghost leases (a crash between taking a lease and the first append): they
+    // have no stream, so no pass would ever re-drive or remove them, and lease mode lists them forever.
+    // Loom's own GC runs only from TimerService, which this server does not run.
+    try {
+      for (let i = 0; i < GHOST_GC_MAX_ROUNDS; i++)
+        if ((await collectGhostLeases(runtime, { limit: GHOST_GC_BATCH })) === 0) break;
+    } catch (err) {
+      console.error("ingest ghost lease gc failed", errorClass(err));
+    }
+  }
   const ending: Promise<unknown>[] = [];
   const giveUp = (executionId: string, reason: string) => {
     ending.push(
@@ -126,8 +142,7 @@ export function startRecovery(
   pass(0);
   const timer = setInterval(() => {
     if (stopped || running) return;
-    // Lease mode finds a crash's expired leases only; ghost lease rows (a crash between taking the lease
-    // and the first append) are not covered until the next full scan. Carried, not fixed.
+    // Lease mode finds a crash's expired leases only; ghost lease rows are cleared by the next full scan.
     periodic++;
     pass(ABANDON_GRACE_MS, periodic % FULL_SCAN_EVERY === 0 ? undefined : leases);
   }, intervalMs);
