@@ -83,6 +83,8 @@ export async function startIngestStack(): Promise<IngestStack> {
       DOCMIND_EMBED_MODEL: "fake-embed",
       DOCMIND_EMBED_DIMENSIONS: "768",
     });
+    // The retry policy's backoff is the one timer a test must not wait on: attempts still run, back to back.
+    wiring.sleep = async () => {};
     cleanups.unshift(() => closeIngest(wiring));
     const composed = buildServer({
       pool: app,
@@ -124,6 +126,8 @@ export async function startIngestStack(): Promise<IngestStack> {
     });
 
     async function signUpAndLogIn(email: string) {
+      // The acceptance suite signs up more users from one address than the sign-up throttle allows.
+      await db.owner.query("DELETE FROM auth_throttle");
       const post = (path: string) =>
         fetch(`${base}${path}`, {
           method: "POST",
