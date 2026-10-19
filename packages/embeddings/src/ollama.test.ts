@@ -208,13 +208,26 @@ describe("OllamaEmbeddingProvider", () => {
     ]);
   });
 
-  it("refuses to follow redirects", async () => {
+  it("never follows redirects: any 3xx is a permanent fixed-message failure", async () => {
+    for (const status of [301, 307, 308]) {
+      const { body, cancelled } = trackedBody(new Uint8Array(0));
+      const location = "http://evil.invalid/steal";
+      const p = provider(async () => new Response(body, { status, headers: { location } }));
+      const err = await p.embed(["a"]).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EmbeddingError);
+      expect(err).not.toBeInstanceOf(EmbeddingUnavailableError);
+      expect((err as Error).message).toBe("the embedding service redirected the request");
+      expect(cancelled(), String(status)).toBe(true);
+    }
+  });
+
+  it("asks fetch not to follow redirects", async () => {
     let seen: RequestInit | undefined;
     await provider(async (_u, init) => {
       seen = init;
       return ok([vec(3)]);
     }).embed(["a"]);
-    expect(seen?.redirect).toBe("error");
+    expect(seen?.redirect).toBe("manual");
   });
 
   it.each([
@@ -236,6 +249,7 @@ describe("OllamaEmbeddingProvider", () => {
   it.each([
     [{ dimensions: 0 }, "DOCMIND_EMBED_DIMENSIONS must be a positive integer"],
     [{ timeoutMs: -1 }, "DOCMIND_EMBED_TIMEOUT_MS must be a positive integer"],
+    [{ model: "" }, "DOCMIND_EMBED_MODEL must be non-empty"],
     [{ maxBatchSize: 1.5 }, "maxBatchSize must be a positive integer"],
   ])("rejects bad options %j", (over, message) => {
     const make = () => provider(hang, over);
