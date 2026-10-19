@@ -170,7 +170,7 @@ export async function bumpGeneration(
   return rows[0] ?? null;
 }
 
-/** Removes the row (RLS and the owner filter scope it). Returns what the blob store needs, or undefined. */
+/** Removes the row (RLS and the owner filter scope it) and the owner's entities that no chunk mentions any more. Returns what the blob store needs, or undefined. */
 export async function deleteDocument(
   tx: PoolClient,
   ownerId: string,
@@ -180,5 +180,12 @@ export async function deleteDocument(
     "DELETE FROM documents WHERE id = $1 AND owner_id = $2 RETURNING content_address",
     [id, ownerId],
   );
-  return rows[0] ? { contentAddress: rows[0].content_address } : undefined;
+  if (!rows[0]) return undefined;
+  // The cascade removed this document's mentions; entities no chunk mentions any more go with them.
+  await tx.query(
+    `DELETE FROM entities e WHERE e.owner_id = $1
+       AND NOT EXISTS (SELECT 1 FROM chunk_entities ce WHERE ce.entity_id = e.id)`,
+    [ownerId],
+  );
+  return { contentAddress: rows[0].content_address };
 }

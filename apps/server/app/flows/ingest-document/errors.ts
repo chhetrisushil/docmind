@@ -64,6 +64,7 @@ const FK_VIOLATION = "23503";
 export const DOCUMENT_FKEY_CONSTRAINTS: readonly string[] = [
   "chunks_document_fkey",
   "parsed_documents_document_fkey",
+  "chunk_entities_chunk_fkey",
 ];
 
 const isDocumentFkViolation = (err: unknown): boolean => {
