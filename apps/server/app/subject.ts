@@ -4,6 +4,13 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
 
+declare const userExecution: unique symbol;
+/**
+ * An execution id built by `executionIdFor`. A plain string is not assignable to it, so a start or
+ * fork that passes `executionId` from anywhere else is caught by the ratchet in executionIds.test.ts.
+ */
+export type UserExecutionId = string & { readonly [userExecution]: true };
+
 /**
  * The execution id for something a user owns. Loom encrypts an execution's data under the key of
  * its erasure subject and learns the subject from the execution id alone, so every execution a user
@@ -13,7 +20,7 @@ const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
  * for that user; otherwise Loom uses a ULID and the data falls outside the user's key. Execution ids,
  * including `name`, are stored in plaintext and survive erasure, so `name` must never carry user content.
  */
-export function executionIdFor(userId: string, name: string): string {
+export function executionIdFor(userId: string, name: string): UserExecutionId {
   if (!CANONICAL_USER_ID.test(userId)) {
     throw new RangeError("userId must be a canonical lowercase UUID (8-4-4-4-12 hex digits)");
   }
@@ -24,7 +31,7 @@ export function executionIdFor(userId: string, name: string): string {
       `execution id is ${bytes} bytes, over the ${MAX_EXECUTION_ID_BYTES}-byte limit; shorten the name`,
     );
   }
-  return executionId;
+  return executionId as UserExecutionId;
 }
 
 /**
