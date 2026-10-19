@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { EventEnvelope } from "@loom/core";
+import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import {
   INITIAL_STATUS,
@@ -11,45 +11,7 @@ import {
   ingestStatus,
   isIngestExecution,
 } from "./model";
-
-/** An event the way Loom writes one (fields as in `EventEnvelope`). */
-const evt = (
-  executionId: string,
-  sequence: number,
-  eventType: string,
-  payload: unknown = {},
-): EventEnvelope => ({
-  id: `${executionId}-${sequence}`,
-  workflowId: "ingest-document",
-  executionId,
-  eventType,
-  sequence,
-  timestamp: 1_000 + sequence,
-  payload,
-});
-
-/** The events of one ingest execution, from sequence 0: just started, parsing, ready, or failed with a code. */
-function ingestRun(
-  executionId: string,
-  spec: "started" | "parsed" | "ready" | `failed:${string}`,
-): EventEnvelope[] {
-  const out: EventEnvelope[] = [evt(executionId, 0, "EXECUTION_STARTED", { input: {} })];
-  const step = (type: string, stepId: string, output?: unknown) =>
-    out.push(
-      evt(executionId, out.length, type, output === undefined ? { stepId } : { stepId, output }),
-    );
-  if (spec === "started") return out;
-  step("STEP_STARTED", "ingest-parse");
-  if (spec === "parsed") return out;
-  if (spec.startsWith("failed:")) {
-    step("STEP_COMPLETED", "ingest-parse", { outcome: "failed", code: spec.slice(7) });
-    return out;
-  }
-  step("STEP_COMPLETED", "ingest-parse", { outcome: "done", count: 1 });
-  step("STEP_STARTED", "ingest-finalize");
-  step("STEP_COMPLETED", "ingest-finalize", { outcome: "done", count: 1 });
-  return out;
-}
+import { evt, ingestRun } from "./testing";
 
 const U = randomUUID();
 const D = randomUUID();
@@ -198,5 +160,31 @@ describe("the fold", () => {
       "STEP_COMPLETED",
       "STEP_STARTED",
     ]);
+  });
+});
+
+describe("through Loom's folded-model service", () => {
+  it("folds by key and scope; a non-ingest execution gets a row with null key and scope", async () => {
+    const store = new InMemoryReadModelStore();
+    const service = new ReadModelService(store, {});
+    await service.registerFolded({
+      projection: ingestStatus,
+      keyOf: ingestKeyOf,
+      scopeOf: ingestScopeOf,
+    });
+    const chat = `u_${U}:chat-${D}`;
+    for (const e of [...ingestRun(exec(".2"), "ready"), ...ingestRun(chat, "started")]) {
+      service.handleEvent(e);
+    }
+    await service.drain();
+    const [row] = await store.getFoldedByKey("ingest-status", [D]);
+    expect(row).toMatchObject({
+      executionId: exec(".2"),
+      key: D,
+      scope: U,
+      state: { status: "ready", step: "finalize", code: null },
+    });
+    const [other] = await store.getFolded("ingest-status", [chat]);
+    expect(other).toMatchObject({ key: null, scope: null, state: INITIAL_STATUS });
   });
 });

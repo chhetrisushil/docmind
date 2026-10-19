@@ -10,9 +10,11 @@ overrides:
   '@loom/conformance': link:../loom/packages/conformance
   '@loom/core': link:../loom/packages/core
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
+  '@loom/event-runtime': link:../loom/packages/event-runtime
   '@loom/plugin-content': link:../loom/plugins/content
   '@loom/plugin-crypto': link:../loom/plugins/crypto
   '@loom/plugin-postgres': link:../loom/plugins/postgres
+  '@loom/plugin-read-model': link:../loom/plugins/read-model
   '@loom/workflow-runtime': link:../loom/packages/workflow-runtime
 
 importers:
@@ -61,6 +63,9 @@ importers:
       '@loom/plugin-postgres':
         specifier: link:../../../loom/plugins/postgres
         version: link:../../../loom/plugins/postgres
+      '@loom/plugin-read-model':
+        specifier: link:../../../loom/plugins/read-model
+        version: link:../../../loom/plugins/read-model
       '@loom/workflow-runtime':
         specifier: link:../../../loom/packages/workflow-runtime
         version: link:../../../loom/packages/workflow-runtime
@@ -80,6 +85,9 @@ importers:
       '@loom/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
+      '@loom/event-runtime':
+        specifier: link:../../../loom/packages/event-runtime
+        version: link:../../../loom/packages/event-runtime
       '@types/busboy':
         specifier: ^1.5.4
         version: 1.5.5

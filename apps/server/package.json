@@ -23,6 +23,7 @@
     "@loom/effect-runtime": "*",
     "@loom/plugin-crypto": "*",
     "@loom/plugin-postgres": "*",
+    "@loom/plugin-read-model": "*",
     "@loom/workflow-runtime": "*",
     "busboy": "^1.6.0",
     "pg": "^8.13.0",
@@ -31,6 +32,7 @@
   "devDependencies": {
     "@loom/cli": "*",
     "@loom/conformance": "*",
+    "@loom/event-runtime": "*",
     "@types/busboy": "^1.5.4",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
