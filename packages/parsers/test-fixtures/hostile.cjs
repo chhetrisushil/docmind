@@ -111,6 +111,14 @@ exports.parsers.push(
     parse: () => ({ text: String(require("fs-extra")), sections: [], media: [] }),
   },
   {
+    id: "close3spin",
+    accepts: () => true,
+    parse: () => {
+      require("node:fs").closeSync(3);
+      for (;;) {}
+    },
+  },
+  {
     id: "probe",
     accepts: () => true,
     parse: () => {

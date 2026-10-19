@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawned: ChildProcess[] = [];
 let stdiolessSpawn = false;
+let onSpawn: (() => void) | null = null;
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -15,12 +16,14 @@ vi.mock("node:child_process", async (importOriginal) => {
         return { pid: undefined, once: () => {}, on: () => {} } as unknown as ChildProcess;
       }
       spawned.push(child);
+      onSpawn?.();
       return child;
     }) as typeof actual.spawn,
   };
 });
 
 import {
+  ParseAbortedError,
   ParseCrashedError,
   ParseLimitError,
   ParseMemoryError,
@@ -275,6 +278,24 @@ describe("ParseRunner", () => {
     expect(spawned[0]?.stderr).toBeNull();
     released();
   });
+});
+
+describe("ParseRunner concurrency and abort", () => {
+  beforeEach(() => {
+    spawned.length = 0;
+    onSpawn = null;
+  });
+  const gated = (maxConcurrent: number) =>
+    new ParseRunner({ limits: LIMITS, parserModule: hostile, maxConcurrent });
+  const spawns = (n: number) =>
+    new Promise<void>((res) => {
+      const check = () => {
+        if (spawned.length >= n) res();
+      };
+      onSpawn = check;
+      check();
+    });
+  const dead = (c?: ChildProcess) => c && (c.exitCode !== null || c.signalCode !== null);
 
   it("denies the child the filesystem, child processes and the parent's environment", async () => {
     process.env.DOCMIND_PROBE_SECRET = "must-not-reach-the-child";
@@ -291,5 +312,123 @@ describe("ParseRunner", () => {
       delete process.env.DOCMIND_PROBE_SECRET;
     }
     released();
+  });
+
+  it("aborting a running parse kills the child and rejects ParseAbortedError", async () => {
+    const r = gated(1);
+    const started = spawns(1);
+    const ac = new AbortController();
+    const run = r.run("spin", bytes("x"), { signal: ac.signal });
+    await started;
+    ac.abort();
+    await expect(run).rejects.toMatchObject({
+      name: "ParseAbortedError",
+      message: "parse aborted",
+    });
+    released();
+    expect(spawned[0]?.signalCode).toBe("SIGKILL");
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("an already-aborted signal never spawns", async () => {
+    const r = gated(1);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(r.run("echo", bytes("x"), { signal: ac.signal })).rejects.toBeInstanceOf(
+      ParseAbortedError,
+    );
+    expect(spawned).toHaveLength(0);
+    expect(r.active()).toBe(0);
+  });
+
+  it("runs at most maxConcurrent children and queues the rest in order", async () => {
+    const r = gated(1);
+    const started = spawns(1);
+    const hold = new AbortController();
+    const first = r.run("spin", bytes("x"), { signal: hold.signal });
+    const second = r.run("echo", bytes("queued"));
+    expect([r.active(), r.queued()]).toEqual([1, 1]);
+    await started;
+    expect(spawned).toHaveLength(1);
+    hold.abort();
+    await expect(first).rejects.toBeInstanceOf(ParseAbortedError);
+    expect((await second).text).toBe("queued");
+    expect(spawned).toHaveLength(2);
+    expect(spawned.every(dead)).toBe(true);
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("with maxConcurrent 2 the third run waits", async () => {
+    const r = gated(2);
+    const a = new AbortController();
+    const b = new AbortController();
+    const one = r.run("spin", bytes("x"), { signal: a.signal });
+    const two = r.run("spin", bytes("x"), { signal: b.signal });
+    const three = r.run("echo", bytes("third"));
+    expect([r.active(), r.queued()]).toEqual([2, 1]);
+    await spawns(2);
+    expect(spawned).toHaveLength(2);
+    expect(r.active()).toBe(2);
+    a.abort();
+    b.abort();
+    await expect(one).rejects.toBeInstanceOf(ParseAbortedError);
+    await expect(two).rejects.toBeInstanceOf(ParseAbortedError);
+    expect((await three).text).toBe("third");
+    expect(spawned.every(dead)).toBe(true);
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("a crashed run frees its slot for the next one", async () => {
+    const r = gated(1);
+    const crashed = r.run("exit", bytes("x"));
+    const next = r.run("echo", bytes("after"));
+    await expect(crashed).rejects.toBeInstanceOf(ParseCrashedError);
+    expect((await next).text).toBe("after");
+    expect(spawned.every(dead)).toBe(true);
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("an aborted run still waiting for a slot never starts a child", async () => {
+    const r = gated(1);
+    const started = spawns(1);
+    const hold = new AbortController();
+    const first = r.run("spin", bytes("x"), { signal: hold.signal });
+    const waiting = new AbortController();
+    const second = r.run("echo", bytes("x"), { signal: waiting.signal });
+    waiting.abort();
+    await expect(second).rejects.toBeInstanceOf(ParseAbortedError);
+    expect(r.queued()).toBe(0);
+    await started;
+    hold.abort();
+    await expect(first).rejects.toBeInstanceOf(ParseAbortedError);
+    expect(spawned).toHaveLength(1);
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("runs queued parses in submission order", async () => {
+    const r = gated(1);
+    const started = spawns(1);
+    const hold = new AbortController();
+    const first = r.run("spin", bytes("x"), { signal: hold.signal });
+    const order: string[] = [];
+    const a = r.run("echo", bytes("a")).then((d) => order.push(d.text));
+    const b = r.run("echo", bytes("b")).then((d) => order.push(d.text));
+    await started;
+    hold.abort();
+    await expect(first).rejects.toBeInstanceOf(ParseAbortedError);
+    await Promise.all([a, b]);
+    expect(order).toEqual(["a", "b"]);
+    expect([r.active(), r.queued()]).toEqual([0, 0]);
+  });
+
+  it("a closed reply pipe on a live child is a crash, not a wall-clock timeout", async () => {
+    const r = limited({ wallClockMs: 2_000_000_000 });
+    await expect(r.run("close3spin", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    released();
+    expect(r.active()).toBe(0);
+  });
+
+  it("rejects an invalid maxConcurrent", () => {
+    expect(() => gated(0)).toThrow(/maxConcurrent must be/);
   });
 });
