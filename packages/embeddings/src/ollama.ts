@@ -9,6 +9,18 @@ export class EmbeddingUnavailableError extends EmbeddingError {
   }
 }
 
+/**
+ * The caller's own AbortSignal fired. That is cancellation, not a failure of the service, so it is
+ * neither class above: it is not an EmbeddingError, a retry policy must not count or retry it, and
+ * a step treats it like Loom's cancel (the run is already being stopped).
+ */
+export class EmbeddingAbortedError extends Error {
+  constructor() {
+    super("the embedding request was aborted");
+    this.name = "EmbeddingAbortedError";
+  }
+}
+
 export interface OllamaOptions {
   baseUrl: string;
   model: string;
@@ -20,6 +32,9 @@ export interface OllamaOptions {
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_BATCH_SIZE = 64;
+/** A JSON double is at most about 25 bytes; the cap allows 32 per expected value plus 64 KiB. */
+export const MAX_BYTES_PER_VALUE = 32;
+export const MAX_RESPONSE_OVERHEAD_BYTES = 64 * 1024;
 
 const Body = z.object({ embeddings: z.array(z.array(z.number().finite())) });
 
@@ -35,14 +50,20 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 
   async embed(texts: readonly string[], opts: EmbedOptions = {}): Promise<number[][]> {
     const out: number[][] = [];
+    if (opts.signal?.aborted) throw new EmbeddingAbortedError();
     for (let i = 0; i < texts.length; i += this.maxBatchSize) {
       out.push(...(await this.request(texts.slice(i, i + this.maxBatchSize), opts.signal)));
     }
     return out;
   }
 
+  private failure(signal?: AbortSignal): Error {
+    return signal?.aborted ? new EmbeddingAbortedError() : new EmbeddingUnavailableError();
+  }
+
   private async request(batch: readonly string[], signal?: AbortSignal): Promise<number[][]> {
     const timeout = AbortSignal.timeout(this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const merged = signal ? AbortSignal.any([signal, timeout]) : timeout;
     let response: Response;
     try {
       response = await (this.options.fetch ?? fetch)(
@@ -51,11 +72,11 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ model: this.options.model, input: batch, truncate: true }),
-          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+          signal: merged,
         },
       );
     } catch {
-      throw new EmbeddingUnavailableError(); // connection refused, DNS, timeout, abort
+      throw this.failure(signal); // connection refused, DNS, timeout, caller abort
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => {}); // never leave the body open
@@ -64,9 +85,11 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
         `the embedding service refused the request (HTTP ${response.status})`,
       );
     }
+    const max = batch.length * this.dimensions * MAX_BYTES_PER_VALUE + MAX_RESPONSE_OVERHEAD_BYTES;
+    const text = await this.readCapped(response, max, signal);
     let embeddings: number[][];
     try {
-      embeddings = Body.parse(await response.json()).embeddings;
+      embeddings = Body.parse(JSON.parse(text)).embeddings;
     } catch {
       throw new EmbeddingError("the embedding service answered with an unexpected shape");
     }
@@ -79,5 +102,30 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
       );
     }
     return embeddings;
+  }
+
+  /** Reads the body up to `max` bytes; a longer body is cancelled, never buffered whole. */
+  private async readCapped(response: Response, max: number, signal?: AbortSignal): Promise<string> {
+    const reader = response.body?.getReader();
+    if (!reader)
+      throw new EmbeddingError("the embedding service answered with an unexpected shape");
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > max) {
+          await reader.cancel().catch(() => {});
+          throw new EmbeddingError("the embedding service answered with too large a response");
+        }
+        chunks.push(value);
+      }
+    } catch (err) {
+      if (err instanceof EmbeddingError) throw err;
+      throw this.failure(signal); // the connection broke or timed out mid-body
+    }
+    return Buffer.concat(chunks).toString("utf8");
   }
 }

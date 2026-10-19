@@ -1,6 +1,10 @@
 import { EmbeddingError } from "@loom/memory";
 import { describe, expect, it } from "vitest";
-import { EmbeddingUnavailableError, OllamaEmbeddingProvider } from "./ollama";
+import {
+  EmbeddingAbortedError,
+  EmbeddingUnavailableError,
+  OllamaEmbeddingProvider,
+} from "./ollama";
 
 const vec = (n: number, seed = 1) => Array.from({ length: n }, (_, i) => seed + i);
 const ok = (embeddings: unknown[]) =>
@@ -72,6 +76,16 @@ describe("OllamaEmbeddingProvider", () => {
     await expect(slow.embed(["a"])).rejects.toBeInstanceOf(EmbeddingUnavailableError);
   });
 
+  it("treats a connection that breaks mid-body as transient", async () => {
+    const body = new ReadableStream({
+      pull(c) {
+        c.error(new TypeError("terminated"));
+      },
+    });
+    const p = provider(async () => new Response(body, { status: 200 }));
+    await expect(p.embed(["a"])).rejects.toBeInstanceOf(EmbeddingUnavailableError);
+  });
+
   it("treats 404 (model not pulled), 400 and a redirect status as permanent, not transient", async () => {
     for (const status of [400, 404, 302]) {
       const p = provider(async () => new Response("model not found", { status }));
@@ -109,6 +123,29 @@ describe("OllamaEmbeddingProvider", () => {
     const p = provider(async () => new Response(body, { status: 500 }));
     await expect(p.embed(["a"])).rejects.toBeInstanceOf(EmbeddingUnavailableError);
     expect(cancelled()).toBe(true);
+  });
+
+  it("caps the response size: an endless body is cancelled and refused, permanently", async () => {
+    const { body, cancelled } = trackedBody(new Uint8Array(1 << 20).fill(32), true);
+    const p = provider(async () => new Response(body, { status: 200 }));
+    const err = await p.embed(["a"]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(EmbeddingError);
+    expect(err).not.toBeInstanceOf(EmbeddingUnavailableError);
+    expect(cancelled()).toBe(true);
+  });
+
+  it("surfaces a caller abort as EmbeddingAbortedError, neither transient nor permanent", async () => {
+    const before = new AbortController();
+    before.abort();
+    const p = provider(hang);
+    const early = await p.embed(["a"], { signal: before.signal }).catch((e: unknown) => e);
+    expect(early).toBeInstanceOf(EmbeddingAbortedError);
+    const during = new AbortController();
+    const pending = p.embed(["a"], { signal: during.signal }).catch((e: unknown) => e);
+    during.abort();
+    const late = await pending;
+    expect(late).toBeInstanceOf(EmbeddingAbortedError);
+    expect(late).not.toBeInstanceOf(EmbeddingError);
   });
 });
 
