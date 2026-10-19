@@ -5,11 +5,10 @@ import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import type { ParsedStore } from "../pgParsed";
 import {
-  STEP_RETRY,
-  STEP_TIMEOUT_MS,
   type StepGuard,
   type StepOptions,
   type StepResult,
+  ingestStepOptions,
   stepEffect,
 } from "../stepEffect";
 
@@ -50,12 +49,6 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
       await deps.parsed.drop(ref, signal); // after the chunks exist, never before
       return { count };
     },
-    {
-      retry: STEP_RETRY,
-      timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
-      ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
-      ...(deps.sleep && { sleep: deps.sleep }),
-      ...(deps.shutdown && { shutdown: deps.shutdown }),
-    },
+    ingestStepOptions(deps),
   );
 }

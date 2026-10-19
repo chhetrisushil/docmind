@@ -113,6 +113,25 @@ const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
  */
 const INTERRUPTED: Promise<never> = new Promise<never>(() => {});
 
+/** The seams every durable step's deps may carry (test seams and the shutdown signal). */
+export interface StepSeams {
+  sleep?: StepOptions["sleep"];
+  shutdown?: AbortSignal;
+  /** The wall-clock bound of one attempt (default STEP_TIMEOUT_MS). */
+  stepTimeoutMs?: number;
+  /** How long a timed-out attempt may take to settle before the step fails (default ATTEMPT_SETTLE_MS). */
+  attemptSettleMs?: number;
+}
+
+/** The retry, per-attempt timeout and shutdown options every ingest step runs under. */
+export const ingestStepOptions = (deps: StepSeams): StepOptions => ({
+  retry: STEP_RETRY,
+  timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
+  ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
+  ...(deps.sleep && { sleep: deps.sleep }),
+  ...(deps.shutdown && { shutdown: deps.shutdown }),
+});
+
 export function stepEffect(
   step: IngestStep,
   guard: StepGuard,
