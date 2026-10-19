@@ -99,7 +99,12 @@ export interface IngestProbe {
 }
 
 /** A real in-memory Loom app running the ingest stub against `app`, behind a probe. */
-function makeIngest(app: Pool): {
+function makeIngest(
+  app: Pool,
+  fields: FieldCrypto,
+  blobs: DocumentRoutesDeps["blobs"],
+  wiring: IngestWiring,
+): {
   port: IngestPort;
   probe: IngestProbe;
   status: IngestStatus;
@@ -114,10 +119,11 @@ function makeIngest(app: Pool): {
   let open: () => void = () => {};
   let startGate: Promise<void> | null = null;
   let openStart: () => void = () => {};
-  const real = pgIngestDeps(app);
+  const real = pgIngestDeps({ pool: app, fields, blobs, wiring });
   const loom = buildApp({ kind: "custom", eventStore }, undefined, {
     onEvent: (e) => status.onEvent(e),
     ingest: {
+      ...real,
       guard: {
         begin: async (ref, step) => {
           await gate;
@@ -204,7 +210,7 @@ export interface DocumentHarness {
   root: string;
   keys: InMemoryKeyStore;
   ingest: IngestProbe;
-  /** The parser registry, runner and progress bus (defaults); nothing consumes them until the parse step. */
+  /** The parser registry, runner and progress bus (defaults); the real ingest ports are built from them. */
   wiring: IngestWiring;
   inFlight: InFlight;
   starts: StartScheduler;
@@ -234,22 +240,25 @@ export async function startDocumentServer(
   const root = mkdtempSync(join(tmpdir(), "dm-docs-"));
   const keys = new InMemoryKeyStore();
   const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
-  const ingest = makeIngest(app);
+  const fields = new FieldCrypto(keys);
+  const blobs: DocumentRoutesDeps["blobs"] = (id) =>
+    new EncryptedFsContentStore({
+      root,
+      tenantId: id.tenantId,
+      userId: id.userId,
+      keys,
+      maxBytes: limits.maxFileBytes,
+    });
+  const wiring = createIngestWiring({});
+  const ingest = makeIngest(app, fields, blobs, wiring);
   const inFlight = new InFlight();
   await ingest.status.boot();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
   const wrapped = wrap({
     pool: app,
     authenticator: testAuthenticator,
-    fields: new FieldCrypto(keys),
-    blobs: (id) =>
-      new EncryptedFsContentStore({
-        root,
-        tenantId: id.tenantId,
-        userId: id.userId,
-        keys,
-        maxBytes: limits.maxFileBytes,
-      }),
+    fields,
+    blobs,
     limits,
     ingest: ingest.port,
     status: ingest.status,
@@ -269,7 +278,7 @@ export async function startDocumentServer(
     root,
     keys,
     ingest: ingest.probe,
-    wiring: createIngestWiring({}),
+    wiring,
     inFlight,
     starts,
     status: ingest.status,
@@ -302,6 +311,7 @@ export async function startDocumentServer(
       });
       await starts.idle(); // after the server stops, nothing can fire anymore
       await ingest.close();
+      await wiring.runner.close();
       await app.end();
       await db.drop();
       rmSync(root, { recursive: true, force: true });

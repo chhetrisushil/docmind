@@ -8,6 +8,7 @@ import { executionIdFor } from "../../subject";
 import type { IngestDeps } from "./deps";
 import { DocumentGoneError } from "./errors";
 import { IngestOutput, IngestStartInput, ingestDocumentFlow } from "./flow";
+import { fakeIngestDeps } from "./testing";
 
 const ids = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -16,14 +17,14 @@ const ids = (): IngestStartInput => ({
 });
 const appWith = (exists: boolean) => {
   const seen: IngestStartInput[] = [];
-  const deps: IngestDeps = {
+  const deps: IngestDeps = fakeIngestDeps({
     guard: {
       begin: async (ref) => {
         seen.push(ref);
         if (!exists) throw new DocumentGoneError();
       },
     },
-  };
+  });
   return { app: buildApp({ kind: "memory" }, undefined, { ingest: deps }), seen };
 };
 type App = ReturnType<typeof buildApp>;

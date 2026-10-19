@@ -4,19 +4,20 @@ import { ExecutionDeniedError, type WorkflowRuntime } from "@loom/workflow-runti
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../config";
 import { DocumentGoneError } from "../flows/ingest-document/errors";
+import { fakeIngestDeps } from "../flows/ingest-document/testing";
 import { generationOf, ingestKeyOf, ingestScopeOf } from "../status/model";
 import { ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
 
 const identity = () => ({ tenantId: randomUUID(), userId: randomUUID() });
 const appWith = (exists: () => Promise<boolean>) =>
   buildApp({ kind: "memory" }, undefined, {
-    ingest: {
+    ingest: fakeIngestDeps({
       guard: {
         begin: async () => {
           if (!(await exists())) throw new DocumentGoneError();
         },
       },
-    },
+    }),
   });
 
 describe("ingest start input", () => {

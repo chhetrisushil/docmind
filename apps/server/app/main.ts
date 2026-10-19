@@ -116,6 +116,7 @@ async function main(): Promise<void> {
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(
           () => drainWithin(starts.idle(), SHUTDOWN_DRAIN_MS),
+          () => ingest.runner.close(), // aborts in-flight parses and kills their children, before any pool ends
           async () => {
             detachStatusFeed(); // a step still running must not fold onto stores about to close
             await status.close();
