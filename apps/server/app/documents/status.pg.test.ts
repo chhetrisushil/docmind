@@ -1,5 +1,5 @@
 import type { DocumentDto, ListDocumentsResponse } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
@@ -20,8 +20,26 @@ describe.skipIf(!PG_URL)(
   "document status comes from the ingest-status model (needs DOCMIND_TEST_PG_URL)",
   () => {
     let h: DocumentHarness;
+    let failBlobDelete = false; // makes the delete transaction fail (the blob removal runs inside it)
     beforeAll(async () => {
-      h = await startDocumentServer();
+      h = await startDocumentServer({
+        deps: (d) => ({
+          ...d,
+          blobs: (id) => {
+            const store = d.blobs(id);
+            const real = store.delete.bind(store);
+            store.delete = async (ref) => {
+              if (failBlobDelete) throw new RangeError("blob store down");
+              return real(ref);
+            };
+            return store;
+          },
+        }),
+      });
+    });
+    afterEach(() => {
+      failBlobDelete = false;
+      vi.restoreAllMocks();
     });
     afterAll(async () => {
       await h?.close();
@@ -119,7 +137,47 @@ describe.skipIf(!PG_URL)(
         "DELETE /api/documents/:id",
       );
       expect(JSON.stringify(spy.mock.calls)).not.toContain("store down");
-      vi.restoreAllMocks();
     });
+
+    it("keeps the status rows when the delete itself fails (forget runs only after the commit)", async () => {
+      const id = await seed(ALICE, "8".repeat(64));
+      await feed(ALICE, id, "ready");
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const purge = vi.spyOn(h.statusStore, "purgeFolded");
+      failBlobDelete = true;
+      expect((await del(id)).status).toBe(500);
+      failBlobDelete = false;
+      expect(purge).not.toHaveBeenCalled();
+      expect(await json("alice", `/api/documents/${id}`)).toMatchObject({ id, status: "ready" });
+    });
+
+    it.each([
+      ["ready", "ready", null],
+      ["failed:corrupt_content", "failed", STATUS_MESSAGES.corrupt_content],
+    ] as const)(
+      "answers a duplicate upload with the model's status (%s) and starts nothing",
+      async (spec, status, error) => {
+        const bytes = TEXT(`dup ${spec}`);
+        const first = (await (await h.upload("alice", "a.txt", bytes)).json()) as {
+          document: DocumentDto;
+        };
+        await h.starts.idle();
+        const id = first.document.id;
+        await feed(ALICE, id, spec);
+        const starts = () => h.ingest.calls.filter((c) => c === `start:${id}`).length;
+        const before = starts();
+        const res = await h.upload("alice", "again.txt", bytes);
+        await h.starts.idle();
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { document: DocumentDto; duplicate: boolean };
+        expect(body.duplicate).toBe(true);
+        expect([body.document.id, body.document.status, body.document.error]).toEqual([
+          id,
+          status,
+          error,
+        ]);
+        expect(starts()).toBe(before);
+      },
+    );
   },
 );
