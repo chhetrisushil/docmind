@@ -36,8 +36,26 @@ export interface StepGuard {
  */
 export const PARSE_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
 
+/**
+ * The wall-clock bound of one attempt of a step that has no runner clock of its own (the chunk step;
+ * parse is bounded by the parser runner's wall clock, DOCMIND_PARSE_TIMEOUT_MS). Generous: chunking is
+ * CPU work over text already in memory. Recovery re-drives steps one by one, so a step that never
+ * settles would stall every execution behind it on the node.
+ */
+export const STEP_TIMEOUT_MS = 120_000;
+
+/** An attempt hit its wall clock: transient (retried by the policy), never a permanent code. */
+export class StepTimeoutError extends Error {
+  constructor() {
+    super("the step attempt timed out");
+    this.name = "StepTimeoutError";
+  }
+}
+
 export interface StepOptions {
   retry?: RetryPolicy;
+  /** Wall-clock bound of each attempt (guard, work and all); a hit is a transient failure. Unset: no bound. */
+  timeoutMs?: number;
   /** Injectable wait between attempts; must reject if `signal` aborts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** Aborted by the composition root just before the runner closes: whatever the step is doing is interrupted, not failed. */
@@ -77,6 +95,31 @@ export function stepEffect(
 ): Effect<IngestStartInput, StepResult> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const sleep = options.sleep ?? defaultSleep;
+  const attemptOnce = async (
+    ref: IngestStartInput,
+    signal: AbortSignal | undefined,
+  ): Promise<StepResult> => {
+    const bound = options.timeoutMs;
+    const run = async (inner: AbortSignal | undefined): Promise<StepResult> => {
+      await guard.begin(ref, step);
+      return { outcome: "done", ...((await work(ref, inner)) ?? {}) };
+    };
+    if (bound === undefined) return run(signal);
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), bound);
+    const expired = new Promise<never>((_, reject) =>
+      timeout.signal.addEventListener("abort", () => reject(new StepTimeoutError()), {
+        once: true,
+      }),
+    );
+    const pending = run(signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal);
+    pending.catch(() => {}); // a late rejection after the bound is not unhandled
+    try {
+      return await Promise.race([pending, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   return {
     kind: "tool",
     execute: async (ref, ctx) => {
@@ -85,8 +128,7 @@ export function stepEffect(
       const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
       for (let attempt = 1; ; attempt++) {
         try {
-          await guard.begin(ref, step);
-          return { outcome: "done", ...((await work(ref, ctx?.signal)) ?? {}) };
+          return await attemptOnce(ref, ctx?.signal);
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
           if (isDocumentGone(err)) return { outcome: "document_gone" };
