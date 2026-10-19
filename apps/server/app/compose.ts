@@ -12,6 +12,7 @@ import { authRoutes } from "./auth/routes";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
 import { withTenant } from "./db/tenant";
+import { documentEventRoutes } from "./documents/events";
 import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
@@ -95,6 +96,7 @@ export function buildServer(options: ComposeOptions) {
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
+  const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });
   const server = createHttpServer({
     ...authRoutes({
       service: new AuthService(store),
@@ -114,6 +116,7 @@ export function buildServer(options: ComposeOptions) {
       starts,
       status,
     }),
+    ...events.routes, // exact route, matched before `GET /api/documents/:id`
   });
   return {
     app,
@@ -125,6 +128,8 @@ export function buildServer(options: ComposeOptions) {
     vectors,
     bus: options.ingest.bus,
     status,
+    /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
+    events,
     /** Stops feeding the model; shutdown calls it before `status.close()` so a late event is not folded onto closing pools. */
     detachStatusFeed: () => {
       feed.onEvent = undefined;

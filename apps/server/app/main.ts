@@ -64,23 +64,24 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle, starts, status, vectors, detachStatusFeed } = buildServer({
-    pool,
-    keys,
-    storage: durable.storage,
-    crypto: durable.crypto,
-    limits,
-    blobRoot,
-    secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
-    trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
-    ingest,
-    // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
-    status: {
-      writer: pgStatusWriter(durable.pool),
-      readerFor: pgStatusReaderFor(pool),
-      source: durable.storage.eventStore,
-    },
-  });
+  const { app, server, store, throttle, starts, status, vectors, events, detachStatusFeed } =
+    buildServer({
+      pool,
+      keys,
+      storage: durable.storage,
+      crypto: durable.crypto,
+      limits,
+      blobRoot,
+      secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
+      trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
+      ingest,
+      // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
+      status: {
+        writer: pgStatusWriter(durable.pool),
+        readerFor: pgStatusReaderFor(pool),
+        source: durable.storage.eventStore,
+      },
+    });
 
   // The schema (applied out of band by `pnpm db:migrate`) must fit the embedder before anything else
   // starts. The embedder holds no resources, so closeIngest (the runner) covers its share.
@@ -149,12 +150,16 @@ async function main(): Promise<void> {
   // the pool the key store reads from.
   let closing: Promise<void> | undefined;
   const stop = () => {
+    // Timers first, then the open event streams (they never end on their own, so the server drain
+    // below would wait on them until SIGKILL), then the server drain and the close sequence.
     clearInterval(sweepTimer);
     recovery.stop();
+    const sweeperStopped = uploadSweeper.stop(); // idempotent; no sweep may fire a start once the drain begins
+    events.closeAll();
     closing ??= shutdown(server, {
       close: async () => {
-        // No sweep may fire a start once the drain below begins: stop the timer and let a run finish.
-        await drainWithin(uploadSweeper.stop(), SHUTDOWN_DRAIN_MS);
+        // Let a sweep that is already running finish.
+        await drainWithin(sweeperStopped, SHUTDOWN_DRAIN_MS);
         // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
         // start stuck on a dead database must not keep the stores open), then close everything.
         await runAll(

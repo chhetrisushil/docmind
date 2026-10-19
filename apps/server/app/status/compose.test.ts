@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
@@ -98,6 +99,21 @@ describe("buildServer and the ingest-status model", () => {
     const { identity, documentId } = await runFailingIngest(composed);
     await composed.status.close();
     expect((await composed.status.forPage(identity, [documentId])).size).toBe(0);
+    await composed.app.close();
+  });
+
+  it("mounts the progress stream and returns events, whose closeAll shutdown calls", async () => {
+    const { composed } = compose();
+    await new Promise<void>((resolve) => composed.server.listen(0, "127.0.0.1", resolve));
+    const { port } = composed.server.address() as AddressInfo;
+    const res = await fetch(`http://127.0.0.1:${port}/api/documents/events`);
+    expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+      401,
+      "unauthorized",
+    ]);
+    expect(typeof composed.events.closeAll).toBe("function");
+    await new Promise<void>((resolve) => composed.server.close(() => resolve()));
+    await composed.status.close();
     await composed.app.close();
   });
 });
