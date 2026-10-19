@@ -1,7 +1,7 @@
 import { Locator } from "@docmind/contracts";
 import type { ParsedDocument } from "@docmind/parsers";
 import { describe, expect, it } from "vitest";
-import { chunkDocument, estimateTokens } from "./chunker";
+import { chunkDocument, chunkIdFor, estimateTokens } from "./chunker";
 
 type S = { text: string; headingPath?: string[]; page?: number };
 const doc = (...sections: S[]): ParsedDocument => {
@@ -145,5 +145,78 @@ describe("estimateTokens", () => {
     expect([estimateTokens("a"), estimateTokens("abcd"), estimateTokens("abcde")]).toEqual([
       1, 1, 2,
     ]);
+  });
+});
+
+describe("chunkIdFor", () => {
+  it("derives a stable, well-formed UUID per document and ordinal, different for each", () => {
+    const d = "11111111-1111-4111-8111-111111111111";
+    const id = chunkIdFor(d, 0);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(chunkIdFor(d, 0)).toBe(id);
+    expect(
+      new Set([id, chunkIdFor(d, 1), chunkIdFor("22222222-2222-4222-8222-222222222222", 0)]).size,
+    ).toBe(3);
+  });
+});
+
+describe("overlap", () => {
+  const long = (n: number) => Array.from({ length: n }, (_, i) => para(i + 1)).join("\n\n");
+
+  it("starts each later chunk of a section inside the end of the previous one, by up to 15% of the target", () => {
+    const chunks = chunkDocument(doc({ text: long(12) }));
+    expect(chunks.length).toBeGreaterThan(2);
+    for (let i = 1; i < chunks.length; i++) {
+      const prev = chunks[i - 1]?.locator;
+      const cur = chunks[i]?.locator;
+      if (prev?.kind !== "chars" || cur?.kind !== "chars") throw new Error("expected chars");
+      const shared = prev.end - cur.start;
+      expect(shared).toBeGreaterThan(0);
+      expect(shared).toBeLessThanOrEqual(360);
+      expect(chunks[i]?.text.length).toBeLessThanOrEqual(2400);
+    }
+  });
+
+  it("starts overlapped chunks on a word start and covers every non-space character", () => {
+    const d = doc({ text: long(12) });
+    const chunks = chunkDocument(d);
+    const covered = new Array<boolean>(d.text.length).fill(false);
+    for (const c of chunks) {
+      if (c.locator.kind !== "chars") throw new Error("expected chars");
+      if (c.ordinal > 0) expect(/\s/.test(d.text[c.locator.start - 1] ?? "")).toBe(true);
+      for (let i = c.locator.start; i < c.locator.end; i++) covered[i] = true;
+    }
+    expect(d.text.split("").every((ch, i) => /\s/.test(ch) || covered[i])).toBe(true);
+  });
+
+  it("does not carry text across sections", () => {
+    const chunks = chunkDocument(doc({ text: long(8) }, { text: long(8) }));
+    const first = chunks.find((c) => c.sectionOrdinal === 1)?.locator;
+    const last = chunks.filter((c) => c.sectionOrdinal === 0).at(-1)?.locator;
+    if (first?.kind !== "chars" || last?.kind !== "chars") throw new Error("expected chars");
+    expect(first.start).toBeGreaterThanOrEqual(last.end);
+  });
+
+  it("is deterministic and equals the no-overlap tiling when overlap is 0", () => {
+    const d = doc({ text: long(10) });
+    expect(chunkDocument(d)).toEqual(chunkDocument(d));
+    expect(
+      chunkDocument(d, { overlap: 0 })
+        .map((c) => c.text)
+        .join("\n\n"),
+    ).toBe(d.text);
+  });
+
+  it("terminates, stays exact and never splits a surrogate pair on unspaced text", () => {
+    const text = "😀".repeat(3000);
+    const d = doc({ text });
+    const chunks = chunkDocument(d, { targetTokens: 100, overlap: 0.5 });
+    expect(chunks.length).toBeGreaterThan(3);
+    for (const c of chunks) {
+      if (c.locator.kind !== "chars") throw new Error("expected chars");
+      expect(c.text).toBe(d.text.slice(c.locator.start, c.locator.end));
+      expect(c.text.length).toBeLessThanOrEqual(400);
+      expect(c.text).toMatch(/^(?:😀)+$/u);
+    }
   });
 });
