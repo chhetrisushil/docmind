@@ -17,16 +17,15 @@ export interface PgIngestArgs {
     get(ref: { __loomContent: string }): Promise<Uint8Array | null>;
   };
   wiring: IngestWiring;
-  /** Checked against `wiring.embedder` when given (Task 91b makes it required and returns it in the deps). */
-  vectors?: ChunkVectorStore;
+  /** Must agree with `wiring.embedder` (model and dimensions), or composition refuses. */
+  vectors: ChunkVectorStore;
 }
 
 export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestArgs): IngestDeps {
   // A deployment fault: refuse to compose rather than embed vectors the store cannot compare.
   if (
-    vectors &&
-    (vectors.modelId !== wiring.embedder.modelId ||
-      vectors.dimensions !== wiring.embedder.dimensions)
+    vectors.modelId !== wiring.embedder.modelId ||
+    vectors.dimensions !== wiring.embedder.dimensions
   ) {
     throw new IngestConfigError();
   }
@@ -36,6 +35,8 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     parsed: new PgParsedStore(pool, fields),
     chunks: new PgChunkStore(pool, fields),
     registry: wiring.registry,
+    vectors,
+    embedder: wiring.embedder,
     runner: wiring.runner,
     shutdown: wiring.shutdown.signal,
     ...(wiring.sleep && { sleep: wiring.sleep }),
