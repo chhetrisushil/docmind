@@ -5,13 +5,27 @@
   "description": "DocumentParser interface, registry and parsers; runs untrusted bytes in a resource-limited child process.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "engines": { "node": ">=22.13.0" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "tsc -p tsconfig.json && vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
-  "dependencies": { "@docmind/contracts": "workspace:*", "zod": "^3.23.8" },
-  "devDependencies": { "@types/node": "^22.0.0", "vitest": "^2.1.8" }
+  "dependencies": {
+    "@docmind/contracts": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
 }

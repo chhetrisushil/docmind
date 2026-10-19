@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawned: ChildProcess[] = [];
 let stdiolessSpawn = false;
+let spawnCommand: string | null = null;
 let onSpawn: (() => void) | null = null;
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
     ...actual,
     spawn: ((...args: Parameters<typeof actual.spawn>) => {
-      const child = actual.spawn(...args);
+      const real = actual.spawn as (...a: unknown[]) => ChildProcess;
+      const child = real(spawnCommand ?? args[0], ...args.slice(1));
       if (stdiolessSpawn) {
         child.kill("SIGKILL");
         return { pid: undefined, once: () => {}, on: () => {} } as unknown as ChildProcess;
@@ -31,12 +33,18 @@ import {
   type ParseRunnerOptions,
   ParseTimeoutError,
 } from "./ParseRunner";
-import { createTestParseRunner } from "./testing";
+import { setRunnerInternals } from "./internals";
 
 const LIMITS = { wallClockMs: 10_000, memoryMb: 256, maxInputBytes: 1024, maxChars: 500 };
 const hostile = resolve(__dirname, "../../test-fixtures/hostile.cjs");
+/** A runner whose test-only internals (the parser module) are set through the hidden table. */
+const withModule = (options: ParseRunnerOptions, parserModule?: string): ParseRunner => {
+  const r = new ParseRunner(options);
+  if (parserModule) setRunnerInternals(r, { parserModule });
+  return r;
+};
 const runner = (parserModule: string | null = hostile, limits = LIMITS) =>
-  new ParseRunner({ limits, ...(parserModule ? { parserModule } : {}) });
+  withModule({ limits }, parserModule ?? undefined);
 const limited = (over: Partial<typeof LIMITS>) => runner(hostile, { ...LIMITS, ...over });
 const bytes = (s: string) => new TextEncoder().encode(s);
 const released = () => {
@@ -175,16 +183,28 @@ describe("ParseRunner", () => {
   });
 
   it("a failed spawn (ENOENT) rejects with a crash instead of hanging", async () => {
-    const r = createTestParseRunner({ limits: LIMITS }, "/nonexistent/node-binary");
-    await expect(r.run("txt", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    spawnCommand = "/nonexistent/node-binary";
+    try {
+      const r = new ParseRunner({ limits: LIMITS });
+      await expect(r.run("txt", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    } finally {
+      spawnCommand = null;
+    }
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.pid).toBeUndefined();
   });
 
-  it("the public options type has no executable", () => {
-    // @ts-expect-error `executable` is reachable only through createTestParseRunner
-    const options: ParseRunnerOptions = { limits: LIMITS, executable: "/nonexistent/node-binary" };
-    expect(options.limits).toBe(LIMITS);
+  it("the exported constructor's options cannot carry the sandbox seams", () => {
+    type Options = ConstructorParameters<typeof ParseRunner>[0];
+    // @ts-expect-error not an option: it would widen the child's filesystem grants
+    const a: Options = { limits: LIMITS, parserModule: "/x.cjs" };
+    // @ts-expect-error not an option
+    const b: Options = { limits: LIMITS, childEntry: "/x.js" };
+    // @ts-expect-error not an option
+    const c: Options = { limits: LIMITS, executable: "/bin/true" };
+    // Even if a JavaScript caller passes them, the runner never reads them.
+    const r = new ParseRunner(a);
+    expect([b, c].length + r.active()).toBe(2);
   });
 
   it("a spawn that returns no stdio (EMFILE) rejects with a crash, not a TypeError", async () => {
@@ -293,8 +313,7 @@ describe("ParseRunner concurrency and abort", () => {
     spawned.length = 0;
     onSpawn = null;
   });
-  const gated = (maxConcurrent: number) =>
-    new ParseRunner({ limits: LIMITS, parserModule: hostile, maxConcurrent });
+  const gated = (maxConcurrent: number) => withModule({ limits: LIMITS, maxConcurrent }, hostile);
   const spawns = (n: number) =>
     new Promise<void>((res) => {
       const check = () => {
