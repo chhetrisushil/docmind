@@ -6,6 +6,7 @@ import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, shutdown } from "./shutdown";
+import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
 
@@ -72,14 +73,7 @@ async function main(): Promise<void> {
   });
 
   // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
-  try {
-    await status.boot();
-  } catch (err) {
-    await app.close();
-    await durable.close();
-    await pool.end();
-    throw err;
-  }
+  await bootStatus(status, [() => app.close(), () => durable.close(), () => pool.end()]);
 
   const sweep = () =>
     Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err) =>
@@ -133,6 +127,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err);
+  // Class only: a startup error's message or stack can carry ids or connection details.
+  console.error(
+    "docmind server failed to start",
+    err instanceof Error ? err.constructor.name : typeof err,
+  );
   process.exit(1);
 });
