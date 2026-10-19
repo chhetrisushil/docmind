@@ -1,0 +1,163 @@
+#+TITLE: DocMind
+#+OPTIONS: toc:2 num:nil
+
+* What DocMind is
+
+DocMind is a multi-user, local-first, RAG-based document assistant built on the Loom framework.
+A signed-in user uploads documents, gets summaries and analysis, and asks questions across their
+documents in a chat that cites its sources. Each user's data is isolated per tenant and encrypted
+under a per-user key, so account erasure can be made final by destroying that key.
+
+Only the document-storage half exists today (see Status); ingestion, retrieval, chat and the web UI
+are planned.
+
+* Status
+
+Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spec]] (section 9).
+
+| Milestone | Scope                                          | State                          |
+|-----------+------------------------------------------------+--------------------------------|
+| M0        | Foundations: workspace, CI, contracts, tenancy | shipped                        |
+| M1        | Identity and keys: password auth, KeyStore, sealed Postgres event store | shipped |
+| M2        | Document storage: encrypted blobs, upload/list/get/delete API | shipped         |
+| M3        | Ingestion: parsers, chunking, embeddings, summaries | planned (only a stub flow exists) |
+| M4        | Chat and history: tools, agent, citations      | planned                        |
+| M5        | Erasure: =DELETE /api/me=                      | planned                        |
+| M6        | Web UI (=apps/web=)                            | planned                        |
+| M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
+
+The =ingest-document= flow is a stub: it only checks that the document still exists. There is no
+parsing, chunking, embedding or chat code yet, and no =apps/web=.
+
+* Architecture
+
+Data flow as built:
+
+1. =POST /api/documents= streams a multipart upload, sniffs magic bytes, applies per-user and
+   per-tenant limits, and writes the bytes to the encrypted filesystem blob store under a keyed
+   content address (used for dedup).
+2. A row goes into the =documents= table, which is under row-level security; sensitive columns
+   (=*_enc=) are encrypted with =FieldCrypto=.
+3. After the upload commits, the server starts the =ingest-document= flow on Loom (ids only in the
+   input and event log). Deleting a document cancels the flow first.
+4. =GET /api/documents= (keyset paging), =GET /api/documents/:id= and =DELETE /api/documents/:id=
+   complete the API. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
+
+Planned (spec): parse, chunk and embed steps (pgvector, local Ollama embeddings), then a
+=doc-assistant= agent over Claude for cited chat. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
+
+Security model, in brief:
+- Per-tenant isolation through Postgres row-level security. The server connects as =docmind_app=,
+  which owns nothing and cannot bypass RLS; migrations run as the owner role.
+- A per-user data key (DEK) is stored wrapped by a master key (KEK). Loom's event log and snapshots
+  are sealed per user through =PostgresKeyStore=; blobs are enveloped per user.
+- Destroying a user's key makes their events, snapshots and blobs unreadable (crypto-shredding).
+- Event paths holding sensitive fields are registered in =apps/server/app/sensitive.ts=; flow input
+  carries ids only, and passwords and secrets are kept out of logs.
+
+* Repository layout
+
+pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live in =infra/migrations=.
+
+| Path                    | Purpose                                                        |
+|-------------------------+----------------------------------------------------------------|
+| =apps/server=           | =@docmind/server=: Loom app, HTTP routes, migrations runner, KEK rotation tool |
+| =packages/auth=         | =@docmind/auth=: =Authenticator= interface, conformance suite, password/session implementation |
+| =packages/blob-store=   | =@docmind/blob-store=: encrypted filesystem =ContentStore=     |
+| =packages/contracts=    | =@docmind/contracts=: zod schemas and types for the HTTP API   |
+| =packages/keystore-pg=  | =@docmind/keystore-pg=: =PostgresKeyStore= (per-subject keys wrapped by a master key) |
+| =infra/migrations=      | Ordered SQL migrations =0001= to =0009= (roles, tenancy, auth, keys, documents) |
+
+* Prerequisites
+
+- Node.js >= 20 (CI uses 22).
+- pnpm 9.14.4 (pinned in =packageManager=).
+- PostgreSQL 16 (CI and =docker-compose.yml= use the =pgvector/pgvector:pg16= image). pgvector is not
+  needed until M3.
+- A sibling Loom checkout at =../loom=, built with =pnpm build=. =package.json= overrides every
+  =@loom/*= dependency with =link:../loom/...=, so install fails without it.
+- Optional: Docker, for the compose services (Postgres, and Ollama on port 11434 for embeddings in M3).
+
+* Getting started
+
+Clone DocMind beside Loom:
+
+#+begin_src text
+workspace/
+  loom/      (run: pnpm install && pnpm build)
+  docmind/
+#+end_src
+
+#+begin_src bash
+cd docmind
+pnpm install
+pnpm build
+docker compose up -d            # Postgres (+ Ollama); binds to 127.0.0.1
+cp .env.example .env            # then edit; .env is git-ignored
+set -a; . ./.env; set +a
+pnpm --filter @docmind/server db:migrate
+pnpm --filter @docmind/server start
+#+end_src
+
+Environment variables (names only; see [[file:.env.example][.env.example]] for the template and comments):
+
+| Variable                                     | Purpose                                              |
+|----------------------------------------------+------------------------------------------------------|
+| =HOST=, =PORT=                               | HTTP listen address (defaults 127.0.0.1 and 3000)    |
+| =DOCMIND_MIGRATE_URL=                        | Owner-role connection used by migrations and key rotation |
+| =DOCMIND_APP_DB_PASSWORD=                    | Password set for the =docmind_app= role by migrations |
+| =DOCMIND_LOOM_DB_PASSWORD=                   | Password set for the =docmind_loom= role              |
+| =DATABASE_URL=                               | App connection as =docmind_app= (subject to RLS)      |
+| =LOOM_DATABASE_URL=                          | Loom event log and snapshots, as =docmind_loom=       |
+| =DOCMIND_KEK=, =DOCMIND_KEK_ID=              | Master key and its id (=.env.example= also mentions =DOCMIND_KEK_FILE=) |
+| =DOCMIND_KEK_PREVIOUS=, =DOCMIND_KEK_PREVIOUS_ID= | Retiring key, only during rotation               |
+| =DOCMIND_COOKIE_SECURE=                      | =true= when served over HTTPS                         |
+| =DOCMIND_TRUST_PROXY=                        | =true= to trust =X-Forwarded-For= behind one proxy    |
+| =DOCMIND_BLOB_DIR=                           | Directory for encrypted blobs                         |
+| =DOCMIND_MAX_UPLOAD_BYTES=, =DOCMIND_TENANT_MAX_BYTES=, =DOCMIND_TENANT_MAX_DOCUMENTS=, =DOCMIND_MAX_CONCURRENT_UPLOADS= | Upload limits and quotas |
+| =DOCMIND_TEST_PG_URL=                        | Enables the Postgres test suites                      |
+| =OLLAMA_URL=, =ANTHROPIC_API_KEY=            | Listed in =.env.example= for M3 and M4; not read by code yet |
+
+Generate the KEK as described in =.env.example=. Losing it makes all encrypted data unreadable.
+A =GET /healthz= endpoint reports liveness.
+
+* Development
+
+Run from the repository root:
+
+| Script                 | What it does                                      |
+|------------------------+---------------------------------------------------|
+| =pnpm build=           | =turbo run build= (tsc per package)               |
+| =pnpm test=            | =turbo run test= (vitest per package)             |
+| =pnpm typecheck=       | =turbo run typecheck=                             |
+| =pnpm typecheck:tests= | =turbo run typecheck:tests=                       |
+| =pnpm lint=            | =biome check .= (=pnpm lint:fix= writes fixes)    |
+
+Postgres-backed suites run only when =DOCMIND_TEST_PG_URL= is set; otherwise they skip. The role
+needs =CREATE DATABASE=, because each suite creates and drops its own database. Migrations are a
+Turbo test input, so changing one reruns tests.
+
+CI (=.github/workflows/ci.yml=) checks out Loom next to this repo, builds it, then builds,
+typechecks, lints and tests DocMind. Draft pull requests skip CI. The design spec asks for pull
+requests of at most 200 changed lines and 10 files, opened as drafts.
+
+* Operations
+
+- [[file:docs/operations/rotate-kek.md][Rotating the master key (KEK)]]: re-wraps stored data keys with
+  =pnpm --filter @docmind/server keys:rotate=.
+
+Backup and erasure runbooks are listed in the spec as M7 work and do not exist yet.
+
+* Documentation map
+
+- [[file:docs/specs/2026-10-18-docmind-design.md][Design spec]] (draft): goals, data model, tenancy, crypto-shredding, ingestion, chat, roadmap.
+- [[file:docs/design/linked-retrieval.md][Linked retrieval]]: semantic seeds, then link hops (accepted direction).
+- [[file:docs/design/ui-mocks.md][UI mocks]] and [[file:docs/design/claude-design-brief.md][design brief]].
+- Milestone plans:
+  - [[file:docs/superpowers/plans/2026-10-18-m0-foundations.md][M0 foundations]]
+  - [[file:docs/superpowers/plans/2026-10-18-m1-identity-and-keys.md][M1 identity and keys]]
+  - [[file:docs/superpowers/plans/2026-10-18-m2-document-storage.md][M2 document storage]]
+
+* License
+
+Unlicensed and private (=UNLICENSED=, =private: true= in =package.json=).
