@@ -165,6 +165,11 @@ Backup and erasure runbooks are listed in the spec as M7 work and do not exist y
 - The =vector= (pgvector) extension must be created by a superuser or the DBA before migrating:
   the migration runner refuses to continue without it. After a pgvector upgrade, the app role needs
   EXECUTE on the new extension functions again, so ship a grant migration with the upgrade.
+- Applied migration files are checksummed (SHA-256, BOM and CRLF ignored). =db:migrate= and the server
+  start refuse a file that changed after it was applied. The first run against a database from
+  before checksums records the files as they are now (trust on first use). Never edit an applied
+  file: add a new migration. To accept a legitimate edit, update that row's =checksum= in
+  =schema_migrations= by hand.
 
 * Documentation map
 

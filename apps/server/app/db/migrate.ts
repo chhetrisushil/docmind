@@ -35,7 +35,48 @@ const extensionAvailable = async (client: PoolClient, name: string): Promise<boo
   ((await client.query("SELECT 1 FROM pg_available_extensions WHERE name = $1", [name])).rowCount ??
     0) > 0;
 
+/**
+ * A migration's text as it is hashed and executed: without a leading BOM and with LF line ends, so
+ * an editor's BOM or a CRLF checkout (core.autocrlf) of an unchanged file neither refuses nor runs
+ * differently. `.gitattributes` also pins `*.sql` to LF.
+ */
+const readMigration = (dir: string, file: string): string =>
+  readFileSync(join(dir, file), "utf8")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n");
 const checksumOf = (sql: string) => createHash("sha256").update(sql).digest("hex");
+
+/** An applied migration file no longer matches its recorded checksum. The message names the file only. */
+export class MigrationChecksumError extends Error {
+  override readonly name = "MigrationChecksumError";
+  constructor(file: string) {
+    super(`migration ${file} was changed after it was applied`);
+  }
+}
+const changed = (file: string) => new MigrationChecksumError(file);
+
+/**
+ * Read-only check, for server start: refuses when an applied migration file no longer matches its
+ * recorded checksum. Rows without a checksum (not yet backfilled by `db:migrate`) and a database
+ * without the table or column are not checked. Throws an error naming the file only.
+ */
+export async function verifyMigrationChecksums(
+  pool: Pool,
+  dir: string = MIGRATIONS_DIR,
+): Promise<void> {
+  const column = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'schema_migrations' AND column_name = 'checksum'`,
+  );
+  if (column.rowCount === 0) return;
+  const { rows } = await pool.query<{ name: string; checksum: string | null }>(
+    "SELECT name, checksum FROM public.schema_migrations ORDER BY name",
+  );
+  const files = new Set(readdirSync(dir));
+  for (const { name, checksum } of rows)
+    if (checksum !== null && files.has(name) && checksum !== checksumOf(readMigration(dir, name)))
+      throw changed(name);
+}
 
 /** Applies every `NNNN_name.sql` in `dir` not yet recorded in `schema_migrations`, in name order. */
 export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise<string[]> {
@@ -61,7 +102,7 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
     // from before checksums existed are backfilled from the file as it is now (recorded, not refused).
     for (const file of files) {
       if (!seen.has(file)) continue;
-      const sum = checksumOf(readFileSync(join(dir, file), "utf8"));
+      const sum = checksumOf(readMigration(dir, file));
       const recorded = seen.get(file);
       if (recorded == null) {
         await client.query("UPDATE schema_migrations SET checksum = $2 WHERE name = $1", [
@@ -69,13 +110,13 @@ export async function migrate(pool: Pool, dir: string = MIGRATIONS_DIR): Promise
           sum,
         ]);
       } else if (recorded !== sum) {
-        throw new Error(`migration ${file} was changed after it was applied`);
+        throw changed(file);
       }
     }
     const applied: string[] = [];
     for (const file of files) {
       if (seen.has(file)) continue;
-      const sql = readFileSync(join(dir, file), "utf8");
+      const sql = readMigration(dir, file);
       let missing: string | undefined;
       for (const name of requiredExtensions(file, sql)) {
         if (!(await extensionAvailable(client, name))) {
