@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { foldIngestStatus } from "../../status/model";
 import { DocumentGoneError } from "./errors";
-import type { IngestStartInput } from "./flow";
+import { type IngestStartInput, ingestDocumentFlow } from "./flow";
 import { recoverIngest } from "./recovery";
 import { boot, eventsOf, hanging, input, keptLog, start, types } from "./recoveryHarness";
 import { fakeIngestDeps } from "./testing";
@@ -92,5 +92,25 @@ describe("recoverIngest: resuming executions", () => {
       recovered: 0,
     });
     expect(await recoverIngest(app.runtime, log.kept, at(1000))).toMatchObject({ recovered: 1 });
+  });
+
+  it("leaves an execution that is not an ingest alone, even one recovery could re-drive", async () => {
+    const log = keptLog();
+    const ids = input();
+    const first = hanging();
+    const other = `u_${ids.userId}:chat-${ids.documentId}`;
+    await boot(log, first.deps).runtime.start(ingestDocumentFlow, ids, {
+      executionId: other,
+      principal: { tenant: ids.tenantId, actor: ids.userId },
+    });
+    await first.inStep;
+    const app = boot(log, fakeIngestDeps());
+    expect(await recoverIngest(app.runtime, log.kept, { graceMs: 0 })).toMatchObject({
+      candidates: 1,
+      recovered: 0,
+    });
+    expect((await log.store.read(other)).map((e) => e.eventType)).not.toContain(
+      "EXECUTION_RECOVERED",
+    );
   });
 });
