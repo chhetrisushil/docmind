@@ -103,6 +103,21 @@ const defaultEntry = (): string => {
 export class ParseRunner {
   private slots = 0;
   private readonly waiting: { start: () => void; drop: () => void }[] = [];
+  private readonly inFlight = new Map<AbortController, Promise<unknown>>();
+  private closing: Promise<void> | undefined;
+
+  /**
+   * Aborts every run (queued runs are dropped unstarted, started children are SIGKILLed), refuses
+   * new ones with ParseAbortedError, and resolves once every child has exited. Idempotent.
+   */
+  close(): Promise<void> {
+    this.closing ??= (async () => {
+      const runs = [...this.inFlight];
+      for (const [ac] of runs) ac.abort();
+      await Promise.allSettled(runs.map(([, done]) => done));
+    })();
+    return this.closing;
+  }
 
   /** Runs holding a slot (a child may still be starting or exiting). */
   active(): number {
@@ -172,10 +187,27 @@ export class ParseRunner {
     opts?: { signal?: AbortSignal },
   ): Promise<ParsedDocument> {
     if (bytes.byteLength > this.options.limits.maxInputBytes) throw new ParseLimitError("input");
-    await this.acquire(opts?.signal);
+    if (this.closing) throw new ParseAbortedError();
+    const own = new AbortController();
+    const signal = opts?.signal ? AbortSignal.any([opts.signal, own.signal]) : own.signal;
+    const done = this.runSlot(parserId, bytes, signal);
+    this.inFlight.set(own, done);
     try {
-      if (opts?.signal?.aborted) throw new ParseAbortedError();
-      return await this.runChild(parserId, bytes, opts?.signal);
+      return await done;
+    } finally {
+      this.inFlight.delete(own);
+    }
+  }
+
+  private async runSlot(
+    parserId: string,
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<ParsedDocument> {
+    await this.acquire(signal);
+    try {
+      if (signal.aborted) throw new ParseAbortedError();
+      return await this.runChild(parserId, bytes, signal);
     } finally {
       this.release();
     }
@@ -223,6 +255,7 @@ export class ParseRunner {
         bytes: Buffer.from(bytes).toString("base64"),
         module: parserModule,
         maxChars: limits.maxChars,
+        wallClockMs: limits.wallClockMs,
       };
       return await this.exchange(child, request, signal);
     } finally {

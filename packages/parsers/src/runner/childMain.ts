@@ -2,7 +2,13 @@ import { createWriteStream } from "node:fs";
 import { createDefaultParsers } from "../defaults";
 import { ParserRegistry } from "../registry";
 import { type DocumentParser, ParseRejectedError } from "../types";
-import { type ChildReply, type ChildRequest, encodeFrame } from "./protocol";
+import {
+  CHILD_DEADLINE_EXIT,
+  CHILD_GRACE_MS,
+  type ChildReply,
+  type ChildRequest,
+  encodeFrame,
+} from "./protocol";
 
 const reply = (message: ChildReply) => {
   createWriteStream("", { fd: 3 }).end(encodeFrame(message), () => process.exit(0));
@@ -13,6 +19,10 @@ async function main(): Promise<void> {
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
   const frame = Buffer.concat(chunks);
   const request = JSON.parse(frame.subarray(4).toString("utf8")) as ChildRequest;
+  // The parent SIGKILLs at its wall clock; this is the backstop if the parent is gone or stuck.
+  // Unref'd, so it never keeps a finished child alive (it cannot fire inside a synchronous loop).
+  const deadlineMs = Math.min(request.wallClockMs + CHILD_GRACE_MS, 2_147_483_647); // setTimeout's ceiling
+  setTimeout(() => process.exit(CHILD_DEADLINE_EXIT), deadlineMs).unref();
   const parsers: DocumentParser[] = request.module
     ? (require(request.module) as { parsers: DocumentParser[] }).parsers
     : createDefaultParsers();
