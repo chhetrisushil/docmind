@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ProgressDetail } from "@docmind/contracts";
 import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "../flows/ingest-document/errors";
@@ -208,6 +209,10 @@ describe("the view", () => {
   it("has a message for every failure code and for internal, and UPLOADED carries no error", () => {
     expect(Object.keys(STATUS_MESSAGES).sort()).toEqual([...FAILURE_CODES, "internal"].sort());
     expect(UPLOADED).toEqual({ status: "uploaded", step: null, error: null });
+  });
+
+  it("keeps the contract's detail enum equal to the app's codes", () => {
+    expect([...ProgressDetail.options].sort()).toEqual([...FAILURE_CODES, "internal"].sort());
   });
 });
 
