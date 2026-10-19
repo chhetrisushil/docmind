@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ParserRegistry } from "./registry";
-import { type DocumentParser, ParseRejectedError, ParsedDocument } from "./types";
+import {
+  type DocumentParser,
+  PARSE_REJECT_CODES,
+  ParseRejectedError,
+  ParsedDocument,
+} from "./types";
 
 const parser = (id: string, mime: string, ext?: string): DocumentParser => ({
   id,
@@ -15,6 +20,14 @@ describe("ParserRegistry", () => {
     expect(reg.select("text/markdown")?.id).toBe("b");
     expect(reg.select("application/octet-stream", "txt")?.id).toBe("a");
     expect(reg.select("image/png")).toBeUndefined();
+  });
+
+  it("lets registration order win when two parsers accept the same type", () => {
+    const both = new ParserRegistry([
+      parser("first", "text/plain"),
+      parser("second", "text/plain"),
+    ]);
+    expect(both.select("text/plain")?.id).toBe("first");
   });
 
   it("finds a parser by id and lists ids in registration order", () => {
@@ -38,6 +51,32 @@ describe("types", () => {
       media: [],
     };
     expect(ParsedDocument.safeParse(bad).success).toBe(false);
+  });
+
+  it("ParsedDocument accepts a well-formed document", () => {
+    const ok = {
+      text: "t",
+      sections: [{ headingPath: ["Intro"], text: "t", locator: { kind: "section", index: 0 } }],
+      media: [],
+    };
+    expect(ParsedDocument.safeParse(ok).success).toBe(true);
+  });
+
+  it("ParsedDocument keeps locators numbers-only: a heading string in a locator fails", () => {
+    const bad = {
+      text: "t",
+      sections: [{ headingPath: [], text: "t", locator: { kind: "section", index: "Intro" } }],
+      media: [],
+    };
+    expect(ParsedDocument.safeParse(bad).success).toBe(false);
+  });
+
+  it("PARSE_REJECT_CODES lists exactly the three codes", () => {
+    expect([...PARSE_REJECT_CODES]).toEqual([
+      "unsupported_content",
+      "corrupt_content",
+      "too_large",
+    ]);
   });
 
   it("ParseRejectedError carries a code and a fixed message", () => {
