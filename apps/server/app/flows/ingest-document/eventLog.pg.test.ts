@@ -329,5 +329,72 @@ describe.skipIf(!PG_URL)(
       expect(raw.at(-1)?.payload).toEqual({ reason: "ingest-flow-mismatch" });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
+
+    it("a recovery re-run that succeeds leaves the recovery marker and a normal finish", async () => {
+      const ref = await seedTxt("4".repeat(64));
+      await crashed(ref);
+      const next = await peer(async () => ({ text: "h", sections: [], media: [] }));
+      expect(await recoverIngest(next.app.runtime, next.source, { graceMs: 0 })).toMatchObject({
+        recovered: 1,
+        failed: 0,
+      });
+      const raw = proven(await log(ref), ref);
+      expect(types(raw)).toEqual([
+        "EXECUTION_STARTED",
+        "STEP_STARTED",
+        "EXECUTION_RECOVERED",
+        "STEP_STARTED",
+        "RESOURCE_METERED",
+        "STEP_COMPLETED",
+        "EXECUTION_COMPLETED",
+      ]);
+    });
+
+    it("a shutdown interrupt records nothing; the next boot's recovery then finishes the step", async () => {
+      const ref = await seedTxt("5".repeat(64));
+      const shutdown = new AbortController();
+      let inStep: () => void = () => {};
+      const entered = new Promise<void>((resolve) => {
+        inStep = resolve;
+      });
+      const origin = await peer(
+        () =>
+          new Promise<never>((_, reject) => {
+            inStep();
+            shutdown.signal.addEventListener("abort", () => reject(new ParseAbortedError()));
+          }),
+        { shutdown: shutdown.signal },
+      );
+      await origin.app.runtime.start(ingestDocumentFlow, ref, {
+        executionId: ingestExecutionId(ref.userId, ref.documentId),
+        principal: { tenant: ref.tenantId, actor: ref.userId },
+      });
+      await entered;
+      shutdown.abort(); // the step is interrupted, not failed: it stays un-completed in the log
+      await origin.app.runtime.closeHeartbeat();
+      expect(types(proven(await log(ref), ref))).toEqual(["EXECUTION_STARTED", "STEP_STARTED"]);
+      const next = await peer(async () => ({ text: "h", sections: [], media: [] }));
+      await recoverIngest(next.app.runtime, next.source, { graceMs: 0 });
+      const raw = proven(await log(ref), ref);
+      expect(types(raw).at(-1)).toBe("EXECUTION_COMPLETED");
+      expect(types(raw)).toContain("EXECUTION_RECOVERED");
+    });
+
+    it("a cancel by another user is denied and recorded with fixed text only", async () => {
+      const ref = await seedTxt("6".repeat(64));
+      await crashed(ref); // a live-looking execution to aim at
+      const executionId = ingestExecutionId(ref.userId, ref.documentId);
+      await app.runtime
+        .cancel(executionId, "user asked for it: Q3 report.pdf", {
+          principal: { tenant: ref.tenantId, actor: "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1" },
+        })
+        .catch(() => undefined);
+      const raw = proven(await log(ref), ref);
+      expect(raw.at(-1)).toMatchObject({
+        eventType: "EXECUTION_DENIED",
+        payload: { op: "cancel", reason: "only the execution's owner may do this" },
+      });
+      expect(JSON.stringify(raw)).not.toContain("user asked for it"); // the caller's reason is not recorded
+    });
   },
 );

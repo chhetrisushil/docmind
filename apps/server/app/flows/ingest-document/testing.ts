@@ -90,6 +90,12 @@ const payloads = (ref: IngestStartInput): Record<string, Shape> => {
     },
     STEP_CANCELLED: { stepId },
     EXECUTION_RECOVERED: {},
+    // A refused operation by someone else: Loom's fixed text, and the refused actor's id.
+    EXECUTION_DENIED: {
+      op: oneOf("cancel"),
+      actor: matches(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+      reason: exactly("only the execution's owner may do this"),
+    },
   };
 };
 
@@ -140,7 +146,7 @@ export function assertEventsAreContentFree(events: RawEvent[], ref: IngestStartI
     id: (v) =>
       typeof v === "string" &&
       v.startsWith(`${executionId}-`) &&
-      /^\d+$/.test(v.slice(executionId.length + 1)),
+      /^\d+(-denied)?$/.test(v.slice(executionId.length + 1)),
     sequence: count,
     timestamp: count,
     executionId: exactly(executionId),
