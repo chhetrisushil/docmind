@@ -30,6 +30,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@loom/classify": "*",
     "@loom/cli": "*",
     "@loom/conformance": "*",
     "@loom/event-runtime": "*",

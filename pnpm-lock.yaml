@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@loom/app': link:../loom/packages/app
+  '@loom/classify': link:../loom/packages/classify
   '@loom/cli': link:../loom/tools/cli
   '@loom/conformance': link:../loom/packages/conformance
   '@loom/core': link:../loom/packages/core
@@ -79,6 +80,9 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@loom/classify':
+        specifier: link:../../../loom/packages/classify
+        version: link:../../../loom/packages/classify
       '@loom/cli':
         specifier: link:../../../loom/tools/cli
         version: link:../../../loom/tools/cli

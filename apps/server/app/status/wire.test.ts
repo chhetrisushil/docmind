@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { sensitive } from "@loom/classify";
+import { step$ } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import {
   EncryptingEventStore,
@@ -6,6 +8,7 @@ import {
   sensitivePathsFromSteps,
 } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { buildApp } from "../config";
 import { ingestDocumentFlow } from "../flows/ingest-document/flow";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
@@ -33,6 +36,28 @@ describe("the status model's sensitive map", () => {
 
   it("is the steps' map alone when the store seals nothing", () => {
     expect(statusSensitive(flowSteps(), {})).toEqual(sensitivePathsFromSteps(flowSteps()));
+  });
+
+  it("carries a step's sensitive(...) output into the map, and keeps it beside the store's covers", () => {
+    const secretStep = step$({
+      id: "secret-step",
+      inputSchema: z.object({}),
+      outputSchema: z.object({ note: sensitive(z.string()), count: z.number() }),
+    });
+    expect(statusSensitive([secretStep], {}).STEP_COMPLETED).toEqual(["output.note"]);
+    // A real encrypting store, so the capability has Loom's own shape.
+    const sealing = new EncryptingEventStore(
+      new InMemoryAsyncEventStore(),
+      new InMemoryKeyStore(),
+      {
+        sensitive: { OUTCOME_RECORDED: ["recordedBy"] },
+        subjectOf: subjectOfExecution,
+      },
+    );
+    expect(statusSensitive([secretStep], sealing)).toEqual({
+      STEP_COMPLETED: ["output.note"],
+      OUTCOME_RECORDED: ["recordedBy"],
+    });
   });
 });
 

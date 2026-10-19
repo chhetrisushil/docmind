@@ -24,6 +24,7 @@
   "pnpm": {
     "overrides": {
       "@loom/app": "link:../loom/packages/app",
+      "@loom/classify": "link:../loom/packages/classify",
       "@loom/cli": "link:../loom/tools/cli",
       "@loom/conformance": "link:../loom/packages/conformance",
       "@loom/core": "link:../loom/packages/core",
