@@ -3,6 +3,7 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { Pool, PoolClient } from "pg";
 import { type EntityKeys, type EntityKind, normalizeEntityName } from "../../crypto/entityKeys";
 import type { FieldCrypto } from "../../crypto/fields";
+import { ENTITY_LOCK_SHARED } from "../../db/entityLock";
 import { withTenant } from "../../db/tenant";
 import { DocumentGoneError } from "./errors";
 import type { IngestStartInput } from "./flow";
@@ -98,6 +99,7 @@ export class PgEntityStore implements EntityStore {
 
     return withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
+      await tx.query(ENTITY_LOCK_SHARED, [ref.userId]);
       await tx.query(
         `DELETE FROM chunk_entities ce USING chunks c
           WHERE ce.chunk_id = c.id AND c.document_id = $1`,
