@@ -1,10 +1,30 @@
 import { randomUUID } from "node:crypto";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { T1, U1, seedUsers } from "../documents/testHarness";
-import { migrate, setAppRolePassword } from "./migrate";
+import { T1, T2, U1, U2, seedUsers } from "../documents/testHarness";
+import { MIGRATIONS_DIR, migrate, setAppRolePassword } from "./migrate";
 import { withTenant } from "./tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
+
+// The non-extension functions docmind_app may execute: granted on purpose by 0002, 0005, 0006, 0007.
+const APP_EXECUTABLE = [
+  "app_tenant_id()",
+  "auth_find_login(text)",
+  "auth_find_session(text)",
+  "auth_purge_expired_sessions()",
+  "auth_sign_up(uuid,uuid,text,text)",
+  "key_destroy(text)",
+  "key_get(text)",
+  "key_put(text,bytea,text)",
+  "key_was_destroyed(text)",
+  "throttle_clear(text)",
+  "throttle_fail(text,integer,integer,integer,integer)",
+  "throttle_purge()",
+  "throttle_retry_after(text[])",
+];
 
 const vec = (n = 768, x = "0.5") => `[${Array.from({ length: n }, () => x).join(",")}]`;
 
@@ -118,5 +138,64 @@ describe.skipIf(!PG_URL)("chunk embeddings (needs DOCMIND_TEST_PG_URL)", () => {
         WHERE p.prokind = 'f' AND NOT has_function_privilege('docmind_app', p.oid, 'EXECUTE')`,
     );
     expect(rows[0]).toEqual({ ungranted: 0 });
+  });
+  // I1: the probe function exists BEFORE 0014 runs (it sorts between 0013 and 0014), so a grant that
+  // is wider than the vector extension's members would reach it.
+  it("grants EXECUTE to the app only on the vector extension's functions, nothing else", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dm-mig-probe-"));
+    const scratch = await createTestDb();
+    try {
+      for (const f of readdirSync(MIGRATIONS_DIR))
+        copyFileSync(join(MIGRATIONS_DIR, f), join(dir, f));
+      writeFileSync(
+        join(dir, "0013_zz_probe.sql"),
+        "CREATE FUNCTION embed_probe() RETURNS int LANGUAGE sql AS 'SELECT 1';",
+      );
+      const applied = await migrate(scratch.owner, dir);
+      expect(applied.indexOf("0013_zz_probe.sql")).toBeLessThan(
+        applied.indexOf("0014_chunk_embeddings.sql"),
+      );
+      const { rows } = await scratch.owner.query<{ f: string }>(
+        `SELECT p.oid::regprocedure::text AS f FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+            AND has_function_privilege('docmind_app', p.oid, 'EXECUTE')
+            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid
+                              AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e')
+          ORDER BY 1`,
+      );
+      expect(rows.map((r) => r.f)).toEqual(APP_EXECUTABLE);
+      const probe = await scratch.owner.query(
+        `SELECT has_function_privilege('docmind_app', 'embed_probe()', 'EXECUTE') AS app,
+                has_function_privilege('docmind_loom', 'cosine_distance(vector,vector)', 'EXECUTE') AS loom`,
+      );
+      expect(probe.rows[0]).toEqual({ app: false, loom: false });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      await scratch.drop();
+    }
+  });
+
+  it("lets the app role read only its own tenant's embeddings", async () => {
+    const mine = await insertChunk(db.owner, { embedding: { vector: vec(), model: "m" } });
+    const theirs = await insertChunk(db.owner, {
+      tenant: T2,
+      user: U2,
+      embedding: { vector: vec(), model: "m" },
+    });
+    const seen = async (tenant: string) =>
+      withTenant(app, tenant, async (tx) =>
+        (
+          await tx.query(
+            "SELECT id FROM chunks WHERE embedding IS NOT NULL ORDER BY embedding <=> $1::vector",
+            [vec()],
+          )
+        ).rows.map((r) => r.id),
+      );
+    const t1 = await seen(T1);
+    const t2 = await seen(T2);
+    expect(t1).toContain(mine.chunkId);
+    expect(t1).not.toContain(theirs.chunkId);
+    expect(t2).toEqual([theirs.chunkId]);
   });
 });
