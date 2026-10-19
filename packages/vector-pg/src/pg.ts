@@ -88,4 +88,17 @@ export class PgChunkVectorStore implements ChunkVectorStore {
       return rows.map((r) => ({ chunkId: r.id, score: Number(r.score) }));
     });
   }
+
+  /** Boot check. `tenantId` only opens a tenant transaction; any uuid that owns no rows will do. */
+  async verify(tenantId: string): Promise<void> {
+    const found = await this.options.tenant(tenantId, async (tx) => {
+      const { rows } = await tx.query<{ t: string }>(
+        "SELECT format_type(atttypid, atttypmod) AS t FROM pg_attribute WHERE attrelid = 'chunks'::regclass AND attname = 'embedding'",
+      );
+      return rows[0]?.t;
+    });
+    if (found !== `vector(${this.dimensions})`) {
+      throw new Error(`chunks.embedding is not vector(${this.dimensions})`);
+    }
+  }
 }

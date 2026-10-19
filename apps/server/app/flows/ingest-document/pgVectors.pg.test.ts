@@ -1,5 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { PgChunkVectorStore } from "@docmind/vector-pg";
-import { type VectorHarness, runChunkVectorStoreConformance } from "@docmind/vector-pg/testing";
+import {
+  A,
+  B,
+  DOC_A,
+  DOC_B,
+  type VectorHarness,
+  runChunkVectorStoreConformance,
+} from "@docmind/vector-pg/testing";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword } from "../../db/migrate";
@@ -64,4 +72,73 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     async () => ({ store: make("m1"), withModel: (m) => make(m), seed }),
     "PgChunkVectorStore",
   );
+
+  const basis = (i: number): number[] => {
+    const v = new Array<number>(768).fill(0);
+    v[i] = 1;
+    return v;
+  };
+  const stored = async (id: string) =>
+    (await db.owner.query("SELECT embedding IS NOT NULL AS has FROM chunks WHERE id = $1", [id]))
+      .rows[0]?.has;
+
+  it("two owners in one tenant: neither can see or write the other's chunk", async () => {
+    const store = make("m1");
+    const a = randomUUID();
+    const b = randomUUID();
+    await seed(A, DOC_A, [a]);
+    await seed(B, DOC_B, [b]);
+    // B writes against A's document and chunk, and against its own document with A's chunk id.
+    expect(await store.upsert(B, DOC_A, [{ chunkId: a, vector: basis(0) }])).toEqual({
+      written: 0,
+      missing: [a],
+    });
+    expect(await store.upsert(B, DOC_B, [{ chunkId: a, vector: basis(0) }])).toEqual({
+      written: 0,
+      missing: [a],
+    });
+    expect(await stored(a)).toBe(false);
+    expect(await store.upsert(A, DOC_B, [{ chunkId: b, vector: basis(0) }])).toEqual({
+      written: 0,
+      missing: [b],
+    });
+    expect(await stored(b)).toBe(false);
+    // Each owner writes their own and then sees only their own.
+    await store.upsert(A, DOC_A, [{ chunkId: a, vector: basis(0) }]);
+    await store.upsert(B, DOC_B, [{ chunkId: b, vector: basis(0) }]);
+    expect((await store.search(A, basis(0), 10)).map((h) => h.chunkId)).toEqual([a]);
+    expect((await store.search(B, basis(0), 10)).map((h) => h.chunkId)).toEqual([b]);
+    expect(await store.missing(B, DOC_A, 10)).toEqual([]);
+  });
+
+  it("writes a batch larger than any parameter limit in one call", async () => {
+    const store = make("m1");
+    const ids = Array.from({ length: 300 }, () => randomUUID());
+    await seed(A, DOC_A, ids);
+    const items = ids.map((chunkId, i) => ({ chunkId, vector: basis(i % 768) }));
+    expect(await store.upsert(A, DOC_A, items)).toEqual({ written: 300, missing: [] });
+    expect(await store.missing(A, DOC_A, 1000)).toEqual([]);
+  });
+
+  it("verify() accepts the column it was built for and rejects another size", async () => {
+    await expect(make("m").verify(randomUUID())).resolves.toBeUndefined();
+    await expect(make("m", 8).verify(randomUUID())).rejects.toThrow(
+      /^chunks\.embedding is not vector\(8\)$/,
+    );
+  });
+
+  it("a cosine search can use the HNSW index", async () => {
+    const client = await db.owner.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL enable_seqscan = off");
+      const plan = await client.query(
+        `EXPLAIN SELECT id FROM chunks ORDER BY embedding <=> '[${new Array(768).fill(0.1).join(",")}]'::vector LIMIT 5`,
+      );
+      expect(plan.rows.map((r) => r["QUERY PLAN"]).join("\n")).toContain("chunks_embedding_hnsw");
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
+    }
+  });
 });
