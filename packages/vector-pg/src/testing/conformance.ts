@@ -211,5 +211,90 @@ export function runChunkVectorStoreConformance(
         await expect(store.search(A, bad, 5)).rejects.toBeInstanceOf(VectorDimensionError);
       }
     });
+
+    test("never reads or writes across users or tenants", async ({ store, seed }) => {
+      const [mine, theirs, other] = uuids(3) as [string, string, string];
+      await seed(A, DOC_A, [mine]);
+      await seed(B, DOC_B, [theirs]);
+      await seed(C, DOC_C, [other]);
+      const d = store.dimensions;
+      await store.upsert(A, DOC_A, [{ chunkId: mine, vector: basis(d, 0) }]);
+      // another scope's document and chunk ids are reported missing and never written
+      expect(await store.upsert(B, DOC_A, [{ chunkId: mine, vector: basis(d, 1) }])).toEqual({
+        written: 0,
+        missing: [mine],
+      });
+      expect(await store.upsert(C, DOC_A, [{ chunkId: mine, vector: basis(d, 1) }])).toEqual({
+        written: 0,
+        missing: [mine],
+      });
+      expect(await store.upsert(A, DOC_B, [{ chunkId: theirs, vector: basis(d, 1) }])).toEqual({
+        written: 0,
+        missing: [theirs],
+      });
+      expect(await store.upsert(A, DOC_A, [{ chunkId: theirs, vector: basis(d, 1) }])).toEqual({
+        written: 0,
+        missing: [theirs],
+      });
+      expect(await store.missing(B, DOC_A, 10)).toEqual([]);
+      expect(await store.missing(C, DOC_A, 10)).toEqual([]);
+      expect(await store.missing(A, DOC_B, 10)).toEqual([]);
+      expect(await store.missing(B, DOC_B, 10)).toEqual([theirs]);
+      expect(await store.missing(C, DOC_C, 10)).toEqual([other]);
+      // the attempts wrote nothing: each scope searches only its own vectors
+      expect(await store.search(B, basis(d, 0), 10)).toEqual([]);
+      expect(await store.search(B, basis(d, 1), 10)).toEqual([]);
+      expect(await store.search(C, basis(d, 0), 10)).toEqual([]);
+      expect(await store.search(C, basis(d, 1), 10)).toEqual([]);
+      expect(ids(await store.search(A, basis(d, 0), 10))).toEqual([mine]);
+      expect(await store.search(A, basis(d, 1), 10, 0.5)).toEqual([]);
+    });
+
+    test("search and missing never return a chunk that no longer exists", async ({
+      store,
+      seed,
+      withModel,
+    }) => {
+      const [x, y] = uuids(2) as [string, string];
+      await seed(A, DOC_A, [x, y]);
+      const d = store.dimensions;
+      await store.upsert(A, DOC_A, [
+        { chunkId: x, vector: basis(d, 0) },
+        { chunkId: y, vector: basis(d, 0) },
+      ]);
+      await seed(A, DOC_A, [y]); // x is deleted
+      expect(ids(await store.search(A, basis(d, 0), 10))).toEqual([y]);
+      expect(await store.missing(A, DOC_A, 10)).toEqual([]);
+      expect(await store.upsert(A, DOC_A, [{ chunkId: x, vector: basis(d, 1) }])).toEqual({
+        written: 0,
+        missing: [x],
+      });
+      await seed(A, DOC_A, [x, y]); // x comes back as a new row: no vector
+      expect(await store.missing(A, DOC_A, 10)).toEqual([x]);
+      expect(ids(await store.search(A, basis(d, 0), 10))).toEqual([y]);
+      expect(await withModel("another-model").search(A, basis(d, 0), 10)).toEqual([]);
+      await seed(A, DOC_A, []); // the whole document goes
+      expect(await store.search(A, basis(d, 0), 10)).toEqual([]);
+      expect(await store.missing(A, DOC_A, 10)).toEqual([]);
+    });
+
+    test("a store with another model id sees the chunks as unembedded and finds nothing until they are rewritten", async ({
+      store,
+      seed,
+      withModel,
+    }) => {
+      const [id] = uuids(1) as [string];
+      await seed(A, DOC_A, [id]);
+      const d = store.dimensions;
+      await store.upsert(A, DOC_A, [{ chunkId: id, vector: basis(d, 0) }]);
+      const other = withModel("another-model");
+      expect(await other.missing(A, DOC_A, 10)).toEqual([id]);
+      expect(await other.search(A, basis(d, 0), 10)).toEqual([]);
+      await other.upsert(A, DOC_A, [{ chunkId: id, vector: basis(d, 0) }]);
+      expect(await other.missing(A, DOC_A, 10)).toEqual([]);
+      expect(ids(await other.search(A, basis(d, 0), 10))).toEqual([id]);
+      expect(await store.missing(A, DOC_A, 10)).toEqual([id]); // one vector per chunk: the first model's is gone
+      expect(await store.search(A, basis(d, 0), 10)).toEqual([]);
+    });
   });
 }
