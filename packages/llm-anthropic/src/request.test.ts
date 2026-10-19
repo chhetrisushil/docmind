@@ -87,4 +87,46 @@ describe("toMessagesBody", () => {
       expect(() => toMessagesBody(r, "m", 1)).toThrow(/^the language model rejected the request$/);
     }
   });
+
+  it("fences untrusted media with text blocks and drops the mark and the file name", () => {
+    const req: LlmRequest = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              mediaType: "image/png",
+              source: { kind: "data", data: "AAA=" },
+              untrusted: { origin: "upload" },
+            },
+            {
+              type: "file",
+              mediaType: "application/pdf",
+              name: "secret-name.pdf",
+              source: { kind: "data", data: "JVBE" },
+              untrusted: { origin: "upload" },
+            },
+          ],
+        },
+      ],
+    };
+    const content = toMessagesBody(req, "m", 1).messages[0]?.content ?? [];
+    expect(content.map((b) => b.type)).toEqual([
+      "text",
+      "image",
+      "text",
+      "text",
+      "document",
+      "text",
+    ]);
+    const texts = content.flatMap((b) => (b.type === "text" ? [b.text] : []));
+    expect(texts[0]).toMatch(/^<[^>]+origin="upload">$/);
+    expect(texts[1]).toMatch(/^<\/[^>]+>$/);
+    expect(JSON.stringify(content)).not.toContain("secret-name");
+    expect(content.filter((b) => b.type === "image" || b.type === "document")).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA=" } },
+      { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBE" } },
+    ]);
+  });
 });

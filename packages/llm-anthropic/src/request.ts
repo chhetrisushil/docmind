@@ -1,4 +1,4 @@
-import type { LlmContentPart, LlmRequest } from "@loom/llm";
+import { type LlmContentPart, type LlmRequest, fenceUntrustedMedia } from "@loom/llm";
 import { LlmRequestError } from "./errors";
 
 type Block =
@@ -46,7 +46,7 @@ export function toMessagesBody(
       }
       continue;
     }
-    messages.push({ role: m.role, content: parts.map(block) });
+    messages.push({ role: m.role, content: fenceUntrustedMedia(parts).map(block) });
   }
   return {
     model,

@@ -22,6 +22,10 @@ export interface FakeReply {
   rawBody?: string;
   /** Accept the request and never answer. */
   hang?: true;
+  /** Send 200 headers and part of a body, then stall (the socket stays open until close()). */
+  stallAfterHeaders?: true;
+  /** Extra response headers (for example `location` on a 302). */
+  headers?: Record<string, string>;
 }
 
 export interface FakeAnthropic {
@@ -76,8 +80,13 @@ export async function startFakeAnthropic(
       }
       const r = replyFn(body);
       if (r.hang) return;
+      if (r.stallAfterHeaders) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"content":[');
+        return;
+      }
       if (r.rawBody !== undefined || r.status !== undefined) {
-        res.writeHead(r.status ?? 200, { "content-type": "application/json" });
+        res.writeHead(r.status ?? 200, { "content-type": "application/json", ...r.headers });
         res.end(r.rawBody ?? "");
         return;
       }
