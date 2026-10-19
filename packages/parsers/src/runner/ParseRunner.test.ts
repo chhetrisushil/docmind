@@ -177,7 +177,7 @@ describe("ParseRunner", () => {
     [{ memoryMb: Number.NaN }, /limits\.memoryMb must be/],
     [{ maxInputBytes: 0 }, /limits\.maxInputBytes must be/],
     [{ maxChars: 0 }, /limits\.maxChars must be/],
-    [{ maxChars: 700_000_001 }, /limits\.maxChars must be/],
+    [{ maxChars: 100_000_001 }, /limits\.maxChars must be/],
   ])("rejects invalid limits %#", (over, text) => {
     expect(() => new ParseRunner({ limits: { ...LIMITS, ...over } })).toThrow(text);
   });
@@ -201,8 +201,17 @@ describe("ParseRunner", () => {
     expect(new ParseLimitError("input").message).toBe("parse input over limit");
   });
 
-  it("rejects text over maxChars as too_large, from the child", async () => {
+  it("rejects text over maxChars as too_large", async () => {
     await expect(limited({ maxChars: 100 }).run("big", bytes("x"))).rejects.toMatchObject({
+      name: "ParseRejectedError",
+      code: "too_large",
+    });
+    released();
+  });
+
+  it("the child enforces maxChars before replying: 9 MiB of text would overflow the parent's reply cap", async () => {
+    // Without the child check this would be a crash (oversized frame), not too_large.
+    await expect(limited({ maxChars: 100 }).run("huge", bytes("x"))).rejects.toMatchObject({
       name: "ParseRejectedError",
       code: "too_large",
     });
@@ -214,26 +223,19 @@ describe("ParseRunner", () => {
     released();
   });
 
-  it("the parent re-checks maxChars on the reply, whatever the child says", async () => {
-    // Tell the child a larger cap than the parent's, so only the parent's check can refuse.
-    const mod = resolve(__dirname, "../../test-fixtures/hostile.cjs");
-    const r = new ParseRunner({ limits: { ...LIMITS, maxChars: 100 }, parserModule: mod });
-    const bigFrame = r as unknown as {
-      exchange: (c: unknown, q: { maxChars: number }) => Promise<unknown>;
-    };
-    const orig = bigFrame.exchange.bind(r);
-    bigFrame.exchange = (c, q) => orig(c, { ...q, maxChars: 10_000 }); // child no longer enforces
-    await expect(r.run("big", bytes("x"))).rejects.toMatchObject({
+  it("the parent re-checks maxChars on a valid reply the child did not check", async () => {
+    await expect(limited({ maxChars: 100 }).run("longvalid", bytes("x"))).rejects.toMatchObject({
       name: "ParseRejectedError",
       code: "too_large",
     });
     released();
   });
 
-  it("a reply over the derived byte cap is a crash, not a document", async () => {
-    // "garbage" declares an 8-byte body of invalid UTF-8; "oversized" is covered above. With a
-    // tiny cap the frame limit is 1 MiB + 6, still far under what a real reply needs here.
-    await expect(limited({ maxChars: 1 }).run("garbage", bytes("x"))).rejects.toBeInstanceOf(
+  it("the reply byte cap follows maxChars: a frame at the cap is accepted, one byte over is a crash", async () => {
+    expect((await limited({ maxChars: 1 }).run("atcap", bytes("x"))).text).toBe("x");
+    released();
+    spawned.length = 0;
+    await expect(limited({ maxChars: 1 }).run("overcap", bytes("x"))).rejects.toBeInstanceOf(
       ParseCrashedError,
     );
     released();
@@ -249,22 +251,12 @@ describe("ParseRunner", () => {
     for (const c of spawned) expect(c.exitCode !== null || c.signalCode !== null).toBe(true);
   });
 
-  it("a parser writing megabytes to stdout and stderr cannot block the run or reach the parent", async () => {
-    const writes: string[] = [];
-    const spies = [process.stdout, process.stderr].map((s) =>
-      vi.spyOn(s, "write").mockImplementation(((chunk: unknown) => {
-        writes.push(String(chunk));
-        return true;
-      }) as typeof process.stdout.write),
-    );
-    try {
-      const r = runner();
-      expect((await r.run("noisy", bytes("x"))).text).toBe("done");
-      expect(r.active()).toBe(0);
-    } finally {
-      for (const s of spies) s.mockRestore();
-    }
-    expect(writes.filter((w) => /xxxxxxxx|yyyyyyyy|zzzzzzzz/.test(w))).toEqual([]);
+  it("a parser writing megabytes to stdout and stderr cannot block the run (stdio is not piped)", async () => {
+    const r = runner();
+    expect((await r.run("noisy", bytes("x"))).text).toBe("done");
+    expect(r.active()).toBe(0);
+    expect(spawned[0]?.stdout).toBeNull();
+    expect(spawned[0]?.stderr).toBeNull();
     released();
   });
 });

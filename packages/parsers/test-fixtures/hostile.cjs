@@ -21,7 +21,8 @@ exports.parsers = [
 const raw = (frame) => ({
   accepts: () => true,
   parse: () => {
-    require("node:fs").writeSync(3, frame);
+    const fs = require("node:fs");
+    for (let off = 0; off < frame.length; ) off += fs.writeSync(3, frame, off);
     return new Promise(() => {});
   },
 });
@@ -31,7 +32,19 @@ const frame = (v) => {
   h.writeUInt32BE(b.length);
   return Buffer.concat([h, b]);
 };
+const CAP1 = 12 + 8 * 1024 * 1024; // the reply cap at maxChars 1
+const padded = (bodyLen) => {
+  const head = JSON.stringify({ ok: true, doc: ok("x"), pad: "" });
+  const body = JSON.stringify({ ok: true, doc: ok("x"), pad: "p".repeat(bodyLen - head.length) });
+  const h = Buffer.alloc(4);
+  h.writeUInt32BE(body.length);
+  return Buffer.concat([h, Buffer.from(body)]);
+};
 exports.parsers.push(
+  { id: "longvalid", ...raw(frame({ ok: true, doc: ok("x".repeat(1000)) })) },
+  { id: "atcap", ...raw(padded(CAP1)) },
+  { id: "overcap", ...raw(Buffer.concat([Buffer.from([0, 0x80, 0, 0x0d]), Buffer.alloc(8)])) },
+  { id: "huge", accepts: () => true, parse: () => ok("x".repeat(9 * 1024 * 1024)) },
   { id: "big", accepts: () => true, parse: () => ok("x".repeat(1000)) },
   {
     id: "noisy",

@@ -20,7 +20,11 @@ async function main(): Promise<void> {
   const parser = new ParserRegistry(parsers).byId(request.parserId);
   if (!parser) return reply({ ok: false, kind: "failed" });
   const bytes = new Uint8Array(Buffer.from(request.bytes, "base64"));
-  reply({ ok: true, doc: await parser.parse(bytes) });
+  const doc = await parser.parse(bytes);
+  if (typeof doc?.text === "string" && doc.text.length > request.maxChars) {
+    return reply({ ok: false, kind: "rejected", code: "too_large" });
+  }
+  reply({ ok: true, doc });
 }
 
 main().catch((err) =>
