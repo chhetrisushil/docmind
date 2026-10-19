@@ -1,7 +1,7 @@
 import { txtParser } from "./txt";
-import type { DocumentParser } from "./types";
 
 export * from "./types";
 export { ParserRegistry } from "./registry";
 export { txtParser };
-export const createDefaultParsers = (): DocumentParser[] => [txtParser];
+export { createDefaultParsers } from "./defaults";
+export * from "./runner/ParseRunner";
