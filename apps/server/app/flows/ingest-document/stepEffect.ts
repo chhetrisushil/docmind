@@ -34,7 +34,7 @@ export interface StepGuard {
  * is part of the flow's identity (flowHash): changing a number here changes the flow version, and an
  * execution recorded under the old one is refused (FlowCodeMismatchError) until it is cancelled or restarted.
  */
-export const PARSE_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
+export const STEP_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 500, backoffMultiplier: 2 };
 
 /**
  * The wall-clock bound of one attempt of a step that has no runner clock of its own (the chunk step;

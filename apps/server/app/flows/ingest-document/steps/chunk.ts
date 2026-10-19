@@ -4,7 +4,7 @@ import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import type { ParsedStore } from "../pgParsed";
 import {
-  PARSE_RETRY,
+  STEP_RETRY,
   STEP_TIMEOUT_MS,
   type StepGuard,
   type StepOptions,
@@ -50,7 +50,7 @@ export function chunkEffect(deps: ChunkDeps): Effect<IngestStartInput, StepResul
       return { count };
     },
     {
-      retry: PARSE_RETRY,
+      retry: STEP_RETRY,
       timeoutMs: deps.stepTimeoutMs ?? STEP_TIMEOUT_MS,
       ...(deps.attemptSettleMs !== undefined && { settleMs: deps.attemptSettleMs }),
       ...(deps.sleep && { sleep: deps.sleep }),
