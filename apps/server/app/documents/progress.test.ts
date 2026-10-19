@@ -38,6 +38,28 @@ describe("InMemoryProgressBus", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("does not leave an async listener's rejection unhandled", async () => {
+    const bus = new InMemoryProgressBus();
+    const s = scope();
+    const unhandled: unknown[] = [];
+    const spy = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", spy);
+    try {
+      const seen: unknown[] = [];
+      bus.subscribe(s, async () => {
+        throw new Error("x");
+      });
+      bus.subscribe(s, (e) => seen.push(e));
+      bus.publish(s, event());
+      // setImmediate runs after the microtask queue drains and Node's unhandled-rejection processing
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+      expect(seen).toHaveLength(1);
+    } finally {
+      process.off("unhandledRejection", spy);
+    }
+  });
+
   it("unsubscribing twice is harmless and leaves a later subscriber of the same user intact", () => {
     const bus = new InMemoryProgressBus();
     const s = scope();
