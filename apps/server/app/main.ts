@@ -13,7 +13,14 @@ import { startSweeper } from "./documents/sweeper";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
-import { SHUTDOWN_DRAIN_MS, drainWithin, runAll, scheduleForceExit, shutdown } from "./shutdown";
+import {
+  FORCE_EXIT_DEADLINE_MS,
+  SHUTDOWN_DRAIN_MS,
+  drainWithin,
+  runAll,
+  scheduleForceExit,
+  shutdown,
+} from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
@@ -183,6 +190,8 @@ async function main(): Promise<void> {
   const stop = () => {
     // Timers first, then the open event streams (they never end on their own, so the server drain
     // below would wait on them until SIGKILL), then the server drain and the close sequence.
+    // The deadline starts now, so a drain that never ends (a slow upload) cannot outlive it: exit 1.
+    if (!closing) scheduleForceExit(process.exit, () => 1, FORCE_EXIT_DEADLINE_MS);
     clearInterval(sweepTimer);
     recovery.stop();
     const sweeperStopped = uploadSweeper.stop(); // idempotent; no sweep may fire a start once the drain begins

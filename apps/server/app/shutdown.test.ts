@@ -1,7 +1,15 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
-import { drainWithin, runAll, scheduleForceExit, shutdown } from "./shutdown";
+import { POOL_END_MS } from "./closeSequence";
+import {
+  FORCE_EXIT_DEADLINE_MS,
+  SHUTDOWN_DRAIN_MS,
+  drainWithin,
+  runAll,
+  scheduleForceExit,
+  shutdown,
+} from "./shutdown";
 
 describe("shutdown", () => {
   it("lets the in-flight request finish before it closes the app", async () => {
@@ -111,5 +119,25 @@ describe("scheduleForceExit", () => {
     expect(timer.hasRef()).toBe(false);
     clearTimeout(timer);
     unref.mockRestore();
+  });
+});
+
+describe("the shutdown deadline", () => {
+  it("exceeds the sum of the bounded close steps, so it bounds the drain and not the closing", () => {
+    expect(FORCE_EXIT_DEADLINE_MS).toBeGreaterThan(2 * SHUTDOWN_DRAIN_MS + 2 * POOL_END_MS);
+  });
+
+  it("exits with code 1 once the deadline passes, and not before", () => {
+    vi.useFakeTimers();
+    try {
+      const exit = vi.fn();
+      scheduleForceExit(exit, () => 1, FORCE_EXIT_DEADLINE_MS);
+      vi.advanceTimersByTime(FORCE_EXIT_DEADLINE_MS - 1);
+      expect(exit).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(exit.mock.calls).toEqual([[1]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
