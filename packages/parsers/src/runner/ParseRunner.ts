@@ -26,7 +26,12 @@ export interface ParseRunnerOptions {
   parserModule?: string;
   /** Tests only: the Node executable to spawn. */
   executable?: string;
+  /** Parses allowed at once; extra runs queue. Default 2. */
+  maxConcurrent?: number;
 }
+
+/** How long a closed reply pipe waits for the child's exit status before it is a crash. */
+const EXIT_GRACE_MS = 250;
 
 export class ParseCrashedError extends Error {
   constructor() {
@@ -55,6 +60,12 @@ export class ParseMemoryError extends Error {
   constructor() {
     super("parse ran out of memory");
     this.name = "ParseMemoryError";
+  }
+}
+export class ParseAbortedError extends Error {
+  constructor() {
+    super("parse aborted");
+    this.name = "ParseAbortedError";
   }
 }
 /** Bare specifiers the child's built code imports, resolved by the parent to real files. */
@@ -91,18 +102,60 @@ const defaultEntry = (): string => {
  * external memory (Buffers/ArrayBuffers) is not bounded by Node, so cap host memory in deployment
  * with a container/cgroup/systemd MemoryMax limit. The out-of-memory label (ParseMemoryError) is
  * advisory: SIGABRT/exit 134 can be produced by a parser or a native assert, a kernel OOM kill
- * arrives as SIGKILL (a crash), and SIGABRT may write a core dump where core dumps are enabled.
+ * arrives as SIGKILL (a crash), and SIGABRT may write a core dump where core dumps are enabled. At most `maxConcurrent` runs hold a slot;
+ * the rest queue, and an AbortSignal kills a started child or drops a queued run unstarted.
  */
 export class ParseRunner {
-  private readonly live = new Set<ChildProcess>();
+  private slots = 0;
+  private readonly waiting: { start: () => void; drop: () => void }[] = [];
 
-  /** Children currently alive (spawned and not yet exited). */
+  /** Runs holding a slot (a child may still be starting or exiting). */
   active(): number {
-    return this.live.size;
+    return this.slots;
+  }
+
+  /** Runs waiting for a slot. */
+  queued(): number {
+    return this.waiting.length;
+  }
+
+  private acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new ParseAbortedError());
+    if (this.slots < (this.options.maxConcurrent ?? 2)) {
+      this.slots++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const entry = {
+        start: () => {
+          signal?.removeEventListener("abort", entry.drop);
+          resolve();
+        },
+        drop: () => {
+          this.waiting.splice(this.waiting.indexOf(entry), 1);
+          reject(new ParseAbortedError());
+        },
+      };
+      signal?.addEventListener("abort", entry.drop, { once: true });
+      this.waiting.push(entry);
+    });
+  }
+
+  private release(): void {
+    const next = this.waiting.shift();
+    if (next)
+      next.start(); // the slot passes straight to the next run
+    else this.slots--;
   }
 
   constructor(private readonly options: ParseRunnerOptions) {
     const { wallClockMs, memoryMb, maxInputBytes, maxChars } = options.limits;
+    if (
+      options.maxConcurrent !== undefined &&
+      (!Number.isSafeInteger(options.maxConcurrent) || options.maxConcurrent < 1)
+    ) {
+      throw new RangeError("maxConcurrent must be a positive integer");
+    }
     if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes < 1) {
       throw new RangeError("limits.maxInputBytes must be a positive integer");
     }
@@ -118,9 +171,27 @@ export class ParseRunner {
     }
   }
 
-  async run(parserId: string, bytes: Uint8Array): Promise<ParsedDocument> {
+  async run(
+    parserId: string,
+    bytes: Uint8Array,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ParsedDocument> {
+    if (bytes.byteLength > this.options.limits.maxInputBytes) throw new ParseLimitError("input");
+    await this.acquire(opts?.signal);
+    try {
+      if (opts?.signal?.aborted) throw new ParseAbortedError();
+      return await this.runChild(parserId, bytes, opts?.signal);
+    } finally {
+      this.release();
+    }
+  }
+
+  private async runChild(
+    parserId: string,
+    bytes: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<ParsedDocument> {
     const { limits } = this.options;
-    if (bytes.byteLength > limits.maxInputBytes) throw new ParseLimitError("input");
     const entry = this.options.childEntry ?? defaultEntry();
     const map = specifierMap();
     const readable = readablePaths(entry, map);
@@ -137,7 +208,6 @@ export class ParseRunner {
       env: {},
       cwd: dirname(entry),
     });
-    this.live.add(child);
     // Spawn failures (ENOENT, EACCES, EAGAIN) emit 'error' and never 'exit'; kill failures emit it too.
     const exited = new Promise<void>((resolve) => {
       child.once("exit", () => resolve());
@@ -149,7 +219,6 @@ export class ParseRunner {
     if (child.pid === undefined || !child.stdin || !child.stdio?.[3]) {
       child.stdin?.destroy();
       child.stdio?.[3]?.destroy();
-      this.live.delete(child);
       throw new ParseCrashedError();
     }
     try {
@@ -159,25 +228,30 @@ export class ParseRunner {
         module: this.options.parserModule,
         maxChars: limits.maxChars,
       };
-      return await this.exchange(child, request);
+      return await this.exchange(child, request, signal);
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       child.stdin?.destroy();
       child.stdio?.[3]?.destroy();
       await exited;
-      this.live.delete(child);
     }
   }
 
-  private exchange(child: ChildProcess, request: ChildRequest): Promise<ParsedDocument> {
+  private exchange(
+    child: ChildProcess,
+    request: ChildRequest,
+    signal?: AbortSignal,
+  ): Promise<ParsedDocument> {
     return new Promise((resolve, reject) => {
       const out = child.stdio[3] as Readable;
       const cap = maxReplyBytes(this.options.limits.maxChars);
       const parts: Buffer[] = [];
       let have = 0;
       let settled = false;
+      const onAbort = () => settle(new ParseAbortedError());
       const settle = (err: Error) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         if (!settled) reject(err);
         settled = true;
       };
@@ -189,6 +263,7 @@ export class ParseRunner {
       );
       const finish = (frame: Buffer) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
         if (settled) return;
         settled = true;
         try {
@@ -211,8 +286,13 @@ export class ParseRunner {
               : new ParseCrashedError(),
           );
         if (child.exitCode !== null || child.signalCode !== null) decide();
-        else child.once("exit", decide);
+        else {
+          // Still running with fd 3 closed: a short grace for the exit status, never the wall clock.
+          child.once("exit", decide);
+          setTimeout(() => settle(new ParseCrashedError()), EXIT_GRACE_MS).unref();
+        }
       });
+      signal?.addEventListener("abort", onAbort, { once: true });
       out.on("data", (chunk: Buffer) => {
         if (settled) return;
         parts.push(chunk);
