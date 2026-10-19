@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { primeDecoy } from "@docmind/auth";
 import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
+import { bootServing, listen, loadPort } from "./boot";
 import { closeSequence } from "./closeSequence";
 import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
@@ -33,6 +34,8 @@ async function main(): Promise<void> {
     throw new StartupConfigError(
       "LOOM_DATABASE_URL is not set (the docmind_loom connection string)",
     );
+  const port = loadPort(); // before anything else opens: a bad PORT must not reach recovery
+  const host = process.env.HOST ?? "127.0.0.1";
   const keks = loadKeks();
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
@@ -119,48 +122,57 @@ async function main(): Promise<void> {
     () => pool.end(),
   ]);
 
-  // Resume what the last process left running (a crash, or a shutdown that released its leases), then keep
-  // looking. Not awaited: a pass settles each step it re-drives, and the server must not wait to listen.
-  const recovery = startRecovery(app.runtime, durable.storage.eventStore, {
-    // After the boot scan, a crash is found through its expired lease, not by reading every execution.
-    ...(durable.storage.leaseStore && {
-      leases: { store: durable.storage.leaseStore, owner: randomUUID() },
-    }),
-  });
-
-  const sweep = () =>
-    Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
-      console.error(
-        "session sweep failed",
-        err instanceof Error ? err.constructor.name : typeof err,
-      ),
-    );
-  void sweep();
-  const sweepTimer = setInterval(sweep, HOUR_MS);
-  sweepTimer.unref();
-
   // Hash the decoy now so the first unknown-email login is not measurably slower.
   await primeDecoy();
 
-  const rawPort = process.env.PORT?.trim();
-  const port = rawPort ? Number(rawPort) : 3000;
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new StartupConfigError("PORT must be an integer between 0 and 65535");
-  }
-  const host = process.env.HOST ?? "127.0.0.1";
-  server.listen(port, host, () =>
-    console.log(`docmind server listening on http://${host}:${port}`),
-  );
+  // Bind first. Recovery spends each in-flight document's recovery budget (every re-drive is recorded),
+  // so a bind failure (EADDRINUSE) must not start it; the failure cleans up and takes the normal
+  // startup-failure path (class-only log, exit 1).
+  let recovery!: ReturnType<typeof startRecovery>;
+  let sweepTimer!: ReturnType<typeof setInterval>;
+  let uploadSweeper!: ReturnType<typeof startSweeper>;
+  await bootServing({
+    bind: async () => {
+      await listen(server, port, host);
+      console.log(`docmind server listening on http://${host}:${port}`);
+    },
+    cleanup: () =>
+      runAll(
+        () => closeIngest(ingest),
+        () => app.close(),
+        () => durable.close(),
+        () => pool.end(),
+      ),
+    afterListen: () => {
+      // Resume what the last process left running (a crash, or a shutdown that released its leases), then keep
+      // looking. Not awaited: a pass settles each step it re-drives, and the server must not wait to listen.
+      recovery = startRecovery(app.runtime, durable.storage.eventStore, {
+        // After the boot scan, a crash is found through its expired lease, not by reading every execution.
+        ...(durable.storage.leaseStore && {
+          leases: { store: durable.storage.leaseStore, owner: randomUUID() },
+        }),
+      });
 
-  // Starts the documents whose upload committed but whose flow never started. One sweep at a time,
-  // an error is logged by class and never escapes, and the timer does not keep the process alive.
-  const uploadSweeper = startSweeper({
-    pool,
-    starts,
-    status,
-    olderThanMs: STALE_UPLOAD_MS,
-    lookbackMs: SWEEP_LOOKBACK_MS,
-    limit: SWEEP_BATCH,
+      const sweep = () =>
+        Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
+          console.error(
+            "session sweep failed",
+            err instanceof Error ? err.constructor.name : typeof err,
+          ),
+        );
+      void sweep();
+      sweepTimer = setInterval(sweep, HOUR_MS);
+      sweepTimer.unref();
+
+      uploadSweeper = startSweeper({
+        pool,
+        starts,
+        status,
+        olderThanMs: STALE_UPLOAD_MS,
+        lookbackMs: SWEEP_LOOKBACK_MS,
+        limit: SWEEP_BATCH,
+      });
+    },
   });
 
   // One shutdown, shared by every signal: a second signal reuses the same promise instead of
