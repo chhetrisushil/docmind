@@ -87,21 +87,54 @@ describe("IngestStatus", () => {
     expect([views.get(D1)?.status, views.get(D2)]).toEqual(["parsing", UPLOADED]);
   });
 
+  it("scopes to the owner: another user of the same tenant sees nothing, and ids are case-insensitive", async () => {
+    const { status, feed } = setup();
+    await status.boot();
+    feed(...ingestRun(exec(D1), "ready"));
+    await status.close();
+    const bob: Identity = { tenantId: ALICE.tenantId, userId: randomUUID() };
+    expect((await status.forPage(bob, [D1])).size).toBe(0);
+    expect(await status.forDocument(bob, D1)).toEqual(UPLOADED);
+    const upper = D1.toUpperCase();
+    expect((await status.forPage(ALICE, [upper])).get(upper)).toMatchObject({ status: "ready" });
+  });
+
+  it("boot rejects when catch-up fails", async () => {
+    class Failing extends InMemoryReadModelStore {
+      override async applyFolded(...a: Parameters<InMemoryReadModelStore["applyFolded"]>) {
+        if (a.length >= 0) throw new RangeError("store down");
+        return super.applyFolded(...a);
+      }
+    }
+    const store = new Failing();
+    const { log, status } = setup({ writer: store, readerFor: () => store });
+    log.append(...ingestRun(exec(D1), "ready"));
+    await expect(status.boot()).rejects.toBeInstanceOf(RangeError);
+  });
+
   it("reports a failed live fold to onError as the error alone, never the event", async () => {
     class Failing extends InMemoryReadModelStore {
+      failing = false;
       override async applyFolded(...a: Parameters<InMemoryReadModelStore["applyFolded"]>) {
         if (this.failing) throw new RangeError("store down");
         return super.applyFolded(...a);
       }
-      failing = false;
     }
     const store = new Failing();
-    const { status, feed, errors } = setup({ writer: store, readerFor: () => store });
+    const calls: unknown[][] = [];
+    const { status, feed } = setup({
+      writer: store,
+      readerFor: () => store,
+      onError: (...args: unknown[]) => calls.push(args),
+    });
     await status.boot();
     store.failing = true;
     feed(...ingestRun(exec(D1), "parsed"));
     await status.close();
-    expect(errors.length).toBeGreaterThan(0);
-    for (const e of errors) expect(e).toBeInstanceOf(RangeError);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const args of calls) {
+      expect(args).toHaveLength(1);
+      expect(args[0]).toBeInstanceOf(RangeError);
+    }
   });
 });

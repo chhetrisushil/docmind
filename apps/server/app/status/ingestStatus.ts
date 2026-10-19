@@ -72,16 +72,24 @@ export class IngestStatus {
   ): Promise<Map<string, StatusView>> {
     const views = new Map<string, StatusView>();
     if (documentIds.length === 0) return views;
+    // Stored keys are lowercase (routes lowercase ids too); answer under the caller's spelling.
+    const spelled = new Map(documentIds.map((id) => [id.toLowerCase(), id]));
     const reader = this.o.readerFor(identity);
     if (reader.getFoldedByKey === undefined)
       throw new TypeError("the status reader store has no folded-state support");
     const best = new Map<string, number>();
-    for (const row of foldedStates(await reader.getFoldedByKey(INGEST_STATUS_MODEL, documentIds))) {
-      if (row.key === null) continue;
+    for (const row of foldedStates(
+      await reader.getFoldedByKey(INGEST_STATUS_MODEL, [...spelled.keys()]),
+    )) {
+      // Reader RLS is tenant-wide: owner scoping happens here (scope is the user id).
+      if (row.key === null || ingestScopeOf(row.executionId) !== identity.userId) continue;
       const generation = generationOf(row.executionId);
+      // Highest generation wins (generation 1 is the bare id; `.1` is never emitted, Task 74b ruling).
       if (generation === undefined || generation < (best.get(row.key) ?? 0)) continue;
+      const caller = spelled.get(row.key);
+      if (caller === undefined) continue;
       best.set(row.key, generation);
-      views.set(row.key, viewOf(row.state as IngestStatusState));
+      views.set(caller, viewOf(row.state as IngestStatusState));
     }
     return views;
   }
@@ -91,17 +99,16 @@ export class IngestStatus {
    * then read it like a page. A document with no row is `uploaded`.
    */
   async forDocument(identity: Identity, documentId: string): Promise<StatusView> {
-    await this.service.getMany(
+    // The writer refreshes (read-repair by execution id: a document with no row has no key to find); the reader reads.
+    await this.service.refresh(
       INGEST_STATUS_MODEL,
       [ingestExecutionId(identity.userId, documentId)],
-      {
-        refreshFrom: [this.o.source],
-      },
+      [this.o.source],
     );
     return (await this.forPage(identity, [documentId])).get(documentId) ?? UPLOADED;
   }
 
-  /** Wait for every fold scheduled so far (shutdown, tests). */
+  /** Wait for every fold scheduled so far (shutdown, tests). Callers close the event feed first: events fed afterwards are not awaited. */
   async close(): Promise<void> {
     await this.service.drain();
   }
