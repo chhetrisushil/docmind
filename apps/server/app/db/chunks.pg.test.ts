@@ -81,14 +81,30 @@ describe.skipIf(!PG_URL)("chunks and parsed_documents (needs DOCMIND_TEST_PG_URL
       withTenant(app, T2, (tx) => insertChunk(tx, CHUNK(4), T1, DOC, 9)),
     ).rejects.toMatchObject({
       code: "42501",
+      message: /row-level security policy for table "chunks"/,
+    });
+  });
+
+  it("applies the same composite key and row-level security to parsed_documents", async () => {
+    const body =
+      "INSERT INTO parsed_documents (tenant_id, document_id, body_enc) VALUES ($1, $2, '{\"x\":1}')";
+    await expect(withTenant(app, T2, (tx) => tx.query(body, [T2, DOC]))).rejects.toMatchObject({
+      code: "23503",
+      constraint: "parsed_documents_document_fkey",
+    });
+    await expect(withTenant(app, T1, (tx) => tx.query(body, [T2, DOC]))).rejects.toMatchObject({
+      code: "42501",
+      message: /row-level security policy for table "parsed_documents"/,
     });
   });
 
   it("deletes chunks and the parsed body with their document", async () => {
-    await db.owner.query("DELETE FROM documents WHERE id = $1", [DOC]);
-    const { rows } = await db.owner.query(
-      "SELECT (SELECT count(*) FROM chunks)::int AS c, (SELECT count(*) FROM parsed_documents)::int AS p",
-    );
+    const { rows } = await withTenant(app, T1, async (tx) => {
+      await tx.query("DELETE FROM documents WHERE id = $1", [DOC]);
+      return tx.query(
+        "SELECT (SELECT count(*) FROM chunks)::int AS c, (SELECT count(*) FROM parsed_documents)::int AS p",
+      );
+    });
     expect(rows[0]).toEqual({ c: 0, p: 0 });
   });
 });
