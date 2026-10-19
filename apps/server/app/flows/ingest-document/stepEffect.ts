@@ -3,7 +3,14 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
-import { FAILURE_CODES, isAbort, isDocumentGone, isFatal, permanentCode } from "./errors";
+import {
+  FAILURE_CODES,
+  StepResultError,
+  isAbort,
+  isDocumentGone,
+  isFatal,
+  permanentCode,
+} from "./errors";
 import type { IngestStartInput } from "./flow";
 
 /** What every step returns, and so what the event log holds: an outcome, a count, a model id, a code. Never text. */
@@ -127,7 +134,13 @@ export function stepEffect(
     const bound = options.timeoutMs;
     const run = async (inner: AbortSignal | undefined): Promise<StepResult> => {
       await guard.begin(ref, step);
-      return { outcome: "done", ...((await work(ref, inner, progress)) ?? {}) };
+      // The result is written to the event log: nothing outside StepResult may reach it.
+      const parsed = StepResult.safeParse({
+        outcome: "done",
+        ...((await work(ref, inner, progress)) ?? {}),
+      });
+      if (!parsed.success) throw new StepResultError();
+      return parsed.data;
     };
     if (bound === undefined) return run(signal);
     const timeout = new AbortController();

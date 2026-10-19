@@ -55,6 +55,14 @@ export const isAbort = (err: unknown): boolean =>
   err instanceof ParseAbortedError || err instanceof EmbeddingAbortedError;
 
 /** Deployment misconfiguration (embedder and vector store disagree): deterministic, never retried. Names no values. */
+/** A step produced a result outside StepResult (an extra or malformed field): a programming fault, fatal, never retried. */
+export class StepResultError extends Error {
+  constructor() {
+    super("step result does not match StepResult");
+    this.name = "StepResultError";
+  }
+}
+
 export class IngestConfigError extends Error {
   constructor() {
     super("embedder and vector store modelId/dimensions differ");
@@ -69,6 +77,7 @@ export class IngestConfigError extends Error {
  */
 export const isFatal = (err: unknown): boolean =>
   err instanceof IngestConfigError ||
+  err instanceof StepResultError ||
   (err instanceof EmbeddingError && !(err instanceof EmbeddingUnavailableError));
 
 export function isDocumentGone(err: unknown): boolean {
