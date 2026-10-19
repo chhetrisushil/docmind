@@ -2,7 +2,7 @@ import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { STATUS_MESSAGES } from "../status/model";
-import { ingestExecutionId } from "./ingest";
+import { INGEST_GENERATION, ingestExecutionId } from "./ingest";
 import { ALICE, type DocumentHarness, PDF, TEXT, U1, startDocumentServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_URL)", () => {
@@ -30,7 +30,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const state = await handle?.waitForCompletion();
     expect(state?.status).toBe("completed");
     expect(state?.variables._output).toEqual({ outcome: "done" });
-    expect(await h.status.forDocument(ALICE, id)).toEqual({
+    expect(await h.status.forDocument(ALICE, id, INGEST_GENERATION)).toEqual({
       status: "ready",
       step: "finalize",
       error: null,
@@ -46,7 +46,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const { body } = await created("report.pdf", PDF("pdf flow"));
     await h.starts.idle();
     await h.ingest.handles.get(body.document.id)?.waitForCompletion();
-    expect(await h.status.forDocument(ALICE, body.document.id)).toEqual({
+    expect(await h.status.forDocument(ALICE, body.document.id, INGEST_GENERATION)).toEqual({
       status: "failed",
       step: "parse",
       error: STATUS_MESSAGES.unsupported_content,
@@ -58,7 +58,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const { body } = await created("data.txt", bytes);
     await h.starts.idle();
     await h.ingest.handles.get(body.document.id)?.waitForCompletion();
-    expect(await h.status.forDocument(ALICE, body.document.id)).toEqual({
+    expect(await h.status.forDocument(ALICE, body.document.id, INGEST_GENERATION)).toEqual({
       status: "failed",
       step: "parse",
       error: STATUS_MESSAGES.corrupt_content,

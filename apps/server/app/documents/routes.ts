@@ -168,7 +168,7 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
       // A duplicate is an existing document, so its status is the model's (one log-tail read); a new
       // one is `uploaded`. Resolved before the start decision below, which keys on it.
       if (result.kind === "stored" && result.duplicate) {
-        const view = await deps.status.forDocument(identity, result.document.id);
+        const view = await deps.status.forDocument(identity, result.document.id, result.generation);
         result.document = { ...result.document, status: view.status, error: view.error };
       }
       // The row is committed (register returns after COMMIT). Fire now, before the body drain and
@@ -279,7 +279,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       const cipher = deps.fields.forUser(identity.userId);
       const views = await deps.status.forPage(
         identity,
-        page.rows.map((row) => row.id),
+        page.rows.map((row) => ({ id: row.id, generation: row.ingest_generation })),
       );
       json(res, 200, {
         items: await Promise.all(
@@ -299,7 +299,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           )
         : undefined;
       if (!row) return sendError(res, 404, "not_found", "document not found");
-      const view = await deps.status.forDocument(identity, row.id);
+      const view = await deps.status.forDocument(identity, row.id, row.ingest_generation);
       json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view));
     }),
 

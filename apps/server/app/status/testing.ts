@@ -1,5 +1,10 @@
 import type { EventEnvelope } from "@loom/core";
 import type { ReadModelEventSource } from "@loom/plugin-read-model";
+import { INGEST_GENERATION } from "../documents/ingest";
+
+/** Documents at the default generation, in the shape `forPage` takes. */
+export const atDefault = (...ids: string[]) =>
+  ids.map((id) => ({ id, generation: INGEST_GENERATION }));
 
 /** An event the way Loom writes one (fields as in `EventEnvelope`). */
 export const evt = (
