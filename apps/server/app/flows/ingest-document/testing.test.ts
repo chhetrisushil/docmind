@@ -26,7 +26,11 @@ const SEALED = {
   tag: Buffer.alloc(16, 2).toString("base64"),
   data: Buffer.alloc(20, 3).toString("base64"),
 };
+const MODEL = "ollama/fake-embed";
 const check = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref);
+const checkEmbed = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref, MODEL);
+const embedDone = (output: Record<string, unknown>) =>
+  ev("STEP_COMPLETED", { output, stepId: "ingest-embed" });
 
 describe("assertEventsAreContentFree (the proof has teeth)", () => {
   it("accepts a clean log of ids, outcomes, counts and codes", () => {
@@ -79,12 +83,9 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
       /output\.code is not an id/,
     ],
     [
-      "a model key (none is allowed yet)",
-      ev("STEP_COMPLETED", {
-        output: { outcome: "done", model: "quarterly-report.pdf" },
-        stepId: "ingest-parse",
-      }),
-      /unexpected key .*\.output\.model/,
+      "a model when no embedder model was configured for the check",
+      embedDone({ outcome: "done", count: 2, model: MODEL }),
+      /output\.model is not an id/,
     ],
     [
       "a plaintext principal",
@@ -239,6 +240,46 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
         ev("STEP_FAILED", { error: "Error: ingest step failed: chunk", stepId: "ingest-chunk" }),
       ),
     ).not.toThrow();
+  });
+
+  it("accepts the embed step's result with exactly the configured model, and its fixed failure", () => {
+    expect(() =>
+      checkEmbed(
+        ev("STEP_STARTED", { input: ref, stepId: "ingest-embed" }),
+        embedDone({ outcome: "done", count: 2, model: MODEL }),
+        ev("STEP_FAILED", { error: "Error: ingest step failed: embed", stepId: "ingest-embed" }),
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a filename-like model",
+      { outcome: "done", count: 2, model: "quarterly-report.pdf" },
+      /output\.model is not an id/,
+    ],
+    [
+      "another model id",
+      { outcome: "done", count: 2, model: "ollama/other" },
+      /output\.model is not an id/,
+    ],
+    [
+      "a model that only contains the configured one",
+      { outcome: "done", model: `${MODEL}-x` },
+      /output\.model is not an id/,
+    ],
+    [
+      "chunk text in the result",
+      { outcome: "done", count: 2, model: MODEL, text: SENTENCE },
+      /unexpected key .*\.output\.text/,
+    ],
+    [
+      "chunk text as the count",
+      { outcome: "done", count: SENTENCE, model: MODEL },
+      /output\.count is not an id/,
+    ],
+  ])("throws for %s in an embed result", (_name, output, message) => {
+    expect(() => checkEmbed(embedDone(output))).toThrow(message);
   });
 
   it("throws for an empty log, which would prove nothing", () => {

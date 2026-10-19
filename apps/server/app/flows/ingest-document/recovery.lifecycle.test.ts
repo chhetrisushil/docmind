@@ -71,7 +71,8 @@ describe("recoverIngest: resuming executions", () => {
     expect(seen).toEqual([
       { ref: ids, step: "parse" },
       { ref: ids, step: "chunk" },
-    ]); // the hung parse is re-run, then chunk, both for the recorded principal
+      { ref: ids, step: "embed" },
+    ]); // the hung parse is re-run, then chunk and embed, all for the recorded principal
     const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });

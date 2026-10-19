@@ -37,8 +37,16 @@ export const ingestChunkStep = step$({
   retry: STEP_RETRY,
 });
 
-/** Spec 5.2 order. Later tasks append embed, analyze, summarize, link and finalize. */
-export const INGEST_STEPS = [ingestParseStep, ingestChunkStep];
+export const ingestEmbedStep = step$({
+  id: "ingest-embed",
+  name: "IngestEmbed",
+  inputSchema: IngestStartInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY,
+});
+
+/** Spec 5.2 order. Later tasks append analyze, summarize, link and finalize. */
+export const INGEST_STEPS = [ingestParseStep, ingestChunkStep, ingestEmbedStep];
 
 /** Runs each step in order; a `document_gone` or `failed` outcome ends the flow, later steps never run. */
 export const runIngestSteps =

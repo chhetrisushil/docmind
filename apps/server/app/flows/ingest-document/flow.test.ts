@@ -61,7 +61,7 @@ describe("ingest-document flow v2", () => {
   it("runs the parse step and completes done, asking with ids only", async () => {
     const { deps, seen } = fakeDeps();
     expect(await outputOf(deps)).toEqual({ outcome: "done" });
-    expect(seen).toEqual(["begin:parse", "begin:chunk"]);
+    expect(seen).toEqual(["begin:parse", "begin:chunk", "begin:embed"]);
   });
 
   it("stops cleanly, not as a failure, when the document is gone", async () => {

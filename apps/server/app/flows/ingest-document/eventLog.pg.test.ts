@@ -2,9 +2,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
+import { EmbeddingUnavailableError } from "@docmind/embeddings";
+import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { ParseAbortedError, ParseRejectedError } from "@docmind/parsers";
 import type { EventEnvelope } from "@loom/core";
 import { flow$, step$ } from "@loom/core";
+import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { setRolePassword } from "../../db/migrate";
@@ -12,7 +15,7 @@ import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
 import { ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { insertDocument } from "../../documents/repo";
-import { T1, U1, newDocument } from "../../documents/testHarness";
+import { T1, U1, newDocument, twinOverPgChunks } from "../../documents/testHarness";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
@@ -40,15 +43,13 @@ const CLEAN_RUN = [
   "STEP_COMPLETED",
   "EXECUTION_COMPLETED",
 ];
-/** Parse then chunk, both done. */
+const DONE_STEP = ["STEP_STARTED", "RESOURCE_METERED", "STEP_COMPLETED"];
+/** Parse, chunk, then embed, all done. */
 const FULL_RUN = [
   "EXECUTION_STARTED",
-  "STEP_STARTED",
-  "RESOURCE_METERED",
-  "STEP_COMPLETED",
-  "STEP_STARTED",
-  "RESOURCE_METERED",
-  "STEP_COMPLETED",
+  ...DONE_STEP,
+  ...DONE_STEP,
+  ...DONE_STEP,
   "EXECUTION_COMPLETED",
 ];
 
@@ -59,9 +60,11 @@ describe.skipIf(!PG_URL)(
     let durable: Awaited<ReturnType<typeof openDurableStorage>>;
     let app: ReturnType<typeof buildApp>;
     let root: string;
-    const wiring = createIngestWiring({});
-    wiring.sleep = async () => {}; // retries do not wait
-    let runner: IngestDeps["runner"] = wiring.runner; // each test may swap the parser runner
+    let fake: FakeOllama;
+    let wiring: ReturnType<typeof createIngestWiring>;
+    let embedder: EmbeddingProvider; // each test may swap the embedder
+    let modelId = "";
+    let runner: IngestDeps["runner"]; // each test may swap the parser runner
     const blobs = (id: { tenantId: string; userId: string }) =>
       new EncryptedFsContentStore({
         root,
@@ -72,17 +75,42 @@ describe.skipIf(!PG_URL)(
       });
 
     beforeAll(async () => {
+      fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
+      wiring = createIngestWiring({
+        DOCMIND_OLLAMA_URL: fake.url,
+        DOCMIND_EMBED_MODEL: "fake-embed",
+        DOCMIND_EMBED_DIMENSIONS: "64",
+      });
+      wiring.sleep = async () => {}; // retries do not wait
+      runner = wiring.runner;
+      embedder = wiring.embedder;
+      modelId = wiring.embedder.modelId;
       f = await startPgFixture();
       await setRolePassword(f.db.owner, "docmind_loom", LOOM_PASSWORD);
       durable = await openDurableStorage({ loomUrl: f.db.loomUrl, keys: f.keys });
       root = mkdtempSync(join(tmpdir(), "dm-eventlog-"));
-      const base = pgIngestDeps({ pool: f.app, fields: f.fields, blobs, wiring });
+      const base = pgIngestDeps({
+        pool: f.app,
+        fields: f.fields,
+        blobs,
+        wiring,
+        vectors: twinOverPgChunks(f.app, wiring),
+      });
       app = buildApp(durable.storage, durable.crypto, {
-        ingest: { ...base, runner: { run: (...args) => runner.run(...args) } },
+        ingest: {
+          ...base,
+          runner: { run: (...args) => runner.run(...args) },
+          embedder: {
+            modelId: base.embedder.modelId,
+            dimensions: base.embedder.dimensions,
+            embed: (texts, options) => embedder.embed(texts, options),
+          },
+        },
       });
     });
     afterEach(() => {
       runner = wiring.runner;
+      embedder = wiring.embedder;
       vi.restoreAllMocks();
     });
     afterAll(async () => {
@@ -90,6 +118,7 @@ describe.skipIf(!PG_URL)(
       await wiring.runner.close();
       await durable?.close();
       await f?.close();
+      await fake?.close();
       if (root) rmSync(root, { recursive: true, force: true });
     });
 
@@ -118,7 +147,7 @@ describe.skipIf(!PG_URL)(
     };
     /** Every event passes the structural check, and none of the seeded text is in the raw JSON. */
     const proven = (raw: EventEnvelope[], ref: IngestStartInput) => {
-      assertEventsAreContentFree(raw as RawEvent[], ref);
+      assertEventsAreContentFree(raw as RawEvent[], ref, modelId);
       const json = JSON.stringify(raw);
       for (const text of [SENTENCE.slice(0, 30), "Quarterly report", "Quarterly report.pdf"]) {
         expect(json).not.toContain(text); // meaningful: raw events are plain JSON, so a leak would show
@@ -127,7 +156,7 @@ describe.skipIf(!PG_URL)(
     };
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
 
-    it("a successful parse and chunk: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
+    it("a successful parse, chunk and embed: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
       const ref = await seedTxt("a".repeat(64));
       const raw = proven(await run(ref), ref);
       expect(types(raw)).toEqual(FULL_RUN);
@@ -139,7 +168,11 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "done", count: 1 },
         stepId: "ingest-chunk",
       });
-      expect(foldIngestStatus(raw)).toEqual({ status: "parsing", step: "chunk", code: null }); // the model's handlers match the kernel's real events
+      expect(raw[9]?.payload).toEqual({
+        output: { outcome: "done", count: 1, model: "ollama/fake-embed" },
+        stepId: "ingest-embed",
+      });
+      expect(foldIngestStatus(raw)).toEqual({ status: "embedding", step: "embed", code: null }); // the model's handlers match the kernel's real events
       const chunked = await f.db.owner.query(
         "SELECT count(*)::int AS n FROM chunks WHERE document_id = $1",
         [ref.documentId],
@@ -273,7 +306,13 @@ describe.skipIf(!PG_URL)(
     });
     async function peer(run: IngestDeps["runner"]["run"], over: Partial<IngestDeps> = {}) {
       const d = await openDurableStorage({ loomUrl: f.db.loomUrl, keys: f.keys });
-      const base = pgIngestDeps({ pool: f.app, fields: f.fields, blobs, wiring });
+      const base = pgIngestDeps({
+        pool: f.app,
+        fields: f.fields,
+        blobs,
+        wiring,
+        vectors: twinOverPgChunks(f.app, wiring),
+      });
       const a = buildApp(d.storage, d.crypto, {
         ingest: { ...base, runner: { run }, ...over },
       });
@@ -369,12 +408,9 @@ describe.skipIf(!PG_URL)(
         "EXECUTION_STARTED",
         "STEP_STARTED",
         "EXECUTION_RECOVERED",
-        "STEP_STARTED",
-        "RESOURCE_METERED",
-        "STEP_COMPLETED",
-        "STEP_STARTED",
-        "RESOURCE_METERED",
-        "STEP_COMPLETED",
+        ...DONE_STEP,
+        ...DONE_STEP,
+        ...DONE_STEP,
         "EXECUTION_COMPLETED",
       ]);
     });

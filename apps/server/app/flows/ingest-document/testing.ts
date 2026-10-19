@@ -1,4 +1,6 @@
 import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
+import { InMemoryChunkVectors } from "@docmind/vector-pg";
+import { HashingEmbeddingProvider } from "@loom/memory";
 import { isBase64Of } from "../../crypto/fields";
 import { ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
@@ -10,6 +12,8 @@ const PARSED = {
   media: [],
 };
 
+const EMBEDDER = new HashingEmbeddingProvider({ dimensions: 8 });
+
 /** Fakes of every ingest port, for tests that run the flow over an in-memory Loom app. */
 export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
   return {
@@ -20,6 +24,12 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
     },
     parsed: { put: async () => {}, take: async () => PARSED, drop: async () => {} },
     chunks: { replace: async (_r, c) => c.length, count: async () => 0, read: async () => [] },
+    vectors: new InMemoryChunkVectors({
+      modelId: EMBEDDER.modelId,
+      dimensions: EMBEDDER.dimensions,
+      chunkIds: async () => [],
+    }),
+    embedder: EMBEDDER,
     registry: new ParserRegistry(createDefaultParsers()),
     runner: {
       run: async () => ({
@@ -79,11 +89,15 @@ const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
   code: { optional: oneOf("unsupported_content", "corrupt_content", "too_large") },
 };
-// No `model` yet: a step that sets one adds it back as a closed set of configured ids (Task 91).
-const stepOutput: Shape = { ...flowOutput, count: { optional: count } };
+/** Embed's `model` is exactly the configured provider's id: a closed value, never a free pattern. */
+const stepOutput = (modelId: string | undefined): Shape => ({
+  ...flowOutput,
+  count: { optional: count },
+  model: { optional: (v) => modelId !== undefined && v === modelId },
+});
 
 /** The payload of every event type, per key the only values it may hold; an unlisted type or key fails. */
-const payloads = (ref: IngestStartInput): Record<string, Shape> => {
+const payloads = (ref: IngestStartInput, modelId: string | undefined): Record<string, Shape> => {
   const ids: Shape = {
     documentId: exactly(ref.documentId),
     tenantId: exactly(ref.tenantId),
@@ -96,7 +110,7 @@ const payloads = (ref: IngestStartInput): Record<string, Shape> => {
       principal: { v: exactly(1), identity: { actor: sealed, tenant: sealed } },
     },
     STEP_STARTED: { input: ids, stepId },
-    STEP_COMPLETED: { output: stepOutput, stepId },
+    STEP_COMPLETED: { output: stepOutput(modelId), stepId },
     STEP_FAILED: { error: fixedFailure, stepId },
     RESOURCE_METERED: { ms: count, tokens: count },
     EXECUTION_COMPLETED: { output: flowOutput },
@@ -155,10 +169,15 @@ export interface RawEvent {
  * fixed failure text, or Loom's ciphertext envelope; a key, event type or value it does not list
  * fails, so a filename, title, text, email or error message fails (extend `payloads` per new step).
  */
-export function assertEventsAreContentFree(events: RawEvent[], ref: IngestStartInput): void {
+export function assertEventsAreContentFree(
+  events: RawEvent[],
+  ref: IngestStartInput,
+  /** The configured embedder's `modelId`: the only `model` an embed result may hold (none given: any `model` fails). */
+  modelId?: string,
+): void {
   if (events.length === 0) throw new Error("no events to check");
   const executionId = ingestExecutionId(ref.userId, ref.documentId);
-  const types = payloads(ref);
+  const types = payloads(ref, modelId);
   const envelope: Shape = {
     id: (v) =>
       typeof v === "string" &&
