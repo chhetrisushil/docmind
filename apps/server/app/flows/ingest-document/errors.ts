@@ -22,13 +22,32 @@ export class PermanentIngestError extends Error {
 }
 
 const FK_VIOLATION = "23503";
+/**
+ * Constraint names of the foreign keys that point at `documents` (migration 0011). A foreign-key
+ * violation on one of them means the document went away mid-step. Tables added later with a
+ * documents FK (e.g. chunk_links) must add their constraint name here.
+ */
+export const DOCUMENT_FKEY_CONSTRAINTS: readonly string[] = [
+  "chunks_document_fkey",
+  "parsed_documents_document_fkey",
+];
+
+const isDocumentFkViolation = (err: unknown): boolean => {
+  if (typeof err !== "object" || err === null) return false;
+  const { code, constraint } = err as { code?: unknown; constraint?: unknown };
+  return (
+    code === FK_VIOLATION &&
+    typeof constraint === "string" &&
+    DOCUMENT_FKEY_CONSTRAINTS.includes(constraint)
+  );
+};
 
 export function isDocumentGone(err: unknown): boolean {
   return (
     err instanceof DocumentGoneError ||
     err instanceof FieldKeyUnavailableError ||
     err instanceof BlobKeyUnavailableError ||
-    (typeof err === "object" && err !== null && (err as { code?: unknown }).code === FK_VIOLATION)
+    isDocumentFkViolation(err)
   );
 }
 
@@ -39,7 +58,11 @@ export function isDocumentGone(err: unknown): boolean {
  * outages are NOT permanent: they stay transient and are never recorded as a code.
  */
 export function permanentCode(err: unknown): FailureCode | undefined {
-  if (err instanceof PermanentIngestError || err instanceof ParseRejectedError) return err.code;
+  if (err instanceof PermanentIngestError || err instanceof ParseRejectedError) {
+    // Runtime guard: a code outside the contract is never recorded.
+    return (FAILURE_CODES as readonly string[]).includes(err.code) ? err.code : undefined;
+  }
+  // ParseLimitError's only variant today is "input"; revisit if another limit is added.
   if (err instanceof ParseLimitError || err instanceof ParseMemoryError) return "too_large";
   return undefined;
 }

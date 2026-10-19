@@ -10,7 +10,12 @@ import {
 } from "@docmind/parsers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../../crypto/fields";
-import { DocumentGoneError, FAILURE_CODES, PermanentIngestError } from "./errors";
+import {
+  DOCUMENT_FKEY_CONSTRAINTS,
+  DocumentGoneError,
+  FAILURE_CODES,
+  PermanentIngestError,
+} from "./errors";
 import type { IngestStartInput } from "./flow";
 import { type StepGuard, StepResult, stepEffect } from "./stepEffect";
 
@@ -44,8 +49,9 @@ describe("stepEffect", () => {
     ["a destroyed user key", () => new FieldKeyUnavailableError()],
     ["a destroyed blob key", () => new BlobKeyUnavailableError()],
     [
-      "a foreign-key violation",
-      () => Object.assign(new Error("violates foreign key"), { code: "23503" }),
+      "a documents foreign-key violation",
+      () =>
+        Object.assign(new Error("fk"), { code: "23503", constraint: DOCUMENT_FKEY_CONSTRAINTS[0] }),
     ],
   ])("treats %s as document_gone, not a failure", async (_n, make) => {
     const { port } = guard();
@@ -92,10 +98,31 @@ describe("stepEffect", () => {
     ["a crash", () => new ParseCrashedError()],
     ["a cancellation", () => new ParseAbortedError()],
     ["a key store outage", () => new FieldKeyStoreError()],
+    [
+      "a foreign-key violation on another constraint",
+      () => Object.assign(new Error("fk"), { code: "23503", constraint: "other_fkey" }),
+    ],
+    [
+      "a foreign-key violation without a constraint",
+      () => Object.assign(new Error("fk"), { code: "23503" }),
+    ],
+    [
+      "a unique violation",
+      () =>
+        Object.assign(new Error("dup"), {
+          code: "23505",
+          constraint: DOCUMENT_FKEY_CONSTRAINTS[0],
+        }),
+    ],
+    ["a rejection with an unknown code", () => new ParseRejectedError("bogus" as never)],
+    ["a permanent error with an unknown code", () => new PermanentIngestError("bogus" as never)],
   ])("rethrows %s with the fixed message and records no code", async (_n, make) => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { port } = guard();
-    await expect(run(throwing(make), port)).rejects.toThrow(/^ingest step failed: chunk$/);
+    const err = await run(throwing(make), port).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("ingest step failed: chunk");
+    expect((err as Error).cause).toBeUndefined();
   });
 
   it("rethrows anything else with a fixed message that names the step only, and logs the class", async () => {
