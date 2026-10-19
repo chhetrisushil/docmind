@@ -25,6 +25,12 @@ export const MAX_RECOVERIES = 3;
  */
 export const ABANDON_GRACE_MS = 60_000;
 
+/**
+ * Every this-many periodic passes scan the whole log instead of the expired leases (hourly at the
+ * default interval): a re-drive that failed before its claim won leaves no expired lease to find.
+ */
+export const FULL_SCAN_EVERY = 60;
+
 const errorClass = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
 export interface RecoverOptions {
@@ -103,6 +109,7 @@ export function startRecovery(
 ): Recovery {
   let running: Promise<void> | undefined;
   let stopped = false;
+  let periodic = 0; // passes the timer has started
   const pass = (graceMs: number, scan?: RecoverOptions["leases"]) => {
     if (stopped || running) return;
     running = recoverIngest(runtime, source, {
@@ -117,7 +124,13 @@ export function startRecovery(
       });
   };
   pass(0);
-  const timer = setInterval(() => pass(ABANDON_GRACE_MS, leases), intervalMs);
+  const timer = setInterval(() => {
+    if (stopped || running) return;
+    // Lease mode finds a crash's expired leases only; ghost lease rows (a crash between taking the lease
+    // and the first append) are not covered until the next full scan. Carried, not fixed.
+    periodic++;
+    pass(ABANDON_GRACE_MS, periodic % FULL_SCAN_EVERY === 0 ? undefined : leases);
+  }, intervalMs);
   timer.unref();
   return {
     stop: () => {
