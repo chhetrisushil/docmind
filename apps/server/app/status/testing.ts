@@ -1,4 +1,5 @@
 import type { EventEnvelope } from "@loom/core";
+import type { ReadModelEventSource } from "@loom/plugin-read-model";
 
 /** An event the way Loom writes one (fields as in `EventEnvelope`). */
 export const evt = (
@@ -37,4 +38,22 @@ export function ingestRun(
   step("STEP_STARTED", "ingest-finalize");
   step("STEP_COMPLETED", "ingest-finalize", { outcome: "done", count: 1 });
   return out;
+}
+
+/** A tiny event log for tests: what Loom's event store is to the model (live source and catch-up source). */
+export class MemoryLog implements ReadModelEventSource {
+  private readonly byExecution = new Map<string, EventEnvelope[]>();
+  append(...events: EventEnvelope[]): void {
+    for (const e of events) {
+      const list = this.byExecution.get(e.executionId) ?? [];
+      list.push(e);
+      this.byExecution.set(e.executionId, list);
+    }
+  }
+  async listExecutions(): Promise<string[]> {
+    return [...this.byExecution.keys()];
+  }
+  async readFrom(executionId: string, fromSequence: number): Promise<EventEnvelope[]> {
+    return (this.byExecution.get(executionId) ?? []).filter((e) => e.sequence >= fromSequence);
+  }
 }
