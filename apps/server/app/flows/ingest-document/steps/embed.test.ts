@@ -116,4 +116,111 @@ describe("embedEffect", () => {
     expect(await run(h.deps)).toEqual({ outcome: "document_gone" });
     expect(h.embedCalls).toEqual([]);
   });
+
+  it("retries an embedder outage in the same run and resumes at the unfinished batch", async () => {
+    const h = harness(100);
+    h.failFrom(2, new EmbeddingUnavailableError());
+    expect(await run(h.deps)).toMatchObject({ outcome: "done", count: 100 });
+    expect(h.embedCalls).toEqual([64, 36]); // the failed second call is retried, batch 1 is not redone
+  });
+
+  it("gives up an outage after the retry budget with the fixed message and the class logged", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(2);
+    h.failFrom(1, new EmbeddingUnavailableError(), 99);
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "EmbeddingUnavailableError");
+  });
+
+  it("maps a permanent embedder error to a code, keeps finished batches, and resumes", async () => {
+    const h = harness(100);
+    h.failFrom(2, new EmbeddingError("bad request"));
+    expect(await run(h.deps)).toEqual({ outcome: "failed", code: "unsupported_content" });
+    expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(36);
+    h.embedCalls.length = 0;
+    expect(await run(h.deps)).toMatchObject({ outcome: "done", count: 100 });
+    expect(h.embedCalls).toEqual([36]);
+  });
+
+  it("treats an embedder abort as a cancel: not retried, not logged", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(2);
+    h.failFrom(1, new EmbeddingAbortedError(), 99);
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(h.signals).toHaveLength(1);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("passes the attempt's signal to the embedder", async () => {
+    const h = harness(1);
+    await run(h.deps);
+    expect(h.signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  it("writes no vectors when the attempt was aborted while embedding", async () => {
+    const h = harness(3);
+    const cancel = new AbortController();
+    const real = h.deps.embedder.embed.bind(h.deps.embedder);
+    h.deps.embedder.embed = async (t, o) => {
+      const out = await real(t, o);
+      cancel.abort();
+      return out;
+    };
+    await expect(run(h.deps, cancel.signal)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(3);
+  });
+
+  it("an attempt that timed out commits no vectors when its embedder finally answers", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(2);
+    const real = h.deps.embedder.embed.bind(h.deps.embedder);
+    let release: () => void = () => {};
+    const late = new Promise<void>((r) => {
+      release = r;
+    });
+    h.deps.embedder.embed = async (t, o) => {
+      await new Promise<void>((r) =>
+        o?.signal?.addEventListener("abort", () => r(), { once: true }),
+      );
+      release();
+      return real(t, o);
+    };
+    await expect(run({ ...h.deps, stepTimeoutMs: 1, attemptSettleMs: 1000 })).rejects.toThrow(
+      /^ingest step failed: embed$/,
+    );
+    await late;
+    expect(await h.deps.vectors.missing(SCOPE, DOC, 1000)).toHaveLength(2);
+  });
+
+  it("stops as document_gone when the chunk texts cannot be read for ids the vector store listed", async () => {
+    const h = harness(3);
+    h.deps.chunks.read = async () => [];
+    expect(await run(h.deps)).toEqual({ outcome: "document_gone" });
+  });
+
+  it("stops as document_gone when the vector store says the chunk rows are gone", async () => {
+    const h = harness(3);
+    h.deps.vectors.upsert = async (_s, _d, items) => ({
+      written: 0,
+      missing: items.map((i) => i.chunkId),
+    });
+    expect(await run(h.deps)).toEqual({ outcome: "document_gone" });
+  });
+
+  it("fails instead of spinning when the vector store keeps listing the same ids", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(3);
+    h.deps.vectors.upsert = async () => ({ written: 0, missing: [] });
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(spy).toHaveBeenCalledWith("ingest step failed", "embed", "Error");
+    expect(h.embedCalls).toHaveLength(3); // one batch per attempt: the bound stops the second
+  });
+
+  it("fails with the fixed message when the embedder and the vector store disagree on the model", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const h = harness(2);
+    h.deps.embedder = { ...h.deps.embedder, modelId: "other-model" };
+    await expect(run(h.deps)).rejects.toThrow(/^ingest step failed: embed$/);
+    expect(h.embedCalls).toEqual([]);
+  });
 });
