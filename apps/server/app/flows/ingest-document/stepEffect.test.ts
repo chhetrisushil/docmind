@@ -186,6 +186,47 @@ describe("stepEffect", () => {
     await expect(cancelled).rejects.toThrow(/^ingest step failed: chunk$/);
   });
 
+  it("runs the guard before every attempt", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port, calls } = guard();
+    await expect(
+      stepEffect(
+        "chunk",
+        port,
+        throwing(() => new ParseCrashedError()),
+        {
+          retry: { maxAttempts: 3 },
+          sleep: async () => {},
+        },
+      ).execute(ref(), {} as never),
+    ).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(calls).toEqual(["begin:chunk", "begin:chunk", "begin:chunk"]);
+  });
+
+  it("stops waiting between attempts when the execution is cancelled: one attempt, the fixed failure", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { port } = guard();
+    const cancel = new AbortController();
+    let works = 0;
+    const sleep = (_ms: number, signal?: AbortSignal) =>
+      new Promise<void>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("woken")));
+        cancel.abort(); // a delete lands during the backoff
+      });
+    await expect(
+      stepEffect(
+        "chunk",
+        port,
+        async () => {
+          works++;
+          throw new ParseCrashedError();
+        },
+        { retry: { maxAttempts: 3 }, sleep },
+      ).execute(ref(), { signal: cancel.signal } as never),
+    ).rejects.toThrow(/^ingest step failed: chunk$/);
+    expect(works).toBe(1);
+  });
+
   it("wakes the backoff on shutdown and then stays un-completed", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { port } = guard();
