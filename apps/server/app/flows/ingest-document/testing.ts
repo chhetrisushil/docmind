@@ -45,6 +45,7 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
         media: [],
       }),
     },
+    maxChars: 20_000_000,
     ...over,
   };
 }

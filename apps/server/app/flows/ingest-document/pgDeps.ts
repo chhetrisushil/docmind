@@ -39,6 +39,7 @@ export function pgIngestDeps({ pool, fields, blobs, wiring, vectors }: PgIngestA
     vectors,
     embedder: wiring.embedder,
     runner: wiring.runner,
+    maxChars: wiring.runnerLimits.maxChars,
     shutdown: wiring.shutdown.signal,
     gate: wiring.gate,
     parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits, wiring.llm.config.timeoutMs),
