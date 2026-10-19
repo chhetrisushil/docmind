@@ -11,6 +11,7 @@ import { FieldCrypto } from "./crypto/fields";
 import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
+import { StartScheduler } from "./documents/startScheduler";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
 
@@ -39,6 +40,7 @@ export function buildServer(options: ComposeOptions) {
   const ingest = options.wrapIngest
     ? options.wrapIngest(loomIngest(app.runtime))
     : loomIngest(app.runtime);
+  const starts = new StartScheduler(ingest);
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
@@ -65,7 +67,8 @@ export function buildServer(options: ComposeOptions) {
         }),
       limits,
       ingest,
+      starts,
     }),
   });
-  return { app, server, store, throttle };
+  return { app, server, store, throttle, starts };
 }

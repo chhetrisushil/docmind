@@ -19,6 +19,7 @@ import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { type NewDocument, filenameBind, titleBind } from "./repo";
 import { type DocumentRoutesDeps, documentRoutes } from "./routes";
+import { StartScheduler } from "./startScheduler";
 
 export const T1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const T2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -86,6 +87,9 @@ export interface IngestProbe {
   calls: string[];
   hold(): void;
   release(): void;
+  /** Holds every start at its entry until `releaseStart()`. */
+  holdStart(): void;
+  releaseStart(): void;
   failNext(op: "start" | "cancel"): void;
 }
 
@@ -93,6 +97,8 @@ export interface IngestProbe {
 function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close(): Promise<void> } {
   let gate: Promise<void> | null = null;
   let open: () => void = () => {};
+  let startGate: Promise<void> | null = null;
+  let openStart: () => void = () => {};
   const real = pgIngestDeps(app);
   const loom = buildApp({ kind: "memory" }, undefined, {
     ingest: {
@@ -116,12 +122,22 @@ function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close():
       open();
       gate = null;
     },
+    holdStart() {
+      startGate = new Promise<void>((resolve) => {
+        openStart = resolve;
+      });
+    },
+    releaseStart() {
+      openStart();
+      startGate = null;
+    },
     failNext(op) {
       failures[op]++;
     },
   };
   const port: IngestPort = {
     async start(identity, documentId) {
+      await startGate;
       probe.calls.push(`start:${documentId}`);
       if (failures.start > 0) {
         failures.start--;
@@ -145,6 +161,7 @@ function makeIngest(app: Pool): { port: IngestPort; probe: IngestProbe; close():
     probe,
     close: async () => {
       probe.release();
+      probe.releaseStart();
       await loom.close();
     },
   };
@@ -158,6 +175,7 @@ export interface DocumentHarness {
   keys: InMemoryKeyStore;
   ingest: IngestProbe;
   inFlight: InFlight;
+  starts: StartScheduler;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -183,26 +201,27 @@ export async function startDocumentServer(
   const ingest = makeIngest(app);
   const inFlight = new InFlight();
   const wrap = overrides.deps ?? ((d: DocumentRoutesDeps) => d);
-  const server = createHttpServer(
-    documentRoutes(
-      wrap({
-        pool: app,
-        authenticator: testAuthenticator,
-        fields: new FieldCrypto(keys),
-        blobs: (id) =>
-          new EncryptedFsContentStore({
-            root,
-            tenantId: id.tenantId,
-            userId: id.userId,
-            keys,
-            maxBytes: limits.maxFileBytes,
-          }),
-        limits,
-        ingest: ingest.port,
-        inFlight,
+  const wrapped = wrap({
+    pool: app,
+    authenticator: testAuthenticator,
+    fields: new FieldCrypto(keys),
+    blobs: (id) =>
+      new EncryptedFsContentStore({
+        root,
+        tenantId: id.tenantId,
+        userId: id.userId,
+        keys,
+        maxBytes: limits.maxFileBytes,
       }),
-    ),
-  );
+    limits,
+    ingest: ingest.port,
+    starts: new StartScheduler(ingest.port),
+    inFlight,
+  });
+  // A wrapper that replaces `ingest` (an injected failure or gate) gets a scheduler over its port.
+  const starts =
+    wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
+  const server = createHttpServer(documentRoutes({ ...wrapped, starts }));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
@@ -213,6 +232,7 @@ export async function startDocumentServer(
     keys,
     ingest: ingest.probe,
     inFlight,
+    starts,
     upload(user, name, data) {
       const form = new FormData();
       form.append("file", new Blob([data]), name);
@@ -232,11 +252,14 @@ export async function startDocumentServer(
       );
     },
     async close() {
-      await ingest.close();
+      ingest.probe.release();
+      ingest.probe.releaseStart();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
       });
+      await starts.idle(); // after the server stops, nothing can fire anymore
+      await ingest.close();
       await app.end();
       await db.drop();
       rmSync(root, { recursive: true, force: true });

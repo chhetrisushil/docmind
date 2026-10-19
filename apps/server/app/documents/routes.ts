@@ -36,6 +36,7 @@ import {
   usageOfTenant,
 } from "./repo";
 import { SNIFF_BYTES, type Sniffed, sanitizeFilename, sniff, titleFromFilename } from "./sniff";
+import type { StartScheduler } from "./startScheduler";
 
 export interface DocumentRoutesDeps {
   pool: Pool;
@@ -46,6 +47,10 @@ export interface DocumentRoutesDeps {
   limits: DocumentLimits;
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
+  /** Test seam: how long a delete waits for a pending start before cancelling anyway. */
+  settleTimeoutMs?: number;
+  /** Fires flow starts after the upload commits, without making the response wait for them. */
+  starts: StartScheduler;
   /** Uploads in progress per user; defaults to one tracker shared by this process. */
   inFlight?: InFlight;
 }
@@ -141,6 +146,17 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
         throw err instanceof BlobTooLargeError ? new UploadTooLargeError() : err;
       });
       const result = await register(deps, identity, store, staged, filename, sniffed);
+      // The row is committed (register returns after COMMIT). Fire now, before the body drain and
+      // the response, so one round trip (withTenant's reset) separates COMMIT from the registration a
+      // delete settles on.
+      // A duplicate whose document never left `uploaded` re-attempts the start (Loom: start-once).
+      // Not closed: another process's delete cannot see this scheduler; `document_gone` covers that.
+      if (
+        result.kind === "stored" &&
+        (!result.duplicate || result.document.status === "uploaded")
+      ) {
+        deps.starts.fire(identity, result.document.id);
+      }
       return { rejected: false as const, result };
     } finally {
       await close(); // idempotent; releases the body if it was never consumed
@@ -181,19 +197,27 @@ async function upload(
     return uploadError(req, res, 403, "quota_exceeded", message);
   }
   const { document, duplicate } = result;
-  // The row is committed. Only now start the flow: a rolled-back upload must never have an execution.
-  // A duplicate whose document never left `uploaded` re-attempts the start, which Loom makes start-once.
-  if (!duplicate || document.status === "uploaded") {
-    await deps.ingest.start(identity, document.id).catch((err: unknown) => {
-      // Class and route only: the message could carry anything.
-      console.error(
-        "ingest start failed",
-        err instanceof Error ? err.constructor.name : typeof err,
-        "POST /api/documents",
-      );
-    });
-  }
   json(res, duplicate ? 200 : 201, { document, duplicate } satisfies UploadDocumentResponse);
+}
+
+/** How long a delete waits for that document's pending flow start before it cancels anyway. */
+export const SETTLE_TIMEOUT_MS = 5000;
+
+async function settleWithin(
+  starts: StartScheduler,
+  identity: Identity,
+  documentId: string,
+  ms: number,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  try {
+    await Promise.race([starts.settle(identity, documentId), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The document API. Every route takes the tenant and user from the session, never from the request. */
@@ -262,6 +286,14 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         // 1. Cancel the ingest execution first, outside any transaction. If this throws nothing has
         //    been deleted and the delete can be repeated; a step still running when the cancel lands
         //    finds its document gone and stops cleanly.
+        //    A start still in flight for this document lands first, so the cancel finds it.
+        //    The wait is bounded: past it the cancel goes ahead and `document_gone` covers a late start.
+        await settleWithin(
+          deps.starts,
+          identity,
+          mine.id,
+          deps.settleTimeoutMs ?? SETTLE_TIMEOUT_MS,
+        );
         await deps.ingest.cancel(identity, mine.id);
 
         // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
