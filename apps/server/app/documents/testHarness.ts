@@ -30,7 +30,7 @@ import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import { InMemoryProgressBus } from "./progress";
-import { type NewDocument, filenameBind, titleBind } from "./repo";
+import { type NewDocument, filenameBind, insertDocument, titleBind } from "./repo";
 import { type DocumentRoutesDeps, documentRoutes } from "./routes";
 import { StartScheduler } from "./startScheduler";
 
@@ -371,3 +371,33 @@ export async function startDocumentServer(
     throw err;
   }
 }
+
+// A document of `who`, created `ageSeconds` ago, as the owner role.
+export async function seedDoc(
+  owner: Pool,
+  app: Pool,
+  fields: FieldCrypto,
+  who: Identity,
+  fingerprint: string,
+  ageSeconds: number,
+) {
+  const d = await newDocument(fields, who.tenantId, who.userId, fingerprint);
+  await withTenant(app, who.tenantId, (tx) => insertDocument(tx, d));
+  await owner.query(
+    "UPDATE documents SET created_at = now() - make_interval(secs => $2::float8) WHERE id = $1",
+    [d.id, ageSeconds],
+  );
+  return d.id;
+}
+// What the status model's writer would have stored for an execution.
+export const seedRow = (
+  owner: Pool,
+  executionId: string,
+  key: string,
+  scope: string,
+  state = "{}",
+) =>
+  owner.query(
+    "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, $2, $3, 0, $4)",
+    [executionId, key, scope, state],
+  );
