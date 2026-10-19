@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Locator } from "@docmind/contracts";
 import type { ParsedDocument } from "@docmind/parsers";
 
@@ -50,13 +51,14 @@ function units(text: string, max: number): Span[] {
 }
 
 /** Greedy packing of consecutive units; a chunk runs from its first unit's start to its last unit's end. */
-function packed(all: Span[], max: number): Span[] {
+function packed(all: Span[], max: number, overlapChars: number, text: string): Span[] {
   const out: Span[] = [];
   let cur: Span | undefined;
   for (const u of all) {
     if (cur && u.end - cur.start > max) {
       out.push(cur);
-      cur = undefined;
+      cur = { start: overlapStart(text, cur, u, overlapChars, max), end: u.end };
+      continue;
     }
     cur = cur ? { start: cur.start, end: u.end } : u;
   }
@@ -64,7 +66,30 @@ function packed(all: Span[], max: number): Span[] {
   return out;
 }
 
-/** Section-bounded chunks whose text is an exact slice of the section text. `overlap` is Task 72's. */
+/** Where the next chunk begins: up to `overlapChars` before `next`, on a word start, within `max`, after the previous start. */
+function overlapStart(
+  text: string,
+  prev: Span,
+  next: Span,
+  overlapChars: number,
+  max: number,
+): number {
+  let at = Math.max(prev.start + 1, next.start - overlapChars, next.end - max);
+  if (at >= next.start) return next.start;
+  while (at < next.start && !/\s/.test(text[at - 1] as string)) at++; // snap forward to a word start
+  return Math.min(at, next.start);
+}
+
+/** Deterministic, so a re-run of the chunk step writes the same ids and embedding is idempotent by id. */
+export function chunkIdFor(documentId: string, ordinal: number): string {
+  const h = createHash("sha256").update(`docmind-chunk-v1:${documentId}:${ordinal}`).digest();
+  h[6] = ((h[6] as number) & 0x0f) | 0x50; // version 5 layout
+  h[8] = ((h[8] as number) & 0x3f) | 0x80; // RFC 4122 variant
+  const x = h.subarray(0, 16).toString("hex");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`;
+}
+
+/** Section-bounded chunks whose text is an exact slice of the section text. */
 export function chunkDocument(doc: ParsedDocument, options: ChunkOptions = {}): Chunk[] {
   const target = options.targetTokens ?? DEFAULT_TARGET_TOKENS;
   if (!Number.isInteger(target) || target < 1)
@@ -73,10 +98,11 @@ export function chunkDocument(doc: ParsedDocument, options: ChunkOptions = {}): 
   if (!Number.isFinite(overlap) || overlap < 0 || overlap >= 1)
     throw new RangeError("overlap must be a number in [0, 1)");
   const max = target * CHARS_PER_TOKEN;
+  const overlapChars = Math.floor(max * overlap);
   const chunks: Chunk[] = [];
   doc.sections.forEach((section, sectionOrdinal) => {
     const loc = section.locator;
-    for (const span of packed(units(section.text, max), max)) {
+    for (const span of packed(units(section.text, max), max, overlapChars, section.text)) {
       const text = section.text.slice(span.start, span.end);
       chunks.push({
         ordinal: chunks.length,
