@@ -8,6 +8,7 @@ import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
+import { verifyVectors } from "./flows/ingest-document/verifyVectors";
 import { runAll, scheduleForceExit, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { bootStatus } from "./status/boot";
@@ -32,7 +33,7 @@ async function main(): Promise<void> {
   const keks = loadKeks();
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
-  const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* variables before any connection opens
+  const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
 
   const pool = await createAppPool(databaseUrl);
 
@@ -61,7 +62,7 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle, starts, status, detachStatusFeed } = buildServer({
+  const { app, server, store, throttle, starts, status, vectors, detachStatusFeed } = buildServer({
     pool,
     keys,
     storage: durable.storage,
@@ -78,6 +79,15 @@ async function main(): Promise<void> {
       source: durable.storage.eventStore,
     },
   });
+
+  // The schema (applied out of band by `pnpm db:migrate`) must fit the embedder before anything else
+  // starts. The embedder holds no resources, so closeIngest (the runner) covers its share.
+  await verifyVectors(vectors, [
+    () => closeIngest(ingest),
+    () => app.close(),
+    () => durable.close(),
+    () => pool.end(),
+  ]);
 
   // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
   await bootStatus(status, [
