@@ -146,6 +146,40 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
     },
   } as unknown as EventStore;
 
+  const ctr = new Map<string, { consumed: number; records: number; turns: number }>();
+  const counters = (id: string) => {
+    const found = ctr.get(id);
+    if (found) return found;
+    const fresh = { consumed: 0, records: 0, turns: 0 };
+    ctr.set(id, fresh);
+    return fresh;
+  };
+  const push = (
+    id: string,
+    c: { consumed: number; records: number },
+    e: Pick<HistoryEntry, "turn" | "role" | "text" | "status" | "at">,
+    kind: "user" | "reply",
+  ) => {
+    const list = entries.get(id) ?? [];
+    entries.set(id, list);
+    const sequence = list.length + 1;
+    list.push({ ...e, ord: ++c.records, cursor: `0.${sequence}`, executionId: id });
+    events.set(`${id}:${sequence}`, {
+      id: `${id}-${sequence}`,
+      workflowId: "conversation",
+      executionId: id,
+      eventType: "DECISION_RECORDED",
+      sequence,
+      timestamp: e.at ?? 0,
+      payload: {
+        decisionId: `conv#o${c.consumed}:${kind}`,
+        source: "conversation-record",
+        choice: {},
+      },
+    });
+    for (const poke of wake) poke();
+  };
+
   return {
     api: api as unknown as Conversations,
     eventStore,
@@ -156,42 +190,45 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
     ownerOf: (id: string) => owners.get(id),
     failNextStart: () => void failures.start++,
     failNextSend: (err: Error) => void failures.send.push(err),
-    /** Appends a user message and its reply as the flow records them: turn k, record ordinals 2k-1 and 2k (turn key k). */
+    /**
+     * Appends a user message and its reply as Loom's flow records them. Two counters, as in conversation.ts:
+     * `consumed` (every message taken from the inbox, accepted or not) names the decision ids `conv#o<consumed>:...`;
+     * `records` (every record written) is the record's `ord`. An accepted turn is number `turns + 1`.
+     */
     addTurn(id: string, t: FakeTurn): void {
-      const list = entries.get(id) ?? [];
-      entries.set(id, list);
-      const k = list.length / 2 + 1;
-      const at = t.at ?? 1_700_000_000_000 + list.length * 1000;
-      for (const [role, text, status, rec] of [
-        ["user", t.question, "complete", 2 * k - 1],
-        ["assistant", t.answer, t.status ?? "complete", 2 * k],
-      ] as const) {
-        const sequence = list.length + 1;
-        list.push({
-          turn: k,
-          ord: rec,
-          role,
+      const c = counters(id);
+      c.consumed++;
+      c.turns++;
+      const at = t.at ?? 1_700_000_000_000 + (entries.get(id)?.length ?? 0) * 1000;
+      push(
+        id,
+        c,
+        { turn: c.turns, role: "user", text: t.question, status: "complete", at },
+        "user",
+      );
+      push(
+        id,
+        c,
+        { turn: c.turns, role: "assistant", text: t.answer, status: t.status ?? "complete", at },
+        "reply",
+      );
+    },
+    /** A rejected envelope: it consumes a message and writes a record (turn 0, user, rejected), but is no turn. */
+    addRejected(id: string, text = "rejected"): void {
+      const c = counters(id);
+      c.consumed++;
+      push(
+        id,
+        c,
+        {
+          turn: 0,
+          role: "user",
           text,
-          status,
-          cursor: `0.${sequence}`,
-          executionId: id,
-          at,
-        });
-        events.set(`${id}:${sequence}`, {
-          id: `${id}-${sequence}`,
-          workflowId: "conversation",
-          executionId: id,
-          eventType: "DECISION_RECORDED",
-          sequence,
-          timestamp: at,
-          payload: {
-            decisionId: `conv#o${k}:${role === "user" ? "user" : "reply"}`,
-            source: "conversation-record",
-            choice: {},
-          },
-        });
-      }
-      for (const poke of wake) poke();
+          status: "rejected",
+          at: 1_700_000_000_000 + (entries.get(id)?.length ?? 0) * 1000,
+        },
+        "user",
+      );
     },
   };
 }
