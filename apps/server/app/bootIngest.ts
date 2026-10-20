@@ -72,7 +72,13 @@ export async function bootIngest(
   await verifyVectors(vectors, cleanup);
   // Register, then catch up on what the log holds, before anything is served (ADR 0132 D13).
   await bootStatus(status, cleanup);
-  await bootStatus(activity, cleanup, "chat activity");
+  // The session list falls back to created_at without this model, so its failure never blocks serving.
+  await activity.boot().catch((err: unknown) => {
+    console.error(
+      "chat activity failed to boot; serving without it",
+      err instanceof Error ? err.constructor.name : typeof err,
+    );
+  });
   // Hash the decoy now so the first unknown-email login is not measurably slower.
   await primeDecoy();
 
@@ -136,10 +142,11 @@ export async function bootIngest(
             ...(chat && { closeChat: () => chat.close() }),
             closeHeartbeat: () => app.runtime.closeHeartbeat(),
             detachStatusFeed,
-            closeStatus: async () => {
-              await status.close();
-              await activity.close();
-            },
+            closeStatus: () =>
+              runAll(
+                () => status.close(),
+                () => activity.close(),
+              ),
             closeApp: () => app.close(),
             closeDurable: () => durable.close(),
             endPool: () => pool.end(),

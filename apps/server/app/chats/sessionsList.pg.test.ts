@@ -39,7 +39,7 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
         `u_${user}.c-${chatId}${gen ? `~${gen}` : ""}`,
         chatId,
         user,
-        JSON.stringify({ messages, lastOrd: messages - 1, lastAt }),
+        JSON.stringify({ messages, lastOrd: messages - 1, lastAt: Date.parse(lastAt) }),
       ],
     );
 
@@ -95,14 +95,14 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       const quiet = await make(user); // no activity row: sorts by created_at
       const busy = await make(user);
       const older = await make(user);
-      await activity(busy.id, user, 4, "2031-01-02T10:00:00.123456Z");
+      await activity(busy.id, user, 4, "2031-01-02T10:00:00.123Z");
       await activity(older.id, user, 2, "2031-01-01T10:00:00.000Z");
       const rows = await as(T1, (tx) => listChats(tx, user, { limit: 10 }));
       expect(ids(rows)).toEqual([busy.id, older.id, quiet.id]);
       expect(rows.map((r) => r.messages)).toEqual([4, 2, 0]);
       expect(rows[2]?.last_at).toBeNull();
       expect(rows[0]?.last_at?.toISOString()).toBe("2031-01-02T10:00:00.123Z");
-      expect(rows[0]?.sort_cursor).toBe("2031-01-02T10:00:00.123456Z"); // microseconds survive
+      expect(rows[0]?.sort_cursor).toBe("2031-01-02T10:00:00.123000Z"); // cursor text keeps microsecond digits
       expect(rows[2]?.sort_at).toEqual(quiet.created_at);
     });
 
@@ -110,13 +110,13 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       const user = U1B;
       const before = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
       const fresh = await Promise.all([make(user), make(user), make(user)]);
-      // three newer rows tied within one millisecond: two share .123456, one is .123400; a page boundary
-      // falls between the .123456 pair and the rest, so a cursor cut to milliseconds would skip a row
+      // three newer rows: two tie at .123, one is .122; a page boundary falls between the tied pair and the
+      // rest, so a cursor that dropped the id tiebreak would skip a row
       const [m0, m1, m2] = await Promise.all([make(user), make(user), make(user)]);
       const micro = [m0, m1, m2];
-      await activity(m0.id, user, 1, "2032-06-01T00:00:00.123456Z");
-      await activity(m1.id, user, 1, "2032-06-01T00:00:00.123456Z");
-      await activity(m2.id, user, 1, "2032-06-01T00:00:00.123400Z");
+      await activity(m0.id, user, 1, "2032-06-01T00:00:00.123Z");
+      await activity(m1.id, user, 1, "2032-06-01T00:00:00.123Z");
+      await activity(m2.id, user, 1, "2032-06-01T00:00:00.122Z");
       // all three created in one millisecond window and given the SAME last activity: only the id splits them
       for (const c of fresh) await activity(c.id, user, 1, "2032-01-01T00:00:00.000Z");
       const want = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
@@ -163,7 +163,11 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
           `u_${user}.c-${chat.id}~3`,
           chat.id,
           user,
-          JSON.stringify({ messages: 99, lastOrd: 98, lastAt: "2035-01-01T00:00:00.000Z" }),
+          JSON.stringify({
+            messages: 99,
+            lastOrd: 98,
+            lastAt: Date.parse("2035-01-01T00:00:00.000Z"),
+          }),
         ],
       );
       const row = (await as(T1, (tx) => listChats(tx, user, { limit: 100 }))).find(
