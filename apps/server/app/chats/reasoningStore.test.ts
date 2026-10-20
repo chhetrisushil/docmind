@@ -10,7 +10,12 @@ import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { chatConversationId } from "./ids";
-import { ChatReasoningStore, MAX_REASONING_BYTES, ReasoningScopeError } from "./reasoningStore";
+import {
+  ChatReasoningStore,
+  MAX_REASONING_BYTES,
+  ReasoningScopeError,
+  chatReasoningBind,
+} from "./reasoningStore";
 import { type ChatCallScope, chatScope } from "./scope";
 import { C, MemoryReasoningRows, T, U, modelCtx } from "./testing";
 
@@ -122,6 +127,36 @@ describe("ChatReasoningStore", () => {
     expect(await s.inScope(() => s.store.get({ __loomContent: "0".repeat(32) }))).toBeNull();
     expect(await s.store.readerFor({ ...REF, chatId: C2 }).get(ref)).toBeNull();
     expect(await s.store.readerFor({ ...REF, userId: U2 }).get(ref)).toBeNull();
+  });
+
+  it("ties the ciphertext to its row: a sealed copy under another address or chat does not open", async () => {
+    const s = setup();
+    const ref = await s.inScope(() => s.store.put(sealReasoningText(TEXT, EXEC)));
+    const [row] = [...s.rows.rows.values()];
+    const other = "b".repeat(32);
+    await s.rows.put(REF, other, row?.sealed);
+    await s.rows.put({ ...REF, chatId: C2 }, ref.__loomContent, row?.sealed);
+    await expect(s.store.readerFor(REF).get({ __loomContent: other })).rejects.toThrow();
+    await expect(
+      s.store.readerFor({ ...REF, chatId: C2 }).get({ __loomContent: ref.__loomContent }),
+    ).rejects.toThrow();
+  });
+
+  it("keeps a byte-order mark: it is refused as a non-envelope, and a stored one reads back byte for byte", async () => {
+    const s = setup();
+    const enc = new TextEncoder();
+    const envelope = new TextDecoder().decode(sealReasoningText(TEXT, EXEC));
+    const bom = enc.encode(`\uFEFF${envelope}`);
+    await expect(s.inScope(() => s.store.put(bom))).rejects.toBeInstanceOf(ReasoningScopeError);
+    const address = "d".repeat(32);
+    await s.rows.put(
+      REF,
+      address,
+      await new FieldCrypto(s.keys)
+        .forUser(U)
+        .seal(chatReasoningBind(C, address), `\uFEFF${envelope}`),
+    );
+    expect(await s.store.readerFor(REF).get({ __loomContent: address })).toEqual(bom);
   });
 
   it("reads null once the owner's key is destroyed (erased), and rethrows any other failure", async () => {
