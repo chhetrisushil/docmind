@@ -110,16 +110,30 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       const user = U1B;
       const before = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
       const fresh = await Promise.all([make(user), make(user), make(user)]);
+      // three newer rows tied within one millisecond: two share .123456, one is .123400; a page boundary
+      // falls between the .123456 pair and the rest, so a cursor cut to milliseconds would skip a row
+      const micro = await Promise.all([make(user), make(user), make(user)]);
+      await activity(micro[0]!.id, user, 1, "2032-06-01T00:00:00.123456Z");
+      await activity(micro[1]!.id, user, 1, "2032-06-01T00:00:00.123456Z");
+      await activity(micro[2]!.id, user, 1, "2032-06-01T00:00:00.123400Z");
       // all three created in one millisecond window and given the SAME last activity: only the id splits them
       for (const c of fresh) await activity(c.id, user, 1, "2032-01-01T00:00:00.000Z");
       const want = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
-      expect(want.slice(0, 3)).toEqual(
+      expect(want.slice(3, 6)).toEqual(
         fresh
           .map((c) => c.id)
           .sort()
           .reverse(),
       );
-      expect(want).toHaveLength(before.length + 3);
+      expect(want.slice(0, 3)).toEqual([
+        ...micro
+          .slice(0, 2)
+          .map((c) => c.id)
+          .sort()
+          .reverse(),
+        micro[2]!.id,
+      ]);
+      expect(want).toHaveLength(before.length + 6);
       const seen: string[] = [];
       let cursor: { t: string; i: string } | undefined;
       for (let guard = 0; guard < 20; guard++) {
@@ -142,14 +156,29 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       await activity(chat.id, U1B, 50, "2034-01-01T00:00:00.000Z", 2); // scope is not the chat's owner
       await fx.db.owner.query(
         `INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased)
-         VALUES ($1, $2, $3, $4, 1, NULL, true)`,
-        [CHAT_ACTIVITY_MODEL, `u_${user}.c-${chat.id}~3`, chat.id, user],
+         VALUES ($1, $2, $3, $4, 1, $5::jsonb, true)`,
+        [
+          CHAT_ACTIVITY_MODEL,
+          `u_${user}.c-${chat.id}~3`,
+          chat.id,
+          user,
+          JSON.stringify({ messages: 99, lastOrd: 98, lastAt: "2035-01-01T00:00:00.000Z" }),
+        ],
       );
       const row = (await as(T1, (tx) => listChats(tx, user, { limit: 100 }))).find(
         (r) => r.id === chat.id,
       );
       expect(row?.messages).toBe(5);
       expect(row?.last_at?.toISOString()).toBe("2033-02-01T00:00:00.000Z");
+    });
+
+    it("refuses a title that is not a sealed object, with a fixed message", async () => {
+      const row = await make();
+      for (const bad of [null, "plain", 3, ["x"]]) {
+        await expect(as(T1, (tx) => setTitle(tx, U1, row.id, bad, "user"))).rejects.toThrow(
+          /^chat_sessions\.title_enc must be a sealed object$/,
+        );
+      }
     });
 
     it("lists only the owner's live chats, and never another tenant's", async () => {

@@ -23,8 +23,9 @@ CREATE TABLE chat_sessions (
   CONSTRAINT chat_sessions_scope_shape CHECK (
     scope = '"all"'::jsonb
     OR (jsonb_typeof(scope) = 'object'
-        AND COALESCE(jsonb_typeof(scope -> 'documentIds') = 'array'
-                     AND jsonb_array_length(scope -> 'documentIds') BETWEEN 1 AND 100, false)))
+        AND CASE WHEN jsonb_typeof(scope -> 'documentIds') = 'array'
+                 THEN jsonb_array_length(scope -> 'documentIds') BETWEEN 1 AND 100
+                 ELSE false END))
 );
 CREATE INDEX chat_sessions_owner_created_idx ON chat_sessions (tenant_id, user_id, created_at DESC, id DESC)
   WHERE deleted_at IS NULL;

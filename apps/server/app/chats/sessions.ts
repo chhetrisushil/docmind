@@ -119,6 +119,9 @@ export async function setTitle(
   titleEnc: unknown,
   source: "auto" | "user",
 ): Promise<boolean> {
+  if (typeof titleEnc !== "object" || titleEnc === null || Array.isArray(titleEnc)) {
+    throw new Error("chat_sessions.title_enc must be a sealed object");
+  }
   const { rowCount } = await tx.query(
     `UPDATE chat_sessions SET title_enc = $3::jsonb, title_source = $4, updated_at = now()
       WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
