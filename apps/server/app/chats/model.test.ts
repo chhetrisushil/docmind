@@ -209,6 +209,36 @@ describe("chatModelEffect behaviour", () => {
     expect([sawAbort, winner]).toEqual([true, SENTINEL]);
   });
 
+  it("on shutdown stays pending even when the call's own signal is aborted too (the lease keeper's close)", async () => {
+    const stop = new AbortController();
+    const own = new AbortController();
+    const inner: Effect<AgentModelCall, LlmResponse> = {
+      kind: "llm",
+      async execute() {
+        throw new TypeError("LLM_INTERRUPTED");
+      },
+    };
+    const effect = chatModelEffect(inner, {
+      items: new FakeItems(),
+      bus: new ChatBus(),
+      shutdown: stop.signal,
+    });
+    stop.abort();
+    own.abort();
+    const SENTINEL = Symbol("sentinel");
+    const sentinel = new Promise<typeof SENTINEL>((resolve) =>
+      setTimeout(() => resolve(SENTINEL), 0),
+    );
+    const winner = await Promise.race([
+      effect.execute(CALL, { ...modelCtx(), signal: own.signal }).then(
+        () => "settled",
+        () => "settled",
+      ),
+      sentinel,
+    ]);
+    expect(winner).toBe(SENTINEL);
+  });
+
   it("still fails a call that errors while no shutdown is under way", async () => {
     const inner: Effect<AgentModelCall, LlmResponse> = {
       kind: "llm",

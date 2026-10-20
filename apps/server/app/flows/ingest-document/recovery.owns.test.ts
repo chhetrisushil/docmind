@@ -80,4 +80,19 @@ describe("recoverIngest owns", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     errors.mockRestore();
   });
+
+  it("once recovery is stopped a failing re-drive is not logged; before that it is", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let stopped = false;
+    await recoverIngest(runtime, source, { graceMs: 10, owns: () => true, stopped: () => stopped });
+    const onError = seen[0]?.onError;
+    class LeaseKeeperClosedError extends Error {}
+    onError?.(`u_${U}:ingest-${C}`, new LeaseKeeperClosedError("closed"));
+    expect(errors).toHaveBeenCalledWith("recovery failed", "LeaseKeeperClosedError");
+    errors.mockClear();
+    stopped = true;
+    onError?.(`u_${U}:ingest-${C}`, new LeaseKeeperClosedError("closed"));
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
 });
