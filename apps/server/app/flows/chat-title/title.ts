@@ -36,7 +36,10 @@ export function cleanTitle(raw: string): string | null {
   let t = (raw.split("\n").find((line) => line.trim() !== "") ?? "").trim();
   t = t.replace(/^title\s*:\s*/i, "").replace(/^#+\s*/, "");
   t = t.replace(/^[\s"'`*_]+|[\s"'`*_]+$/g, "").replace(/[.\s]+$/, "");
-  t = t.replace(/\s+/g, " ");
+  t = t
+    .replace(/\t/g, " ")
+    .replace(/[\p{Cc}\u202A-\u202E\u2066-\u2069\u200B\u2060\uFEFF]/gu, "")
+    .replace(/\s+/g, " ");
   if (t === "" || t.includes("[[")) return null;
   const chars = [...t];
   if (chars.length > TITLE_MAX_CHARS) t = chars.slice(0, TITLE_MAX_CHARS).join("").trimEnd();
