@@ -6,6 +6,7 @@ import {
   ReasoningResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
+import { inboxChainOf } from "@loom/event-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
@@ -229,12 +230,12 @@ describe.skipIf(!PG_URL)(
             "LLM_REASONING_CAPTURED:parts",
           ]),
         );
-        // The owner subject, on the production key store: every execution in the log belongs to ada (`u_<ada>...`),
+        // The owner subject, on the production key store: every execution in the log belongs to ada (`u_<ada>...`; an inbox stream is keyed by its chain id, as Loom's EncryptingEventStore does),
         // and the only data key that exists is hers, so nothing here was sealed under bob's or any other tenant's key.
         // Reading the sealed log back through the decrypting store with her key finds the question: it was her key.
-        expect([...new Set(ids.map((id) => subjectOfExecution({ executionId: id })))]).toEqual([
-          ada.userId,
-        ]);
+        expect([
+          ...new Set(ids.map((id) => subjectOfExecution({ executionId: inboxChainOf(id) ?? id }))),
+        ]).toEqual([ada.userId]);
         expect(
           (await st.db.owner.query("SELECT subject_id FROM data_keys")).rows.map(
             (r) => r.subject_id,
