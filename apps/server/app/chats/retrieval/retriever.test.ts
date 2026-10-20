@@ -52,6 +52,10 @@ function build(
     embed?: EmbeddingProvider["embed"];
     missing?: string[];
     linksFail?: boolean;
+    linksError?: Error;
+    linksFailOnCall?: number;
+    vectorsFailOnCall?: number;
+    onHopError?: (hop: 1 | 2, errorClass: string) => void;
   } = {},
 ) {
   const registry = new Map<string, string[]>();
@@ -78,6 +82,12 @@ function build(
       }),
   };
   const counting = Object.create(vectors) as InMemoryChunkVectors;
+  let vectorCalls = 0;
+  counting.vectors = (...a: Parameters<InMemoryChunkVectors["vectors"]>) => {
+    vectorCalls += 1;
+    if (vectorCalls === over.vectorsFailOnCall) return Promise.reject(new Error("vectors failed"));
+    return vectors.vectors(...a);
+  };
   counting.search = (...a: Parameters<InMemoryChunkVectors["search"]>) => {
     calls.search += 1;
     return vectors.search(...a);
@@ -109,7 +119,8 @@ function build(
       opts: { perChunk: number; kinds?: readonly LinkKind[]; documentIds?: readonly string[] },
     ) => {
       calls.links.push({ ids, opts: { ...opts } });
-      if (over.linksFail) throw new Error("links failed");
+      if (over.linksFail || over.linksFailOnCall === calls.links.length)
+        throw over.linksError ?? new Error("links failed");
       return ids.flatMap((src) =>
         EDGES.filter(
           (e) =>
@@ -128,6 +139,7 @@ function build(
     passages,
     links,
     hops: over.hops ?? 1,
+    ...(over.onHopError && { onHopError: over.onHopError }),
   });
   const seeded = (async () => {
     for (const [d, ids] of registry) {
@@ -254,6 +266,61 @@ describe("Retriever.search hop failure", () => {
     const { retriever, ready } = build({ hops: 1, linksFail: true });
     await ready;
     expect(ids(await retriever.search(SCOPE, "all", "q", 8))).toEqual([x1, x2, y1]);
+  });
+});
+
+describe("Retriever.search hop failure policy", () => {
+  class DbDown extends Error {}
+  it("rethrows an abort instead of degrading", async () => {
+    const { retriever, ready } = build({ hops: 1, linksFail: true });
+    await ready;
+    const ac = new AbortController();
+    ac.abort(new DOMException("aborted", "AbortError"));
+    // The embedder fake ignores the signal, so only the post-hop check can surface the abort.
+    await expect(retriever.search(SCOPE, "all", "q", 8, ac.signal)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+  });
+
+  it("keeps hop 1 when hop 2 fails", async () => {
+    const seen: [number, string][] = [];
+    const { retriever, ready } = build({
+      hops: 2,
+      linksFailOnCall: 2,
+      linksError: new DbDown("x"),
+      onHopError: (h, c) => seen.push([h, c]),
+    });
+    await ready;
+    const out = await retriever.search(SCOPE, "all", "q", 12);
+    expect(ids(out)).toContain(z1);
+    expect(ids(out)).toContain(h1);
+    expect(ids(out)).not.toContain(h2);
+    expect(seen).toEqual([[2, "DbDown"]]);
+  });
+
+  it("leaves no partial hop results when the target-vector read fails", async () => {
+    const seen: [number, string][] = [];
+    const { retriever, ready } = build({
+      hops: 1,
+      vectorsFailOnCall: 2,
+      onHopError: (h, c) => seen.push([h, c]),
+    });
+    await ready;
+    expect(ids(await retriever.search(SCOPE, "all", "q", 8))).toEqual([x1, x2, y1]);
+    expect(seen).toEqual([[1, "Error"]]);
+  });
+
+  it("rethrows a programmer error from a hop step", async () => {
+    const seen: string[] = [];
+    const { retriever, ready } = build({
+      hops: 1,
+      linksFail: true,
+      linksError: new TypeError("bug"),
+      onHopError: (_h, c) => seen.push(c),
+    });
+    await ready;
+    await expect(retriever.search(SCOPE, "all", "q", 8)).rejects.toBeInstanceOf(TypeError);
+    expect(seen).toEqual([]);
   });
 });
 
