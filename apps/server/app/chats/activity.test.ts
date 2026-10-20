@@ -117,6 +117,33 @@ describe("recordOf", () => {
 });
 
 describe("ChatActivity", () => {
+  it("ignores the model reasoning events of ADR 0133: a capture event and a step value that carries reasoning change nothing", async () => {
+    const { feed, activity, rows, errors } = await setup();
+    feed(
+      record(CONV, 0, 1, "user"),
+      evt(CONV, 1, "LLM_REASONING_CAPTURED", {
+        stepId: "conv#o1#turn:0",
+        attempt: 1,
+        provider: "anthropic",
+        parts: [{ kind: "summary", ref: "0".repeat(32), digest: "d".repeat(64), size: 12 }],
+      }),
+      evt(CONV, 2, "STEP_COMPLETED", {
+        stepId: "conv#o1#turn:0",
+        output: {
+          content: "a",
+          stopReason: "end_turn",
+          reasoning: [
+            { type: "reasoning", kind: "summary", provider: "anthropic", signature: "S" },
+          ],
+        },
+      }),
+      record(CONV, 3, 1, "reply"),
+    );
+    await activity.drain();
+    expect((await rows())[0]?.state).toMatchObject({ messages: 2, lastOrd: 1 });
+    expect(errors).toEqual([]);
+  });
+
   it("counts the user's message and the reply, and notes the last time", async () => {
     const { feed, activity, rows } = await setup();
     feed(

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
 import { type ChatStack, startChatStack } from "./testStack";
-import { C, U } from "./testing";
+import { C, T, U } from "./testing";
 import { passage } from "./tools/testing";
 
 const CONV = chatConversationId(U, C);
@@ -14,6 +14,9 @@ const ANSWER = "Nocturne expects seventeen thousand dollars of revenue next quar
 const PASSAGE_TEXT =
   "Nocturne quarterly revenue forecast: seventeen thousand dollars, confidential.";
 const TITLE = "Nocturne planning memo (confidential)";
+const SIG1 = "sigA-Zq8Lm2Vx9Rt4Ns6Hd1Wk3Pf7";
+const SIG2 = "sigB-Hd1Wk3Pf7Zq8Lm2Vx9Rt4Ns6";
+const THINK2 = "Checking the figure against the passage.";
 const SECOND = "And what does the Nocturne cost forecast say about hiring?";
 const THIRD = "Summarise the Nocturne hiring plan in one sentence please.";
 const SECRETS = [
@@ -25,7 +28,9 @@ const SECRETS = [
   TITLE,
   SECOND,
   THIRD,
-  "Checking the figure against the passage.",
+  THINK2,
+  SIG1,
+  SIG2,
 ];
 
 const PASSAGE = passage({ text: PASSAGE_TEXT, docTitle: TITLE });
@@ -47,15 +52,15 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
       {
         steps: [
           { thinking: THINKING },
-          { signature: "sig-1" },
+          { signature: SIG1 },
           { toolUse: { id: "toolu_1", name: "search_docs", input: { query: QUERY } } },
           { stop: "tool_use" },
         ],
       },
       {
         steps: [
-          { thinking: "Checking the figure against the passage." },
-          { signature: "sig-2" },
+          { thinking: THINK2 },
+          { signature: SIG2 },
           { text: `${ANSWER} [[${PASSAGE.passageId}]].` },
           { stop: "end_turn" },
         ],
@@ -105,7 +110,9 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
         "EXECUTION_STARTED:input.turns[].user",
         "INBOX_MESSAGE:payload",
         "MESSAGE_CONSUMED:payload",
+        "LLM_REASONING_CAPTURED:parts",
         "STEP_COMPLETED:output.content",
+        "STEP_COMPLETED:output.reasoning",
         "STEP_COMPLETED:output.toolCalls[].input",
         "STEP_COMPLETED:output.value",
         "STEP_STARTED:input.messages",
@@ -113,7 +120,22 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
       ]),
     );
     expect(JSON.stringify(served)).toContain(THINKING);
-    // Only the owner's key was used. THINKING stays in SECRETS: from Task 162 Loom records it in the log, sealed.
+    // The reasoning really reached the store, sealed under the owner's key (so the scan above is not vacuous for it).
+    const sealedRows = [...stack.reasoningRows.rows.values()];
+    expect(sealedRows).toHaveLength(2); // one summary per model frame of the first turn
+    for (const r of sealedRows)
+      expect((r.sealed as { __loomEnc?: string }).__loomEnc).toBe("loom/aes-256-gcm");
+    expect(JSON.stringify(sealedRows)).not.toContain("Nocturne");
+    const reader = stack.reasoning.readerFor({ tenantId: T, userId: U, chatId: C });
+    const texts = await Promise.all(
+      sealedRows.map(async (r) =>
+        new TextDecoder().decode(
+          (await reader.get({ __loomContent: r.address })) ?? new Uint8Array(),
+        ),
+      ),
+    );
+    expect(texts.some((t) => t.includes(THINKING))).toBe(true);
+    // Only the owner's key was used.
     expect([...stack.subjects]).toEqual([U]);
     // The same log, read through the decrypting store, is the conversation.
     const history = await stack.chat.reader.read(CONV, { limit: 50 });
@@ -197,5 +219,81 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
     assertNoPlaintext(raw, [LEAK, QUERY]);
     expect(raw.some((e) => e.eventType === "STEP_FAILED")).toBe(true);
     expect([...sealedPaths(raw)]).toContain("STEP_FAILED:error");
+  });
+
+  it("an interleaved thinking, tool call, thinking, tool call turn seals its layout, and the model gets the blocks back in that order", async () => {
+    const FIRST = "First, which memo covers the Nocturne cost forecast?";
+    const SECOND_THOUGHT = "Second, is the hiring figure in the same Nocturne memo?";
+    stack = await startChatStack({
+      passages: [PASSAGE],
+      scripts: [
+        {
+          steps: [
+            { thinking: FIRST },
+            { signature: SIG1 },
+            { toolUse: { id: "toolu_1", name: "search_docs", input: { query: QUERY } } },
+            { thinking: SECOND_THOUGHT },
+            { signature: SIG2 },
+            {
+              toolUse: { id: "toolu_2", name: "search_docs", input: { query: `${QUERY} hiring` } },
+            },
+            { stop: "tool_use" },
+          ],
+        },
+        { steps: [{ text: `${ANSWER} [[${PASSAGE.passageId}]].` }, { stop: "end_turn" }] },
+      ],
+    });
+    const id = await stack.start();
+    await stack.send(id, QUESTION);
+    await stack.replies(id, 1);
+    const raw = await rawLog(stack);
+    assertNoPlaintext(raw, [FIRST, SECOND_THOUGHT, SIG1, SIG2, QUESTION]);
+    expect([...sealedPaths(raw)]).toEqual(
+      expect.arrayContaining([
+        "STEP_COMPLETED:output.layout",
+        "STEP_COMPLETED:output.reasoning",
+        "LLM_REASONING_CAPTURED:parts",
+      ]),
+    );
+    // the second request carried the blocks back in the order they were made, with text and signature
+    const assistant = stack.fake.requests[1]?.body.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content.map((b) => b.type)).toEqual([
+      "thinking",
+      "tool_use",
+      "thinking",
+      "tool_use",
+    ]);
+    expect(assistant?.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: FIRST,
+      signature: SIG1,
+    });
+    expect(assistant?.content[2]).toMatchObject({
+      type: "thinking",
+      thinking: SECOND_THOUGHT,
+      signature: SIG2,
+    });
+  });
+
+  it("a refused response keeps no reasoning: nothing is stored and no capture event is written", async () => {
+    stack = await startChatStack({
+      scripts: [
+        {
+          steps: [
+            { thinking: THINKING },
+            { signature: SIG1 },
+            { text: "I can" },
+            { stop: "refusal", details: { category: "policy" } },
+          ],
+        },
+      ],
+    });
+    const id = await stack.start();
+    await stack.send(id, QUESTION);
+    await stack.replies(id, 1);
+    expect(stack.reasoningRows.rows.size).toBe(0);
+    const raw = await rawLog(stack);
+    expect(raw.some((e) => e.eventType === "LLM_REASONING_CAPTURED")).toBe(false);
+    assertNoPlaintext(raw, [THINKING, SIG1]);
   });
 });

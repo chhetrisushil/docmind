@@ -1,10 +1,19 @@
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../config";
-import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";
+import { FieldCrypto } from "../crypto/fields";
+import {
+  CHAT_EFFECT_IDS,
+  CHAT_MODEL_TOOL_ID,
+  CHAT_FLOW_ID,
+  CHAT_GK_FLOW_ID,
+  CHAT_TOOL_IDS,
+} from "./ids";
 import { createChatLlm } from "./llm";
+import { ChatReasoningStore } from "./reasoningStore";
 import { loadChatSettings } from "./settings";
-import { FakeItems } from "./testing";
+import { FakeItems, MemoryReasoningRows } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { connectChat, logHopError, prepareChat } from "./wiring";
 
@@ -15,6 +24,10 @@ const collaborators = () => ({
   passages: { read: async () => new Map(), section: async () => [] },
   chats: new FakeChats("all"),
   documents: { summary: async () => null, list: async () => [] },
+  reasoning: new ChatReasoningStore(
+    new MemoryReasoningRows(),
+    new FieldCrypto(new InMemoryKeyStore()),
+  ),
 });
 const env = { ANTHROPIC_API_KEY: "sk-test-not-real", DOCMIND_CHAT_ENVELOPE_KEY: KEY };
 
@@ -34,6 +47,14 @@ function prepare(over: Record<string, string> = {}, withLlm = true) {
 }
 
 describe("prepareChat", () => {
+  it("gives the chat model effect the reasoning store and the hub's live sink, so Loom's boot warning has nobody to name", () => {
+    const effect = prepare().prepared.deps.effects[CHAT_MODEL_TOOL_ID] as unknown as {
+      reasoning?: { capable: boolean; posture(): string };
+    };
+    expect(effect.reasoning?.capable).toBe(true);
+    expect(effect.reasoning?.posture()).toBe("keeps"); // not "unconfigured": the boot warning needs that
+  });
+
   it("registers the five tools and, with a key, the model effect; never anything else", () => {
     expect(Object.keys(prepare().prepared.deps.effects).sort()).toEqual(
       [...CHAT_EFFECT_IDS].sort(),

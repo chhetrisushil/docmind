@@ -10,21 +10,35 @@
  *  - execution ids are plaintext and survive erasure, so they never contain user content either.
  *
  * M2's only flow (`ingest-document`) has a start input of three UUIDs and a two-value enum output, so
- * it registers nothing. M4 registers the conversation paths below (flow doc-chat), and Task 147b's
- * raw event-log proof fails if a path is missing.
+ * it registers nothing. M4 registers the conversation paths below (flow doc-chat) and the ADR 0133
+ * reasoning paths (Task 162); the raw event-log proof fails if a path is missing.
  */
 export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> = {
-  // M4: a chat conversation (flow doc-chat) writes user text, replies, thinking-free model frames and
+  // M4: a chat conversation (flow doc-chat) writes user text, replies, model reasoning and
   // tool results into the log. Loom already seals the principal, and (inbox on) INBOX_MESSAGE.payload and
   // MESSAGE_CONSUMED.payload. These are the rest. They name content fields only, so ingest events (ids,
   // counts, codes) are untouched and a fold can still read `choice.role|turn|ord|status`. The tool
   // schemas are strict, so a tool frame's `input` holds only the declared keys, and the text ones are here.
   STEP_STARTED: ["input.messages", "input.query", "input.titleContains"],
-  STEP_COMPLETED: ["output.content", "output.toolCalls[].input", "output.value"],
+  STEP_COMPLETED: [
+    "output.content",
+    "output.toolCalls[].input",
+    "output.value",
+    // ADR 0133: the reasoning parts of a model frame (signature, textRef with its size, digest) and the vendor's
+    // block order (text lengths). A signature carries the model's encrypted reasoning; the digest of a short
+    // summary would let a reader of the log guess it. \`STEP_STARTED.input.messages\` above already seals the
+    // assistant reasoning parts that later requests send back. toolCalls[].signature is Gemini's (absent for Claude).
+    "output.reasoning",
+    "output.layout",
+    "output.toolCalls[].signature",
+  ],
   DECISION_RECORDED: ["choice.text", "choice.partial", "choice.failed", "choice.error"],
   // Loom writes String(err) here; a tool's collaborator error could carry a query or passage text.
   STEP_FAILED: ["error"],
   EXECUTION_FAILED: ["error"],
+  // ADR 0133: the audit event of a captured reasoning text: references, digests and sizes (stepId, attempt, provider
+  // and model stay readable: ids and a model name).
+  LLM_REASONING_CAPTURED: ["parts"],
   EXECUTION_STARTED: [
     "input.turns[].user",
     "input.turns[].assistant",

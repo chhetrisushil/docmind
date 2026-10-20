@@ -18,6 +18,7 @@ import { CHAT_MODEL_TOOL_ID } from "./ids";
 import type { ChatLlm } from "./llm";
 import { chatModelEffect } from "./model";
 import { chatObserver } from "./observer";
+import type { ChatReasoningStore } from "./reasoningStore";
 import type { PassageReader, Retriever } from "./retrieval";
 import type { ChatSettings } from "./settings";
 import { StopRegistry, stoppableBargeIn } from "./stop";
@@ -32,6 +33,7 @@ export interface ChatCollaborators {
   passages: Pick<PassageReader, "read" | "section">;
   chats: ChatLookup;
   documents: DocumentReads;
+  reasoning: Pick<ChatReasoningStore, "put" | "get" | "readerFor">;
 }
 
 export interface PrepareChatOptions {
@@ -101,6 +103,14 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
       createAgentModelEffect(hub.wrapProvider(o.llm.provider), {
         stream: true,
         onDelta: hub.deltaSink(),
+        // ADR 0133: Loom captures the model's reasoning into OUR store (sealed under the owner's key), streams it
+        // live on the hub, and sends it back within a tool loop.
+        reasoning: {
+          store: c.reasoning,
+          live: true,
+          onDelta: hub.reasoningSink(),
+          model: settings.model,
+        },
       }),
       { items: c.items, bus, shutdown: shutdown.signal },
     );
@@ -125,6 +135,7 @@ export interface ChatWiring {
   bus: ChatBus;
   stops: StopRegistry;
   items: ChatCollaborators["items"];
+  reasoning: Pick<ChatReasoningStore, "readerFor">;
   reader: ConversationReader;
   /** False without an API key: create and send answer 503 `chat_unavailable` (D12). */
   available: boolean;
@@ -152,6 +163,7 @@ export function connectChat(
     bus: p.bus,
     stops: p.stops,
     items: p.collaborators.items,
+    reasoning: p.collaborators.reasoning,
     reader: conversations.reader,
     available: p.available,
     settings: p.settings,
