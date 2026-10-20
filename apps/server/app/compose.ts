@@ -2,6 +2,7 @@ import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
+import type { EventEnvelope } from "@loom/core";
 import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { ReadModelStore } from "@loom/plugin-read-model";
@@ -9,6 +10,7 @@ import type { Pool } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
+import { ChatActivity } from "./chats/activity";
 import type { ChatLlm } from "./chats/llm";
 import { pgCollaborators } from "./chats/pgCollaborators";
 import type { ChatSettings } from "./chats/settings";
@@ -68,7 +70,9 @@ export interface ComposeOptions {
  */
 export function buildServer(options: ComposeOptions) {
   const { pool, keys, limits } = options;
-  const feed: { onEvent?: IngestStatus["onEvent"] } = {}; // the model is built after defineConfig, which the sensitive map needs; onEvent reaches it through this holder
+  type Sink = (event: EventEnvelope) => void;
+  // The sinks are built after defineConfig (the sensitive map needs it); onEvent reaches them through this holder.
+  const feed: { sinks: Sink[] } = { sinks: [] };
   const fields = new FieldCrypto(keys);
   // The per-identity blob store, built the same way for the routes and the ingest source.
   const blobs = ({ tenantId, userId }: Identity) =>
@@ -110,17 +114,35 @@ export function buildServer(options: ComposeOptions) {
   const app = buildApp(options.storage, options.crypto, {
     ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
     ...(chatParts && { chat: chatParts.deps }),
-    onEvent: (event) => feed.onEvent?.(event),
+    onEvent: (event) => {
+      for (const sink of feed.sinks) {
+        try {
+          sink(event);
+        } catch (err) {
+          // One sink's failure never reaches Loom or the other sinks. Class only.
+          console.error(
+            "event sink failed",
+            err instanceof Error ? err.constructor.name : typeof err,
+          );
+        }
+      }
+    },
   });
   const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
+  const sensitive = statusSensitive(flowSteps(), options.status.source);
   const status = new IngestStatus({
     writer: options.status.writer,
     readerFor: options.status.readerFor,
     source: options.status.source,
-    sensitive: statusSensitive(flowSteps(), options.status.source),
+    sensitive,
     bus: options.ingest.bus,
   });
-  feed.onEvent = status.onEvent;
+  const activity = new ChatActivity({
+    writer: options.status.writer,
+    source: options.status.source,
+    sensitive,
+  });
+  feed.sinks = [status.onEvent, activity.onEvent];
   const ingest = options.wrapIngest
     ? options.wrapIngest(loomIngest(app.runtime))
     : loomIngest(app.runtime);
@@ -164,13 +186,14 @@ export function buildServer(options: ComposeOptions) {
     vectors,
     bus: options.ingest.bus,
     status,
+    activity,
     /** The chat wiring; absent when `options.chat` is. No route is mounted from it yet (Task 149). */
     chat,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
-    /** Stops feeding the model; shutdown calls it before `status.close()` so a late event is not folded onto closing pools. */
+    /** Stops feeding the models; shutdown calls it before `status.close()` and `activity.close()` so a late event is not folded onto closing pools. */
     detachStatusFeed: () => {
-      feed.onEvent = undefined;
+      feed.sinks = [];
     },
   };
 }

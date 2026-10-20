@@ -25,6 +25,14 @@ describe("bootStatus", () => {
     expect(JSON.stringify(logged.mock.calls)).not.toContain(ID);
   });
 
+  it("takes a label for another model", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      bootStatus({ boot: () => Promise.reject(new RangeError("x")) }, [], "chat activity"),
+    ).rejects.toThrow(/^chat activity failed to boot$/);
+    expect(logged).toHaveBeenCalledWith("chat activity failed", "RangeError");
+  });
+
   it("runs every cleanup step in order even when one rejects, and still throws the boot error", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const order: string[] = [];

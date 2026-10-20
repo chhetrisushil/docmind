@@ -49,7 +49,18 @@ export async function bootIngest(
   parts: BootIngestParts,
 ): Promise<{ stop(): Promise<void>; recoveryIdle(): Promise<void> }> {
   const { built, ingest, durable, pool, listen, recoveryOwner, background = true } = parts;
-  const { app, store, throttle, starts, status, vectors, events, detachStatusFeed, chat } = built;
+  const {
+    app,
+    store,
+    throttle,
+    starts,
+    status,
+    activity,
+    vectors,
+    events,
+    detachStatusFeed,
+    chat,
+  } = built;
   const cleanup = [
     () => closeIngest(ingest),
     () => app.close(),
@@ -61,6 +72,7 @@ export async function bootIngest(
   await verifyVectors(vectors, cleanup);
   // Register, then catch up on what the log holds, before anything is served (ADR 0132 D13).
   await bootStatus(status, cleanup);
+  await bootStatus(activity, cleanup, "chat activity");
   // Hash the decoy now so the first unknown-email login is not measurably slower.
   await primeDecoy();
 
@@ -124,7 +136,10 @@ export async function bootIngest(
             ...(chat && { closeChat: () => chat.close() }),
             closeHeartbeat: () => app.runtime.closeHeartbeat(),
             detachStatusFeed,
-            closeStatus: () => status.close(),
+            closeStatus: async () => {
+              await status.close();
+              await activity.close();
+            },
             closeApp: () => app.close(),
             closeDurable: () => durable.close(),
             endPool: () => pool.end(),
