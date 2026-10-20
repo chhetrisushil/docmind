@@ -20,7 +20,7 @@ const HOW_TO_WORK = `How to work
 - You have a limited number of steps for each question. Once you can answer, answer. After at most four rounds of tool calls, answer with what you have.`;
 
 const CITING = `Citations
-- Every factual claim you take from a document ends with a citation marker, [[passageId]], using the exact passageId a tool returned. Put the marker right after the claim, for example: Revenue grew four percent [[0b6f3c1e-8f0a-4a39-9d57-1f2a5c7e9b10]]. Cite several passages with several markers.
+- Every factual claim you take from a document ends with a citation marker, [[passageId]], using the exact passageId a tool returned. Put the marker right after the claim, for example: Revenue grew four percent [[00000000-0000-0000-0000-000000000000]]. Cite several passages with several markers.
 - Never invent, change or guess a passageId. Never cite a passage you were not given in this conversation. Never use a documentId or a title in place of a passageId.
 - Do not show a passageId anywhere except inside [[ ]] markers.`;
 
@@ -83,6 +83,12 @@ export interface ChatFlowConfig {
 export function chatFlow(config: ChatFlowConfig): ConversationFlow {
   if (config.key.length < 32)
     throw new RangeError("the chat envelope key must be at least 32 characters");
+  if (config.previousKeys?.some((k) => k.length < 32))
+    throw new RangeError("every previous chat envelope key must be at least 32 characters");
+  if (!Number.isSafeInteger(config.contextTokens) || config.contextTokens <= 0)
+    throw new RangeError("contextTokens must be a positive safe integer");
+  if (!Number.isSafeInteger(config.maxTokens) || config.maxTokens <= 0)
+    throw new RangeError("maxTokens must be a positive safe integer");
   const gk = config.generalKnowledge;
   return conversation$(
     {

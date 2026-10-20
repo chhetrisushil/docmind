@@ -117,4 +117,22 @@ describe("stoppableBargeIn", () => {
     un();
     expect(off).toHaveBeenCalledOnce();
   });
+
+  it("a stop while the inner subscribe is still pending reaches onMessage, and unsubscribing leaves no listener", async () => {
+    const stops = new StopRegistry();
+    const unsubscribed = vi.fn();
+    let release!: (off: () => void) => void;
+    const source: BargeInSource = () =>
+      new Promise<() => void>((r) => {
+        release = r;
+      });
+    const h = handlers();
+    const pending = stoppableBargeIn(source, stops)(CONV, "o", h);
+    expect(stops.stop(CONV)).toBe(true);
+    expect(h.onMessage).toHaveBeenCalledOnce();
+    release(unsubscribed);
+    const off = await pending;
+    off();
+    expect([unsubscribed.mock.calls.length, stops.running(CONV)]).toEqual([1, false]);
+  });
 });
