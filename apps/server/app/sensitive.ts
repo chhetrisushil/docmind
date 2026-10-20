@@ -9,7 +9,23 @@
  *    before its path is registered stays readable in the clear forever;
  *  - execution ids are plaintext and survive erasure, so they never contain user content either.
  *
- * M2's only flow (`ingest-document`, Task 53) has a start input of three UUIDs and a two-value enum
- * output, so nothing is registered yet; Task 53's tests fail if that stops being true.
+ * M2's only flow (`ingest-document`) has a start input of three UUIDs and a two-value enum output, so
+ * it registers nothing. M4 registers the conversation paths below (flow doc-chat), and Task 147b's
+ * raw event-log proof fails if a path is missing.
  */
-export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> = {};
+export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> = {
+  // M4: a chat conversation (flow doc-chat) writes user text, replies, thinking-free model frames and
+  // tool results into the log. Loom already seals the principal, and (inbox on) INBOX_MESSAGE.payload and
+  // MESSAGE_CONSUMED.payload. These are the rest. They name content fields only, so ingest events (ids,
+  // counts, codes) are untouched and a fold can still read `choice.role|turn|ord|status`. The tool
+  // schemas are strict, so a tool frame's `input` holds only the declared keys, and the text ones are here.
+  STEP_STARTED: ["input.messages", "input.query", "input.titleContains"],
+  STEP_COMPLETED: ["output.content", "output.toolCalls[].input", "output.value"],
+  DECISION_RECORDED: ["choice.text", "choice.partial", "choice.failed", "choice.error"],
+  EXECUTION_STARTED: [
+    "input.turns[].user",
+    "input.turns[].assistant",
+    "input.summary",
+    "input.pending",
+  ],
+};

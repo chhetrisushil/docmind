@@ -408,11 +408,16 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
     for (const step of INGEST_STEPS) expect(step.outputSchema).toBe(StepResult);
   });
 
-  it("marks nothing sensitive, and so registers no event paths", () => {
+  it("ingest marks nothing; the map holds only the conversation event types", () => {
     expect(sensitivePathsFromSteps(ingestDocumentFlow.definition.steps)).toEqual({});
     // If a content-bearing field is ever added to this flow, register it in the same PR and update
     // this expectation: an event written before its path is registered stays readable forever.
-    expect(SENSITIVE_EVENT_PATHS).toEqual({});
+    expect(Object.keys(SENSITIVE_EVENT_PATHS).sort()).toEqual([
+      "DECISION_RECORDED",
+      "EXECUTION_STARTED",
+      "STEP_COMPLETED",
+      "STEP_STARTED",
+    ]);
   });
 
   it("keeps the execution id free of content: u_<user>:ingest-<document uuid>.<generation> only", () => {
