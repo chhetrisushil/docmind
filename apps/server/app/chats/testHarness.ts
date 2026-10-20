@@ -18,7 +18,7 @@ import { type FakeConversations, fakeConversations } from "./fakeConversations";
 import { chatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
 import { ChatReasoningStore } from "./reasoningStore";
-import { type ChatRouteDeps, chatRoutes } from "./routes";
+import { type ChatRouteDeps, type ChatTitleTrigger, chatRoutes } from "./routes";
 import { chatTitleBind, insertChat, setTitle } from "./sessions";
 import type { ChatSettings } from "./settings";
 import { StopRegistry } from "./stop";
@@ -44,7 +44,7 @@ export interface ChatHarness {
 
 /** A migrated database, two tenants, the chat routes over the fake conversations, on 127.0.0.1. */
 export async function startChatServer(
-  o: { available?: boolean; pageCap?: number } = {},
+  o: { available?: boolean; pageCap?: number; titles?: ChatTitleTrigger } = {},
 ): Promise<ChatHarness> {
   const db = await createTestDb();
   await migrate(db.owner);
@@ -80,6 +80,7 @@ export async function startChatServer(
     chat: wiring,
     eventStore: fake.eventStore,
     reasoning,
+    ...(o.titles && { titles: o.titles }),
   };
   const server = createHttpServer({ ...chatRoutes(deps) });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

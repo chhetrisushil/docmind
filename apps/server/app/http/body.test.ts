@@ -14,6 +14,10 @@ const server = createHttpServer({
     const body = await readJson(req, res, Echo);
     if (body) json(res, 200, body);
   },
+  "POST /big": async (req, res) => {
+    const body = await readJson(req, res, Echo, { maxBytes: 40 * 1024 });
+    if (body) json(res, 200, { name: body.name.length });
+  },
   "POST /whoami": (req, res) =>
     json(res, 200, { contentType: req.headers["content-type"] ?? null }),
   "POST /kind": async (req, res) => {
@@ -108,5 +112,20 @@ describe("readJson", () => {
   it("accepts a body of exactly 16 KiB and refuses one byte more", async () => {
     expect((await post(nameBody(16_384))).status).toBe(200);
     expect((await post(nameBody(16_385))).status).toBe(413);
+  });
+});
+
+describe("readJson with a larger cap", () => {
+  it("accepts a body between the default cap and the route's own", async () => {
+    const res = await post(nameBody(20 * 1024), "application/json", "/big");
+    expect(res.status).toBe(200);
+  });
+  it("still refuses a body over the route's cap, by its declared length and with the connection closed", async () => {
+    const res = await post(nameBody(41 * 1024), "application/json", "/big");
+    expect(res.status).toBe(413);
+    expect(res.headers.get("connection")).toBe("close");
+  });
+  it("keeps the default cap for a route that does not ask", async () => {
+    expect((await post(nameBody(20 * 1024))).status).toBe(413);
   });
 });
