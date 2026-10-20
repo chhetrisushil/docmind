@@ -105,8 +105,7 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
         "STEP_STARTED:input.query",
       ]),
     );
-    // The thinking was really stored (so the scan above is not vacuous for it), and only the owner's key was used.
-    expect(JSON.stringify(stack.blocks.puts)).toContain(THINKING);
+    // Only the owner's key was used. THINKING stays in SECRETS: from Task 162 Loom records it in the log, sealed.
     expect([...stack.subjects]).toEqual([U]);
     // The same log, read through the decrypting store, is the conversation.
     const history = await stack.chat.reader.read(CONV, { limit: 50 });

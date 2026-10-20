@@ -97,7 +97,7 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
     documents: c.documents,
   });
   if (o.llm) {
-    o.llm.observer.current = chatObserver({ items: c.items, blocks: c.blocks, bus });
+    o.llm.observer.current = chatObserver({ items: c.items });
     effects[CHAT_MODEL_TOOL_ID] = chatModelEffect(
       createAgentModelEffect(hub.wrapProvider(o.llm.provider), {
         stream: true,
