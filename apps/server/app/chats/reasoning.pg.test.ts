@@ -62,7 +62,7 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/reasoning (needs DOCMIND_TEST_PG_UR
     expect(await (await get("alice2", chatId, "?cursor=0.2")).text()).not.toContain("Private");
   });
 
-  it("is 404 for a user message, an unknown cursor and a cursor of another turn without reasoning, and 400 for a missing or malformed cursor", async () => {
+  it("is 404 for a user message and an unknown cursor, and 400 for a missing or malformed cursor", async () => {
     const chatId = await seedChat(h, ALICE);
     const cursor = await seedReasoning(h, ALICE, chatId, 1, "Some reasoning for the first reply.");
     const history = (await (

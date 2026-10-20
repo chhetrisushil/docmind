@@ -108,6 +108,7 @@ describe.skipIf(!PG_URL)(
       answers.push(await h.req("alice", "GET", `/api/chats/${chatId}/stream`));
       expect(answers.map((r) => r.status)).toEqual([404, 404, 404, 404, 404]);
       expect(h.wiring.hub.subscriberCount(convOf(chatId))).toBe(0);
+      expect(h.wiring.bus.subscriberCount(chatId)).toBe(0);
     });
 
     it("requires a session", async () => {
