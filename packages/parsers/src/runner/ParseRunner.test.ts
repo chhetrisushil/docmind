@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -151,12 +152,16 @@ describe("ParseRunner", () => {
   });
 
   it("refuses a read one directory above the bundle (the grant is its directory only)", async () => {
+    // The target exists (so ENOENT is not an acceptable outcome): packages/parsers/package.json.
+    expect(existsSync(resolve(__dirname, "../../package.json"))).toBe(true);
     expect((await runner().run("escape-up", bytes("x"))).text).toBe("ERR_ACCESS_DENIED");
     released();
   });
 
   it("refuses a bare import the parent did not map (no node_modules resolution)", async () => {
-    await expect(runner().run("bare", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
+    // zod is installed (hostile.cjs sits under packages/parsers), so MODULE_NOT_FOUND would be a false pass.
+    expect(existsSync(resolve(__dirname, "../../node_modules/zod/package.json"))).toBe(true);
+    expect((await runner().run("bare", bytes("x"))).text).toBe("ERR_ACCESS_DENIED");
     released();
   });
 

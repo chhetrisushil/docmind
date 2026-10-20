@@ -1,19 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { MAX_PDF_PAGES, pdfParser, rejectionOf } from "./pdf";
 import { ParseRunner } from "./runner/ParseRunner";
 import { runDocumentParserConformance } from "./testing/conformance";
 
 const fixture = (name: string) =>
   new Uint8Array(readFileSync(join(__dirname, "../test-fixtures", name)));
-
-// pdf.js prints a non-fatal standardFontDataUrl warning; keep the test output clean.
-beforeAll(() => {
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  vi.spyOn(console, "log").mockImplementation(() => {});
-});
-afterAll(() => vi.restoreAllMocks());
 
 runDocumentParserConformance(
   () => pdfParser,

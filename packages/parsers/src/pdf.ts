@@ -10,11 +10,18 @@ import {
 
 export const MAX_PDF_PAGES = 5000;
 
-// unpdf's typings omit these pdf.js options, which are accepted at run time.
+// unpdf's typings omit these pdf.js options, which are accepted at run time. Nothing is fetched or
+// loaded from disk: no font data or CMap URLs, no system fonts, no font-face injection, and no
+// console output (verbosity 0 silences the non-fatal missing-font-data warnings).
+// `isEvalSupported: false` is defence in depth: this pdf.js build has no eval path to disable.
 const PDF_OPTIONS = {
   isEvalSupported: false,
   useSystemFonts: false,
   disableFontFace: true,
+  standardFontDataUrl: undefined,
+  cMapUrl: undefined,
+  cMapPacked: false,
+  verbosity: 0,
 } as Parameters<typeof getDocumentProxy>[1];
 
 /** pdf.js signals by error name; nothing it says is kept. */
@@ -24,7 +31,7 @@ export const rejectionOf = (err: unknown): ParseRejectCode =>
     : "corrupt_content";
 
 /**
- * PDF (spec 5.3) with unpdf (pdf.js, in-thread, eval off, no system fonts). A page section per page
+ * PDF (spec 5.3) with unpdf (pdf.js, in-thread, no system fonts, no external font or CMap data). A page section per page
  * with text; pages with no text layer are listed as media so the parse step can send them to vision
  * (M3b D8). No rendering happens here: it would need a native canvas.
  */

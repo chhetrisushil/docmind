@@ -186,11 +186,12 @@ exports.parsers.push(
     },
   },
   {
-    // package.json one directory above the bundle: outside the grant (dist/child).
+    // packages/parsers/package.json, two directories above the bundle (cwd is dist/child): it exists
+    // and lies outside the grant, so the only possible failure is the permission denial.
     id: "escape-up",
     accepts: () => true,
     parse: () => {
-      const file = require("node:path").resolve(process.cwd(), "..", "package.json");
+      const file = require("node:path").resolve(process.cwd(), "..", "..", "package.json");
       try {
         require("node:fs").readFileSync(file);
         return ok("READ");
@@ -202,7 +203,15 @@ exports.parsers.push(
   {
     id: "bare",
     accepts: () => true,
-    parse: () => ({ text: String(require("fs-extra")), sections: [], media: [] }),
+    // zod is installed for packages/parsers, so the module exists: only the permission model can refuse it.
+    parse: () => {
+      try {
+        require("zod");
+        return ok("LOADED");
+      } catch (e) {
+        return ok(e.code);
+      }
+    },
   },
   {
     id: "close3spin",
