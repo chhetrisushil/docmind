@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   ChatMessageDto,
+  ChatReasoningDto,
   ChatSessionDto,
   ChatStreamEvent,
   CitationLocator,
   CreateChatRequest,
   Locator,
   PatchChatRequest,
+  ReasoningQuery,
+  ReasoningResponse,
   SendMessageRequest,
   SendMessageResponse,
   StopChatResponse,
@@ -52,7 +55,8 @@ describe("chat contracts", () => {
         snippet: "...",
       },
     ],
-    thinking: "Looking for the Q3 figures.",
+    cursor: "0.12",
+    reasoning: { text: "Looking for the Q3 figures.", kind: "summary" },
     steps: [{ name: "search_docs", label: 'Searched documents: "Q3"', count: 8 }],
     outcome: null,
     createdAt: "2026-10-18T10:00:00.000Z",
@@ -77,11 +81,77 @@ describe("chat contracts", () => {
     expect(CitationLocator.safeParse({ kind: "heading" }).success).toBe(false);
   });
 
-  it("describes a message with its turn, status, thinking, steps and outcome", () => {
+  it("describes a message with its turn, status, reasoning, steps, outcome and cursor", () => {
     expect(ChatMessageDto.parse(message)).toEqual(message);
     expect(
-      ChatMessageDto.parse({ ...message, outcome: "max_iterations", thinking: null }).outcome,
+      ChatMessageDto.parse({ ...message, outcome: "max_iterations", reasoning: null }).outcome,
     ).toBe("max_iterations");
+    for (const reasoning of [
+      { text: "", kind: "redacted" },
+      { text: "", kind: "text", status: "erased" },
+      { text: "", kind: "text", status: "digest-mismatch", truncated: true },
+    ]) {
+      expect(ChatMessageDto.parse({ ...message, reasoning }).reasoning).toEqual(reasoning);
+      expect(ChatReasoningDto.parse(reasoning)).toEqual(reasoning);
+    }
+  });
+
+  it("refuses a reasoning kind or status it does not know, a missing cursor and the old thinking field's shape", () => {
+    for (const bad of [
+      { reasoning: { text: "x", kind: "thought" } },
+      { reasoning: { text: "x", kind: "summary", status: "lost" } },
+      { reasoning: { text: "x", kind: "summary", truncated: false } },
+      { reasoning: "plain string" },
+      { cursor: "" },
+    ]) {
+      expect(ChatMessageDto.safeParse({ ...message, ...bad }).success).toBe(false);
+    }
+    const { cursor: _cursor, ...noCursor } = message;
+    expect(ChatMessageDto.safeParse(noCursor).success).toBe(false);
+  });
+
+  it("parses Loom's durable reasoning body and refuses an unknown part status", () => {
+    const body = {
+      steps: [
+        {
+          stepId: "conv#o1#turn:0",
+          recordedAttempt: 1,
+          attempts: [
+            {
+              attempt: 1,
+              provider: "anthropic",
+              model: "claude-opus-5-5",
+              recorded: true,
+              parts: [
+                { kind: "summary", status: "ok", text: "Looking." },
+                { kind: "redacted", status: "redacted" },
+              ],
+            },
+          ],
+        },
+      ],
+      truncated: true,
+    };
+    expect(ReasoningResponse.parse(body)).toEqual(body);
+    expect(ReasoningResponse.parse({ steps: [] })).toEqual({ steps: [] });
+    const bad = {
+      steps: [
+        {
+          stepId: "conv#o1#turn:0",
+          attempts: [
+            {
+              attempt: 1,
+              provider: "anthropic",
+              recorded: true,
+              parts: [{ kind: "summary", status: "lost" }],
+            },
+          ],
+        },
+      ],
+    };
+    expect(ReasoningResponse.safeParse(bad).success).toBe(false);
+    expect(ReasoningQuery.parse({ cursor: "0.12" })).toEqual({ cursor: "0.12" });
+    expect(ReasoningQuery.safeParse({}).success).toBe(false);
   });
 
   it("refuses a message id that is not a decimal ordinal, an unknown status, outcome or tool", () => {
@@ -134,11 +204,12 @@ describe("chat contracts", () => {
     const events = [
       { kind: "status", state: "open", running: false, turns: 0 },
       { kind: "message", message },
-      { kind: "thinking", turnKey: 3, text: "..." },
+      { kind: "reasoning", turn: 3, text: "..." },
+      { kind: "reasoning-partial", turn: 3, text: "so far" },
       { kind: "tool", turnKey: 3, step: message.steps[0] },
+      { kind: "tool-reset", turnKey: 5 },
       { kind: "answer", turn: 3, text: "The" },
       { kind: "reset", turn: 3 },
-      { kind: "reset", turnKey: 5 },
       { kind: "closed" },
       { kind: "error", code: "internal" },
     ];
@@ -146,6 +217,15 @@ describe("chat contracts", () => {
     expect(ChatStreamEvent.safeParse({ kind: "delta", text: "x" }).success).toBe(false);
     expect(ChatStreamEvent.safeParse({ kind: "error" }).success).toBe(false);
     expect(ChatStreamEvent.safeParse({ kind: "error", code: "boom" }).success).toBe(false);
-    expect(ChatStreamEvent.safeParse({ kind: "thinking", turn: 3, text: "x" }).success).toBe(false);
+    expect(ChatStreamEvent.safeParse({ kind: "thinking", turnKey: 3, text: "x" }).success).toBe(
+      false,
+    );
+    expect(ChatStreamEvent.safeParse({ kind: "reasoning", turnKey: 3, text: "x" }).success).toBe(
+      false,
+    );
+    expect(ChatStreamEvent.safeParse({ kind: "reasoning", turn: 0, text: "x" }).success).toBe(
+      false,
+    );
+    expect(ChatStreamEvent.safeParse({ kind: "reset", turnKey: 5 }).success).toBe(false);
   });
 });

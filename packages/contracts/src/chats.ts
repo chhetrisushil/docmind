@@ -70,6 +70,23 @@ export type ChatMessageStatus = z.infer<typeof ChatMessageStatus>;
 export const ChatOutcome = z.enum(["refusal", "max_tokens", "max_iterations"]);
 export type ChatOutcome = z.infer<typeof ChatOutcome>;
 
+/** What kind of reasoning this is: a `summary` is never presented as the full chain of thought; `redacted` carries no text (loom-ui `ChatReasoningKind`). */
+export const ChatReasoningKind = z.enum(["text", "summary", "redacted"]);
+export type ChatReasoningKind = z.infer<typeof ChatReasoningKind>;
+
+/**
+ * A reply's reasoning as history shows it: the recorded attempts' texts folded into one (Loom ADR 0133, loom-ui
+ * `chatReasoningFromDurable`). Absent `status` means the text was read and its digest checked. Model output derived
+ * from untrusted input: text only.
+ */
+export const ChatReasoningDto = z.object({
+  text: z.string().max(40_000),
+  kind: ChatReasoningKind,
+  status: z.enum(["erased", "digest-mismatch"]).optional(),
+  truncated: z.literal(true).optional(),
+});
+export type ChatReasoningDto = z.infer<typeof ChatReasoningDto>;
+
 export const ChatMessageDto = z.object({
   /** The conversation record's ordinal, in decimal: the history cursor and the stream event id. */
   id: z.string().regex(/^(0|[1-9][0-9]{0,14})$/),
@@ -79,8 +96,10 @@ export const ChatMessageDto = z.object({
   text: z.string(),
   status: ChatMessageStatus,
   citations: z.array(Citation),
-  /** The summarized thinking of an assistant turn, or `null`. */
-  thinking: z.string().nullable(),
+  /** Loom's history cursor of this record, `<generation>.<sequence>`: the SSE `id:` of its `message` frame and what `GET /api/chats/:id/reasoning?cursor=` takes. */
+  cursor: Cursor,
+  /** The model's reasoning for an assistant turn, or `null` (none kept, or a user message). */
+  reasoning: ChatReasoningDto.nullable(),
   steps: z.array(ChatToolStep),
   outcome: ChatOutcome.nullable(),
   createdAt: IsoDateTime,
@@ -96,6 +115,37 @@ export const ListMessagesResponse = z.object({
   nextCursor: Cursor.nullable(),
 });
 export type ListMessagesResponse = z.infer<typeof ListMessagesResponse>;
+
+/** `GET /api/chats/:id/reasoning?cursor=<a reply's cursor>`. */
+export const ReasoningQuery = z.object({ cursor: Cursor });
+export type ReasoningQuery = z.infer<typeof ReasoningQuery>;
+
+const ReasoningPartDto = z.object({
+  kind: ChatReasoningKind,
+  /** `redacted`: the vendor withheld it; `erased`: removed on purpose; `digest-mismatch`: the stored text no longer matches its record. */
+  status: z.enum(["ok", "redacted", "erased", "digest-mismatch"]),
+  text: z.string().optional(),
+});
+const ReasoningAttemptDto = z.object({
+  attempt: z.number().int().nonnegative(),
+  provider: z.string(),
+  model: z.string().optional(),
+  recorded: z.boolean(),
+  parts: z.array(ReasoningPartDto),
+});
+
+/** Loom's `/reasoning` body, unchanged: loom-ui folds it. Superseded attempts are kept; `recorded` marks the one the step used. */
+export const ReasoningResponse = z.object({
+  steps: z.array(
+    z.object({
+      stepId: z.string(),
+      recordedAttempt: z.number().int().nonnegative().optional(),
+      attempts: z.array(ReasoningAttemptDto),
+    }),
+  ),
+  truncated: z.literal(true).optional(),
+});
+export type ReasoningResponse = z.infer<typeof ReasoningResponse>;
 
 /**
  * `POST /api/chats/:id/messages`. The reply arrives on the SSE stream. `messageId` makes a retry of
@@ -127,13 +177,14 @@ export type PatchChatRequest = z.infer<typeof PatchChatRequest>;
 const Count = z.number().int().nonnegative();
 
 /**
- * What `GET /api/chats/:id/stream` sends, for the web client. On the wire the SSE `event:` is `kind`
- * and `data:` is the rest of the object as JSON. `message` is durable (its SSE id is the message id);
- * the others are live and carry no id.
+ * What `GET /api/chats/:id/stream` sends, for the web client. On the wire the SSE `event:` is `kind` and `data:` is
+ * the rest of the object as JSON. `message` is durable (its SSE id is the message's `cursor`); the others are live
+ * and carry no id.
  *
- * Two turn numbers exist and a live event carries exactly the one it came with: `turn` is the hub's
- * accepted-turn number (`answer`, and `reset` from the hub); `turnKey` is the bus's turn key
- * (`thinking`, `tool`, and `reset` from the bus). They are not convertible from a live event alone.
+ * `reasoning`, `reasoning-partial` and `reset` are loom-ui's `ChatFeed` events exactly (`{turn, text}`, `{turn}`):
+ * `turn` is the hub's accepted-turn number, the same one as `answer` and `ChatMessageDto.turn`. `tool` and
+ * `tool-reset` come from DocMind's `ChatBus`, which numbers by the turn key (`turnKey`, what the side table uses);
+ * the two numbers are not convertible from a live event, so each frame keeps the name of the one it carries.
  */
 export const ChatStreamEvent = z.discriminatedUnion("kind", [
   z.object({
@@ -143,10 +194,16 @@ export const ChatStreamEvent = z.discriminatedUnion("kind", [
     turns: Count,
   }),
   z.object({ kind: z.literal("message"), message: ChatMessageDto }),
-  z.object({ kind: z.literal("thinking"), turnKey: Count, text: z.string() }),
+  z.object({ kind: z.literal("reasoning"), turn: z.number().int().min(1), text: z.string() }),
+  z.object({
+    kind: z.literal("reasoning-partial"),
+    turn: z.number().int().min(1),
+    text: z.string(),
+  }),
   z.object({ kind: z.literal("tool"), turnKey: Count, step: ChatToolStep }),
+  z.object({ kind: z.literal("tool-reset"), turnKey: Count }),
   z.object({ kind: z.literal("answer"), turn: Count, text: z.string() }),
-  z.object({ kind: z.literal("reset"), turn: Count.optional(), turnKey: Count.optional() }),
+  z.object({ kind: z.literal("reset"), turn: Count }),
   z.object({ kind: z.literal("closed") }),
   z.object({
     kind: z.literal("error"),
