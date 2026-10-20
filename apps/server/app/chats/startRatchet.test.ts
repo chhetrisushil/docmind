@@ -51,13 +51,23 @@ function scanStarts(files: string[], virtual = new Map<string, string>()) {
   };
   const idOk = (arg: ts.Expression | undefined): boolean => {
     if (!arg || !ts.isObjectLiteralExpression(arg)) return false;
-    return arg.properties.some(
-      (p) =>
-        ts.isPropertyAssignment(p) &&
-        ts.isIdentifier(p.name) &&
-        p.name.text === "conversationId" &&
-        ts.isCallExpression(p.initializer) &&
-        isChatConversationId(p.initializer.expression),
+    const named = (n: string) =>
+      arg.properties.some(
+        (p) =>
+          (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+          ts.isIdentifier(p.name) &&
+          p.name.text === n,
+      );
+    return (
+      named("principal") &&
+      arg.properties.some(
+        (p) =>
+          ts.isPropertyAssignment(p) &&
+          ts.isIdentifier(p.name) &&
+          p.name.text === "conversationId" &&
+          ts.isCallExpression(p.initializer) &&
+          isChatConversationId(p.initializer.expression),
+      )
     );
   };
   const visit = (node: ts.Node) => {
@@ -131,8 +141,16 @@ describe("Conversations.start", () => {
   it("passes for every start in the real sources, and finds the create route's", () => {
     const found = scanStarts(sources());
     expect(found.filter((c) => !c.ok).map((c) => c.at)).toEqual([]);
-    expect(found.length).toBeGreaterThanOrEqual(1);
-    expect(found.map((c) => c.at.replace(/:\d+$/, ""))).toContain("chats/routes.ts");
+    // P8: exactly one start in the whole program, in the create route.
+    expect(found.map((c) => c.at.replace(/:\d+$/, ""))).toEqual(["chats/routes.ts"]);
+  });
+
+  it("flags a start without a principal", () => {
+    expect(
+      snippet("await c.start({ conversationId: chatConversationId(user, chat) });").map(
+        (c) => c.ok,
+      ),
+    ).toEqual([false]);
   });
 
   it("flags a start whose callee only looks like chatConversationId", () => {
