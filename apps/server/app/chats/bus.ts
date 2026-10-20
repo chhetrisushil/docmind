@@ -47,7 +47,7 @@ export class ChatBus {
 
   publish(chatId: string, e: LiveChatEvent): void {
     if (e.kind === "thinking") this.append(chatId, e.turnKey, e.text);
-    else if (e.kind === "reset") this.partials.delete(chatId);
+    else if (e.kind === "reset") this.end(chatId, e.turnKey);
     for (const fn of [...(this.subs.get(chatId) ?? [])]) {
       try {
         fn(e);

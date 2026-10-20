@@ -83,6 +83,71 @@ describe("chatModelEffect on the real EffectRuntime (the probe)", () => {
 });
 
 describe("chatModelEffect behaviour", () => {
+  it("forwards every key of the inner effect except execute (reasoningSink, resourceOf, ...)", () => {
+    const sink = () => {};
+    const inner = {
+      kind: "llm",
+      idempotent: true,
+      reasoning: { supported: true },
+      reasoningSink: sink,
+      resourceOf: () => "r",
+      execute: async () => ({ content: "", stopReason: "end_turn" }),
+    } as unknown as Effect<AgentModelCall, LlmResponse>;
+    const wrapped = chatModelEffect(inner, { items: new FakeItems(), bus: new ChatBus() });
+    for (const k of Object.keys(inner).filter((k) => k !== "execute"))
+      expect(k in wrapped).toBe(true);
+    const s = setup();
+    const own = (e: object) =>
+      Object.getOwnPropertyNames(Object.getPrototypeOf(e)).filter(
+        (k) => k !== "constructor" && k !== "execute",
+      );
+    for (const k of own(s.inner)) expect(k in s.effect).toBe(true);
+  });
+
+  it("on shutdown a failing max_tokens put does not fail the step: it stays pending", async () => {
+    const stop = new AbortController();
+    const inner: Effect<AgentModelCall, LlmResponse> = {
+      kind: "llm",
+      async execute() {
+        stop.abort();
+        return { content: "x", stopReason: "max_tokens" };
+      },
+    };
+    const items = {
+      put: async () => {
+        throw new RangeError("db down");
+      },
+      remove: async () => {},
+    };
+    const effect = chatModelEffect(inner, { items, bus: new ChatBus(), shutdown: stop.signal });
+    const SENTINEL = Symbol("sentinel");
+    const sentinel = new Promise<typeof SENTINEL>((resolve) =>
+      setTimeout(() => resolve(SENTINEL), 0),
+    );
+    const winner = await Promise.race([
+      effect.execute(CALL, modelCtx()).then(
+        () => "settled",
+        () => "settled",
+      ),
+      sentinel,
+    ]);
+    expect(winner).toBe(SENTINEL);
+  });
+
+  it("a retried attempt drops the earlier attempt's thinking row, and keeps other frames' rows", async () => {
+    const s = setup();
+    await s.items.put({} as never, 3, "conv#o3#turn:1", {
+      kind: "thinking",
+      body: { text: "old" },
+    });
+    await s.items.put({} as never, 3, "conv#o3#turn:0", {
+      kind: "thinking",
+      body: { text: "earlier frame" },
+    });
+    await s.runtime.execute("chat-model", CALL, modelCtx({ attempt: 2 }));
+    expect(s.items.puts.map((p) => p.stepKey)).toEqual(["conv#o3#turn:0"]);
+  });
+
   it("refuses a call outside a chat conversation before the provider is reached", async () => {
     const s = setup();
     await expect(

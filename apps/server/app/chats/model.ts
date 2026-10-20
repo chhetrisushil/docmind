@@ -6,7 +6,7 @@ import { chatScope, scopeOfEffect } from "./scope";
 import type { PgTurnItems } from "./turnItems";
 
 export interface ChatModelDeps {
-  items: Pick<PgTurnItems, "put">;
+  items: Pick<PgTurnItems, "put" | "remove">;
   bus: Pick<ChatBus, "publish">;
   /** Aborted by `ChatWiring.close()`: cuts an in-flight model call and leaves the step un-completed. */
   shutdown?: AbortSignal;
@@ -26,36 +26,44 @@ export function chatModelEffect(
   inner: Effect<AgentModelCall, LlmResponse>,
   deps: ChatModelDeps,
 ): Effect<AgentModelCall, LlmResponse> {
-  const { deltaSink, warm } = inner;
-  return {
-    kind: inner.kind,
-    ...(inner.idempotent !== undefined && { idempotent: inner.idempotent }),
-    ...(inner.errors !== undefined && { errors: inner.errors }),
-    ...(inner.mode !== undefined && { mode: inner.mode }),
-    ...(warm && { warm: () => warm.call(inner) }),
-    ...(deltaSink && { deltaSink: (chunk, ctx) => deltaSink.call(inner, chunk, ctx) }),
+  const wrapper: Record<string, unknown> = {};
+  // Every capability of the inner effect (own or inherited from a class, e.g. reasoning, reasoningSink,
+  // resourceOf), methods bound to it; only `execute` is replaced.
+  for (let o: object | null = inner; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const key of Object.getOwnPropertyNames(o)) {
+      if (key === "execute" || key === "constructor" || key in wrapper) continue;
+      const v = (inner as unknown as Record<string, unknown>)[key];
+      wrapper[key] = typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(inner) : v;
+    }
+  }
+  return Object.assign(wrapper, {
     async execute(input: AgentModelCall, ctx: EffectContext): Promise<LlmResponse> {
       const scope = scopeOfEffect(ctx); // throws ChatScopeError before anything is sent
       // A retried attempt starts the stream over: tell the listeners to drop what they showed.
       if (ctx.attempt > 1)
         deps.bus.publish(scope.chatId, { kind: "reset", turnKey: scope.turnKey });
       const call = withShutdown(ctx, deps.shutdown);
+      // During shutdown whatever fails leaves the step un-completed, as after a crash.
+      const interrupted = () => deps.shutdown?.aborted === true && ctx.signal?.aborted !== true;
       let response: LlmResponse;
       try {
+        // The retried attempt's response replaces the earlier one: drop its stale thinking row.
+        if (ctx.attempt > 1)
+          await deps.items.remove(scope, scope.turnKey, scope.stepKey, "thinking");
         response = await chatScope.run(scope, () => inner.execute(input, call));
+        if (response.stopReason === "max_tokens") {
+          await deps.items.put(scope, scope.turnKey, scope.stepKey, {
+            kind: "outcome",
+            body: { kind: "max_tokens" },
+          });
+        }
       } catch (err) {
-        if (deps.shutdown?.aborted === true && ctx.signal?.aborted !== true) return INTERRUPTED;
+        if (interrupted()) return INTERRUPTED;
         throw err;
-      }
-      if (response.stopReason === "max_tokens") {
-        await deps.items.put(scope, scope.turnKey, scope.stepKey, {
-          kind: "outcome",
-          body: { kind: "max_tokens" },
-        });
       }
       return response;
     },
-  };
+  } as Effect<AgentModelCall, LlmResponse>);
 }
 
 /** The context with the shutdown signal merged into the call's own, so the provider stream is cut. */

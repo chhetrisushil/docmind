@@ -202,6 +202,26 @@ describe.skipIf(!PG_URL)("chat turn items (needs DOCMIND_TEST_PG_URL)", () => {
       ).rejects.toMatchObject({ constraint: "chat_turn_items_kind_check" });
     });
 
+    it("removes exactly one item, owner-scoped: others' rows, other steps and other kinds stay", async () => {
+      const turn = 710;
+      await items.put(chat, turn, "conv#o710#turn:0", thinking("a"));
+      await items.put(chat, turn, "conv#o710#turn:1", thinking("b"));
+      await items.put(chat, turn, "conv#o710#turn:0", {
+        kind: "outcome",
+        body: { kind: "max_tokens" },
+      });
+      await items.put(theirs, turn, "conv#o710#turn:0", thinking("theirs"));
+      await items.remove(chat, turn, "conv#o710#turn:0", "thinking");
+      await items.remove(theirs, turn, "conv#o710#turn:9", "thinking"); // nothing there: no error
+      expect((await items.forTurns(chat, [turn])).get(turn)).toEqual([
+        thinking("b"),
+        { kind: "outcome", body: { kind: "max_tokens" } },
+      ]);
+      expect((await items.forTurns(theirs, [turn])).get(turn)).toEqual([thinking("theirs")]);
+      await items.remove(chat, -1 + 0, "x", "thinking").catch(() => {});
+      await expect(items.remove(chat, -1, "x", "thinking")).rejects.toBeInstanceOf(RangeError);
+    });
+
     it("goes with its chat: deleting the chat removes the items", async () => {
       const own = await withTenant(fx.app, T1, (tx) => insertChat(tx, T1, U1, randomUUID(), "all"));
       const ref = { tenantId: T1, userId: U1, chatId: own.id };
