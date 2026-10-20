@@ -13,6 +13,7 @@ import type { LlmUsageDetail, ReasoningBlock, RefusalDetails } from "./observer"
 type Open =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; json: string }
+  | { kind: "thinking"; thinking: string; signature: string }
   | { kind: "ignored" };
 
 export interface StreamEnd {
@@ -32,6 +33,15 @@ const obj = (v: unknown): Record<string, unknown> | undefined =>
   typeof v === "object" && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : undefined;
+
+/** `error` event types that blame the request: permanent. Everything else is transient. */
+const PERMANENT = new Set([
+  "invalid_request_error",
+  "authentication_error",
+  "permission_error",
+  "not_found_error",
+  "request_too_large",
+]);
 
 function parseInput(json: string): unknown {
   if (json === "") return {}; // an empty argument object streams as no deltas at all
@@ -90,6 +100,20 @@ export class StreamState {
             { delta: "", done: false, toolDelta: { id: b.id, name: b.name, inputDelta: "" } },
           ];
         }
+        if (b.type === "thinking") {
+          const thinking = typeof b.thinking === "string" ? b.thinking : "";
+          const signature = typeof b.signature === "string" ? b.signature : "";
+          this.#open.set(index, { kind: "thinking", thinking, signature });
+          if (thinking !== "") this.onThinking(thinking);
+          return [];
+        }
+        if (b.type === "redacted_thinking") {
+          if (typeof b.data !== "string") throw new LlmRequestError();
+          this.#sawThinking = true;
+          this.#blocks.push({ type: "redacted_thinking", data: b.data });
+          this.#open.set(index, { kind: "ignored" });
+          return [];
+        }
         this.#open.set(index, { kind: "ignored" });
         return [];
       }
@@ -112,6 +136,23 @@ export class StreamState {
             { delta: "", done: false, toolDelta: { id: open.id, inputDelta: d.partial_json } },
           ];
         }
+        if (
+          open.kind === "thinking" &&
+          d.type === "thinking_delta" &&
+          typeof d.thinking === "string"
+        ) {
+          open.thinking += d.thinking;
+          if (d.thinking !== "") this.onThinking(d.thinking);
+          return [];
+        }
+        if (
+          open.kind === "thinking" &&
+          d.type === "signature_delta" &&
+          typeof d.signature === "string"
+        ) {
+          open.signature += d.signature;
+          return [];
+        }
         return [];
       }
       case "content_block_stop": {
@@ -124,6 +165,14 @@ export class StreamState {
           const input = parseInput(open.json);
           this.#toolCalls.push({ id: open.id, name: open.name, input });
           this.#blocks.push({ type: "tool_use", id: open.id, name: open.name, input });
+        }
+        if (open?.kind === "thinking") {
+          this.#sawThinking = true;
+          this.#blocks.push({
+            type: "thinking",
+            thinking: open.thinking,
+            signature: open.signature,
+          });
         }
         return [];
       }
@@ -139,6 +188,11 @@ export class StreamState {
       case "message_stop":
         this.stopped = true;
         return [];
+      case "error":
+        // The event's message is the model's or the platform's text: never read into an error.
+        throw PERMANENT.has(String(obj(o.error)?.type))
+          ? new LlmRequestError()
+          : new LlmStreamError();
       default:
         return []; // unknown events are ignored: the API adds them over time
     }

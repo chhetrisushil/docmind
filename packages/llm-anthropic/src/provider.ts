@@ -201,6 +201,18 @@ export class AnthropicMessagesProvider implements LlmProvider {
         if (state.stopped) break;
       }
       const end = state.end();
+      if (end.usage !== undefined) observer?.onUsage(end.detail);
+      if (end.refused !== undefined) {
+        if (this.o.refusal !== "report" || !observer) throw new LlmRefusalError();
+        await observer.onRefusal(end.refused);
+      }
+      if (observer && end.sawThinking) {
+        // Once per response that thought, tool calls or not: `[]` ids when it only answered.
+        await observer.onBlocks(
+          end.toolCalls.map((c) => c.id),
+          end.blocks,
+        );
+      }
       yield {
         delta: "",
         done: true,
