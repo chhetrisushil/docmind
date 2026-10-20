@@ -7,13 +7,15 @@ import { followConversation } from "@loom/conversation";
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { buildApp } from "../config";
+import { FieldCrypto } from "../crypto/fields";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
 import { chatConversationId } from "./ids";
 import { createChatLlm } from "./llm";
 import type { Passage } from "./retrieval";
 import { loadChatSettings } from "./settings";
-import { C, FakeItems, T, U } from "./testing";
+import { ChatReasoningStore } from "./reasoningStore";
+import { C, FakeItems, MemoryReasoningRows, T, U } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { type ChatWiring, connectChat, prepareChat } from "./wiring";
 
@@ -24,6 +26,11 @@ export interface ChatStack {
   /** The unsealed log, as Postgres would hold it. */
   raw: InMemoryAsyncEventStore;
   items: FakeItems;
+  /** The decrypting view of the log (what a route reads reasoning through). */
+  events: EncryptingEventStore;
+  reasoning: ChatReasoningStore;
+  /** The sealed rows the reasoning store wrote. */
+  reasoningRows: MemoryReasoningRows;
   /** Every subject a key was requested for: the proof that nothing is sealed under another user. */
   subjects: ReadonlySet<string>;
   start(): Promise<string>;
@@ -79,6 +86,8 @@ export async function startChatStack(o: {
     subjectOf: subjectOfExecution,
   });
   const items = new FakeItems();
+  const reasoningRows = new MemoryReasoningRows();
+  const reasoning = new ChatReasoningStore(reasoningRows, new FieldCrypto(recording));
   const prepared = prepareChat({
     settings,
     ...(llm && { llm }),
@@ -87,6 +96,7 @@ export async function startChatStack(o: {
     ...(o.rotateEveryTurns !== undefined && { rotateEveryTurns: o.rotateEveryTurns }),
     collaborators: {
       items,
+      reasoning,
       retriever: {
         search: async () => {
           if (o.searchError) throw o.searchError;
@@ -107,6 +117,9 @@ export async function startChatStack(o: {
     fake,
     raw,
     items,
+    events,
+    reasoning,
+    reasoningRows,
     subjects,
     async start() {
       const { conversationId } = await chat.conversations.start({

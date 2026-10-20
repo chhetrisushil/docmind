@@ -35,6 +35,68 @@ async function roundTrip(
 }
 
 describe("SENSITIVE_EVENT_PATHS for conversations", () => {
+  it("seals the reasoning parts and layout of a model frame and the references of the capture event, and the store opens them again", async () => {
+    const reasoning = [
+      {
+        type: "reasoning",
+        kind: "summary",
+        provider: "anthropic",
+        signature: "SIG-secret-bytes-0123456789",
+        textRef: { address: "0123456789abcdef0123456789abcdef", size: 41 },
+        digest: "d".repeat(64),
+      },
+    ];
+    const layout = ["reasoning", { call: "toolu_1" }, "reasoning", { call: "toolu_2" }];
+    const captured = {
+      stepId: "conv#o1#turn:0",
+      attempt: 1,
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+      parts: [
+        {
+          kind: "summary",
+          ref: "0123456789abcdef0123456789abcdef",
+          digest: "d".repeat(64),
+          size: 41,
+        },
+      ],
+    };
+    const { raw, plain } = await roundTrip(EXEC, [
+      {
+        eventType: "STEP_COMPLETED",
+        payload: {
+          stepId: "conv#o1#turn:0",
+          output: {
+            content: "a",
+            toolCalls: [{ id: "toolu_1", name: "search_docs", input: { query: "q" } }],
+            stopReason: "tool_use",
+            reasoning,
+            layout,
+          },
+        },
+      },
+      { eventType: "LLM_REASONING_CAPTURED", payload: captured },
+    ]);
+    const out = (raw[0]?.payload as { output: Record<string, unknown> }).output;
+    expect([isSealed(out.reasoning), isSealed(out.layout), out.stopReason]).toEqual([
+      true,
+      true,
+      "tool_use",
+    ]);
+    const cap = raw[1]?.payload as Record<string, unknown>;
+    expect(isSealed(cap.parts)).toBe(true);
+    // ids and a model name stay readable: no content
+    expect([cap.stepId, cap.attempt, cap.provider, cap.model]).toEqual([
+      "conv#o1#turn:0",
+      1,
+      "anthropic",
+      "claude-opus-5-5",
+    ]);
+    const back = (plain[0]?.payload as { output: { reasoning: unknown; layout: unknown } }).output;
+    expect([back.reasoning, back.layout]).toEqual([reasoning, layout]);
+    expect((plain[1]?.payload as { parts: unknown }).parts).toEqual(captured.parts);
+  });
+
   it("seals the message text and leaves the record's shape readable, and the store opens it again", async () => {
     const record = {
       turn: 1,

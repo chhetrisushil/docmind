@@ -4,6 +4,8 @@ import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import type { DocumentStatusReads } from "../status/ingestStatus";
+import { PgReasoningRows } from "./pgReasoningRows";
+import { ChatReasoningStore } from "./reasoningStore";
 import { LinkReader, PassageReader, Retriever } from "./retrieval";
 import { getChat } from "./sessions";
 import { PgDocumentReads } from "./tools/pgDocumentReads";
@@ -37,5 +39,6 @@ export function pgCollaborators(o: {
           ?.scope ?? null,
     },
     documents: new PgDocumentReads(o.pool, o.fields, o.status),
+    reasoning: new ChatReasoningStore(new PgReasoningRows(o.pool), o.fields),
   };
 }
