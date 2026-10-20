@@ -33,6 +33,8 @@ export interface RetrieverDeps {
   passages: Pick<PassageReader, "read">;
   links: Pick<LinkReader, "from">;
   hops: 0 | 1 | 2;
+  /** Called when a hop step failed and the search degraded: the hop and the error's constructor name only (a message can carry an entity name). */
+  onHopError?: (hop: 1 | 2, errorClass: string) => void;
 }
 
 /**
@@ -97,7 +99,11 @@ export class Retriever {
       });
     // Hop failure policy: links and target vectors are an enrichment of the seeds, so a failure in any
     // hop step (an unreadable entity name, a database error) degrades to what was gathered so far
-    // (seeds-only if hop 1 failed) rather than failing the search. An abort still propagates.
+    // (seeds-only if hop 1 failed; hop 1 kept if only hop 2 failed) rather than failing the search, and
+    // is reported through onHopError with the error class only. Not degraded: an abort (rethrown after
+    // the block, since the readers take no signal) and TypeError/RangeError/ReferenceError, which are
+    // programmer errors and must surface.
+    let hop: 1 | 2 = 1;
     let hop1: LinkHop[] = [];
     let hop2: LinkHop[] = [];
     try {
@@ -106,6 +112,7 @@ export class Retriever {
         await targets(first);
         hop1 = first;
       }
+      hop = 2;
       if (this.deps.hops >= 2 && hop1.length > 0) {
         const frontier = hop2Frontier({ seeds, hop1, ownSim: sims });
         if (frontier.length > 0) {
@@ -115,9 +122,14 @@ export class Retriever {
         }
       }
     } catch (err) {
-      if (signal?.aborted) throw err;
+      signal?.throwIfAborted();
+      if (err instanceof TypeError || err instanceof RangeError || err instanceof ReferenceError) {
+        throw err;
+      }
+      this.deps.onHopError?.(hop, err instanceof Error ? err.constructor.name : "unknown");
       hop2 = []; // hop 1 is kept only if it completed (assigned above after its targets were read)
     }
+    signal?.throwIfAborted();
     const nodes = expandHops({ seeds, hop1, hop2, ownSim: sims });
     const picked = mmr(
       nodes.flatMap((n) => {
