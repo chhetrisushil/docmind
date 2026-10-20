@@ -6,6 +6,7 @@ import {
   LlmStreamError,
   LlmUnavailableError,
 } from "./errors";
+import { mapStopReason, refusalDetailsOf, usageDetail } from "./mapping";
 import { type CallObserver, type ReasoningBlock, coversToolUses } from "./observer";
 import { EFFORTS, type Effort, toMessagesBody, toolUseGroups } from "./request";
 import { parseResponse } from "./response";
@@ -164,18 +165,27 @@ export class AnthropicMessagesProvider implements LlmProvider {
     try {
       const text = await readCapped(res, this.o.maxResponseBytes ?? DEFAULT_MAX_RESPONSE);
       const parsed = parseResponse(text);
-      if (parsed.stop_reason === "refusal") throw new LlmRefusalError();
+      const refused = parsed.stopReason === "refusal";
+      for (const t of parsed.thinking) if (t !== "") observer?.onThinking(t);
+      if (parsed.usage) observer?.onUsage(usageDetail(parsed.usage));
+      if (refused) {
+        if (this.o.refusal !== "report" || !observer) throw new LlmRefusalError();
+        await observer.onRefusal(refusalDetailsOf(parsed.stopDetails));
+      }
+      const toolCalls = refused ? [] : parsed.toolCalls;
+      if (observer && !refused && parsed.sawThinking) {
+        // Once per response that thought, tool calls or not: `[]` ids when it only answered.
+        await observer.onBlocks(
+          toolCalls.map((c) => c.id),
+          parsed.blocks,
+        );
+      }
       return {
-        content: parsed.content
-          .filter((b) => b.type === "text")
-          .map((b) => b.text ?? "")
-          .join(""),
-        stopReason: parsed.stop_reason === "max_tokens" ? "max_tokens" : "end_turn",
+        content: parsed.text,
+        ...(toolCalls.length > 0 && { toolCalls }),
+        stopReason: mapStopReason(parsed.stopReason),
         ...(parsed.usage && {
-          usage: {
-            inputTokens: parsed.usage.input_tokens,
-            outputTokens: parsed.usage.output_tokens,
-          },
+          usage: { inputTokens: parsed.usage.input ?? 0, outputTokens: parsed.usage.output ?? 0 },
         }),
       };
     } catch (err) {

@@ -323,3 +323,187 @@ describe("request options and the observer", () => {
     );
   });
 });
+
+describe("complete(): tool calls, reasoning blocks, usage detail and refusal", () => {
+  const message = (content: unknown[], over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      id: "msg_t",
+      type: "message",
+      role: "assistant",
+      content,
+      stop_reason: "end_turn",
+      stop_details: null,
+      usage: { input_tokens: 5, output_tokens: 7 },
+      ...over,
+    });
+  const reply = (rawBody: string) => fake.reply(() => ({ status: 200, rawBody }));
+
+  it("returns tool calls with stopReason tool_use and the text of the text blocks only", async () => {
+    reply(
+      message(
+        [
+          { type: "text", text: "Looking." },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
+          { type: "tool_use", id: "toolu_2", name: "list_documents" },
+          { type: "server_tool_use", id: "srv_1", name: "ignored", input: {} },
+        ],
+        { stop_reason: "tool_use" },
+      ),
+    );
+    expect(await provider().complete(HI)).toEqual({
+      content: "Looking.",
+      toolCalls: [
+        { id: "toolu_1", name: "search_docs", input: { query: "x" } },
+        { id: "toolu_2", name: "list_documents", input: {} },
+      ],
+      stopReason: "tool_use",
+      usage: { inputTokens: 5, outputTokens: 7 },
+    });
+  });
+
+  it("gives the observer thinking, usage detail (null cache fields are 0) and the blocks, in that order, and keeps thinking out of content", async () => {
+    reply(
+      message(
+        [
+          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
+          { type: "redacted_thinking", data: "ENC" },
+          { type: "text", text: "answer" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+        ],
+        {
+          stop_reason: "tool_use",
+          usage: {
+            input_tokens: 5,
+            output_tokens: 7,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: null,
+          },
+        },
+      ),
+    );
+    const rec = recordingObserver();
+    const res = await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
+    expect(res.content).toBe("answer");
+    expect(rec.log).toEqual(["thinking", "usage", "blocks"]);
+    expect(rec.thinking).toEqual(["Let me think"]);
+    expect(rec.usage).toEqual([
+      { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 0 },
+    ]);
+    expect(rec.blocks).toEqual([
+      {
+        ids: ["toolu_1"],
+        blocks: [
+          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
+          { type: "redacted_thinking", data: "ENC" },
+          { type: "text", text: "answer" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+        ],
+      },
+    ]);
+  });
+
+  it("hands the full ordered blocks to onBlocks with no ids for a thinking response without a tool call, and calls it for none otherwise", async () => {
+    reply(
+      message([
+        { type: "thinking", thinking: "t", signature: "S" },
+        { type: "text", text: "a" },
+      ]),
+    );
+    const rec = recordingObserver();
+    await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
+    expect(rec.blocks).toEqual([
+      {
+        ids: [],
+        blocks: [
+          { type: "thinking", thinking: "t", signature: "S" },
+          { type: "text", text: "a" },
+        ],
+      },
+    ]);
+    reply(message([{ type: "text", text: "plain" }]));
+    const quiet = recordingObserver();
+    await provider({ thinking: true, observer: () => quiet.observer }).complete(HI);
+    expect(quiet.blocks).toEqual([]);
+  });
+
+  it("keeps an interleaved thinking, tool_use, thinking, tool_use response in order", async () => {
+    reply(
+      message(
+        [
+          { type: "thinking", thinking: "a", signature: "S1" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+          { type: "thinking", thinking: "b", signature: "S2" },
+          { type: "tool_use", id: "toolu_2", name: "related", input: {} },
+        ],
+        { stop_reason: "tool_use" },
+      ),
+    );
+    const rec = recordingObserver();
+    await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
+    expect(rec.blocks[0]?.ids).toEqual(["toolu_1", "toolu_2"]);
+    expect(rec.blocks[0]?.blocks.map((b) => b.type)).toEqual([
+      "thinking",
+      "tool_use",
+      "thinking",
+      "tool_use",
+    ]);
+  });
+
+  it("reports a refusal to the observer in report mode: end_turn, text kept, no tool calls, no blocks", async () => {
+    reply(
+      message(
+        [
+          { type: "thinking", thinking: "t", signature: "S" },
+          { type: "text", text: "I can't help" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+        ],
+        {
+          stop_reason: "refusal",
+          stop_details: { type: "refusal", category: "cyber", explanation: "why" },
+        },
+      ),
+    );
+    const rec = recordingObserver();
+    const res = await provider({
+      thinking: true,
+      refusal: "report",
+      observer: () => rec.observer,
+    }).complete(HI);
+    expect(res).toEqual({
+      content: "I can't help",
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 7 },
+    });
+    expect(rec.refusals).toEqual([{ category: "cyber", explanation: "why" }]);
+    expect(rec.blocks).toEqual([]);
+  });
+
+  it("still throws LlmRefusalError in throw mode, with no stop_details text in the error", async () => {
+    reply(
+      message([], {
+        stop_reason: "refusal",
+        stop_details: { type: "refusal", explanation: "SECRET-WHY" },
+      }),
+    );
+    const err = await provider()
+      .complete(HI)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmRefusalError);
+    expect(JSON.stringify([(err as Error).message, (err as Error).stack])).not.toContain(
+      "SECRET-WHY",
+    );
+  });
+
+  it("refuses malformed blocks and usage with a fixed LlmRequestError", async () => {
+    for (const rawBody of [
+      message([{ type: "tool_use", name: "x", input: {} }]),
+      message([{ type: "thinking", thinking: "t" }]),
+      message([{ type: "redacted_thinking" }]),
+      message([{ type: "text", text: 5 }]),
+      message([], { usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: -3 } }),
+    ]) {
+      reply(rawBody);
+      await expect(provider().complete(HI)).rejects.toBeInstanceOf(LlmRequestError);
+    }
+  });
+});
