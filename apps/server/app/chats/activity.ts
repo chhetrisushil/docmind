@@ -17,19 +17,27 @@ export { CHAT_ACTIVITY_MODEL };
  * record seals only strings (`choice.text` ...), so its lifted set holds no numbers, but a user can type any text, an
  * epoch-ms string included. So `lastAt` is the event's epoch milliseconds PLUS 0.5: never an integer, so the
  * integer-to-string check never applies. Readers subtract 0.5 (`listChats`). One row per conversation generation;
- * `messages` counts that generation only. `lastOrd` is informational (the highest turn key seen), NOT a dedupe guard:
+ * `n` (messages) counts that generation only. The keys are 5 characters or fewer on purpose: the guard also lifts
+ * every object KEY under a sealed path and only strings of 6+ characters, so a user message that is exactly
+ * "messages" cannot match one. `o` (lastOrd) is informational (the highest turn key seen), NOT a dedupe guard:
  * Loom's per-execution sequence watermark makes each event fold exactly once.
  */
 export interface ChatActivityState {
-  messages: number;
-  lastOrd: number;
-  lastAt: number | null;
+  /** Messages in this generation. */
+  n: number;
+  /** The highest turn key seen. */
+  o: number;
+  /** The last event's epoch milliseconds + 0.5, or null. */
+  at: number | null;
 }
 export const INITIAL_ACTIVITY: ChatActivityState = {
-  messages: 0,
-  lastOrd: 0,
-  lastAt: null,
+  n: 0,
+  o: 0,
+  at: null,
 };
+
+/** The state of an execution that is not a chat conversation: no key and no value (see the ingest model). */
+const NEUTRAL = {} as ChatActivityState;
 
 export const chatKeyOf = (executionId: string): string | undefined =>
   chatIdOfConversation(executionId)?.chatId;
@@ -73,25 +81,30 @@ export function recordOf(e: EventEnvelope): RecordFact | undefined {
 
 type Handler = (state: ChatActivityState, event: EventEnvelope) => ChatActivityState;
 
+const chatOnly =
+  (handler: Handler): Handler =>
+  (s, e) =>
+    isChatExecution(e.executionId) ? handler(s, e) : NEUTRAL;
+
 export const activityHandlers = {
   // The row exists from the start of the execution.
-  EXECUTION_STARTED: (s) => s,
-  DECISION_RECORDED: (s, e) => {
+  EXECUTION_STARTED: chatOnly((s) => s),
+  DECISION_RECORDED: chatOnly((s, e) => {
     const fact = recordOf(e);
     if (!fact || fact.status === "rejected") return s;
     return {
-      messages: s.messages + 1,
-      lastOrd: Math.max(s.lastOrd, fact.ord),
-      lastAt: Number.isFinite(e.timestamp) ? e.timestamp + 0.5 : s.lastAt,
+      n: s.n + 1,
+      o: Math.max(s.o, fact.ord),
+      at: Number.isFinite(e.timestamp) ? e.timestamp + 0.5 : s.at,
     };
-  },
+  }),
 } satisfies Record<string, Handler>;
 
 /** The durable fold. Bump `version` when a handler's meaning changes: Loom re-folds at boot. */
 export const chatActivity = projection$<ChatActivityState>({
   id: CHAT_ACTIVITY_MODEL,
   name: "ChatActivity",
-  version: "1",
+  version: "2",
   initialState: INITIAL_ACTIVITY,
   handlers: activityHandlers,
 });

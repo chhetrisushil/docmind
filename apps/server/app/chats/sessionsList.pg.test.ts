@@ -39,7 +39,7 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
         `u_${user}.c-${chatId}${gen ? `~${gen}` : ""}`,
         chatId,
         user,
-        JSON.stringify({ messages, lastOrd: messages - 1, lastAt: Date.parse(lastAt) + 0.5 }),
+        JSON.stringify({ n: messages, o: messages - 1, at: Date.parse(lastAt) + 0.5 }),
       ],
     );
 

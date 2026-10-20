@@ -80,7 +80,22 @@ const isTerminal = (s: IngestStatusState): boolean => s.status === "failed" || s
 
 type Handler = (state: IngestStatusState, event: EventEnvelope) => IngestStatusState;
 
-export const ingestHandlers = {
+/**
+ * The state of an execution that is not an ingest one. Loom folds EVERY execution for every folded model (a chat
+ * and a chat-title execution too), and its sensitive-state guard refuses a state holding a string of 6+ characters
+ * or an object key that equals one lifted from a sealed path (a user message "uploaded", a tool output's `status`
+ * key). An empty object has no key and no value, so nothing can match. It is never read: such a row has a NULL key
+ * and scope and every reader filters on them.
+ */
+const NEUTRAL = {} as IngestStatusState;
+
+/** A handler that folds ingest executions only; any other execution gets the neutral state. */
+const ingestOnly =
+  (handler: Handler): Handler =>
+  (s, e) =>
+    isIngestExecution(e.executionId) ? handler(s, e) : NEUTRAL;
+
+const rawHandlers = {
   // The row exists from the start of the execution (the stale-upload sweep relies on it).
   EXECUTION_STARTED: (s) => s,
   STEP_STARTED: (s, e) => {
@@ -106,11 +121,19 @@ export const ingestHandlers = {
   EXECUTION_FAILED: (s) => (isTerminal(s) ? s : { ...s, status: "failed", code: "internal" }),
 } satisfies Record<string, Handler>;
 
+export const ingestHandlers: Record<keyof typeof rawHandlers, Handler> = {
+  EXECUTION_STARTED: ingestOnly(rawHandlers.EXECUTION_STARTED),
+  STEP_STARTED: ingestOnly(rawHandlers.STEP_STARTED),
+  STEP_COMPLETED: ingestOnly(rawHandlers.STEP_COMPLETED),
+  EXECUTION_CANCELLED: ingestOnly(rawHandlers.EXECUTION_CANCELLED),
+  EXECUTION_FAILED: ingestOnly(rawHandlers.EXECUTION_FAILED),
+};
+
 /** The durable fold (ADR 0132). Bump `version` when a handler's meaning changes: Loom re-folds at boot. */
 export const ingestStatus = projection$<IngestStatusState>({
   id: INGEST_STATUS_MODEL,
   name: "IngestStatus",
-  version: "2",
+  version: "3",
   initialState: INITIAL_STATUS,
   handlers: ingestHandlers,
 });

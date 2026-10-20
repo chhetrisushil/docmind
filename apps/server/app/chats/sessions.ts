@@ -93,8 +93,8 @@ export async function listChats(
                     'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS sort_cursor
        FROM chat_sessions c
        LEFT JOIN LATERAL (
-         SELECT sum((s.state ->> 'messages')::int)::int AS messages,
-                max(to_timestamp(((s.state ->> 'lastAt')::double precision - 0.5) / 1000)) AS last_at
+         SELECT sum((s.state ->> 'n')::int)::int AS messages,
+                max(to_timestamp(((s.state ->> 'at')::double precision - 0.5) / 1000)) AS last_at
            FROM read_model_state s
           WHERE s.model_id = $5 AND s.app_key = c.id::text AND s.scope = c.user_id::text
             AND NOT s.erased AND s.state IS NOT NULL) a ON true

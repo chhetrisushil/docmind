@@ -172,9 +172,9 @@ export async function seedChat(
         id,
         who.userId,
         JSON.stringify({
-          messages: o.messages,
-          lastOrd: o.messages,
-          lastAt: o.lastAt === undefined ? null : Date.parse(o.lastAt) + 0.5,
+          n: o.messages,
+          o: o.messages,
+          at: o.lastAt === undefined ? null : Date.parse(o.lastAt) + 0.5,
         }),
       ],
     );

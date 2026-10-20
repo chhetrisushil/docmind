@@ -87,6 +87,7 @@ export class IngestStatus implements DocumentStatusReads {
    * The publish userId comes from the execution id, never from client input.
    */
   onEvent = (event: EventEnvelope): void => {
+    if (!isIngestExecution(event.executionId)) return; // chat and title executions are not this model's
     this.service.handleEvent(event);
     const derived = progressOf(event);
     if (derived === null) return;

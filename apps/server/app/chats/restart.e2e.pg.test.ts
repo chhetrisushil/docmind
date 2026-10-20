@@ -2,13 +2,15 @@ import { rmSync } from "node:fs";
 import {
   ChatMessageDto,
   ChatSessionDto,
+  ListChatsResponse,
+  ListDocumentsResponse,
   ListMessagesResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
-import { DOC, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
+import { DOC, SIG, collectUntil, hasToolResult, isReply, scriptChat } from "./e2eSupport";
 
 describe.skipIf(!PG_URL)(
   "M4 acceptance: a restarted server continues the chat (needs DOCMIND_TEST_PG_URL)",
@@ -114,6 +116,78 @@ describe.skipIf(!PG_URL)(
         kind: "summary",
       });
     }, 120_000);
+
+    it("restarts twice over a chat of state words and document listings: the server boots, the document's status and the chat's count are unchanged", async () => {
+      // A user may type exactly a folded state's key or value, and list_documents lifts objects with a `status`
+      // key into a sealed path: no other model's fold may refuse that, or the next boot refuses to start.
+      const WORDS = ["status", "uploaded", "messages", "lastOrd", "lastAt"];
+      const first = track(await startIngestStack({ chat: true }));
+      const claude1 = first.claude;
+      if (!claude1) throw new Error("no fake Claude");
+      const ada = await first.signUpAndLogIn("ada@example.com");
+      const events = await first.events(ada.cookie);
+      const up = await first.upload(ada.cookie, "terms.txt", Buffer.from(DOC));
+      const documentId = ((await up.json()) as UploadDocumentResponse).document.id;
+      await first.until(events, documentId, (s) => s === "ready" || s === "failed");
+      events.close();
+      claude1.reply((body) => {
+        if (body.model === "title-model") return { text: "Payment due dates" };
+        return hasToolResult(body)
+          ? { stream: { steps: [{ text: "uploaded" }, { stop: "end_turn" }] } }
+          : {
+              stream: {
+                steps: [
+                  { toolUse: { id: "toolu_1", name: "list_documents", input: {} } },
+                  { stop: "tool_use" },
+                ],
+              },
+            };
+      });
+      const chat = ChatSessionDto.parse(
+        await (await first.chatReq(ada.cookie, "POST", "/api/chats", {})).json(),
+      );
+      const stream = await first.openChat(ada.cookie, chat.id);
+      try {
+        for (const text of WORDS) {
+          const sent = await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
+            text,
+          });
+          expect(sent.status).toBe(202);
+          await collectUntil(stream, isReply);
+        }
+      } finally {
+        stream.close();
+      }
+      const observe = async (stack: IngestStack) => {
+        const docs = ListDocumentsResponse.parse(
+          await (await stack.chatReq(ada.cookie, "GET", "/api/documents")).json(),
+        );
+        const chats = ListChatsResponse.parse(
+          await (await stack.chatReq(ada.cookie, "GET", "/api/chats")).json(),
+        );
+        return {
+          status: docs.items.map((d) => [d.id, d.status]),
+          count: chats.items.map((c) => [c.id, c.messageCount]),
+        };
+      };
+      const before = await observe(first);
+      expect(before.status).toEqual([[documentId, "ready"]]);
+      expect(before.count).toEqual([[chat.id, WORDS.length * 2]]);
+
+      let previous: IngestStack = first;
+      for (let restart = 0; restart < 2; restart++) {
+        await previous.close({ keepDb: true });
+        stacks.splice(stacks.indexOf(previous), 1);
+        // startIngestStack rejects when ingest status or chat activity catch-up throws (bootIngest is fatal)
+        previous = track(
+          await startIngestStack({
+            chat: true,
+            resume: { db: first.db, kek: first.kek, root: first.root },
+          }),
+        );
+        expect(await observe(previous)).toEqual(before);
+      }
+    }, 240_000);
 
     it("a restart in the middle of a tool loop keeps the thinking block: the recovered model call sends it back with its text and signature", async () => {
       const errors = vi.spyOn(console, "error");

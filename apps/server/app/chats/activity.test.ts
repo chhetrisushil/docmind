@@ -140,7 +140,7 @@ describe("ChatActivity", () => {
       record(CONV, 3, 1, "reply"),
     );
     await activity.drain();
-    expect((await rows())[0]?.state).toMatchObject({ messages: 2, lastOrd: 1 });
+    expect((await rows())[0]?.state).toMatchObject({ n: 2, o: 1 });
     expect(errors).toEqual([]);
   });
 
@@ -155,7 +155,7 @@ describe("ChatActivity", () => {
     expect(await rows()).toEqual([
       {
         executionId: CONV,
-        state: { messages: 2, lastOrd: 1, lastAt: 1_002.5 },
+        state: { n: 2, o: 1, at: 1_002.5 },
       },
     ]);
   });
@@ -168,7 +168,7 @@ describe("ChatActivity", () => {
       record(CONV, 2, 2, "reply", "failed"),
     );
     await activity.drain();
-    expect((await rows())[0]?.state).toMatchObject({ messages: 2, lastOrd: 2 });
+    expect((await rows())[0]?.state).toMatchObject({ n: 2, o: 2 });
   });
 
   it("keeps one row per generation of a rotated conversation, all under the same chat key", async () => {
@@ -178,7 +178,7 @@ describe("ChatActivity", () => {
     await activity.drain();
     const got = await rows();
     expect(got.map((r) => r.executionId).sort()).toEqual([CONV, `${CONV}~1`]);
-    expect(got.map((r) => r.state.messages).sort()).toEqual([1, 2]);
+    expect(got.map((r) => r.state.n).sort()).toEqual([1, 2]);
   });
 
   it("ignores events of other executions and other decision sources", async () => {
@@ -193,9 +193,7 @@ describe("ChatActivity", () => {
     );
     await activity.drain();
     // Only the chat's own execution has a row, and the other-source decision changed nothing in it.
-    expect(await rows()).toEqual([
-      { executionId: CONV, state: { messages: 0, lastOrd: 0, lastAt: null } },
-    ]);
+    expect(await rows()).toEqual([{ executionId: CONV, state: { n: 0, o: 0, at: null } }]);
   });
 
   it("folds a record whose body is masked, by its decision id alone", async () => {
@@ -205,14 +203,14 @@ describe("ChatActivity", () => {
       record(CONV, 1, 1, "reply", "complete", "[masked]"),
     );
     await activity.drain();
-    expect((await rows())[0]?.state).toMatchObject({ messages: 2 });
+    expect((await rows())[0]?.state).toMatchObject({ n: 2 });
   });
 
   it("boots from the log: what was written before this process started is counted", async () => {
     const { log, activity, rows } = await setup(false);
     log.append(record(CONV, 0, 1, "user"), record(CONV, 1, 1, "reply"));
     await activity.boot();
-    expect((await rows())[0]?.state.messages).toBe(2);
+    expect((await rows())[0]?.state.n).toBe(2);
   });
 
   it("counts a record once when the same envelope is fed twice", async () => {
@@ -221,7 +219,7 @@ describe("ChatActivity", () => {
     feed(evt(CONV, 0, "EXECUTION_STARTED", { input: {} }), user);
     activity.onEvent(user); // the same envelope again
     await activity.drain();
-    expect((await rows())[0]?.state.messages).toBe(1);
+    expect((await rows())[0]?.state.n).toBe(1);
   });
 
   it("boot after live events leaves the count unchanged", async () => {
@@ -239,7 +237,7 @@ describe("ChatActivity", () => {
       onError: () => {},
     });
     await second.boot(); // catch-up over the same log
-    expect((await rows())[0]?.state.messages).toBe(2);
+    expect((await rows())[0]?.state.n).toBe(2);
   });
 
   it("a rotated generation's EXECUTION_STARTED carrying turns adds nothing", async () => {
@@ -250,14 +248,14 @@ describe("ChatActivity", () => {
       }),
     );
     await activity.drain();
-    expect((await rows()).map((r) => r.state.messages)).toEqual([0]);
+    expect((await rows()).map((r) => r.state.n)).toEqual([0]);
   });
 
   const TS = 1_760_000_000_123; // a real 13-digit epoch-ms
   it.each([
     ["its ISO time", new Date(TS).toISOString()],
     ["its epoch ms", String(TS)],
-    ["its stored lastAt", String(TS + 0.5)],
+    ["its stored `at`", String(TS + 0.5)],
   ])(
     "folds a user record whose text equals %s (the sensitive guard cannot trip)",
     async (_n, text) => {
@@ -291,7 +289,7 @@ describe("ChatActivity", () => {
       await activity.drain();
       expect(errors.map((x) => String(x))).toEqual([]);
       const rows = foldedStates((await store.getFoldedByKey?.(CHAT_ACTIVITY_MODEL, [C])) ?? []);
-      expect(rows.map((r) => r.state)).toEqual([{ messages: 1, lastOrd: 1, lastAt: TS + 0.5 }]);
+      expect(rows.map((r) => r.state)).toEqual([{ n: 1, o: 1, at: TS + 0.5 }]);
     },
   );
 });
