@@ -43,7 +43,10 @@ export async function createTestDb(): Promise<TestDb> {
     async drop() {
       await owner.end();
       const dropper = new Pool({ connectionString: PG_URL, max: 1 });
-      await dropper.query(`DROP DATABASE ${name} WITH (FORCE)`);
+      // No FORCE: pg-pool's end() resolves before its sockets close, and FORCE would kill those
+      // closing connections, surfacing 57P01 as an unhandled error in whichever file runs next.
+      // A plain DROP waits for them, and fails loudly (55006) if a test really leaked a client.
+      await dropper.query(`DROP DATABASE ${name}`);
       await dropper.end();
     },
   };
