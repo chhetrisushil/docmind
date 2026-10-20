@@ -6,21 +6,16 @@ import { join } from "node:path";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { Pool } from "pg";
-import { closeSequence } from "../closeSequence";
+import { bootIngest } from "../bootIngest";
 import { buildServer } from "../compose";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, type TestDb, createTestDb } from "../db/testSupport";
 import { closeIngest, createIngestWiring } from "../flows/ingest-document/limits";
-import { startRecovery } from "../flows/ingest-document/recovery";
-import { verifyVectors } from "../flows/ingest-document/verifyVectors";
-import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "../shutdown";
-import { bootStatus } from "../status/boot";
+import { runAll } from "../shutdown";
 import { pgStatusReaderFor, pgStatusWriter } from "../status/pgStores";
 import { type DurableStorage, openDurableStorage } from "../storage";
 import { loadBlobRoot, loadLimits } from "./limits";
-import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./sweep";
-import { startSweeper } from "./sweeper";
 import { openSse } from "./testHarness";
 
 const PASSWORD = "correct horse battery";
@@ -116,27 +111,29 @@ export async function startIngestStack(): Promise<IngestStack> {
       },
       // no `vectors`: the production PgChunkVectorStore over the real chunks table
     });
-    const { server, status, starts, events, vectors } = composed;
+    const { server } = composed;
     cleanups.unshift(() => composed.app.close());
 
-    // main's boot order: the schema must fit the embedder, then the status model registers and catches up.
-    await verifyVectors(vectors, []);
-    await bootStatus(status, []);
-    const recovery = startRecovery(composed.app.runtime, durable.storage.eventStore, {
-      ...(durable.storage.leaseStore && {
-        leases: { store: durable.storage.leaseStore, owner: randomUUID() },
-      }),
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const sweeper = startSweeper({
+    // The same boot function main uses; the stack binds an ephemeral port.
+    const boot = await bootIngest({
+      built: composed,
+      ingest: wiring,
+      durable,
       pool: app,
-      starts,
-      status,
-      olderThanMs: STALE_UPLOAD_MS,
-      lookbackMs: SWEEP_LOOKBACK_MS,
-      limit: SWEEP_BATCH,
+      recoveryOwner: randomUUID(),
+      listen: () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+      drainServer: async (then) => {
+        try {
+          await new Promise<void>((resolve) => {
+            server.close(() => resolve());
+            server.closeAllConnections();
+          });
+        } finally {
+          await then();
+        }
+      },
     });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
     async function signUpAndLogIn(email: string) {
       // The acceptance suite signs up more users from one address than the sign-up throttle allows.
@@ -199,26 +196,8 @@ export async function startIngestStack(): Promise<IngestStack> {
         failStarts++;
       },
       async close() {
-        // main's stop(): timers, then open streams, then the server drain, then the close sequence.
-        recovery.stop();
-        const sweeperStopped = sweeper.stop();
-        events.closeAll();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-          server.closeAllConnections();
-        });
-        await drainWithin(sweeperStopped, SHUTDOWN_DRAIN_MS);
-        const steps = closeSequence({
-          startsIdle: () => starts.idle(),
-          closeIngest: () => closeIngest(wiring),
-          closeHeartbeat: () => composed.app.runtime.closeHeartbeat(),
-          detachStatusFeed: composed.detachStatusFeed,
-          closeStatus: () => status.close(),
-          closeApp: () => composed.app.close(),
-          closeDurable: () => durable.close(),
-          endPool: () => app.end(),
-        });
-        await runAll(...steps, () => fake.close());
+        // main's stop(): timers, open streams, the server drain, then the close sequence.
+        await runAll(boot.stop, () => fake.close());
         await db.drop();
         rmSync(root, { recursive: true, force: true });
       },
