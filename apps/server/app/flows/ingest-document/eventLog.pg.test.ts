@@ -16,7 +16,7 @@ import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
 import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
 import { filenameBind, insertDocument, titleBind } from "../../documents/repo";
-import { T1, U1, newDocument, twinOverPgChunks } from "../../documents/testHarness";
+import { T1, U1, newDocument, twinOverPgChunks, twoPagePdf } from "../../documents/testHarness";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
@@ -611,33 +611,6 @@ describe.skipIf(!PG_URL)(
   },
 );
 
-/** A two-page PDF: page 1 has the text layer `text`, page 2 has none (a scan, read by vision). */
-const twoPagePdf = (text: string): Buffer => {
-  const stream = `BT /F1 18 Tf 20 100 Td (${text}) Tj ET`;
-  const page = (contents: number) =>
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents ${contents} 0 R /Resources << /Font << /F1 6 0 R >> >> >>`;
-  const objs = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
-    page(5),
-    page(7),
-    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    "<< /Length 0 >>\nstream\n\nendstream",
-  ];
-  let out = "%PDF-1.4\n";
-  const offsets = objs.map((o, i) => {
-    const at = out.length;
-    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
-    return at;
-  });
-  const xref = out.length;
-  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
-  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(out, "latin1");
-};
-
 describe.skipIf(!PG_URL)(
   "the event log of a keyed ingest of every format holds no content (needs DOCMIND_TEST_PG_URL)",
   () => {
@@ -645,7 +618,7 @@ describe.skipIf(!PG_URL)(
     const DOCX = "Heliotrope procurement addendum covering the Osprey contract";
     const PNG_TEXT = "Cormorant shipping manifest, container seven";
     const PNG_DESC = "A photographed manifest lying on a wooden desk.";
-    const PDF_TEXT = "Tamarind";
+    const PDF_TEXT = "Tamarind chutney invoice";
     const PDF_SCAN = "Bittern inspection certificate, second page";
     const TLDR = "Summary marker: the Wombat reorganisation is complete";
     const TITLE = "Distinctive title Quillfeather";
