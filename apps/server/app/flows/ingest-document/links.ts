@@ -56,11 +56,10 @@ export function buildLinks(input: LinkInput): Link[] {
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Case-insensitive whole-phrase title matches; one link per (chunk, target). */
-export function findReferences(
-  chunks: { id: string; text: string }[],
+/** Compiles one whole-phrase, case-insensitive pattern per usable title, once; the returned function matches a batch of chunks. */
+export function referenceMatcher(
   titles: { title: string; firstChunkId: string }[],
-): { chunkId: string; targetChunkId: string }[] {
+): (chunks: { id: string; text: string }[]) => { chunkId: string; targetChunkId: string }[] {
   const patterns = titles
     .map((t) => ({ ...t, title: t.title.trim() }))
     .filter((t) => t.title.length >= MIN_TITLE_CHARS && !/^\d+$/.test(t.title))
@@ -68,14 +67,22 @@ export function findReferences(
       target: t.firstChunkId,
       re: new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(t.title)}(?![\\p{L}\\p{N}])`, "iu"),
     }));
-  const seen = new Set<string>();
-  const out: { chunkId: string; targetChunkId: string }[] = [];
-  for (const c of chunks)
-    for (const p of patterns) {
-      const key = `${c.id}|${p.target}`;
-      if (seen.has(key) || c.id === p.target || !p.re.test(c.text)) continue;
-      seen.add(key);
-      out.push({ chunkId: c.id, targetChunkId: p.target });
-    }
-  return out;
+  return (chunks) => {
+    const seen = new Set<string>();
+    const out: { chunkId: string; targetChunkId: string }[] = [];
+    for (const c of chunks)
+      for (const p of patterns) {
+        const key = `${c.id}|${p.target}`;
+        if (seen.has(key) || c.id === p.target || !p.re.test(c.text)) continue;
+        seen.add(key);
+        out.push({ chunkId: c.id, targetChunkId: p.target });
+      }
+    return out;
+  };
 }
+
+/** Case-insensitive whole-phrase title matches; one link per (chunk, target). */
+export const findReferences = (
+  chunks: { id: string; text: string }[],
+  titles: { title: string; firstChunkId: string }[],
+): { chunkId: string; targetChunkId: string }[] => referenceMatcher(titles)(chunks);

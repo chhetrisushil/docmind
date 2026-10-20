@@ -5,6 +5,7 @@ import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
 import {
   createIngestWiring,
+  insecureBaseUrlWarning,
   loadEmbedConfig,
   loadGateLimits,
   loadLlmConfig,
@@ -253,5 +254,35 @@ describe("loadSummaryMaxChars", () => {
     expect(() => loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: value })).toThrow(
       /DOCMIND_SUMMARY_MAX_CHARS/,
     );
+  });
+});
+
+describe("insecureBaseUrlWarning", () => {
+  it.each([
+    [undefined],
+    [""],
+    ["https://api.example.com"],
+    ["https://llm.internal:8443/v1"],
+    ["http://localhost:8080"],
+    ["HTTP://LOCALHOST"],
+    ["http://127.0.0.1:9000"],
+    ["http://127.1.2.3"],
+    ["http://[::1]:9000"],
+    ["not a url"], // the provider refuses it with its own message
+  ])("is silent for %j", (url) => {
+    expect(insecureBaseUrlWarning(url)).toBeUndefined();
+  });
+
+  it.each([
+    ["http://llm.internal"],
+    ["http://10.0.0.5:8080/v1"],
+    ["http://192.168.1.20"],
+    ["http://example.com:80"],
+  ])("warns for plain http to %j, without echoing the address", (url) => {
+    const warning = insecureBaseUrlWarning(url);
+    expect(warning).toBe(
+      "ANTHROPIC_BASE_URL is plain http:// to a host that is not this machine: the API key and document text travel unencrypted",
+    );
+    expect(warning).not.toContain("llm.internal");
   });
 });
