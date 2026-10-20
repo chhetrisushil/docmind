@@ -16,6 +16,8 @@ export interface PgVectorOptions {
   tenant: <T>(tenantId: string, fn: (tx: PoolClient) => Promise<T>) => Promise<T>;
   modelId: string;
   dimensions: number;
+  /** `hnsw.ef_search` for every search: the width of the index scan. An integer from 10 to 1000; default 100. */
+  efSearch?: number;
 }
 
 /** The first pgvector with iterative index scans. */
@@ -51,12 +53,39 @@ const literal = (v: readonly number[]) => `[${v.join(",")}]`;
  */
 const JOIN_OWNER = "JOIN documents d ON d.id = c.document_id AND d.tenant_id = c.tenant_id";
 
+/**
+ * The search statement: $1 query vector, $2 owner, $3 model id, $4 limit, $5 largest distance
+ * (1 - minScore), and with `withDocuments` $6 the document ids.
+ *
+ * It is shaped for the HNSW index (`chunks_embedding_hnsw`): the CTE orders by the bare distance
+ * operator, so the planner can walk the index, and `hnsw.iterative_scan = relaxed_order` (set by
+ * `search`) keeps walking until `LIMIT` rows pass the owner, model and document filters. Relaxed order
+ * may emit rows slightly out of order, so the outer query sorts again. The score floor is applied
+ * outside the CTE: a filter on the distance inside it would stop the planner from using the index. It
+ * drops zero vectors too (their cosine distance is NaN, which compares greater than any number).
+ */
+export function searchSql(withDocuments: boolean): string {
+  return `WITH hits AS MATERIALIZED (
+  SELECT c.id, c.embedding <=> $1::vector AS distance
+    FROM chunks c ${JOIN_OWNER}
+   WHERE d.owner_id = $2 AND c.embedding_model = $3
+     ${withDocuments ? "AND c.document_id = ANY($6::uuid[])" : ""}
+   ORDER BY c.embedding <=> $1::vector
+   LIMIT $4)
+SELECT id, 1 - distance AS score FROM hits WHERE distance <= $5 ORDER BY distance, id`;
+}
+
 export class PgChunkVectorStore implements ChunkVectorStore {
   readonly modelId: string;
   readonly dimensions: number;
+  private readonly efSearch: number;
   constructor(private readonly options: PgVectorOptions) {
     this.modelId = options.modelId;
     this.dimensions = options.dimensions;
+    this.efSearch = options.efSearch ?? 100;
+    if (!Number.isInteger(this.efSearch) || this.efSearch < 10 || this.efSearch > 1000) {
+      throw new RangeError("PgChunkVectorStore: efSearch must be an integer from 10 to 1000");
+    }
   }
 
   private check(v: readonly number[]): void {
@@ -124,20 +153,22 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     for (const id of documentIds ?? []) uuid("documentIds", id);
     // Cosine distance of a zero vector is NaN, which Postgres sorts above every number.
     if (limit <= 0 || query.every((x) => x === 0) || documentIds?.length === 0) return [];
-    // Exact scan of the tenant's rows by design until Task 137 (the HNSW index is not used by this SQL).
+    // Iterative scan: keep walking the index until `limit` rows pass the owner, model and document
+    // filters (searchSql). ef_search is at least `limit`; pgvector accepts at most 1000.
+    const ef = Math.min(1000, Math.max(this.efSearch, limit));
     return this.options.tenant(scope.tenantId, async (tx) => {
+      await tx.query(
+        "SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', $1, true)",
+        [String(ef)],
+      );
       const { rows } = await tx.query<{ id: string; score: number }>(
-        `SELECT c.id, 1 - (c.embedding <=> $1::vector) AS score FROM chunks c ${JOIN_OWNER}
-          WHERE d.owner_id = $2 AND c.embedding_model = $3 AND vector_norm(c.embedding) > 0
-            AND 1 - (c.embedding <=> $1::vector) >= $4
-            ${documentIds ? "AND c.document_id = ANY($6::uuid[])" : ""}
-          ORDER BY c.embedding <=> $1::vector, c.id LIMIT $5`,
+        searchSql(documentIds !== undefined),
         [
           literal(query),
           scope.ownerId,
           this.modelId,
-          minScore ?? -1,
           limit,
+          1 - (minScore ?? -1),
           ...(documentIds ? [documentIds] : []),
         ],
       );
