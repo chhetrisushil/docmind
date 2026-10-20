@@ -33,6 +33,8 @@ export interface FakeAnthropic {
   requests: FakeRequest[];
   reply(fn: (body: AnthropicBody) => FakeReply): void;
   failNext(status: number, times?: number): void;
+  /** The next request parks before it is answered: `reached` resolves once it has arrived, `release()` lets it answer. */
+  holdNext(): { reached: Promise<void>; release(): void };
   close(): Promise<void>;
 }
 
@@ -50,6 +52,7 @@ export async function startFakeAnthropic(
   let replyFn: (body: AnthropicBody) => FakeReply = options.reply ?? (() => ({}));
   const requests: FakeRequest[] = [];
   const failures: number[] = [];
+  const holds: { arrive(): void; released: Promise<void>; release(): void }[] = [];
   const sockets = new Set<import("node:net").Socket>();
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/messages") {
@@ -64,7 +67,7 @@ export async function startFakeAnthropic(
       if (size > MAX_BODY) req.destroy();
       else chunks.push(c);
     });
-    req.on("end", () => {
+    req.on("end", async () => {
       let body: AnthropicBody;
       try {
         body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as AnthropicBody;
@@ -77,6 +80,11 @@ export async function startFakeAnthropic(
       if (failure) {
         res.writeHead(failure).end();
         return;
+      }
+      const hold = holds.shift();
+      if (hold) {
+        hold.arrive();
+        await hold.released;
       }
       const r = replyFn(body);
       if (r.hang) return;
@@ -118,8 +126,21 @@ export async function startFakeAnthropic(
     failNext: (status, times = 1) => {
       for (let i = 0; i < times; i++) failures.push(status);
     },
+    holdNext: () => {
+      let arrive: () => void = () => {};
+      let release: () => void = () => {};
+      const reached = new Promise<void>((resolve) => {
+        arrive = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      holds.push({ arrive, released, release });
+      return { reached, release };
+    },
     close: () =>
       new Promise<void>((resolve) => {
+        for (const h of holds) h.release();
         server.close(() => resolve());
         for (const s of sockets) s.destroy();
       }),

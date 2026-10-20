@@ -5,13 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Authenticator, Identity } from "@docmind/auth";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
+import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { startFakeOllama } from "@docmind/embeddings/testing";
+import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { type ChunkVectorStore, InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { ExecutionHandle } from "@loom/workflow-runtime";
 import { Pool } from "pg";
+import { expect } from "vitest";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
@@ -68,15 +71,43 @@ export const testAuthenticator: Authenticator = {
 export const PNG = (tag = "") =>
   Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"), Buffer.from(tag)]);
 export const PDF = (tag = "") => Buffer.from(`%PDF-1.7\n${tag}\n%%EOF`);
-/** A real one-page PDF whose text layer is `text` (ASCII, no parentheses or backslashes). */
-export const makePdf = (text: string): Buffer => {
-  const stream = `BT /F1 18 Tf 20 100 Td (${text}) Tj ET`;
+/** A real one-page PDF whose text layer is `text` (ASCII, no parentheses or backslashes); an array is one line each, on a taller page. */
+export const makePdf = (text: string | string[]): Buffer => {
+  const lines = typeof text === "string" ? [text] : text;
+  const height = lines.length > 1 ? 14 * lines.length + 40 : 200;
+  const stream = `BT /F1 ${lines.length > 1 ? "10 Tf 14 TL" : "18 Tf"} 20 ${height - 30} Td ${lines.map((l) => `(${l}) Tj T*`).join(" ")} ET`;
   const objs = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 ${height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>`,
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets = objs.map((o, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+};
+/** A two-page PDF: page 1 has the text layer `text`, page 2 has none (a scan, read by vision). */
+export const twoPagePdf = (text: string): Buffer => {
+  const stream = `BT /F1 18 Tf 20 100 Td (${text}) Tj ET`;
+  const page = (contents: number) =>
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents ${contents} 0 R /Resources << /Font << /F1 6 0 R >> >> >>`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+    page(5),
+    page(7),
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Length 0 >>\nstream\n\nendstream",
   ];
   let out = "%PDF-1.4\n";
   const offsets = objs.map((o, i) => {
@@ -273,6 +304,11 @@ export interface DocumentHarness {
   statusStore: InMemoryReadModelStore;
   bus: InMemoryProgressBus;
   events: ReturnType<typeof documentEventRoutes>;
+  /** The fake Claude behind the wiring's providers (its key is set only with `llm: true`). */
+  fake: FakeAnthropic;
+  /** Test seams: embed requests answered by the fake Ollama, and parse-runner runs. */
+  embedCalls(): number;
+  parseRuns(): number;
   upload(user: string, name: string, data: Uint8Array | string): Promise<Response>;
   /** The keyed fingerprint the server stores for these bytes, for this harness user (alice, alice2, bob). */
   fingerprint(user: string, data: Uint8Array | string): Promise<string>;
@@ -285,6 +321,8 @@ export async function startDocumentServer(
     limits?: Partial<DocumentLimits>;
     /** Test seam: wraps the route dependencies, e.g. to inject a failure. */
     deps?: (deps: DocumentRoutesDeps) => DocumentRoutesDeps;
+    /** Gives the wiring a Claude key and base URL pointing at `fake`; without it there is no key. */
+    llm?: boolean;
   } = {},
 ): Promise<DocumentHarness> {
   const db = await createTestDb();
@@ -305,12 +343,24 @@ export async function startDocumentServer(
       maxBytes: limits.maxFileBytes,
     });
   const fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
+  const claude = await startFakeAnthropic();
   try {
     const wiring = createIngestWiring({
       DOCMIND_OLLAMA_URL: fake.url,
       DOCMIND_EMBED_MODEL: "fake-embed",
       DOCMIND_EMBED_DIMENSIONS: "64",
+      ...(overrides.llm && {
+        ANTHROPIC_API_KEY: "test-key-not-real",
+        ANTHROPIC_BASE_URL: claude.url,
+      }),
     });
+    wiring.sleep = async () => {}; // no real backoff between LLM retries
+    let parseRuns = 0;
+    const run = wiring.runner.run.bind(wiring.runner);
+    wiring.runner.run = (...args) => {
+      parseRuns++;
+      return run(...args);
+    };
     // The ingest source reads through whatever `deps` finally gives the routes (a failing store reaches both).
     let effectiveBlobs = blobs;
     const ingest = makeIngest(
@@ -360,6 +410,9 @@ export async function startDocumentServer(
       statusStore: ingest.statusStore,
       bus: ingest.bus,
       events,
+      fake: claude,
+      embedCalls: () => fake.batches.length,
+      parseRuns: () => parseRuns,
       upload(user, name, data) {
         const form = new FormData();
         form.append("file", new Blob([data]), name);
@@ -393,13 +446,15 @@ export async function startDocumentServer(
           () => ingest.close(),
           () => app.end(),
           () => fake.close(),
+          () => claude.close(),
         );
         await db.drop();
         rmSync(root, { recursive: true, force: true });
       },
     };
   } catch (err) {
-    await fake.close(); // a later setup step failed: the fake would otherwise leak
+    await fake.close(); // a later setup step failed: the fakes would otherwise leak
+    await claude.close();
     throw err;
   }
 }
@@ -454,3 +509,50 @@ export async function openSse(url: string, headers: Record<string, string>) {
   };
   return { res, next, close: () => controller.abort() };
 }
+
+export const getDoc = async (h: DocumentHarness, user: string, id: string) =>
+  (await (
+    await fetch(`${h.base}/api/documents/${id}`, { headers: { "x-test-user": user } })
+  ).json()) as DocumentDto;
+
+/** Resolves once the document has this status. Waits on bus events, never a delay. */
+export const awaitTerminal = (
+  h: DocumentHarness,
+  user: string,
+  id: string,
+  status: "failed" | "ready",
+) =>
+  new Promise<void>((resolve, reject) => {
+    const check = () =>
+      getDoc(h, user, id).then((d) => {
+        if (d.status === status) {
+          unsubscribe();
+          resolve();
+        }
+      }, reject);
+    const unsubscribe = h.bus.subscribe({ userId: (BY_HEADER[user] as Identity).userId }, (e) => {
+      if (e.documentId === id) void check();
+    });
+    void check(); // it may already be there
+  });
+
+export async function uploadAndAwaitTerminal(
+  h: DocumentHarness,
+  user: string,
+  name: string,
+  data: Uint8Array | string,
+  status: "failed" | "ready",
+): Promise<string> {
+  const res = await h.upload(user, name, data);
+  expect(res.status).toBe(201);
+  const id = ((await res.json()) as UploadDocumentResponse).document.id;
+  await awaitTerminal(h, user, id, status);
+  return id;
+}
+
+export const generationOf = async (owner: Pool, id: string) =>
+  (
+    await owner.query<{ g: number }>("SELECT ingest_generation AS g FROM documents WHERE id = $1", [
+      id,
+    ])
+  ).rows[0]?.g;

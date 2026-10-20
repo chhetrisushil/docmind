@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { RetryDocumentResponse } from "@docmind/contracts";
-import type { ListDocumentsResponse, UploadDocumentResponse } from "@docmind/contracts";
-import type { Pool } from "pg";
+import type { ListDocumentsResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { ALICE, type DocumentHarness, startDocumentServer } from "./testHarness";
+import {
+  type DocumentHarness,
+  awaitTerminal,
+  generationOf,
+  getDoc,
+  startDocumentServer,
+  uploadAndAwaitTerminal,
+} from "./testHarness";
 
 // `PK\x03\x04` plus junk: the sniffer accepts it as docx, and the parse step then fails.
 const BROKEN_DOCX = (tag: string) =>
@@ -38,63 +44,20 @@ describe.skipIf(!PG_URL)("POST /api/documents/:id/retry (needs DOCMIND_TEST_PG_U
       method: "POST",
       headers: { "x-test-user": user },
     });
-  const get = async (user: string, id: string) =>
-    (await (
-      await fetch(`${h.base}/api/documents/${id}`, { headers: { "x-test-user": user } })
-    ).json()) as {
-      status: string;
-    };
-  const generationOf = async (owner: Pool, id: string) =>
-    (
-      await owner.query<{ g: number }>(
-        "SELECT ingest_generation AS g FROM documents WHERE id = $1",
-        [id],
-      )
-    ).rows[0]?.g;
-
-  /** Resolves once the document's current generation has this status. Waits on bus events, never a delay. */
-  const awaitTerminal = (user: string, id: string, status: "failed" | "ready") =>
-    new Promise<void>((resolve, reject) => {
-      const check = () =>
-        get(user, id).then((d) => {
-          if (d.status === status) {
-            unsubscribe();
-            resolve();
-          }
-        }, reject);
-      const unsubscribe = h.bus.subscribe({ userId: ALICE.userId }, (e) => {
-        if (e.documentId === id) void check();
-      });
-      void check(); // it may already be there
-    });
-
-  const uploadAndAwaitTerminal = async (
-    user: string,
-    name: string,
-    data: Uint8Array | string,
-    status: "failed" | "ready",
-  ) => {
-    const res = await h.upload(user, name, data);
-    expect(res.status).toBe(201);
-    const id = ((await res.json()) as UploadDocumentResponse).document.id;
-    await awaitTerminal(user, id, status);
-    return id;
-  };
-
   it("re-runs a failed document under its next generation, and again after it fails again", async () => {
-    const id = await uploadAndAwaitTerminal("alice", "broken.docx", BROKEN_DOCX("0"), "failed");
+    const id = await uploadAndAwaitTerminal(h, "alice", "broken.docx", BROKEN_DOCX("0"), "failed");
     const res = await retry("alice", id);
     expect(res.status).toBe(202);
     const body = RetryDocumentResponse.parse(await res.json());
     expect(body.document.status).toBe("uploaded");
     expect(await generationOf(h.owner, id)).toBe(3);
-    await awaitTerminal("alice", id, "failed"); // generation 3 ran and failed the same way
+    await awaitTerminal(h, "alice", id, "failed"); // generation 3 ran and failed the same way
     expect((await retry("alice", id)).status).toBe(202);
     expect(await generationOf(h.owner, id)).toBe(4);
   });
 
   it("answers 409 not_failed for a document that is not failed, and leaves it alone", async () => {
-    const id = await uploadAndAwaitTerminal("alice", "ok.txt", "some text", "ready");
+    const id = await uploadAndAwaitTerminal(h, "alice", "ok.txt", "some text", "ready");
     const res = await retry("alice", id);
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
@@ -104,7 +67,7 @@ describe.skipIf(!PG_URL)("POST /api/documents/:id/retry (needs DOCMIND_TEST_PG_U
   });
 
   it("answers 404 for another user's document, for an unknown id and for a malformed id", async () => {
-    const id = await uploadAndAwaitTerminal("alice", "broken2.docx", BROKEN_DOCX("1"), "failed");
+    const id = await uploadAndAwaitTerminal(h, "alice", "broken2.docx", BROKEN_DOCX("1"), "failed");
     expect((await retry("alice2", id)).status).toBe(404);
     expect((await retry("bob", id)).status).toBe(404);
     expect((await retry("alice", randomUUID())).status).toBe(404);
@@ -113,7 +76,7 @@ describe.skipIf(!PG_URL)("POST /api/documents/:id/retry (needs DOCMIND_TEST_PG_U
   });
 
   it("lets exactly one of two concurrent retries win", async () => {
-    const id = await uploadAndAwaitTerminal("alice", "broken3.docx", BROKEN_DOCX("2"), "failed");
+    const id = await uploadAndAwaitTerminal(h, "alice", "broken3.docx", BROKEN_DOCX("2"), "failed");
     const statuses = (await Promise.all([retry("alice", id), retry("alice", id)])).map(
       (r) => r.status,
     );
@@ -123,7 +86,7 @@ describe.skipIf(!PG_URL)("POST /api/documents/:id/retry (needs DOCMIND_TEST_PG_U
 
   it("restarts a failed document when the same bytes are uploaded again", async () => {
     const bytes = BROKEN_DOCX("dup");
-    const id = await uploadAndAwaitTerminal("alice", "dup.docx", bytes, "failed");
+    const id = await uploadAndAwaitTerminal(h, "alice", "dup.docx", bytes, "failed");
     const again = await h.upload("alice", "dup.docx", bytes);
     expect(again.status).toBe(200);
     const body = (await again.json()) as { document: { status: string }; duplicate: boolean };
@@ -132,13 +95,13 @@ describe.skipIf(!PG_URL)("POST /api/documents/:id/retry (needs DOCMIND_TEST_PG_U
   });
 
   it("at generation 3, shows uploaded despite the failed generation 2, and a delete cancels generations 2 and 3", async () => {
-    const id = await uploadAndAwaitTerminal("alice", "broken4.docx", BROKEN_DOCX("3"), "failed");
+    const id = await uploadAndAwaitTerminal(h, "alice", "broken4.docx", BROKEN_DOCX("3"), "failed");
     // Hold generation 3's start, so the model has no event for it yet.
     h.ingest.holdStart();
     try {
       expect((await retry("alice", id)).status).toBe(202);
       expect(await generationOf(h.owner, id)).toBe(3);
-      expect((await get("alice", id)).status).toBe("uploaded");
+      expect((await getDoc(h, "alice", id)).status).toBe("uploaded");
       const list = (await (
         await fetch(`${h.base}/api/documents`, { headers: { "x-test-user": "alice" } })
       ).json()) as ListDocumentsResponse;

@@ -282,6 +282,43 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     expect(() => checkEmbed(embedDone(output))).toThrow(message);
   });
 
+  it('accepts each model of a multi-model list and "none", and refuses an unlisted id', () => {
+    const models = [MODEL, "anthropic/claude-haiku-5-5", "anthropic/claude-sonnet-5-5"];
+    const withModel = (model: string) =>
+      ev("STEP_COMPLETED", { output: { outcome: "done", model }, stepId: "ingest-summarize" });
+    for (const model of [...models, "none"])
+      expect(() => assertEventsAreContentFree([withModel(model)], ref, models)).not.toThrow();
+    expect(() =>
+      assertEventsAreContentFree([withModel("anthropic/claude-opus-5")], ref, models),
+    ).toThrow(/output\.model is not an id/);
+  });
+
+  it("accepts vision_unavailable as a failure code", () => {
+    expect(() =>
+      check(
+        ev("STEP_COMPLETED", {
+          output: { outcome: "failed", code: "vision_unavailable" },
+          stepId: "ingest-parse",
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts a later generation's execution id for that generation only", () => {
+    const later = ev(
+      "STEP_STARTED",
+      { input: ref, stepId: "ingest-parse" },
+      {
+        id: `${ingestExecutionId(ID, ID, 3)}-1`,
+        executionId: ingestExecutionId(ID, ID, 3),
+      },
+    );
+    expect(() => assertEventsAreContentFree([later], ref, [], 3)).not.toThrow();
+    expect(() => assertEventsAreContentFree([later], ref, [])).toThrow(
+      /STEP_STARTED\[0\]\.id is not an id/,
+    );
+  });
+
   it.each(["analyze", "summarize", "link"])("accepts the %s placeholder's events", (name) => {
     expect(() =>
       check(
