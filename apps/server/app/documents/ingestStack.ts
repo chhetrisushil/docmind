@@ -1,16 +1,20 @@
-import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
+import { type KeyObject, createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
+import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { Pool } from "pg";
 import { bootIngest } from "../bootIngest";
+import { createChatLlm } from "../chats/llm";
+import { loadChatSettings } from "../chats/settings";
 import { buildServer } from "../compose";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, type TestDb, createTestDb } from "../db/testSupport";
+import { createTitleLlm } from "../flows/chat-title/llm";
 import { closeIngest, createIngestWiring } from "../flows/ingest-document/limits";
 import { runAll } from "../shutdown";
 import { pgStatusReaderFor, pgStatusWriter } from "../status/pgStores";
@@ -19,6 +23,15 @@ import { loadBlobRoot, loadLimits } from "./limits";
 import { openSse } from "./testHarness";
 
 const PASSWORD = "correct horse battery";
+
+export const CHAT_TEST_ENVELOPE_KEY = "chat-envelope-key-for-tests-0123456789"; // a test value, not a secret
+
+export interface IngestStackOptions {
+  /** A Claude key and a FakeAnthropic for the chat only; ingest stays keyless. */
+  chat?: boolean;
+  /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
+  resume?: { db: TestDb; kek: KeyObject; root?: string };
+}
 
 export interface IngestEvent {
   documentId: string;
@@ -35,6 +48,9 @@ export interface IngestStack {
   fields: FieldCrypto;
   durable: DurableStorage;
   fake: FakeOllama;
+  kek: KeyObject;
+  /** Present with the `chat` option. */
+  claude?: FakeAnthropic;
   composed: ReturnType<typeof buildServer>;
   root: string;
   signUpAndLogIn(email: string): Promise<{ cookie: string; userId: string; tenantId: string }>;
@@ -48,7 +64,15 @@ export interface IngestStack {
   ): Promise<IngestEvent[]>;
   /** Makes the next ingest start (an upload's or the sweep's) throw before it creates an execution. */
   failNextStart(): void;
-  close(): Promise<void>;
+  /** A request with the cookie's session; a JSON body when given. */
+  chatReq(cookie: string, method: string, path: string, body?: unknown): Promise<Response>;
+  openChat(
+    cookie: string,
+    chatId: string,
+    headers?: Record<string, string>,
+  ): ReturnType<typeof openSse>;
+  /** `keepDb` leaves the database and the blob root for a `resume` stack. */
+  close(opts?: { keepDb?: boolean }): Promise<void>;
 }
 
 /**
@@ -56,25 +80,28 @@ export interface IngestStack {
  * Postgres, the real chunks table and pgvector store, the two-role status stores. It boots in main's
  * order (verifyVectors, status boot, recovery, listen, sweeper) and closes in main's order.
  */
-export async function startIngestStack(): Promise<IngestStack> {
-  const db = await createTestDb();
+export async function startIngestStack(options: IngestStackOptions = {}): Promise<IngestStack> {
+  const db = options.resume?.db ?? (await createTestDb());
   const cleanups: (() => Promise<unknown>)[] = [];
   try {
-    await migrate(db.owner);
-    await setAppRolePassword(db.owner, APP_PASSWORD);
-    await setRolePassword(db.owner, "docmind_loom", LOOM_PASSWORD);
+    if (!options.resume) {
+      await migrate(db.owner);
+      await setAppRolePassword(db.owner, APP_PASSWORD);
+      await setRolePassword(db.owner, "docmind_loom", LOOM_PASSWORD);
+    }
     const app = new Pool({ connectionString: db.appUrl });
     cleanups.unshift(() => app.end());
-    const root = mkdtempSync(join(tmpdir(), "dm-ingest-e2e-"));
+    const root = options.resume?.root ?? mkdtempSync(join(tmpdir(), "dm-ingest-e2e-"));
     cleanups.unshift(async () => rmSync(root, { recursive: true, force: true }));
-    const keys = new PostgresKeyStore(app, [
-      { id: "kek-1", key: createSecretKey(randomBytes(32)) },
-    ]);
+    const kek = options.resume?.kek ?? createSecretKey(randomBytes(32));
+    const keys = new PostgresKeyStore(app, [{ id: "kek-1", key: kek }]);
     const fields = new FieldCrypto(keys);
     const durable = await openDurableStorage({ loomUrl: db.loomUrl, keys });
     cleanups.unshift(() => durable.close());
     const fake = await startFakeOllama({ dimensions: 768, model: "fake-embed" }); // the migration fixes 768
     cleanups.unshift(() => fake.close());
+    const claude = options.chat ? await startFakeAnthropic() : undefined;
+    cleanups.unshift(async () => void (await claude?.close()));
     const wiring = createIngestWiring({
       DOCMIND_OLLAMA_URL: fake.url,
       DOCMIND_EMBED_MODEL: "fake-embed",
@@ -83,6 +110,17 @@ export async function startIngestStack(): Promise<IngestStack> {
     // The retry policy's backoff is the one timer a test must not wait on: attempts still run, back to back.
     wiring.sleep = async () => {};
     cleanups.unshift(() => closeIngest(wiring));
+    const chatEnv = claude
+      ? {
+          ANTHROPIC_API_KEY: "test-key-not-real",
+          ANTHROPIC_BASE_URL: claude.url,
+          DOCMIND_CHAT_ENVELOPE_KEY: CHAT_TEST_ENVELOPE_KEY,
+          DOCMIND_TITLE_MODEL: "title-model",
+        }
+      : {};
+    const settings = loadChatSettings(chatEnv);
+    const llm = createChatLlm(chatEnv, settings);
+    const titleLlm = createTitleLlm(chatEnv, settings);
     let failStarts = 0;
     const composed = buildServer({
       wrapIngest: (port) => ({
@@ -108,6 +146,12 @@ export async function startIngestStack(): Promise<IngestStack> {
         writer: pgStatusWriter(durable.pool),
         readerFor: pgStatusReaderFor(app),
         source: durable.storage.eventStore,
+      },
+      chat: {
+        settings,
+        ...(llm && { llm }),
+        ...(titleLlm && { titleLlm }),
+        timers: durable.timers,
       },
       // no `vectors`: the production PgChunkVectorStore over the real chunks table
     });
@@ -178,6 +222,15 @@ export async function startIngestStack(): Promise<IngestStack> {
       }
     }
 
+    const chatReq = (cookie: string, method: string, path: string, body?: unknown) =>
+      fetch(`${base}${path}`, {
+        method,
+        headers: { cookie, ...(body !== undefined && { "content-type": "application/json" }) },
+        ...(body !== undefined && { body: JSON.stringify(body) }),
+      });
+    const openChat = (cookie: string, chatId: string, headers: Record<string, string> = {}) =>
+      openSse(`${base}/api/chats/${chatId}/stream`, { cookie, ...headers });
+
     return {
       base,
       db,
@@ -186,18 +239,27 @@ export async function startIngestStack(): Promise<IngestStack> {
       fields,
       durable,
       fake,
+      kek,
+      ...(claude && { claude }),
       composed,
       root,
       signUpAndLogIn,
       upload,
+      chatReq,
+      openChat,
       events: openEvents,
       until,
       failNextStart: () => {
         failStarts++;
       },
-      async close() {
+      async close(opts: { keepDb?: boolean } = {}) {
         // main's stop(): timers, open streams, the server drain, then the close sequence.
-        await runAll(boot.stop, () => fake.close());
+        await runAll(
+          boot.stop,
+          () => fake.close(),
+          async () => void (await claude?.close()),
+        );
+        if (opts.keepDb) return;
         await db.drop();
         rmSync(root, { recursive: true, force: true });
       },
