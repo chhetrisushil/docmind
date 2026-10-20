@@ -3,7 +3,6 @@ import type { LlmRequest } from "@loom/llm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
-import type { ReasoningBlock } from "./observer";
 import { AnthropicMessagesProvider } from "./provider";
 import { type FakeAnthropic, type FakeReply, startFakeAnthropic } from "./testing/fakeAnthropic";
 
@@ -244,25 +243,29 @@ describe("request options and the observer", () => {
       { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "r" }] },
     ],
   };
-  const stored = new Map<string, readonly ReasoningBlock[]>([
-    [
-      "toolu_1",
-      [
-        { type: "thinking", thinking: "t", signature: "S" },
-        { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
-      ],
+  const withReasoning: LlmRequest = {
+    system: "sys",
+    messages: [
+      { role: "user", content: "find it" },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", kind: "summary", provider: "anthropic", signature: "S", text: "t" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+        ],
+      },
+      { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "r" }] },
     ],
-  ]);
+  };
 
-  it("asks the observer for the blocks of each tool_use message and sends them in its place, with thinking, effort and cache", async () => {
-    const rec = recordingObserver(stored);
+  it("sends a recorded reasoning part as its block in place, with thinking, effort and cache, and never calls the observer for it", async () => {
+    const rec = recordingObserver();
     await provider({
       thinking: true,
       effort: "low",
       cache: true,
       observer: () => rec.observer,
-    }).complete(LOOP);
-    expect(rec.asked).toEqual([["toolu_1"]]);
+    }).complete(withReasoning);
     const body = fake.requests.at(-1)?.body;
     expect(body?.messages[1]?.content[0]).toEqual({
       type: "thinking",
@@ -274,30 +277,13 @@ describe("request options and the observer", () => {
     expect(body?.system).toEqual([
       { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
     ]);
-    expect(body?.messages.at(-1)?.content.at(-1)).toMatchObject({
-      type: "tool_result",
-      cache_control: { type: "ephemeral" },
-    });
     expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(2);
+    expect(rec.log).toEqual(["usage"]); // only the response-side usage hook: nothing is asked for reasoning
   });
 
-  it("sends the message as Loom built it when the stored blocks do not cover every tool_use id", async () => {
-    const rec = recordingObserver(
-      new Map<string, readonly ReasoningBlock[]>([
-        ["toolu_1", [{ type: "thinking", thinking: "t", signature: "S" }]],
-      ]),
-    );
-    await provider({ thinking: true, observer: () => rec.observer }).complete(LOOP);
-    expect(fake.requests.at(-1)?.body?.messages[1]?.content).toEqual([
-      { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
-    ]);
-  });
-
-  it("does not ask the observer, and sends no reasoning blocks, when thinking is off", async () => {
-    const rec = recordingObserver(stored);
-    await provider({ observer: () => rec.observer }).complete(LOOP);
-    expect(rec.asked).toEqual([]);
-    expect(JSON.stringify(fake.requests.at(-1)?.body)).not.toContain("thinking");
+  it("sends no reasoning block when thinking is off", async () => {
+    await provider().complete(withReasoning);
+    expect(JSON.stringify(fake.requests.at(-1)?.body)).not.toContain('"thinking"');
   });
 
   it("calls the observer factory once per request", async () => {

@@ -86,7 +86,6 @@ describe.skipIf(!KEY)("real Anthropic API (opt-in)", () => {
     const secondChunks = await collect(p.stream(second));
     expect(secondChunks.at(-1)?.stopReason).toBe("end_turn");
     expect(secondChunks.map((c) => c.delta).join("").length).toBeGreaterThan(0);
-    expect(rec.asked.flat()).toEqual(calls.map((c) => c.id)); // the echo asked for the blocks of the first turn
     expect(rec.usage.length).toBe(2);
   });
 });

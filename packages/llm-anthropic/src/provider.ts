@@ -7,8 +7,8 @@ import {
   LlmUnavailableError,
 } from "./errors";
 import { mapStopReason, refusalDetailsOf, usageDetail } from "./mapping";
-import { type CallObserver, type ReasoningBlock, coversToolUses } from "./observer";
-import { EFFORTS, type Effort, toMessagesBody, toolUseGroups } from "./request";
+import type { CallObserver } from "./observer";
+import { EFFORTS, type Effort, toMessagesBody } from "./request";
 import { parseResponse } from "./response";
 import { readSse } from "./sse";
 import { StreamState } from "./streamState";
@@ -102,26 +102,14 @@ export class AnthropicMessagesProvider implements LlmProvider {
     this.base = checkedBase(o.baseUrl ?? DEFAULT_BASE);
   }
 
-  /** The request body as JSON. Reasoning blocks come from the observer, and only when thinking is on. */
-  async #body(
-    request: LlmRequest,
-    observer: CallObserver | undefined,
-    stream: boolean,
-  ): Promise<string> {
-    const reasoning = new Map<number, readonly ReasoningBlock[]>();
-    if (this.o.thinking === true && observer) {
-      for (const { index, ids } of toolUseGroups(request)) {
-        const found = await observer.blocksFor(ids);
-        if (coversToolUses(ids, found)) reasoning.set(index, found);
-      }
-    }
+  /** The request body as JSON. Reasoning parts of the request go back as blocks when thinking is on (ADR 0133). */
+  #body(request: LlmRequest, stream: boolean): string {
     return JSON.stringify(
       toMessagesBody(request, this.model, this.o.maxTokens, {
         thinking: this.o.thinking === true,
         ...(this.o.effort !== undefined && { effort: this.o.effort }),
         cache: this.o.cache === true,
         stream,
-        reasoning,
       }),
     );
   }
@@ -160,13 +148,13 @@ export class AnthropicMessagesProvider implements LlmProvider {
 
   async complete(request: LlmRequest): Promise<LlmResponse> {
     const observer = this.o.observer?.();
-    const body = await this.#body(request, observer, false);
+    const body = this.#body(request, false);
     const { res, timeout } = await this.#open(request, body);
     try {
       const text = await readCapped(res, this.o.maxResponseBytes ?? DEFAULT_MAX_RESPONSE);
       const parsed = parseResponse(text);
       const refused = parsed.stopReason === "refusal";
-      for (const t of parsed.thinking) if (t !== "") observer?.onThinking(t);
+      for (const t of parsed.thinking) if (t !== "") observer?.onThinking?.(t);
       if (parsed.usage) observer?.onUsage(usageDetail(parsed.usage));
       if (refused) {
         if (this.o.refusal !== "report" || !observer) throw new LlmRefusalError();
@@ -175,7 +163,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
       const toolCalls = refused ? [] : parsed.toolCalls;
       if (observer && !refused && parsed.sawThinking) {
         // Once per response that thought, tool calls or not: `[]` ids when it only answered.
-        await observer.onBlocks(
+        await observer.onBlocks?.(
           toolCalls.map((c) => c.id),
           parsed.blocks,
         );
@@ -199,9 +187,9 @@ export class AnthropicMessagesProvider implements LlmProvider {
 
   async *stream(request: LlmRequest): AsyncIterable<LlmStreamChunk> {
     const observer = this.o.observer?.();
-    const body = await this.#body(request, observer, true);
+    const body = this.#body(request, true);
     const { res, signal, timeout } = await this.#open(request, body);
-    const state = new StreamState((text) => observer?.onThinking(text));
+    const state = new StreamState((text) => observer?.onThinking?.(text));
     const max = this.o.maxStreamBytes ?? DEFAULT_MAX_STREAM;
     try {
       if (!res.body) throw new LlmRequestError();
@@ -218,7 +206,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
       }
       if (observer && end.sawThinking) {
         // Once per response that thought, tool calls or not: `[]` ids when it only answered.
-        await observer.onBlocks(
+        await observer.onBlocks?.(
           end.toolCalls.map((c) => c.id),
           end.blocks,
         );

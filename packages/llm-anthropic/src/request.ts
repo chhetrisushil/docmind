@@ -5,7 +5,7 @@ import {
   fenceUntrustedMedia,
 } from "@loom/llm";
 import { LlmRequestError } from "./errors";
-import { type ReasoningBlock, isReasoningBlock, isThinkingBlock } from "./observer";
+import { type RedactedBlock, type ThinkingBlock, usableReasoning, wireBlockOf } from "./reasoning";
 
 export const EFFORTS = ["low", "medium", "high", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -28,7 +28,13 @@ type ToolResultBlock = {
   content: string | (TextBlock | MediaBlock)[];
   is_error?: true;
 } & Cacheable;
-export type Block = TextBlock | MediaBlock | ToolUseBlock | ToolResultBlock | ReasoningBlock;
+export type Block =
+  | TextBlock
+  | MediaBlock
+  | ToolUseBlock
+  | ToolResultBlock
+  | ThinkingBlock
+  | RedactedBlock;
 
 export interface AnthropicBody {
   model: string;
@@ -42,12 +48,11 @@ export interface AnthropicBody {
 }
 
 export interface BodyOptions {
+  /** Adaptive summarized thinking in the request; also the condition for sending reasoning parts back. */
   thinking?: boolean;
   effort?: Effort;
   cache?: boolean;
   stream?: boolean;
-  /** Stored response content that replaces the assistant message at this index of `request.messages` (system messages count). */
-  reasoning?: ReadonlyMap<number, readonly ReasoningBlock[]>;
 }
 
 const leaf = (part: LlmContentPart | LlmResultPart): TextBlock | MediaBlock => {
@@ -65,6 +70,7 @@ const leaf = (part: LlmContentPart | LlmResultPart): TextBlock | MediaBlock => {
 };
 
 const block = (part: LlmContentPart): Block => {
+  if (part.type === "reasoning") return wireBlockOf(part);
   if (part.type === "tool_use") {
     return { type: "tool_use", id: part.id, name: part.name, input: part.input };
   }
@@ -81,17 +87,6 @@ const block = (part: LlmContentPart): Block => {
   return leaf(part);
 };
 
-/** The `tool_use` ids of each assistant message, with the message's index in `request.messages`. */
-export function toolUseGroups(request: LlmRequest): { index: number; ids: string[] }[] {
-  const out: { index: number; ids: string[] }[] = [];
-  request.messages.forEach((m, index) => {
-    if (m.role !== "assistant" || typeof m.content === "string") return;
-    const ids = m.content.flatMap((p) => (p.type === "tool_use" ? [p.id] : []));
-    if (ids.length > 0) out.push({ index, ids });
-  });
-  return out;
-}
-
 /** Loom's request to the Messages API body. System messages join the top-level system text. */
 export function toMessagesBody(
   request: LlmRequest,
@@ -101,7 +96,7 @@ export function toMessagesBody(
 ): AnthropicBody {
   const system: string[] = request.system ? [request.system] : [];
   const messages: AnthropicBody["messages"] = [];
-  for (const [i, m] of request.messages.entries()) {
+  for (const m of request.messages) {
     const parts =
       typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
     if (m.role === "system") {
@@ -114,14 +109,13 @@ export function toMessagesBody(
     for (const p of parts) {
       if (p.type === "tool_use" && m.role !== "assistant") throw new LlmRequestError();
       if (p.type === "tool_result" && m.role !== "user") throw new LlmRequestError();
+      if (p.type === "reasoning" && m.role !== "assistant") throw new LlmRequestError();
     }
-    const stored = m.role === "assistant" ? options.reasoning?.get(i) : undefined;
-    if (stored !== undefined && !stored.every(isReasoningBlock)) throw new LlmRequestError();
-    const content: Block[] = stored
-      ? [...stored]
-      : fenceUntrustedMedia(parts)
-          .map(block)
-          .filter((b) => !(m.role === "assistant" && b.type === "text" && b.text === ""));
+    const sendable =
+      m.role === "assistant" ? usableReasoning(parts, options.thinking === true) : parts;
+    const content: Block[] = fenceUntrustedMedia(sendable)
+      .map(block)
+      .filter((b) => !(m.role === "assistant" && b.type === "text" && b.text === ""));
     // An assistant message with no content left (only empty text) is dropped: the API rejects
     // empty content, and consecutive same-role turns are merged by the API.
     if (content.length === 0) continue;
@@ -130,8 +124,13 @@ export function toMessagesBody(
   if (options.cache === true) {
     const turn = messages.at(-1);
     const last = turn?.content.at(-1);
-    // Copy, never mutate: a stored reasoning block is echoed verbatim.
-    if (turn && last !== undefined && !isThinkingBlock(last)) {
+    // A thinking block takes no cache_control. Copy, never mutate: blocks may be shared with the request.
+    if (
+      turn &&
+      last !== undefined &&
+      last.type !== "thinking" &&
+      last.type !== "redacted_thinking"
+    ) {
       turn.content = [...turn.content.slice(0, -1), { ...last, cache_control: EPHEMERAL }];
     }
   }
