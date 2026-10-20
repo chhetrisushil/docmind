@@ -5,28 +5,50 @@ import {
   fenceUntrustedMedia,
 } from "@loom/llm";
 import { LlmRequestError } from "./errors";
+import { type ReasoningBlock, isReasoningBlock, isThinkingBlock } from "./observer";
 
-type TextBlock = { type: "text"; text: string };
+export const EFFORTS = ["low", "medium", "high", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+export interface CacheControl {
+  type: "ephemeral";
+}
+const EPHEMERAL: CacheControl = { type: "ephemeral" };
+type Cacheable = { cache_control?: CacheControl };
+
+type TextBlock = { type: "text"; text: string } & Cacheable;
 type MediaBlock = {
   type: "image" | "document";
   source: { type: "base64"; media_type: string; data: string };
-};
-type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
+} & Cacheable;
+type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown } & Cacheable;
 type ToolResultBlock = {
   type: "tool_result";
   tool_use_id: string;
   content: string | (TextBlock | MediaBlock)[];
   is_error?: true;
-};
-export type Block = TextBlock | MediaBlock | ToolUseBlock | ToolResultBlock;
+} & Cacheable;
+export type Block = TextBlock | MediaBlock | ToolUseBlock | ToolResultBlock | ReasoningBlock;
 
 export interface AnthropicBody {
   model: string;
   max_tokens: number;
-  system?: string;
+  stream?: true;
+  system?: string | TextBlock[];
   temperature?: number;
+  thinking?: { type: "adaptive"; display: "summarized" };
+  output_config?: { effort: Effort };
   tools?: { name: string; description: string; input_schema: Record<string, unknown> }[];
   messages: { role: "user" | "assistant"; content: Block[] }[];
+}
+
+export interface BodyOptions {
+  thinking?: boolean;
+  effort?: Effort;
+  cache?: boolean;
+  stream?: boolean;
+  /** Stored response content that replaces the assistant message at this index of `request.messages` (system messages count). */
+  reasoning?: ReadonlyMap<number, readonly ReasoningBlock[]>;
 }
 
 const leaf = (part: LlmContentPart | LlmResultPart): TextBlock | MediaBlock => {
@@ -60,15 +82,27 @@ const block = (part: LlmContentPart): Block => {
   return leaf(part);
 };
 
+/** The `tool_use` ids of each assistant message, with the message's index in `request.messages`. */
+export function toolUseGroups(request: LlmRequest): { index: number; ids: string[] }[] {
+  const out: { index: number; ids: string[] }[] = [];
+  request.messages.forEach((m, index) => {
+    if (m.role !== "assistant" || typeof m.content === "string") return;
+    const ids = m.content.flatMap((p) => (p.type === "tool_use" ? [p.id] : []));
+    if (ids.length > 0) out.push({ index, ids });
+  });
+  return out;
+}
+
 /** Loom's request to the Messages API body. System messages join the top-level system text. */
 export function toMessagesBody(
   request: LlmRequest,
   model: string,
   maxTokens: number,
+  options: BodyOptions = {},
 ): AnthropicBody {
   const system: string[] = request.system ? [request.system] : [];
   const messages: AnthropicBody["messages"] = [];
-  for (const m of request.messages) {
+  for (const [i, m] of request.messages.entries()) {
     const parts =
       typeof m.content === "string" ? [{ type: "text" as const, text: m.content }] : m.content;
     if (m.role === "system") {
@@ -82,21 +116,40 @@ export function toMessagesBody(
       if (p.type === "tool_use" && m.role !== "assistant") throw new LlmRequestError();
       if (p.type === "tool_result" && m.role !== "user") throw new LlmRequestError();
     }
-    const content = fenceUntrustedMedia(parts)
-      .map(block)
-      .filter((b) => !(m.role === "assistant" && b.type === "text" && b.text === ""));
+    const stored = m.role === "assistant" ? options.reasoning?.get(i) : undefined;
+    if (stored !== undefined && !stored.every(isReasoningBlock)) throw new LlmRequestError();
+    const content: Block[] = stored
+      ? [...stored]
+      : fenceUntrustedMedia(parts)
+          .map(block)
+          .filter((b) => !(m.role === "assistant" && b.type === "text" && b.text === ""));
     messages.push({ role: m.role, content });
+  }
+  if (options.cache === true) {
+    const last = messages.at(-1)?.content.at(-1);
+    if (last !== undefined && !isThinkingBlock(last)) (last as Cacheable).cache_control = EPHEMERAL;
   }
   const tools = request.tools?.map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: { type: "object", ...t.inputSchema },
   }));
+  const text = system.join("\n\n");
   return {
     model,
     max_tokens: maxTokens,
-    ...(system.length > 0 && { system: system.join("\n\n") }),
-    ...(request.temperature !== undefined && { temperature: request.temperature }),
+    ...(options.stream === true && { stream: true as const }),
+    ...(system.length > 0 && {
+      system:
+        options.cache === true ? [{ type: "text" as const, text, cache_control: EPHEMERAL }] : text,
+    }),
+    // Thinking and a custom temperature do not go together; thinking wins.
+    ...(request.temperature !== undefined &&
+      options.thinking !== true && { temperature: request.temperature }),
+    ...(options.thinking === true && {
+      thinking: { type: "adaptive" as const, display: "summarized" as const },
+    }),
+    ...(options.effort !== undefined && { output_config: { effort: options.effort } }),
     ...(tools && tools.length > 0 && { tools }),
     messages,
   };

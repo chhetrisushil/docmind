@@ -1,6 +1,7 @@
 import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
-import { toMessagesBody } from "./request";
+import { type CallObserver, type ReasoningBlock, coversToolUses } from "./observer";
+import { EFFORTS, type Effort, toMessagesBody, toolUseGroups } from "./request";
 
 const TRANSIENT = new Set([408, 409, 429, 529]);
 const DEFAULT_BASE = "https://api.anthropic.com";
@@ -16,6 +17,18 @@ export interface AnthropicOptions {
   baseUrl?: string;
   fetch?: typeof fetch;
   maxResponseBytes?: number;
+  /** Adaptive thinking with summarized display; never sends `temperature`. Default false. */
+  thinking?: boolean;
+  /** Sent as `output_config.effort` only when set. */
+  effort?: Effort;
+  /** Cache breakpoints on the system block and the last block of the last message. Default false. */
+  cache?: boolean;
+  /** `"report"` hands a refusal to the observer and ends the turn normally; it needs an observer. Default `"throw"`. */
+  refusal?: "throw" | "report";
+  /** Called once per request. Ingest passes none. */
+  observer?: () => CallObserver | undefined;
+  /** Byte cap for one response stream. Default 8 MiB. */
+  maxStreamBytes?: number;
 }
 
 function checkedBase(raw: string): string {
@@ -101,12 +114,49 @@ export class AnthropicMessagesProvider implements LlmProvider {
     if (!Number.isSafeInteger(o.timeoutMs) || o.timeoutMs < 1) {
       throw new RangeError("timeoutMs must be a positive integer");
     }
+    if (o.effort !== undefined && !EFFORTS.includes(o.effort)) {
+      throw new RangeError("effort must be one of low, medium, high, max");
+    }
+    if (o.refusal === "report" && o.observer === undefined) {
+      throw new TypeError('refusal "report" needs an observer');
+    }
+    if (
+      o.maxStreamBytes !== undefined &&
+      (!Number.isSafeInteger(o.maxStreamBytes) || o.maxStreamBytes < 1)
+    ) {
+      throw new RangeError("maxStreamBytes must be a positive integer");
+    }
     this.model = o.model;
     this.base = checkedBase(o.baseUrl ?? DEFAULT_BASE);
   }
 
+  /** The request body as JSON. Reasoning blocks come from the observer, and only when thinking is on. */
+  async #body(
+    request: LlmRequest,
+    observer: CallObserver | undefined,
+    stream: boolean,
+  ): Promise<string> {
+    const reasoning = new Map<number, readonly ReasoningBlock[]>();
+    if (this.o.thinking === true && observer) {
+      for (const { index, ids } of toolUseGroups(request)) {
+        const found = await observer.blocksFor(ids);
+        if (coversToolUses(ids, found)) reasoning.set(index, found);
+      }
+    }
+    return JSON.stringify(
+      toMessagesBody(request, this.model, this.o.maxTokens, {
+        thinking: this.o.thinking === true,
+        ...(this.o.effort !== undefined && { effort: this.o.effort }),
+        cache: this.o.cache === true,
+        stream,
+        reasoning,
+      }),
+    );
+  }
+
   async complete(request: LlmRequest): Promise<LlmResponse> {
-    const body = JSON.stringify(toMessagesBody(request, this.model, this.o.maxTokens));
+    const observer = this.o.observer?.();
+    const body = await this.#body(request, observer, false);
     const timeout = AbortSignal.timeout(this.o.timeoutMs);
     const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
     let res: Response;
