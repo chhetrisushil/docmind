@@ -8,8 +8,7 @@ A signed-in user uploads documents, gets summaries and analysis, and asks questi
 documents in a chat that cites its sources. Each user's data is isolated per tenant and encrypted
 under a per-user key, so account erasure can be made final by destroying that key.
 
-Only the document-storage half exists today (see Status); ingestion, retrieval, chat and the web UI
-are planned.
+Document storage and ingestion exist today (see Status); retrieval, chat and the web UI are planned.
 
 * Status
 
@@ -20,14 +19,14 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M0        | Foundations: workspace, CI, contracts, tenancy | shipped                        |
 | M1        | Identity and keys: password auth, KeyStore, sealed Postgres event store | shipped |
 | M2        | Document storage: encrypted blobs, upload/list/get/delete API | shipped         |
-| M3        | Ingestion: parsers, chunking, embeddings, summaries | planned (only a stub flow exists) |
+| M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | complete |
 | M4        | Chat and history: tools, agent, citations      | planned                        |
 | M5        | Erasure: =DELETE /api/me=                      | planned                        |
 | M6        | Web UI (=apps/web=)                            | planned                        |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
-The =ingest-document= flow is a stub: it only checks that the document still exists. There is no
-parsing, chunking, embedding or chat code yet, and no =apps/web=.
+The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
+document. There is no chat code yet, and no =apps/web=.
 
 * Architecture
 
@@ -39,12 +38,12 @@ Data flow as built:
 2. A row goes into the =documents= table, which is under row-level security; sensitive columns
    (=*_enc=) are encrypted with =FieldCrypto=.
 3. After the upload commits, the server starts the =ingest-document= flow on Loom (ids only in the
-   input and event log). Deleting a document cancels the flow first.
+   input and event log): parse (sandboxed child process), chunk, embed (Ollama, pgvector), analyze,
+   summarize (Claude, optional), link. Deleting a document cancels every generation of the flow first.
 4. =GET /api/documents= (keyset paging), =GET /api/documents/:id= and =DELETE /api/documents/:id=
-   complete the API. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
+   complete the API; =POST /api/documents/:id/retry= re-runs a failed document. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
 
-Planned (spec): parse, chunk and embed steps (pgvector, local Ollama embeddings), then a
-=doc-assistant= agent over Claude for cited chat. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
+Planned (spec): a =doc-assistant= agent over Claude for cited chat. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
 
 Security model, in brief:
 - Per-tenant isolation through Postgres row-level security. The server connects as =docmind_app=,
@@ -116,9 +115,16 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_BLOB_DIR=                           | Directory for encrypted blobs                         |
 | =DOCMIND_MAX_UPLOAD_BYTES=, =DOCMIND_TENANT_MAX_BYTES=, =DOCMIND_TENANT_MAX_DOCUMENTS=, =DOCMIND_MAX_CONCURRENT_UPLOADS= | Upload limits and quotas |
 | =DOCMIND_PARSE_TIMEOUT_MS=, =DOCMIND_PARSE_MEMORY_MB=, =DOCMIND_PARSE_MAX_CHARS=, =DOCMIND_PARSE_CONCURRENCY= | Parser child limits (optional) |
+| =DOCMIND_INGEST_CONCURRENCY=, =DOCMIND_INGEST_TENANT_CONCURRENCY= | Ingest steps at once overall (default 4) and per tenant (default 2) |
 | =DOCMIND_OLLAMA_URL=, =DOCMIND_EMBED_MODEL=, =DOCMIND_EMBED_DIMENSIONS=, =DOCMIND_EMBED_TIMEOUT_MS= | Embeddings through Ollama (optional; dimensions must match the vector column) |
 | =DOCMIND_TEST_PG_URL=                        | Enables the Postgres test suites                      |
-| =ANTHROPIC_API_KEY=                          | Listed in =.env.example= for M4; not read by code yet |
+| =ANTHROPIC_API_KEY=                          | Enables summaries and image/scanned-PDF vision; without it summaries are skipped and vision documents fail as =vision_unavailable= |
+| =ANTHROPIC_BASE_URL=                         | Optional gateway or proxy for the Anthropic API       |
+| =DOCMIND_SUMMARY_MODEL=, =DOCMIND_VISION_MODEL= | Models for summaries (default =claude-haiku-5-5=) and vision (default =claude-sonnet-5-5=) |
+| =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request Claude timeout (default 60000)            |
+| =DOCMIND_SUMMARY_MAX_CHARS=                  | Most document text one summary reads (default 400000, at most 5000000) |
+| =DOCMIND_PUBLIC_ORIGIN=                      | Browser-visible origin, exactly =scheme://host[:port]= (punycode, no default port), for a proxy that rewrites Host |
+| =DOCMIND_MAX_CONNECTIONS=                    | Most simultaneous HTTP connections (default 2000, at most 65535) |
 
 Generate the KEK as described in =.env.example=. Losing it makes all encrypted data unreadable.
 A =GET /healthz= endpoint reports liveness.
@@ -148,9 +154,29 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
 - [[file:docs/operations/rotate-kek.md][Rotating the master key (KEK)]]: re-wraps stored data keys with
   =pnpm --filter @docmind/server keys:rotate=.
 
+- [[file:docs/operations/backfill.md][Backfilling ingestion for old documents]]:
+  =pnpm --filter @docmind/server backfill:ingest -- --days N=. *Stop the server first*: the backfill
+  runs its own flow engine, and only one engine may drive a database. Exit codes: 0 done, 1 failure,
+  2 bad arguments, 3 incomplete (run again).
+- Retry: =POST /api/documents/:id/retry= restarts a failed document from the step that failed; steps
+  skip work an earlier attempt finished. A fresh parse clears the document's chunks and summary. The
+  parsed text of a failed document stays sealed until a retry or a delete.
+- Upgrading from flow version 2.3.0: executions still running under it are given up
+  (=ingest-flow-mismatch=); the user can retry them.
+- Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters,
+  so at most about 17 map requests) plus one reduce request. Vision reads at most 20 text-less pages per PDF
+  (PDFs over 100 pages or 22 MiB raw are refused for vision); images are limited to 5 MiB of base64
+  and 8000 px a side. Per-tenant token budgets come in M7.
+- A backlog of interrupted summaries is re-driven one step at a time on recovery (up to 10 minutes
+  each), which can delay recovery of other executions after a restart.
+
 Backup and erasure runbooks are listed in the spec as M7 work and do not exist yet.
 
 ** Deployment notes (v1)
+
+- HTTP limits: request headers must arrive within 20 s, 60 s per route except upload and SSE (upload
+  bodies are not cut off at a fixed time), keep-alive 5 s. A refused cross-origin write is logged
+  with the matched route pattern, at most once per 60 s per route.
 
 - One server (one flow engine) per database. Recovery after a restart assumes no second process is
   driving the same executions; running several nodes needs fencing work first.
@@ -171,6 +197,12 @@ Backup and erasure runbooks are listed in the spec as M7 work and do not exist y
   file: add a new migration. To accept a legitimate edit, update that row's =checksum= in
   =schema_migrations= by hand.
 
+** Known limits
+
+- PDFs in CJK scripts that need predefined CMaps extract as empty text and are sent to vision.
+- The word segmentation in =analyze= is synchronous.
+- Vector neighbour search for links is an exact scan (no index) until M4.
+
 * Documentation map
 
 - [[file:docs/specs/2026-10-18-docmind-design.md][Design spec]] (draft): goals, data model, tenancy, crypto-shredding, ingestion, chat, roadmap.
@@ -180,6 +212,8 @@ Backup and erasure runbooks are listed in the spec as M7 work and do not exist y
   - [[file:docs/superpowers/plans/2026-10-18-m0-foundations.md][M0 foundations]]
   - [[file:docs/superpowers/plans/2026-10-18-m1-identity-and-keys.md][M1 identity and keys]]
   - [[file:docs/superpowers/plans/2026-10-18-m2-document-storage.md][M2 document storage]]
+  - [[file:docs/superpowers/plans/2026-10-18-m3a-ingestion-pipeline.md][M3 ingestion, part 1]]
+  - [[file:docs/superpowers/plans/2026-10-20-m3b-ingestion-part2.md][M3 ingestion, part 2]]
 
 * License
 

@@ -87,7 +87,7 @@ Dependency rules:
 | `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector |
 | `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
 | `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
-| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` (§6.5) |
+| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` (§6.5); non-streaming from M3 (summaries, vision), M4 completes it |
 | `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | Loom projection → Postgres |
 
 Each interface has **one shared conformance test suite** that every implementation must pass.
@@ -132,14 +132,18 @@ Every table carries `tenant_id`, except the two folded-state tables of the inges
   argon2id.
 - **`auth_sessions`** `(token_hash, tenant_id, user_id, expires_at)`. Only a hash of the cookie token is stored.
 - **`documents`** `(id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes,
-  content_address, fingerprint, stats jsonb, summary_enc, created_at, updated_at)`
+  content_address, fingerprint, stats_enc, summary_enc, ingest_generation, created_at, updated_at)`
   - Status (`uploaded | parsing | embedding | ready | failed`) is the `ingest-status` model's, not a column; the failure message is derived from its code at read time.
   - `UNIQUE(tenant_id, owner_id, fingerprint)`: re-uploading identical bytes returns the existing
     document.
+  - `ingest_generation` (integer, from 2): a retry increments it and starts a new flow execution; every step is bound to the generation it was started with.
 - **`chunks`** `(id, tenant_id, document_id → ON DELETE CASCADE, ordinal, section_ordinal, text_enc, locator jsonb,
   token_count, embedding vector(N), embedding_model)`
   - `locator` holds numbers and a kind only; the heading path is content and is sealed inside `text_enc` as `{text, headingPath}`. `section_ordinal` is the chunker's section index (Decision D3).
   - Indexes: HNSW (cosine) on `embedding`; B-tree on `(tenant_id, document_id)`.
+- **`entities`** `(id, tenant_id, owner_id, kind, name_enc, name_key, created_at)`. `kind` is `person | organization | product | project | place | other`. `name_enc` is sealed; `name_key` is an HMAC of the normalised name under a key derived from the owner's DEK, `UNIQUE(tenant_id, owner_id, name_key)`. Entities are per owner, never shared across users, and cascade with the user.
+- **`chunk_entities`** `(tenant_id, chunk_id → chunks ON DELETE CASCADE, entity_id → entities ON DELETE CASCADE)`, primary key on all three.
+- **`chunk_links`** `(tenant_id, src_chunk_id, dst_chunk_id, kind, weight, created_at)`, stored in both directions, primary key `(tenant_id, src_chunk_id, dst_chunk_id, kind)`; both chunk FKs cascade. `kind` is `structure | reference | entity | similar`; `weight` is in (0, 1]. Each chunk keeps its top 24 links by weight.
 - **`chat_sessions`** `(id = Loom conversationId, tenant_id, user_id, title_enc, scope jsonb,
   created_at, last_message_at, message_count, deleted_at)`
   - Maintained by the `chat-sessions` projection.
@@ -187,6 +191,7 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
 | Blobs | Envelope-encrypted before writing to `ContentStore` | Ciphertext only |
 | `*_enc` columns | App-level AEAD with the user's DEK | Rows also hard-deleted |
 | `chunks.embedding` | **Plaintext** (pgvector must compare raw vectors) | Hard-deleted |
+| `chunk_links`, `entities.name_key`, `chunk_entities` | **Plaintext** metadata (link existence and weight; an HMAC; ids) | Hard-deleted with their rows |
 
 - **Erasure flow.** `DELETE /api/me` runs these steps in order:
   1. `app.eraseSubject(userId)`. This is liveness-gated: shredding is deferred while any of the
@@ -201,7 +206,11 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
      limited time (default 30 days), and this is documented in the operations runbook.
   2. Chunk text is encrypted, so there is no Postgres full-text index. v1 search is vector-only.
   3. Blob deduplication applies only within a single user.
-  4. Copies retained by the LLM provider are outside the app's control. Requests carry only the
+  4. `chunk_links` (which chunks link, and how strongly), `entities.name_key` and `chunk_entities` are
+     plaintext metadata, like embeddings: they let retrieval walk links without opening every chunk. Entity
+     names themselves (`name_enc`) are sealed. The parsed text of a failed document stays sealed in
+     `parsed_documents` until a retry or a delete.
+  5. Copies retained by the LLM provider are outside the app's control. Requests carry only the
      content they need.
 
 ## 5. Ingestion
@@ -217,15 +226,19 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
 ### 5.2 `ingest-document` flow
 
 Each step is a durable `step$`. A crash resumes at the step that was running. A user retry restarts
-from the step that failed.
+from the step that failed (it cancels only generations g-1 and g; older ones are terminal), and each step
+skips work an earlier generation already finished. A fresh parse clears the document's chunks and summary in
+the same transaction, so chunks always derive from the current parsed row. A superseded generation stops as
+`document_gone`.
 
 | Step | Behavior |
 |---|---|
-| **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in a child process under Node's permission model (no filesystem beyond the parser code, no child processes, empty environment, V8 heap cap, wall clock, 2 concurrent) with decompression caps (docx zip bombs). The permission model does not restrict network, and the heap cap does not bound external (Buffer) memory: the deployment must cap host memory (container/cgroup). |
+| **parse** | Select a parser by sniffed type and produce `ParsedDocument {text, sections[{headingPath, text, locator}], media[]}`. Runs in a child process under Node's permission model (no filesystem beyond the parser code, no child processes, empty environment, V8 heap cap, wall clock, 2 concurrent) with decompression caps (docx zip bombs: the zip directory must end exactly at the end-of-central-directory record, and every deflated entry is inflated under a hard cap first). Library parsers run only inside this sandbox. The permission model does not restrict network, and the heap cap does not bound external (Buffer) memory: the deployment must cap host memory (container/cgroup). |
 | **chunk** | App-local section-bounded chunker (`chunker.ts`). Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
 | **embed** | Batches of 64 → `EmbeddingProvider` → `ChunkVectorStore.upsert` (onto the existing chunk rows), idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
-| **analyze** | Deterministic statistics: word and page counts, reading time, language, outline, notable dates and numbers. |
-| **summarize** | Map-reduce. Summarize each section in parallel, then reduce to structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest`. |
+| **analyze** | Deterministic and local: word and page counts, reading time (230 words/min), language (stop-word vote over 8 languages, else null), outline (depth ≤ 2, ≤ 50 entries), notable dates and numbers (≤ 20 each). Stored sealed in `documents.stats_enc`. Word segmentation (`Intl.Segmenter`) is synchronous. |
+| **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest` and `fenceUntrustedMedia`. Without `ANTHROPIC_API_KEY`, summaries are skipped. |
+| **link** | Writes `chunk_links`: `structure` (neighbouring chunks 0.9, same section 0.6), `similar` (5 nearest chunks of the owner's other documents, score ≥ 0.80; exact vector scans until M4), `entity` (shared entity, weight 1/(1+ln n)) and `reference` (another document's title, ≥ 8 characters, as a whole phrase: 0.7). Owner-scoped, top 24 links per chunk. The LLM fallback for ambiguous references is M4. |
 | **finalize** | Set `status=ready`. |
 
 **Progress.** Every step emits a progress event, streamed to the browser over
@@ -236,8 +249,9 @@ from the step that failed.
 - **Transient** failures (LLM or embedder 429/5xx, timeouts, Ollama down) retry with exponential
   backoff.
 - **Permanent** failures (corrupt file, password-protected PDF, unsupported content) set
-  `status=failed` with a human-readable error. `POST /api/documents/:id/retry` re-runs the flow.
-- Deleting a document cancels its flow.
+  `status=failed` with a human-readable error (a document that needs Claude vision without a key fails as `vision_unavailable`). `POST /api/documents/:id/retry` re-runs the flow.
+- Deleting a document cancels its flow. A delete cancels every generation first.
+- Entity writes take a per-owner shared advisory lock, and a delete's orphan-entity purge the exclusive one; link writes take a per-owner exclusive advisory lock. Both link foreign keys are transient failures (never `document_gone`).
 
 **Scaling.** `@loom/fair-scheduler` caps ingestion concurrency per tenant. In v1 the server and its flow
 engine run as ONE process per database. Recovery of interrupted ingests assumes it: the boot pass has no
@@ -251,14 +265,14 @@ lease-only periodic scan).
 | Format | Library | Locator |
 |---|---|---|
 | txt | built-in (BOM / UTF-16 detection) | character range |
-| md | `remark` | heading path |
+| md | `marked` (lexer; remark measured ~600 bytes of heap per source byte) | heading path |
 | org | `orga` | heading path |
-| docx | `mammoth` → HTML → section tree | heading path |
+| docx | `mammoth` → HTML → section tree (zip budget checked first) | heading path |
 | doc | `word-extractor` | paragraph range |
-| pdf | `unpdf` (pdf.js), page by page | page number |
-| image | Claude vision: transcribe text and describe the image | image region |
+| pdf | `unpdf` (pdf.js), page by page; pages without text go to Claude, at most 20 per document; PDFs ≤ 100 pages / 22 MiB raw for vision (the Messages API caps a request at 32 MB and base64 adds a third) | page number |
+| image | Claude vision: transcribe text and describe the image; ≤ 5 MiB of base64 (≈ 3.75 MiB raw), ≤ 8000 px a side; an answer truncated by `max_tokens` is `too_large` | image region |
 
-Scanned PDF pages with no text layer are routed through the image path.
+Scanned PDF pages with no text layer are routed through the image path. Known limit: CJK PDFs that need predefined CMaps extract as empty text and so go to vision.
 
 ## 6. Agent, retrieval and chat sessions
 
@@ -470,18 +484,18 @@ Each milestone ends with something runnable.
 12. `DocumentParser` interface, registry, conformance suite, txt parser.
 13. Sandboxed parse runner.
 14. `ingest-document` flow skeleton, status projection, progress SSE.
-15. md parser.
-16. org parser.
-17. docx parser.
-18. doc parser.
-19. pdf parser.
-20. image parser (vision).
+15. md parser. *(done, M3 part 2)*
+16. org parser. *(done, M3 part 2)*
+17. docx parser. *(done, M3 part 2)*
+18. doc parser. *(done, M3 part 2)*
+19. pdf parser. *(done, M3 part 2)*
+20. image parser (vision). *(done, M3 part 2)*
 21. Chunk step and `chunks` table.
 22. Ollama `EmbeddingProvider` and conformance suite.
 23. `packages/vector-pg` and the embed step.
-24. Analyze step.
-25. Summarize step.
-26. Fair scheduling, retry policy, failed state, retry endpoint.
+24. Analyze step. *(done, M3 part 2)*
+25. Summarize step. *(done, M3 part 2)*
+26. Fair scheduling, retry policy, failed state, retry endpoint. *(done, M3 part 2)*
 
 **M4 — Chat and history** (runnable: cited chat over the API)
 
@@ -489,7 +503,7 @@ Each milestone ends with something runnable.
 28. History endpoint, send route, conversation-sse stream.
 29. `search_docs` (with MMR) and `list_documents` tools.
 30. `read_section` and `get_summary` tools.
-31. `packages/llm-anthropic`: Loom `llm` interface on `@anthropic-ai/sdk` with summarized thinking, preserved thinking blocks and refusal handling.
+31. `packages/llm-anthropic`: Loom `llm` interface on `@anthropic-ai/sdk` with summarized thinking, preserved thinking blocks and refusal handling. *(Split: the non-streaming half is done in M3 part 2; streaming, thinking and refusals stay in M4.)*
 32. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata.
 33. Auto titles, rename, delete, scope change, stop.
 
