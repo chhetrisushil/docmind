@@ -6,15 +6,6 @@ import { z } from "zod";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 
-/**
- * An opaque vendor content block held by the reasoning-block store. The provider package no longer exports it
- * (ADR 0133 amendment); the store and this type go in Task 160a.
- */
-export interface ReasoningBlock {
-  type: string;
-  [k: string]: unknown;
-}
-
 export interface ChatRef {
   tenantId: string;
   userId: string;
@@ -30,14 +21,12 @@ export interface StoredPassage {
 }
 
 export type TurnItem =
-  | { kind: "thinking"; body: { text: string } }
   | { kind: "tool"; body: ChatToolStep }
   | { kind: "passages"; body: { passages: StoredPassage[] } }
   | { kind: "outcome"; body: { kind: "refusal" | "max_tokens"; details?: RefusalDetails } };
 
 /** One schema per kind, applied on the way in and on the way out. Nothing sealed is trusted. */
 const BODIES = {
-  thinking: z.object({ text: z.string() }).strict(),
   tool: ChatToolStep.strict(),
   passages: z
     .object({
@@ -100,7 +89,7 @@ export function chatItemId(
 const tooLarge = (v: unknown) => Buffer.byteLength(JSON.stringify(v), "utf8") > MAX_SEALED_BYTES;
 
 /**
- * What the conversation record cannot carry (D5): thinking, tool steps, retrieved passages and
+ * What the conversation record cannot carry (D5): tool steps, retrieved passages and
  * outcomes of a turn, append-only and sealed under the owner's key. Every statement is owner-scoped
  * (`user_id`) inside `withTenant`; the composite foreign key makes a row of a chat that is not the
  * writer's impossible.
@@ -113,6 +102,7 @@ export class PgTurnItems {
 
   /** Writes the item for (turnKey, kind, stepKey), replacing an earlier attempt's. */
   async put(ref: ChatRef, turnKey: number, stepKey: string, item: TurnItem): Promise<void> {
+    if (!Object.hasOwn(BODIES, item.kind)) throw new RangeError("turn item: unknown kind");
     if (!Number.isInteger(turnKey) || turnKey < 0 || turnKey > MAX_TURN_KEY)
       throw new RangeError("turn item: turn key must be a non-negative integer");
     if (stepKey.length < 1 || stepKey.length > MAX_STEP_KEY)
@@ -193,89 +183,6 @@ export class PgTurnItems {
       const list = out.get(r.ord) ?? [];
       list.push({ kind: r.kind, body: parsed.data } as TurnItem);
       out.set(r.ord, list);
-    }
-    return out;
-  }
-}
-
-/** A response's content blocks, opaque: any object with a string `type`, kept verbatim. */
-const BLOCKS = z.object({
-  blocks: z.array(z.object({ type: z.string() }).passthrough()).min(1),
-});
-
-export const chatBlocksBind = (chatId: string, toolUseId: string) =>
-  `chatblocks:${chatId}:${toolUseId}`;
-
-/** At most this many tool_use ids per call. */
-export const MAX_TOOL_USE_IDS = 64;
-
-const validToolUseId = (id: string) => id.length >= 1 && id.length <= MAX_STEP_KEY;
-
-/**
- * A response's full ordered content blocks (D3, ruling P1): the signed thinking blocks together with
- * the text and tool_use blocks they sat between, opaque and echoed verbatim, stored whole and sealed,
- * one row per tool_use id. A response with two tool_use ids stores the same list under both; `get`
- * returns that list once. A response without tool_use ids stores nothing.
- */
-export class PgReasoningBlocks {
-  constructor(
-    private readonly pool: Pool,
-    private readonly fields: FieldCrypto,
-  ) {}
-
-  async put(
-    ref: ChatRef,
-    toolUseIds: readonly string[],
-    blocks: readonly ReasoningBlock[],
-  ): Promise<void> {
-    const ids = [...new Set(toolUseIds)];
-    if (ids.length === 0 || blocks.length === 0) return;
-    if (ids.length > MAX_TOOL_USE_IDS || !ids.every(validToolUseId))
-      throw new RangeError("reasoning blocks: bad tool use ids");
-    const parsed = BLOCKS.safeParse({ blocks });
-    if (!parsed.success) throw new Error("the reasoning blocks have an invalid shape");
-    if (tooLarge(parsed.data)) throw new RangeError("reasoning blocks: too large");
-    const cipher = this.fields.forUser(ref.userId);
-    const sealed = await Promise.all(
-      ids.map(async (id) =>
-        JSON.stringify(await cipher.seal(chatBlocksBind(ref.chatId, id), parsed.data)),
-      ),
-    );
-    await withTenant(this.pool, ref.tenantId, (tx) =>
-      tx.query(
-        `INSERT INTO chat_reasoning_blocks (tenant_id, user_id, chat_id, tool_use_id, blocks_enc)
-         SELECT $1, $2, $3, u.id, u.enc::jsonb FROM unnest($4::text[], $5::text[]) AS u(id, enc)
-         ON CONFLICT (tenant_id, user_id, chat_id, tool_use_id) DO UPDATE SET blocks_enc = EXCLUDED.blocks_enc`,
-        [ref.tenantId, ref.userId, ref.chatId, ids, sealed],
-      ),
-    );
-  }
-
-  /** The block lists stored for these tool_use ids, in the order of `toolUseIds`, an identical list once. Unknown ids yield none. */
-  async get(ref: ChatRef, toolUseIds: readonly string[]): Promise<ReasoningBlock[]> {
-    const ids = [...new Set(toolUseIds)].filter(validToolUseId).slice(0, MAX_TOOL_USE_IDS);
-    if (ids.length === 0) return [];
-    const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
-      const res = await tx.query<{ tool_use_id: string; blocks_enc: unknown }>(
-        `SELECT tool_use_id, blocks_enc FROM chat_reasoning_blocks
-          WHERE chat_id = $1 AND user_id = $2 AND tool_use_id = ANY($3::text[])`,
-        [ref.chatId, ref.userId, ids],
-      );
-      return res.rows;
-    });
-    const byId = new Map(rows.map((r) => [r.tool_use_id, r.blocks_enc]));
-    const cipher = this.fields.forUser(ref.userId);
-    const seen = new Set<string>(); // one response's list is stored under each of its ids
-    const out: ReasoningBlock[] = [];
-    for (const id of ids) {
-      const enc = byId.get(id);
-      if (enc === undefined) continue;
-      const parsed = BLOCKS.safeParse(await cipher.open(chatBlocksBind(ref.chatId, id), enc));
-      if (!parsed.success) throw new Error("the stored reasoning blocks have an invalid shape");
-      const key = JSON.stringify(parsed.data.blocks);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(...parsed.data.blocks);
     }
     return out;
   }
