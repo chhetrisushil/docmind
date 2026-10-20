@@ -524,6 +524,18 @@ export function runChunkVectorStoreConformance(
       },
     );
 
+    test("search rejects a minScore that is not finite or not in [-1, 1] with a RangeError", async ({
+      store,
+    }) => {
+      const q = basis(store.dimensions, 0);
+      for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, -1.5]) {
+        await expect(store.search(A, q, 5, bad)).rejects.toBeInstanceOf(RangeError);
+        await expect(store.search(A, q, 5, bad, { documentIds: [DOC_A] })).rejects.toBeInstanceOf(
+          RangeError,
+        );
+      }
+    });
+
     test("search rejects a document filter of more than 1000 ids with a RangeError", async ({
       store,
     }) => {

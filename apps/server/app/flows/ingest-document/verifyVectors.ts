@@ -13,7 +13,8 @@ export const VECTOR_MISMATCH =
 export const PGVECTOR_TOO_OLD = "pgvector 0.8.0 or newer is required for chat search";
 
 /**
- * Boot check: the database's `chunks.embedding` column must fit the embedder. A mismatch becomes a
+ * Boot check: the database's `chunks.embedding` column must fit the embedder, and pgvector must be
+ * 0.8.0 or newer (iterative index scans). A mismatch or an old pgvector becomes a
  * StartupConfigError (safe to print); any other failure keeps its class only. Either way every
  * cleanup step runs first, so the process can exit.
  */

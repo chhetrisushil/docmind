@@ -5,6 +5,7 @@ import {
   type VectorScope,
   checkNeighbourParams,
   checkSearchFilter,
+  checkSearchMinScore,
   checkVectorIds,
   isValidVector,
 } from "./types";
@@ -96,6 +97,7 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
   ): Promise<{ chunkId: string; score: number }[]> {
     this.check(query);
     checkSearchFilter(filter);
+    checkSearchMinScore(minScore);
     const documents = filter?.documentIds ? new Set(filter.documentIds) : undefined;
     const p = prefix(scope);
     const owned = [...this.rows].filter(([key]) => key.startsWith(p));
