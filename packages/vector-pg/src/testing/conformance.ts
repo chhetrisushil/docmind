@@ -176,7 +176,12 @@ export function runChunkVectorStoreConformance(
         c.map((chunkId) => ({ chunkId, vector: basis(d, 2) })),
       );
       expect(ids(await store.search(A, basis(d, 2), 10))).toEqual([...c].sort());
-      expect(ids(await store.search(A, basis(d, 2), 2))).toEqual([...c].sort().slice(0, 2));
+      // Which two of three exactly tied chunks fill a limit of 2 is unspecified (an index scan does
+      // not break ties); the two returned are still ordered by id.
+      const two = ids(await store.search(A, basis(d, 2), 2));
+      expect(two).toHaveLength(2);
+      expect(two).toEqual([...two].sort());
+      expect(two.every((id) => (c as string[]).includes(id))).toBe(true);
     });
 
     test("a zero-length vector is never a hit, for a stored vector or a query", async ({

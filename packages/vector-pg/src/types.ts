@@ -31,7 +31,9 @@ export interface ChunkVectorStore {
    * Cosine similarity over the scope's vectors of this modelId, best first, ties by chunkId.
    * `filter.documentIds` keeps only chunks of those documents (still only the scope's own: an id of
    * another owner's document matches nothing); `[]` matches nothing, absent means every document.
-   * `limit` is applied after the filter.
+   * `limit` is applied after the filter. The returned hits are ordered by score and then chunkId; which
+   * of several chunks with exactly equal scores fill the last places of `limit` is unspecified (an index
+   * scan does not break ties).
    */
   search(
     scope: VectorScope,

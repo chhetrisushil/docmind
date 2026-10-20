@@ -8,5 +8,5 @@ export {
   VectorVersionError,
 } from "./types";
 export type { ChunkVectorStore, SearchFilter, VectorScope } from "./types";
-export { MIN_PGVECTOR, PgChunkVectorStore, atLeast } from "./pg";
+export { MIN_PGVECTOR, PgChunkVectorStore, atLeast, searchSql } from "./pg";
 export type { PgVectorOptions } from "./pg";
