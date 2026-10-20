@@ -40,7 +40,7 @@ export interface FakeAnthropic {
   failNext(status: number, times?: number): void;
   /** The next request parks before it is answered: `reached` resolves once it has arrived, `release()` lets it answer. */
   holdNext(): { reached: Promise<void>; release(): void };
-  /** Resolves when a streaming response reaches a `{hold: true}` step; `release()` lets it go on. */
+  /** Resolves when a streaming response reaches a `{hold: true}` step; `release()` lets it go on. Rejects if close() runs first. */
   streamHold(): Promise<{ release(): void }>;
   close(): Promise<void>;
 }
@@ -65,7 +65,10 @@ export async function startFakeAnthropic(
   const holds: { arrive(): void; released: Promise<void>; release(): void }[] = [];
   const sockets = new Set<import("node:net").Socket>();
   const reachedHolds: { release(): void }[] = [];
-  const holdWaiters: ((gate: { release(): void }) => void)[] = [];
+  const holdWaiters: {
+    resolve: (gate: { release(): void }) => void;
+    reject: (e: Error) => void;
+  }[] = [];
   const openHolds = new Set<{ release(): void }>();
   /** Parks a streaming response until the gate is released, the client leaves or the server closes. */
   const hold = (res: ServerResponse): Promise<void> => {
@@ -73,11 +76,17 @@ export async function startFakeAnthropic(
     const released = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const gate = { release };
+    const gate = {
+      release: () => {
+        const at = reachedHolds.indexOf(gate);
+        if (at >= 0) reachedHolds.splice(at, 1); // a dead gate must not satisfy a later streamHold()
+        release();
+      },
+    };
     openHolds.add(gate);
-    res.once("close", release);
+    res.once("close", gate.release);
     const waiter = holdWaiters.shift();
-    if (waiter) waiter(gate);
+    if (waiter) waiter.resolve(gate);
     else reachedHolds.push(gate);
     return released.then(() => {
       openHolds.delete(gate);
@@ -207,12 +216,16 @@ export async function startFakeAnthropic(
       const gate = reachedHolds.shift();
       return gate
         ? Promise.resolve(gate)
-        : new Promise<{ release(): void }>((resolve) => holdWaiters.push(resolve));
+        : new Promise<{ release(): void }>((resolve, reject) =>
+            holdWaiters.push({ resolve, reject }),
+          );
     },
     close: () =>
       new Promise<void>((resolve) => {
         for (const h of holds) h.release();
-        for (const g of openHolds) g.release();
+        for (const g of [...openHolds]) g.release();
+        // A pending streamHold() rejects once the server is closed, so a test never hangs on it.
+        for (const w of holdWaiters.splice(0)) w.reject(new Error("FakeAnthropic closed"));
         server.close(() => resolve());
         for (const s of sockets) s.destroy();
       }),

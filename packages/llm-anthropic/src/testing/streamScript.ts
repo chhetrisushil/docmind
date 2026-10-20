@@ -42,6 +42,7 @@ export function normalize(script: StreamScript, inputTokens: number): Normal {
       nodes.push({ kind: "thinking", text: s.thinking, signature: "fake-signature" });
     } else if ("signature" in s) {
       const last = nodes.at(-1);
+      if (s.signature === "") throw new Error("a signature must not be empty");
       if (last?.kind !== "thinking")
         throw new Error("a signature step must follow a thinking step");
       last.signature = s.signature;
