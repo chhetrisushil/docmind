@@ -2,7 +2,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { AuthService, PasswordAuthenticator } from "@docmind/auth";
 import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { authRoutes } from "../auth/routes";
 import { createHttpServer } from "../server";
 import { StartupConfigError } from "../startupError";
@@ -84,7 +84,7 @@ describe("origin guard", () => {
         const res = await send(method, path, { "sec-fetch-site": site });
         expect(res).toEqual({ status: 403, body: REFUSED });
         // Method and path only; never a header value.
-        expect(logged).toEqual([[method, path]]);
+        expect(logged).toEqual([[method, path === "/t/abc" ? "/t/:id" : path]]);
       });
     }
   }
@@ -206,6 +206,9 @@ describe("DOCMIND_PUBLIC_ORIGIN", () => {
     "https://a.example?x=1",
     "https://user:pw@a.example",
     "ftp://a.example",
+    "https://a.example:443",
+    "https://bücher.example",
+    "https://a.example#frag",
     "HTTPS://A.example",
     "not a url",
   ])("refuses to start on %s, naming only the variable", (v) => {
@@ -238,13 +241,24 @@ describe("refusal log sampling", () => {
     expect(lines[3]).toBe("cross-origin request refused POST /api/documents");
   });
 
-  it("collapses id segments so the line carries no document id", () => {
+  it("logs the route pattern through the default wiring, never the raw path", async () => {
     const lines: string[] = [];
-    const log = refusalLogger(
-      (l) => lines.push(l),
-      () => 0,
-    );
-    log("DELETE", "/api/documents/0b9c1d2e-3f40-4a51-8b62-73849a5b6c7d");
-    expect(lines).toEqual(["cross-origin request refused DELETE /api/documents/:id"]);
+    const spy = vi.spyOn(console, "error").mockImplementation((l: string) => void lines.push(l));
+    const patterned = createHttpServer({ ...routes, "DELETE /api/documents/:id": ok });
+    await new Promise<void>((r) => patterned.listen(0, "127.0.0.1", r));
+    const p = (patterned.address() as AddressInfo).port;
+    const cross = { "sec-fetch-site": "cross-site" };
+    const id = "0b9c1d2e-3f40-4a51-8b62-73849a5b6c7d";
+    await send("DELETE", `/api/documents/${id}`, cross, p);
+    await send("POST", "/nowhere/a@b.example", cross, p);
+    await new Promise<void>((r) => {
+      patterned.close(() => r());
+      patterned.closeAllConnections();
+    });
+    spy.mockRestore();
+    expect(lines).toEqual([
+      "cross-origin request refused DELETE /api/documents/:id",
+      "cross-origin request refused POST (unrouted)",
+    ]);
   });
 });

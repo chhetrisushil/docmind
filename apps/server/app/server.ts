@@ -8,6 +8,7 @@ const baseRoutes: Record<string, Handler> = {
 
 interface Pattern {
   method: string;
+  route: string; // the pattern path, as registered
   segments: string[]; // ":name" entries are parameters
   handler: Handler;
 }
@@ -17,7 +18,8 @@ function compile(routes: Record<string, Handler>): Pattern[] {
     .filter(([key]) => key.includes("/:"))
     .map(([key, handler]) => {
       const space = key.indexOf(" ");
-      return { method: key.slice(0, space), segments: key.slice(space + 1).split("/"), handler };
+      const route = key.slice(space + 1);
+      return { method: key.slice(0, space), route, segments: route.split("/"), handler };
     });
 }
 
@@ -26,7 +28,7 @@ function match(
   patterns: Pattern[],
   method: string,
   path: string,
-): { handler: Handler; ctx: RouteContext } | undefined {
+): { handler: Handler; ctx: RouteContext; route: string } | undefined {
   const parts = path.split("/");
   for (const p of patterns) {
     if (p.method !== method || p.segments.length !== parts.length) continue;
@@ -47,7 +49,7 @@ function match(
         ok = want === got;
       }
     }
-    if (ok) return { handler: p.handler, ctx: { params } };
+    if (ok) return { handler: p.handler, ctx: { params }, route: p.route };
   }
   return undefined;
 }
@@ -72,19 +74,19 @@ export function createHttpServer(
       return sendError(res, 400, "bad_request", "invalid request target");
     }
     const method = req.method ?? "GET";
+    const key = `${method} ${path}`;
+    const exact = Object.hasOwn(exactRoutes, key) ? exactRoutes[key] : undefined;
+    const found = exact
+      ? { handler: exact, ctx: { params: {} } satisfies RouteContext, route: path }
+      : match(patterns, method, path);
     // The one place a state-changing request is checked, before routing, so no route can skip it.
     if (!isSameOriginRequest(req, guard)) {
-      // Method and id-collapsed path only, at most once a minute each; never a header value.
-      logRefusal(method, path);
+      // The matched route pattern, never the raw path: an attacker-driven path can carry anything.
+      logRefusal(method, found?.route ?? "(unrouted)");
       req.resume();
       res.setHeader("connection", "close");
       return json(res, 403, { error: { code: "cross_origin_request" } });
     }
-    const key = `${method} ${path}`;
-    const exact = Object.hasOwn(exactRoutes, key) ? exactRoutes[key] : undefined;
-    const found = exact
-      ? { handler: exact, ctx: { params: {} } satisfies RouteContext }
-      : match(patterns, method, path);
     if (!found) return sendError(res, 404, "not_found", "no such route");
     // The async wrapper turns a synchronous throw and a rejected promise into the same failure.
     (async () => found.handler(req, res, found.ctx))().catch((err: unknown) => {
