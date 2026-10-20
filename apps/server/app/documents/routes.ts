@@ -43,6 +43,9 @@ import { restartIfFailed } from "./restart";
 import { SNIFF_BYTES, type Sniffed, sanitizeFilename, sniff, titleFromFilename } from "./sniff";
 import type { StartScheduler } from "./startScheduler";
 
+/** The route key of the streaming multipart upload; the server exempts it from the request timer. */
+export const UPLOAD_ROUTE = "POST /api/documents";
+
 export interface DocumentRoutesDeps {
   pool: Pool;
   authenticator: Authenticator;
@@ -266,7 +269,7 @@ async function settleWithin(
 /** The document API. Every route takes the tenant and user from the session, never from the request. */
 export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler> {
   return {
-    "POST /api/documents": requireAuth(deps.authenticator, async (req, res, identity) => {
+    [UPLOAD_ROUTE]: requireAuth(deps.authenticator, async (req, res, identity) => {
       try {
         await upload(deps, req, res, identity);
       } catch (err) {
