@@ -2,6 +2,7 @@ import { AnthropicMessagesProvider, LlmOutputError } from "@docmind/llm-anthropi
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PermanentIngestError } from "./errors";
 import { pngBytes } from "./imageFixtures";
 import { VISION_PDF_MAX_BYTES, VisionReader } from "./vision";
 
@@ -107,5 +108,24 @@ describe("VisionReader.readPdfPages", () => {
       reader.readPdfPages(new Uint8Array(VISION_PDF_MAX_BYTES + 1), [1]),
     ).rejects.toThrow(/^pdf exceeds the size limit$/);
     expect(fake.requests.length).toBe(before);
+  });
+});
+
+describe("VisionReader: an answer truncated by max_tokens", () => {
+  it("is a permanent too_large for an image, even when the cut-off text is valid JSON", async () => {
+    fake.reply(() => ({ text: '{"text":"a","description":"b"}', stopReason: "max_tokens" }));
+    await expect(reader.readImage(PNG_BYTES, "image/png")).rejects.toMatchObject({
+      name: "PermanentIngestError",
+      code: "too_large",
+    });
+    await expect(reader.readImage(PNG_BYTES, "image/png")).rejects.toBeInstanceOf(
+      PermanentIngestError,
+    );
+  });
+
+  it("is a permanent too_large for pdf pages, before the JSON is parsed", async () => {
+    fake.reply(() => ({ text: '[{"page":1,"text":"cut o', stopReason: "max_tokens" }));
+    const pdf = new TextEncoder().encode("%PDF-1.4 fake");
+    await expect(reader.readPdfPages(pdf, [1])).rejects.toBeInstanceOf(PermanentIngestError);
   });
 });
