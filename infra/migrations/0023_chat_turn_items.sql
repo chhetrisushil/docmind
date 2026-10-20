@@ -21,3 +21,21 @@ CREATE TABLE chat_turn_items (
 );
 ALTER TABLE chat_turn_items ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_turn_items USING (tenant_id = app_tenant_id());
+
+-- The model's reasoning text (M4 amendment, Loom ADR 0133): one row per captured text, sealed under the
+-- owner's data key (bind chatreasoning:<chat>:<address>). Loom's ReasoningStore has no tenancy of its own; this
+-- one is owner-scoped. `address` is random (32 hex digits), never a hash of the text. Rows cascade with the chat,
+-- and so with the user; destroying the owner's key makes them unreadable (Loom reports the part `erased`).
+CREATE TABLE chat_reasoning_texts (
+  tenant_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  chat_id uuid NOT NULL,
+  address text NOT NULL CONSTRAINT chat_reasoning_texts_address_check CHECK (address ~ '^[0-9a-f]{32}$'),
+  text_enc jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, user_id, chat_id, address),
+  CONSTRAINT chat_reasoning_texts_chat_fkey FOREIGN KEY (tenant_id, user_id, chat_id)
+    REFERENCES chat_sessions (tenant_id, user_id, id) ON DELETE CASCADE
+);
+ALTER TABLE chat_reasoning_texts ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON chat_reasoning_texts USING (tenant_id = app_tenant_id());
