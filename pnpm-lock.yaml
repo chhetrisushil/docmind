@@ -5,17 +5,21 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  '@loom/agent': link:../loom/packages/agent
   '@loom/app': link:../loom/packages/app
   '@loom/classify': link:../loom/packages/classify
   '@loom/cli': link:../loom/tools/cli
   '@loom/conformance': link:../loom/packages/conformance
+  '@loom/conversation': link:../loom/packages/conversation
   '@loom/core': link:../loom/packages/core
   '@loom/effect-runtime': link:../loom/packages/effect-runtime
   '@loom/event-runtime': link:../loom/packages/event-runtime
   '@loom/fair-scheduler': link:../loom/packages/fair-scheduler
+  '@loom/knowledge': link:../loom/packages/knowledge
   '@loom/llm': link:../loom/packages/llm
   '@loom/memory': link:../loom/packages/memory
   '@loom/plugin-content': link:../loom/plugins/content
+  '@loom/plugin-conversation-sse': link:../loom/plugins/conversation-sse
   '@loom/plugin-crypto': link:../loom/plugins/crypto
   '@loom/plugin-postgres': link:../loom/plugins/postgres
   '@loom/plugin-read-model': link:../loom/plugins/read-model
@@ -61,12 +65,18 @@ importers:
       '@docmind/vector-pg':
         specifier: workspace:*
         version: link:../../packages/vector-pg
+      '@loom/agent':
+        specifier: link:../../../loom/packages/agent
+        version: link:../../../loom/packages/agent
       '@loom/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
       '@loom/classify':
         specifier: link:../../../loom/packages/classify
         version: link:../../../loom/packages/classify
+      '@loom/conversation':
+        specifier: link:../../../loom/packages/conversation
+        version: link:../../../loom/packages/conversation
       '@loom/core':
         specifier: link:../../../loom/packages/core
         version: link:../../../loom/packages/core
@@ -76,12 +86,18 @@ importers:
       '@loom/fair-scheduler':
         specifier: link:../../../loom/packages/fair-scheduler
         version: link:../../../loom/packages/fair-scheduler
+      '@loom/knowledge':
+        specifier: link:../../../loom/packages/knowledge
+        version: link:../../../loom/packages/knowledge
       '@loom/llm':
         specifier: link:../../../loom/packages/llm
         version: link:../../../loom/packages/llm
       '@loom/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
+      '@loom/plugin-conversation-sse':
+        specifier: link:../../../loom/plugins/conversation-sse
+        version: link:../../../loom/plugins/conversation-sse
       '@loom/plugin-crypto':
         specifier: link:../../../loom/plugins/crypto
         version: link:../../../loom/plugins/crypto

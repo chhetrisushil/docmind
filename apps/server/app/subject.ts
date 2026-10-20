@@ -1,8 +1,12 @@
 import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+import { UUID_PATTERN } from "./chats/ids";
 
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const UUID = UUID_PATTERN;
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
-const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|$)`);
+const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
+
+export { chatConversationId, chatIdOfConversation } from "./chats/ids";
+export type { ChatConversationId } from "./chats/ids";
 
 declare const userExecution: unique symbol;
 /**
@@ -35,7 +39,7 @@ export function executionIdFor(userId: string, name: string): UserExecutionId {
 }
 
 /**
- * The erasure subject of an execution: the owning user for `u_<uuid>[:...]`, lower-case only. Any
+ * The erasure subject of an execution: the owning user for `u_<uuid>[:...]` and `u_<uuid>.c-...` (a chat conversation, any generation), lower-case only. Any
  * other id is an execution no user owns; it is keyed as `x:<id>`, outside the bare-UUID user
  * namespace, and survives user erasure, so every user-owned execution must be started with
  * `executionIdFor`.

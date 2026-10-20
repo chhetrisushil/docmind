@@ -10,6 +10,18 @@ describe("erasure subject of an execution", () => {
     expect(subjectOfExecution({ executionId: `u_${USER}` })).toBe(USER);
   });
 
+  it("is the owning user for a chat conversation and every generation of it", () => {
+    const chat = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+    expect(subjectOfExecution({ executionId: `u_${USER}.c-${chat}` })).toBe(USER);
+    expect(subjectOfExecution({ executionId: `u_${USER}.c-${chat}~4` })).toBe(USER);
+  });
+
+  it("does not map a lookalike of the chat separator to the user", () => {
+    for (const executionId of [`u_${USER}.d-x`, `u_${USER}.c`, `u_${USER}-c-x`, `u_${USER}x.c-y`]) {
+      expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);
+    }
+  });
+
   it("is an x: key, outside the user namespace, when no user owns it", () => {
     for (const executionId of [
       "system-sweep",
