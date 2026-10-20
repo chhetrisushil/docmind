@@ -18,7 +18,7 @@ const className = (err: unknown) => (err instanceof Error ? err.constructor.name
 
 export interface SweepArgs {
   pool: Pool;
-  starts: StartScheduler;
+  starts: Pick<StartScheduler, "fire">;
   olderThanMs: number;
   lookbackMs: number;
   limit: number;

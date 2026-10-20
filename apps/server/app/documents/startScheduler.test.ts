@@ -115,4 +115,29 @@ describe("StartScheduler", () => {
     expect(done).toEqual(["abc-def"]);
     await s.settle({ ...IDENTITY, userId: randomUUID() }, "abc-def"); // another user: nothing to wait for
   });
+
+  it("finished() waits for a started execution to complete, whatever its outcome", async () => {
+    let finish: () => void = () => {};
+    const completion = new Promise<void>((r) => {
+      finish = r;
+    });
+    const handle = { waitForCompletion: () => completion } as unknown as NonNullable<
+      Awaited<ReturnType<IngestPort["start"]>>
+    >;
+    const failing = { waitForCompletion: () => Promise.reject(new RangeError("x")) } as never;
+    const handles = [handle, failing];
+    const s = new StartScheduler(port(async () => handles.shift() ?? null));
+    s.fire(IDENTITY, "d1", GEN);
+    s.fire(IDENTITY, "d2", GEN);
+    let done = false;
+    const waiting = s.finished().then(() => {
+      done = true;
+    });
+    await s.idle();
+    await Promise.resolve();
+    expect(done).toBe(false);
+    finish();
+    await waiting;
+    expect(done).toBe(true);
+  });
 });
