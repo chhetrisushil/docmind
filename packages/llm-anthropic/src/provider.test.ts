@@ -277,6 +277,10 @@ describe("request options and the observer", () => {
     expect(body?.system).toEqual([
       { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
     ]);
+    expect(body?.messages.at(-1)?.content.at(-1)).toMatchObject({
+      type: "tool_result",
+      cache_control: { type: "ephemeral" },
+    });
     expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(2);
     expect(rec.log).toEqual(["usage"]); // only the response-side usage hook: nothing is asked for reasoning
   });
