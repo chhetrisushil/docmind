@@ -126,6 +126,22 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
         turns: Math.floor((entries.get(id)?.length ?? 0) / 2),
       };
     },
+    /**
+     * Loom's owner-mode answer: for the cursor of an assistant reply of the caller's own conversation, the execution
+     * and the step prefix of that reply's turn; anything else (a user record, an unknown or foreign cursor) is a
+     * not-found, a malformed cursor is invalid.
+     */
+    async reasoningTarget(id: string, cursor: string, o?: { principal?: PrincipalChain }) {
+      gate(id, o);
+      const seq = cursorSeq(cursor);
+      const entry = entries.get(id)?.find((e) => e.cursor === cursor);
+      const decisionId = (
+        events.get(`${id}:${seq}`)?.payload as { decisionId?: string } | undefined
+      )?.decisionId;
+      const loop = typeof decisionId === "string" ? /^(conv#o\d+):reply$/.exec(decisionId) : null;
+      if (entry?.role !== "assistant" || loop === null) throw new ConversationNotFoundError(id);
+      return { executionId: id, stepPrefix: `${loop[1]}#` };
+    },
     async authorizeRead(id: string, o?: { principal?: PrincipalChain }) {
       gate(id, o);
       return { generation: 0 };

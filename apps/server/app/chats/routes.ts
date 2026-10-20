@@ -27,6 +27,7 @@ import { toChatDto } from "./dto";
 import { chatConversationId } from "./ids";
 import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
+import { chatReasoningRoutes } from "./reasoningRoutes";
 import { insertChat, listChats, softDeleteChat } from "./sessions";
 import type { ChatRef } from "./turnItems";
 import type { ChatWiring } from "./wiring";
@@ -169,5 +170,5 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       json(res, 200, await toChatDto(row, deps.fields.forUser(identity.userId), activity));
     }),
   };
-  return { ...core, ...chatMessageRoutes(deps) };
+  return { ...core, ...chatMessageRoutes(deps), ...chatReasoningRoutes(deps) };
 }
