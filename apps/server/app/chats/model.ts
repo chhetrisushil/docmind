@@ -43,8 +43,9 @@ export function chatModelEffect(
       if (ctx.attempt > 1)
         deps.bus.publish(scope.chatId, { kind: "reset", turnKey: scope.turnKey });
       const call = withShutdown(ctx, deps.shutdown);
-      // During shutdown whatever fails leaves the step un-completed, as after a crash.
-      const interrupted = () => deps.shutdown?.aborted === true && ctx.signal?.aborted !== true;
+      // During shutdown whatever fails leaves the step un-completed, as after a crash. This holds even when the
+      // call's own signal is aborted too: the lease keeper's close aborts it as part of the same shutdown.
+      const interrupted = () => deps.shutdown?.aborted === true;
       let response: LlmResponse;
       try {
         // The retried attempt's response replaces the earlier one: drop its stale outcome row (a refusal or a

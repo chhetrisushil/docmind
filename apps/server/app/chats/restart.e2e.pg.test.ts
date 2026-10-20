@@ -1,10 +1,11 @@
+import { rmSync } from "node:fs";
 import {
   ChatMessageDto,
   ChatSessionDto,
   ListMessagesResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { DOC, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
@@ -12,16 +13,26 @@ import { DOC, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
 describe.skipIf(!PG_URL)(
   "M4 acceptance: a restarted server continues the chat (needs DOCMIND_TEST_PG_URL)",
   () => {
+    // Every stack still running, and every database and blob root any test made: a restart shares them between
+    // two stacks, so the teardown closes each stack (keeping the database) and then drops each database once.
     const stacks: IngestStack[] = [];
+    const dbs = new Set<IngestStack["db"]>();
+    const roots = new Set<string>();
+    const track = (stack: IngestStack) => {
+      stacks.push(stack);
+      dbs.add(stack.db);
+      roots.add(stack.root);
+      return stack;
+    };
+    afterEach(() => vi.restoreAllMocks());
     afterAll(async () => {
-      const last = stacks.pop();
-      for (const s of stacks) await s.close({ keepDb: true }).catch(() => {});
-      await last?.close();
+      for (const s of stacks.splice(0)) await s.close({ keepDb: true });
+      for (const db of dbs) await db.drop();
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
     });
 
     it("answers a second turn after a restart, with the first turn's messages, reasoning and steps intact and in its prompt", async () => {
-      const first = await startIngestStack({ chat: true });
-      stacks.push(first);
+      const first = track(await startIngestStack({ chat: true }));
       const claude1 = first.claude;
       if (!claude1) throw new Error("no fake Claude");
       const ada = await first.signUpAndLogIn("ada@example.com");
@@ -42,9 +53,10 @@ describe.skipIf(!PG_URL)(
       const stream1 = await first.openChat(ada.cookie, chat.id);
       let turnOne: ChatMessageDto;
       try {
-        await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
+        const sent1 = await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
           text: "When is payment due?",
         });
+        expect(sent1.status).toBe(202);
         turnOne = ChatMessageDto.parse((await collectUntil(stream1, isReply)).at(-1)?.data);
       } finally {
         stream1.close();
@@ -52,11 +64,12 @@ describe.skipIf(!PG_URL)(
       await first.close({ keepDb: true }); // main's stop(): the server drains, Loom's pools end
       stacks.pop();
 
-      const second = await startIngestStack({
-        chat: true,
-        resume: { db: first.db, kek: first.kek, root: first.root },
-      });
-      stacks.push(second);
+      const second = track(
+        await startIngestStack({
+          chat: true,
+          resume: { db: first.db, kek: first.kek, root: first.root },
+        }),
+      );
       const claude2 = second.claude;
       if (!claude2) throw new Error("no fake Claude");
       scriptChat(claude2, () => ({
@@ -103,8 +116,8 @@ describe.skipIf(!PG_URL)(
     }, 120_000);
 
     it("a restart in the middle of a tool loop keeps the thinking block: the recovered model call sends it back with its text and signature", async () => {
-      const first = await startIngestStack({ chat: true });
-      stacks.push(first);
+      const errors = vi.spyOn(console, "error");
+      const first = track(await startIngestStack({ chat: true }));
       const claude1 = first.claude;
       if (!claude1) throw new Error("no fake Claude");
       const ada = await first.signUpAndLogIn("ada@example.com");
@@ -122,9 +135,10 @@ describe.skipIf(!PG_URL)(
       const chat = ChatSessionDto.parse(
         await (await first.chatReq(ada.cookie, "POST", "/api/chats", {})).json(),
       );
-      await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
+      const sent = await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
         text: "When is payment due?",
       });
+      expect(sent.status).toBe(202);
       const gate = await claude1.streamHold(); // the second model call is under way
       expect(gate).toBeDefined();
       try {
@@ -134,11 +148,12 @@ describe.skipIf(!PG_URL)(
       }
       stacks.pop();
 
-      const second = await startIngestStack({
-        chat: true,
-        resume: { db: first.db, kek: first.kek, root: first.root },
-      });
-      stacks.push(second);
+      const second = track(
+        await startIngestStack({
+          chat: true,
+          resume: { db: first.db, kek: first.kek, root: first.root },
+        }),
+      );
       const claude2 = second.claude;
       if (!claude2) throw new Error("no fake Claude");
       scriptChat(claude2, () => ({
@@ -163,6 +178,19 @@ describe.skipIf(!PG_URL)(
       expect(
         resumed?.body.messages.some((m) => m.content.some((b) => b.type === "tool_result")),
       ).toBe(true);
+      // the interrupted turn was left pending, not failed: one question, one answer, nothing else
+      const history = ListMessagesResponse.parse(
+        await (await second.chatReq(ada.cookie, "GET", `/api/chats/${chat.id}/messages`)).json(),
+      );
+      expect(history.items.map((m) => [m.role, m.status])).toEqual([
+        ["user", "complete"],
+        ["assistant", "complete"],
+      ]);
+      expect(errors).not.toHaveBeenCalledWith(
+        "chat turn failed",
+        expect.anything(),
+        expect.anything(),
+      );
     }, 120_000);
   },
 );

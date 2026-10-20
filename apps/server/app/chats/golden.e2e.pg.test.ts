@@ -9,6 +9,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
+import { subjectOfExecution } from "../subject";
 import { DOC, SENTENCE, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
@@ -202,7 +203,10 @@ describe.skipIf(!PG_URL)(
 
         // 9. nothing readable is left in the stores. The event-log proof of Task 147b (ruling P10), over the whole
         //    stack: Postgres, the real retriever, fake Ollama and FakeAnthropic.
-        const raw = await st.durable.raw.eventStore.read(chatConversationId(ada.userId, chat.id));
+        //    Every raw stream is scanned (the conversation, the ingest of the document, the title flow), not only the chat's.
+        const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? []; // an empty list fails the next line
+        const raw = (await Promise.all(ids.map((id) => st.durable.raw.eventStore.read(id)))).flat();
+        expect(ids).toContain(chatConversationId(ada.userId, chat.id));
         expect(raw.length).toBeGreaterThan(5);
         assertNoPlaintext(raw, [
           QUESTION,
@@ -211,6 +215,8 @@ describe.skipIf(!PG_URL)(
           "Payment terms:",
           SENTENCE,
           SIG,
+          "Payment due dates", // the auto title
+          "Late payment accrues", // the rest of the passage
         ]);
         expect([...sealedPaths(raw)]).toEqual(
           expect.arrayContaining([
@@ -218,10 +224,27 @@ describe.skipIf(!PG_URL)(
             "STEP_STARTED:input.messages",
             "STEP_COMPLETED:output.content",
             "STEP_COMPLETED:output.toolCalls[].input",
+            "INBOX_MESSAGE:payload",
             "STEP_COMPLETED:output.reasoning",
             "LLM_REASONING_CAPTURED:parts",
           ]),
         );
+        // The owner subject, on the production key store: every execution in the log belongs to ada (`u_<ada>...`),
+        // and the only data key that exists is hers, so nothing here was sealed under bob's or any other tenant's key.
+        // Reading the sealed log back through the decrypting store with her key finds the question: it was her key.
+        expect([...new Set(ids.map((id) => subjectOfExecution({ executionId: id })))]).toEqual([
+          ada.userId,
+        ]);
+        expect(
+          (await st.db.owner.query("SELECT subject_id FROM data_keys")).rows.map(
+            (r) => r.subject_id,
+          ),
+        ).toEqual([ada.userId]);
+        expect(await st.keys.get(bob.userId)).toBeNull();
+        const opened = JSON.stringify(
+          await st.durable.sealed.eventStore.read(chatConversationId(ada.userId, chat.id)),
+        );
+        expect(opened).toContain(QUESTION);
         const items = await st.db.owner.query(
           "SELECT body_enc FROM chat_turn_items WHERE chat_id = $1",
           [chat.id],

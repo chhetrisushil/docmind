@@ -54,6 +54,8 @@ export interface RecoverOptions {
   leases?: { store: LeaseStore; owner: string };
   /** Which executions this pass may re-drive; default ingest executions. */
   owns?: (executionId: string) => boolean;
+  /** Once true (recovery was stopped), a failing re-drive is expected (leases and pools are closing) and not logged. */
+  stopped?: () => boolean;
 }
 
 /**
@@ -80,6 +82,7 @@ export async function recoverIngest(
     now = Date.now,
     leases,
     owns = isIngestExecution,
+    stopped,
   }: RecoverOptions,
 ) {
   if (!leases) {
@@ -123,7 +126,9 @@ export async function recoverIngest(
     onError: (id, err) =>
       err instanceof FlowCodeMismatchError
         ? mismatch(id, err)
-        : console.error("recovery failed", errorClass(err)),
+        : stopped?.() === true
+          ? undefined
+          : console.error("recovery failed", errorClass(err)),
   });
   await Promise.all(ending);
   return summary;
@@ -166,9 +171,12 @@ export function startRecovery(
       ...(now && { now }),
       ...(scan && { leases: scan }),
       ...(owns && { owns }),
+      stopped: () => stopped,
     })
       .then(() => undefined)
-      .catch((err: unknown) => console.error("recovery failed", errorClass(err)))
+      .catch((err: unknown) => {
+        if (!stopped) console.error("recovery failed", errorClass(err));
+      })
       .finally(() => {
         running = undefined;
       });
