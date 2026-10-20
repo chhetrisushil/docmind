@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 /** Modules that exist only for tests: fixtures, fakes, harnesses and the throwaway-database support. */
 const TEST_ONLY =
-  /(\.test|\/testing|\/testSupport|\/testHarness|Harness|\/pgFixture|\/ingestStack|\/testStack)\.ts$/;
+  /(\.test|\/testing|\/testSupport|\/testHarness|\/fakeConversations|Harness|\/pgFixture|\/ingestStack|\/testStack)\.ts$/;
 
 describe("the production build", () => {
   it("compiles no test-only module, so production code imports none", () => {

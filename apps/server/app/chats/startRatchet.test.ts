@@ -1,25 +1,27 @@
-import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const APP = resolve(__dirname, "..");
 const ROOT = resolve(APP, "..");
+const IDS = join(APP, "chats", "ids.ts");
 
-function sources(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) return sources(path);
-    const isSource = path.endsWith(".ts") && !path.endsWith(".test.ts");
-    return isSource && entry.name !== "loom.gen.ts" ? [path] : [];
-  });
+const CONFIG = ts.findConfigFile(ROOT, ts.sys.fileExists, "tsconfig.json") as string;
+
+/** Every file of the production program (app/, scripts/, loom.config.ts): the tsconfig's own file list. */
+function sources(): string[] {
+  const parsed = ts.parseJsonConfigFileContent(
+    ts.readConfigFile(CONFIG, ts.sys.readFile).config,
+    ts.sys,
+    ROOT,
+  );
+  return parsed.fileNames.filter((f) => !f.endsWith(".d.ts"));
 }
 
 /** Every call the checker resolves to `Conversations.start`, with whether its `conversationId` is `chatConversationId(...)`. */
 function scanStarts(files: string[], virtual = new Map<string, string>()) {
-  const config = ts.findConfigFile(ROOT, ts.sys.fileExists, "tsconfig.json") as string;
   const options = ts.parseJsonConfigFileContent(
-    ts.readConfigFile(config, ts.sys.readFile).config,
+    ts.readConfigFile(CONFIG, ts.sys.readFile).config,
     ts.sys,
     ROOT,
   ).options;
@@ -34,6 +36,19 @@ function scanStarts(files: string[], virtual = new Map<string, string>()) {
   const program = ts.createProgram([...files, ...virtual.keys()], options, host);
   const checker = program.getTypeChecker();
   const found: { at: string; ok: boolean }[] = [];
+  /** The callee is the function declared in app/chats/ids.ts, however it is imported or renamed. */
+  const isChatConversationId = (callee: ts.Expression): boolean => {
+    let symbol = checker.getSymbolAtLocation(callee);
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+    return (
+      symbol?.declarations?.some(
+        (d) =>
+          ts.isFunctionDeclaration(d) &&
+          d.name?.text === "chatConversationId" &&
+          d.getSourceFile().fileName === IDS,
+      ) ?? false
+    );
+  };
   const idOk = (arg: ts.Expression | undefined): boolean => {
     if (!arg || !ts.isObjectLiteralExpression(arg)) return false;
     return arg.properties.some(
@@ -42,8 +57,7 @@ function scanStarts(files: string[], virtual = new Map<string, string>()) {
         ts.isIdentifier(p.name) &&
         p.name.text === "conversationId" &&
         ts.isCallExpression(p.initializer) &&
-        ts.isIdentifier(p.initializer.expression) &&
-        p.initializer.expression.text === "chatConversationId",
+        isChatConversationId(p.initializer.expression),
     );
   };
   const visit = (node: ts.Node) => {
@@ -113,14 +127,27 @@ describe("Conversations.start", () => {
     expect(snippet(body).map((c) => c.ok)).toEqual([false]);
   });
 
-  // Only the create route (POST /api/chats) may call `Conversations.start` with a chatConversationId.
-  // No call exists until Task 149, which adds the first and also asserts that at least one real call
-  // is found (PF10); until then this checks every call it finds and does not require one.
-  it("passes for every start in the real sources", () => {
-    expect(
-      scanStarts(sources(APP))
-        .filter((c) => !c.ok)
-        .map((c) => c.at),
-    ).toEqual([]);
+  // Only the create route (POST /api/chats) may call `Conversations.start`, with a chatConversationId.
+  it("passes for every start in the real sources, and finds the create route's", () => {
+    const found = scanStarts(sources());
+    expect(found.filter((c) => !c.ok).map((c) => c.at)).toEqual([]);
+    expect(found.length).toBeGreaterThanOrEqual(1);
+    expect(found.map((c) => c.at.replace(/:\d+$/, ""))).toContain("chats/routes.ts");
+  });
+
+  it("flags a start whose callee only looks like chatConversationId", () => {
+    const fake = scanStarts(
+      [],
+      new Map([
+        [
+          VIRTUAL,
+          `import type { Conversations } from "@loom/conversation";
+           declare const chatConversationId: (a: string, b: string) => string;
+           declare const c: Conversations; declare const p: never;
+           export async function f() { await c.start({ conversationId: chatConversationId("a", "b") as never, principal: p }); }`,
+        ],
+      ]),
+    );
+    expect(fake.map((c) => c.ok)).toEqual([false]);
   });
 });

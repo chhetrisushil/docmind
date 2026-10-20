@@ -5,6 +5,7 @@
   "exclude": [
     "**/*.test.ts",
     "**/testing.ts",
+    "**/fakeConversations.ts",
     "**/testSupport.ts",
     "**/testHarness.ts",
     "**/recoveryHarness.ts",
