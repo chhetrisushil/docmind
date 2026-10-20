@@ -42,7 +42,7 @@ describe("toMessagesBody", () => {
     });
   });
 
-  it("refuses a content reference, audio, tools and a non-pdf file with a fixed LlmRequestError", () => {
+  it("refuses a content reference, audio and a non-pdf file with a fixed LlmRequestError", () => {
     const bad: LlmRequest[] = [
       {
         messages: [
@@ -67,10 +67,6 @@ describe("toMessagesBody", () => {
             ],
           },
         ],
-      },
-      {
-        messages: [{ role: "user", content: "x" }],
-        tools: [{ name: "t", description: "d", inputSchema: {} }],
       },
       {
         messages: [
@@ -128,5 +124,109 @@ describe("toMessagesBody", () => {
       { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA=" } },
       { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBE" } },
     ]);
+  });
+
+  const LOOP: LlmRequest = {
+    messages: [
+      { role: "user", content: "find it" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", toolUseId: "toolu_1", content: "passage text" },
+          { type: "tool_result", toolUseId: "toolu_2", content: "bad id", isError: true },
+        ],
+      },
+    ],
+    tools: [
+      {
+        name: "search_docs",
+        description: "Search the documents",
+        inputSchema: { properties: { query: { type: "string" } }, required: ["query"] },
+      },
+    ],
+  };
+
+  it("maps tools to input_schema objects, tool_use to tool_use and tool_result to tool_result", () => {
+    const body = toMessagesBody(LOOP, "m", 10);
+    expect(body.tools).toEqual([
+      {
+        name: "search_docs",
+        description: "Search the documents",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+    ]);
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } }],
+    });
+    expect(body.messages[2]?.content).toEqual([
+      { type: "tool_result", tool_use_id: "toolu_1", content: "passage text" },
+      { type: "tool_result", tool_use_id: "toolu_2", content: "bad id", is_error: true },
+    ]);
+  });
+
+  it("maps a tool_result with parts, fencing untrusted media, and omits an empty tools list", () => {
+    const body = toMessagesBody(
+      {
+        tools: [],
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                toolUseId: "toolu_1",
+                content: [
+                  { type: "text", text: "see" },
+                  {
+                    type: "image",
+                    mediaType: "image/png",
+                    source: { kind: "data", data: "AAA=" },
+                    untrusted: { origin: "upload" },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      "m",
+      10,
+    );
+    expect("tools" in body).toBe(false);
+    const result = body.messages[0]?.content[0];
+    expect(result?.type).toBe("tool_result");
+    const inner =
+      result?.type === "tool_result" && Array.isArray(result.content) ? result.content : [];
+    expect(inner.map((b) => b.type)).toEqual(["text", "text", "image", "text"]);
+  });
+
+  it("refuses a tool_use outside an assistant message and a tool_result outside a user message", () => {
+    const bad: LlmRequest[] = [
+      {
+        messages: [
+          { role: "user", content: [{ type: "tool_use", id: "a", name: "n", input: {} }] },
+        ],
+      },
+      {
+        messages: [
+          { role: "assistant", content: [{ type: "tool_result", toolUseId: "a", content: "x" }] },
+        ],
+      },
+    ];
+    for (const r of bad) {
+      expect(() => toMessagesBody(r, "m", 1)).toThrow(/^the language model rejected the request$/);
+    }
   });
 });
