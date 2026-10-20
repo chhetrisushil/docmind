@@ -16,6 +16,7 @@ import { pgCollaborators } from "./chats/pgCollaborators";
 import { replyReasoning } from "./chats/reasoningRead";
 import { chatRoutes } from "./chats/routes";
 import type { ChatSettings } from "./chats/settings";
+import { chatStreamRoutes } from "./chats/stream";
 import { connectChat, prepareChat } from "./chats/wiring";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
@@ -153,6 +154,16 @@ export function buildServer(options: ComposeOptions) {
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
   const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });
+  const chatStreams =
+    chat &&
+    chatStreamRoutes({
+      pool,
+      authenticator,
+      fields,
+      chat,
+      eventStore: options.status.source,
+      reasoning: replyReasoning({ log: options.status.source, store: chat.reasoning }),
+    });
   const server = createHttpServer(
     {
       ...authRoutes({
@@ -183,6 +194,7 @@ export function buildServer(options: ComposeOptions) {
           reasoning: replyReasoning({ log: options.status.source, store: chat.reasoning }),
         })),
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
+      ...(chatStreams?.routes ?? {}),
     },
     { secure: options.secureCookies, publicOrigin: options.publicOrigin },
     options.maxConnections === undefined ? {} : { maxConnections: options.maxConnections },
@@ -202,6 +214,8 @@ export function buildServer(options: ComposeOptions) {
     chat,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
+    /** Ends every open chat stream; shutdown calls it right after `events.closeAll()` (a stream never ends on its own). Absent without chat. */
+    chatStreams,
     /** Stops feeding the models; shutdown calls it before `status.close()` and `activity.close()` so a late event is not folded onto closing pools. */
     detachStatusFeed: () => {
       feed.sinks = [];

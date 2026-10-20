@@ -58,6 +58,7 @@ export async function bootIngest(
     activity,
     vectors,
     events,
+    chatStreams,
     detachStatusFeed,
     chat,
   } = built;
@@ -131,6 +132,7 @@ export async function bootIngest(
       recovery.stop();
       const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins
       events.closeAll();
+      chatStreams?.closeAll();
       const close = async () => {
         // Let a sweep that is already running finish.
         await drainWithin(sweeperStopped, SHUTDOWN_DRAIN_MS);
