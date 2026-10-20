@@ -8,6 +8,7 @@ import {
   VectorVersionError,
   checkNeighbourParams,
   checkSearchFilter,
+  checkSearchMinScore,
   checkVectorIds,
   isValidVector,
 } from "./types";
@@ -74,6 +75,19 @@ export function searchSql(withDocuments: boolean): string {
    LIMIT $4)
 SELECT id, 1 - distance AS score FROM hits WHERE distance <= $5 ORDER BY distance, id`;
 }
+
+/**
+ * The exact statement for a document-filtered search (a bounded set of documents): the same parameters
+ * as `searchSql(true)`, but the filters and the distance floor sit beside an exact sort, so nothing
+ * depends on the index scan budget (`hnsw.max_scan_tuples`). It drops zero vectors with vector_norm.
+ * The `+ 0` keeps the ORDER BY from matching the HNSW index, so the planner cannot choose an approximate scan.
+ */
+export const searchExactSql = `SELECT c.id, 1 - (c.embedding <=> $1::vector) AS score
+  FROM chunks c ${JOIN_OWNER}
+ WHERE d.owner_id = $2 AND c.embedding_model = $3 AND vector_norm(c.embedding) > 0
+   AND c.document_id = ANY($6::uuid[])
+   AND (c.embedding <=> $1::vector) <= $5
+ ORDER BY (c.embedding <=> $1::vector) + 0, c.id LIMIT $4`;
 
 export class PgChunkVectorStore implements ChunkVectorStore {
   readonly modelId: string;
@@ -149,28 +163,33 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     scoped(scope);
     this.check(query);
     checkSearchFilter(filter);
+    checkSearchMinScore(minScore);
     const documentIds = filter?.documentIds;
     for (const id of documentIds ?? []) uuid("documentIds", id);
     // Cosine distance of a zero vector is NaN, which Postgres sorts above every number.
     if (limit <= 0 || query.every((x) => x === 0) || documentIds?.length === 0) return [];
-    // Iterative scan: keep walking the index until `limit` rows pass the owner, model and document
-    // filters (searchSql). ef_search is at least `limit`; pgvector accepts at most 1000.
+    const params = [
+      literal(query),
+      scope.ownerId,
+      this.modelId,
+      limit,
+      1 - (minScore ?? -1),
+      ...(documentIds ? [documentIds] : []),
+    ];
+    // A document-filtered search is exact (searchExactSql). Otherwise an iterative index scan keeps
+    // walking until `limit` rows pass the owner and model filters (searchSql); it is approximate and
+    // bounded by hnsw.max_scan_tuples. ef_search is at least `limit`; pgvector accepts at most 1000.
     const ef = Math.min(1000, Math.max(this.efSearch, limit));
     return this.options.tenant(scope.tenantId, async (tx) => {
-      await tx.query(
-        "SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', $1, true)",
-        [String(ef)],
-      );
+      if (!documentIds) {
+        await tx.query(
+          "SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', $1, true)",
+          [String(ef)],
+        );
+      }
       const { rows } = await tx.query<{ id: string; score: number }>(
-        searchSql(documentIds !== undefined),
-        [
-          literal(query),
-          scope.ownerId,
-          this.modelId,
-          limit,
-          1 - (minScore ?? -1),
-          ...(documentIds ? [documentIds] : []),
-        ],
+        documentIds ? searchExactSql : searchSql(false),
+        params,
       );
       return rows.map((r) => ({ chunkId: r.id, score: Number(r.score) }));
     });

@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { PgChunkVectorStore, searchSql } from "@docmind/vector-pg";
+import { PgChunkVectorStore, searchExactSql, searchSql } from "@docmind/vector-pg";
 import type { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../../db/tenant";
@@ -17,7 +16,7 @@ const DIM = 768;
 const QUERIES = 10;
 const EF = 100;
 
-/** mulberry32: a seeded generator, so a failure replays. */
+/** mulberry32: a seeded generator. The data (vectors and ids) is seeded; HNSW graph construction is not. */
 function rng(seed: number) {
   let a = seed;
   return () => {
@@ -27,6 +26,11 @@ function rng(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+/** A uuid-shaped id drawn from the seeded generator. */
+const uid = (r: () => number): string => {
+  const h = Array.from({ length: 32 }, () => Math.floor(r() * 16).toString(16)).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20)}`;
+};
 const unit = (v: number[]): number[] => {
   const n = Math.sqrt(v.reduce((s, x) => s + x * x, 0));
   return v.map((x) => Math.fround(x / n));
@@ -98,20 +102,20 @@ describe.skipIf(!PG_URL)(
       const mine = new Map<string, { id: string; v: number[] }[]>(docs.map((d) => [d, []]));
       const theirRows: { id: string; v: number[] }[] = [];
       for (const d of docs)
-        for (let i = 0; i < 200; i++) mine.get(d)?.push({ id: randomUUID(), v: unit(noise(r)) });
+        for (let i = 0; i < 200; i++) mine.get(d)?.push({ id: uid(r), v: unit(noise(r)) });
       for (const [k, q] of queries.entries()) {
         const p = { target: [] as string[], others: [] as string[] };
         for (let i = 0; i < 5; i++) {
-          const row = { id: randomUUID(), v: near(q, 1, r) };
+          const row = { id: uid(r), v: near(q, 1, r) };
           mine.get(docs[0] as string)?.push(row);
           p.target.push(row.id);
         }
         for (let i = 0; i < 30; i++) {
-          const row = { id: randomUUID(), v: near(q, 0.3, r) };
+          const row = { id: uid(r), v: near(q, 0.3, r) };
           mine.get(docs[1 + (i % 5)] as string)?.push(row);
           p.others.push(row.id);
         }
-        for (let i = 0; i < 150; i++) theirRows.push({ id: randomUUID(), v: near(q, 0.05, r) });
+        for (let i = 0; i < 150; i++) theirRows.push({ id: uid(r), v: near(q, 0.05, r) });
         planted.set(k, p);
       }
       for (const [d, rows] of mine) {
@@ -180,17 +184,61 @@ describe.skipIf(!PG_URL)(
       expect(row.le_inf).toBe(false);
     });
 
-    it("plans the search on the HNSW index, with and without a document filter", async () => {
-      for (const withDocuments of [false, true]) {
-        const q = `[${(queries[0] as number[]).join(",")}]`;
-        const params = [q, U1, "m", 24, 2, ...(withDocuments ? [[docs[0]]] : [])];
-        const plan = await withTenant(app, T1, async (tx) => {
+    it("an unfiltered search can be cut short by the index scan budget; the document-filtered one is exact", async () => {
+      const q = queries[0] as number[];
+      const lit = `[${q.join(",")}]`;
+      const run = async (sql: string, params: unknown[]) =>
+        withTenant(app, T1, async (tx) => {
           await tx.query("SELECT set_config('enable_sort', 'off', true)");
-          const res = await tx.query(`EXPLAIN (FORMAT JSON) ${searchSql(withDocuments)}`, params);
+          await tx.query("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true)");
+          await tx.query("SELECT set_config('hnsw.ef_search', '10', true)");
+          await tx.query("SELECT set_config('hnsw.max_scan_tuples', '1', true)");
+          return (await tx.query(sql, params)).rows;
+        });
+      const cut = await run(searchSql(false), [lit, U1, "m", 10, 2]);
+      expect(cut.length).toBeLessThan(10);
+      const exact = await run(searchExactSql, [lit, U1, "m", 10, 2, [docs[0]]]);
+      expect(exact).toHaveLength(10);
+      // the document's five planted rows are its nearest, then its random rows
+      expect(
+        exact
+          .slice(0, 5)
+          .map((r) => r.id)
+          .sort(),
+      ).toEqual([...(planted.get(0)?.target ?? [])].sort());
+      // and through the store, with the same low budget
+      const low = new PgChunkVectorStore({
+        modelId: "m",
+        dimensions: DIM,
+        efSearch: 10,
+        tenant: (t, fn) =>
+          withTenant(app, t, async (tx) => {
+            await tx.query("SELECT set_config('hnsw.max_scan_tuples', '1', true)");
+            return fn(tx);
+          }),
+      });
+      expect((await low.search(scope, q, 10)).length).toBeLessThan(10);
+      const filtered = await low.search(scope, q, 10, undefined, {
+        documentIds: [docs[0] as string],
+      });
+      expect(filtered).toHaveLength(10);
+    });
+
+    it("plans the unfiltered search on the HNSW index and the document-filtered one on an exact sort", async () => {
+      const q = `[${(queries[0] as number[]).join(",")}]`;
+      const explain = (sql: string, params: unknown[]) =>
+        withTenant(app, T1, async (tx) => {
+          await tx.query("SELECT set_config('enable_sort', 'off', true)");
+          const res = await tx.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
           return JSON.stringify(res.rows[0]["QUERY PLAN"]);
         });
-        expect(plan).toContain('"Index Name":"chunks_embedding_hnsw"');
-      }
+      const plain = await explain(searchSql(false), [q, U1, "m", 24, 2]);
+      console.log(`EXPLAIN unfiltered: ${(/"Index Name":"[a-z_]+"/.exec(plain) ?? ["none"])[0]}`);
+      expect(plain).toContain('"Index Name":"chunks_embedding_hnsw"');
+      const filtered = await explain(searchExactSql, [q, U1, "m", 24, 2, [docs[0]]]);
+      console.log(`EXPLAIN filtered: ${(/"Node Type":"Sort"/.exec(filtered) ?? ["no sort"])[0]}`);
+      expect(filtered).not.toContain("chunks_embedding_hnsw");
+      expect(filtered).toContain('"Node Type":"Sort"');
     });
   },
 );

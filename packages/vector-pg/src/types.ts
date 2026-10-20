@@ -34,6 +34,9 @@ export interface ChunkVectorStore {
    * `limit` is applied after the filter. The returned hits are ordered by score and then chunkId; which
    * of several chunks with exactly equal scores fill the last places of `limit` is unspecified (an index
    * scan does not break ties).
+   * Unfiltered results are approximate: they come from an index scan with a fixed budget, so they may
+   * miss a nearer chunk or be cut short of `limit`. A `documentIds`-filtered search is exact.
+   * `minScore`, when given, must be finite and in [-1, 1] (RangeError otherwise).
    */
   search(
     scope: VectorScope,
@@ -91,6 +94,13 @@ export function checkNeighbourParams(perChunk: number, minScore: number): void {
   }
   if (!Number.isFinite(minScore) || minScore < -1 || minScore > 1) {
     throw new RangeError("neighbours: minScore must be a finite number in [-1, 1]");
+  }
+}
+
+/** Shared by both stores so `search` rejects the same inputs. A NaN floor would match every row in SQL. */
+export function checkSearchMinScore(minScore: number | undefined): void {
+  if (minScore !== undefined && (!Number.isFinite(minScore) || minScore < -1 || minScore > 1)) {
+    throw new RangeError("search: minScore must be a finite number in [-1, 1]");
   }
 }
 
