@@ -163,8 +163,9 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
   parsed text of a failed document stays sealed until a retry or a delete.
 - Upgrading from flow version 2.3.0: executions still running under it are given up
   (=ingest-flow-mismatch=); the user can retry them.
-- Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters,
-  so at most about 17 map requests) plus one reduce request. Vision reads at most 20 text-less pages per PDF
+- Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters:
+  at least about 17 map requests, up to about twice that when sections are just over 12,000
+  characters, since whole sections are packed) plus one reduce request. Vision reads at most 20 text-less pages per PDF
   (PDFs over 100 pages or 22 MiB raw are refused for vision); images are limited to 5 MiB of base64
   and 8000 px a side. Per-tenant token budgets come in M7.
 - A backlog of interrupted summaries is re-driven one step at a time on recovery (up to 10 minutes
