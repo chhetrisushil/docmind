@@ -1,4 +1,5 @@
-import type { LlmUsageDetail, RefusalDetails } from "./observer";
+import { LlmRequestError } from "./errors";
+import type { LlmUsageDetail, ReasoningBlock, RefusalDetails } from "./observer";
 
 export const isCount = (n: unknown): n is number =>
   typeof n === "number" && Number.isInteger(n) && n >= 0;
@@ -54,3 +55,35 @@ export const usageDetail = (f: UsageFields): LlmUsageDetail => ({
   cacheReadTokens: f.cacheRead ?? 0,
   cacheWriteTokens: f.cacheWrite ?? 0,
 });
+
+export const obj = (v: unknown): Record<string, unknown> | undefined =>
+  typeof v === "object" && v !== null && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : undefined;
+
+/**
+ * The one rule set for a finished content block, shared by complete() and stream() so they cannot drift.
+ * Returns the block to keep (verbatim, `tool_use` with `input` defaulted to `{}`), or undefined for a block
+ * that is not kept (an empty text block, or an unknown type such as a server tool block).
+ * Throws LlmRequestError (no values) for a malformed block.
+ */
+export function toContentBlock(b: Record<string, unknown>): ReasoningBlock | undefined {
+  switch (b.type) {
+    case "text":
+      if (b.text !== undefined && typeof b.text !== "string") throw new LlmRequestError();
+      return b.text === undefined || b.text === "" ? undefined : { ...b, type: "text" };
+    case "tool_use":
+      if (typeof b.id !== "string" || typeof b.name !== "string") throw new LlmRequestError();
+      return { ...b, type: "tool_use", input: b.input ?? {} };
+    case "thinking":
+      if (typeof b.thinking !== "string" || typeof b.signature !== "string" || b.signature === "") {
+        throw new LlmRequestError();
+      }
+      return { ...b, type: "thinking" };
+    case "redacted_thinking":
+      if (typeof b.data !== "string") throw new LlmRequestError();
+      return { ...b, type: "redacted_thinking" };
+    default:
+      return undefined;
+  }
+}

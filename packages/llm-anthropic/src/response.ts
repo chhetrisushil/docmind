@@ -1,6 +1,6 @@
 import type { LlmToolCall } from "@loom/llm";
 import { LlmRequestError } from "./errors";
-import { type UsageFields, isCount, usageFieldsOf } from "./mapping";
+import { type UsageFields, isCount, obj, toContentBlock, usageFieldsOf } from "./mapping";
 import type { ReasoningBlock } from "./observer";
 
 export interface Parsed {
@@ -17,11 +17,6 @@ export interface Parsed {
   stopDetails: unknown;
   usage?: UsageFields;
 }
-
-const obj = (v: unknown): Record<string, unknown> | undefined =>
-  typeof v === "object" && v !== null && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : undefined;
 
 const optionalCount = (v: unknown): boolean => v === undefined || v === null || isCount(v);
 
@@ -49,27 +44,20 @@ export function parseResponse(raw: string): Parsed {
   for (const item of content) {
     const b = obj(item);
     if (!b || typeof b.type !== "string") throw new LlmRequestError();
-    if (b.type === "text") {
-      if (b.text !== undefined && typeof b.text !== "string") throw new LlmRequestError();
-      out.text += b.text ?? "";
-      if (typeof b.text === "string" && b.text !== "") out.blocks.push({ ...b, type: "text" });
-    } else if (b.type === "tool_use") {
-      if (typeof b.id !== "string" || typeof b.name !== "string") throw new LlmRequestError();
-      out.toolCalls.push({ id: b.id, name: b.name, input: b.input ?? {} });
-      out.blocks.push({ ...b, type: "tool_use" });
-    } else if (b.type === "thinking") {
-      if (typeof b.thinking !== "string" || typeof b.signature !== "string") {
-        throw new LlmRequestError();
-      }
-      out.blocks.push({ ...b, type: "thinking" });
+    const block = toContentBlock(b);
+    if (!block) continue; // an empty text block or an unknown type (server tools): ignored
+    out.blocks.push(block);
+    if (block.type === "text") out.text += block.text as string;
+    else if (block.type === "tool_use") {
+      out.toolCalls.push({
+        id: block.id as string,
+        name: block.name as string,
+        input: block.input,
+      });
+    } else {
       out.sawThinking = true;
-      out.thinking.push(b.thinking);
-    } else if (b.type === "redacted_thinking") {
-      if (typeof b.data !== "string") throw new LlmRequestError();
-      out.blocks.push({ ...b, type: "redacted_thinking" });
-      out.sawThinking = true;
+      if (block.type === "thinking") out.thinking.push(block.thinking as string);
     }
-    // other block types (server tools) are ignored
   }
   if (usage !== undefined) {
     const u = obj(usage);
