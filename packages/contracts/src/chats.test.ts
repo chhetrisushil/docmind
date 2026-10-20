@@ -203,7 +203,7 @@ describe("chat contracts", () => {
   it("parses every stream event kind and refuses an unknown one", () => {
     const events = [
       { kind: "status", state: "open", running: false, turns: 0 },
-      { kind: "message", message },
+      { kind: "message", ...message },
       { kind: "reasoning", turn: 3, text: "..." },
       { kind: "reasoning-partial", turn: 3, text: "so far" },
       { kind: "tool", turnKey: 3, step: message.steps[0] },
@@ -227,5 +227,9 @@ describe("chat contracts", () => {
       false,
     );
     expect(ChatStreamEvent.safeParse({ kind: "reset", turnKey: 5 }).success).toBe(false);
+    // a message frame is the DTO beside `kind`: the old nested shape is refused, and so is a DTO missing a field
+    expect(ChatStreamEvent.safeParse({ kind: "message", message }).success).toBe(false);
+    const { cursor: _cursor, ...noCursor } = message;
+    expect(ChatStreamEvent.safeParse({ kind: "message", ...noCursor }).success).toBe(false);
   });
 });
