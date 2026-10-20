@@ -9,9 +9,11 @@ import { type IngestWiring, parseStepTimeoutMs } from "./limits";
 import { PgChunkStore } from "./pgChunks";
 import { PgEntityStore } from "./pgEntities";
 import { PgStepGuard } from "./pgGuard";
+import { PgLinkStore } from "./pgLinks";
 import { PgParsedStore } from "./pgParsed";
 import { PgDocumentResults } from "./pgResults";
 import { PgDocumentSource } from "./pgSource";
+import { PgTitleSource } from "./pgTitles";
 import { VisionReader } from "./vision";
 
 export interface PgIngestArgs {
@@ -50,6 +52,8 @@ export function pgIngestDeps({
     chunks: new PgChunkStore(pool, fields),
     results: new PgDocumentResults(pool, fields),
     entities: new PgEntityStore(pool, fields, new EntityKeys(keys)),
+    links: new PgLinkStore(pool),
+    titles: new PgTitleSource(pool, fields),
     summaryMaxChars: wiring.summaryMaxChars,
     ...(wiring.llm.summary && { llm: wiring.llm.summary }),
     registry: wiring.registry,

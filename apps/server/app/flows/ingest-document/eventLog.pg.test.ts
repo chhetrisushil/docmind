@@ -125,8 +125,8 @@ describe.skipIf(!PG_URL)(
     });
 
     /** A txt document of ALICE whose text is `SENTENCE` repeated, its blob stored as an upload leaves it. */
-    async function seedTxt(fingerprint: string): Promise<IngestStartInput> {
-      const bytes = Buffer.from(Array.from({ length: 4 }, () => SENTENCE).join("\n\n"));
+    async function seedTxt(fingerprint: string, paragraphs = 4): Promise<IngestStartInput> {
+      const bytes = Buffer.from(Array.from({ length: paragraphs }, () => SENTENCE).join("\n\n"));
       const ref = await blobs({ tenantId: T1, userId: U1 }).put(bytes);
       const doc = await newDocument(f.fields, T1, U1, fingerprint, {
         contentAddress: ref.__loomContent,
@@ -183,7 +183,10 @@ describe.skipIf(!PG_URL)(
         output: { outcome: "done", model: "none" },
         stepId: "ingest-summarize",
       });
-      expect(raw[18]?.payload).toEqual({ output: { outcome: "done" }, stepId: "ingest-link" });
+      expect(raw[18]?.payload).toEqual({
+        output: { outcome: "done", count: 0 }, // one chunk: nothing to link
+        stepId: "ingest-link",
+      });
       const statsRow = await f.db.owner.query("SELECT stats_enc FROM documents WHERE id = $1", [
         ref.documentId,
       ]);
@@ -209,6 +212,20 @@ describe.skipIf(!PG_URL)(
       expect(row.rows[0].text_enc.__loomEnc).toBe("loom/aes-256-gcm");
       const opened = await new PgChunkStore(f.app, f.fields).read(ref, [row.rows[0].id]);
       expect(opened[0]?.text).toContain(SENTENCE.slice(0, 30)); // opens for its owner
+    });
+
+    it("a multi-chunk document stores structure links and the link step reports their count", async () => {
+      const ref = await seedTxt("f0".repeat(32), 400);
+      const raw = proven(await run(ref), ref);
+      const linked = await f.db.owner.query(
+        "SELECT count(*)::int AS n FROM chunk_links l JOIN chunks c ON c.id = l.src_chunk_id WHERE c.document_id = $1",
+        [ref.documentId],
+      );
+      expect(linked.rows[0].n).toBeGreaterThan(0);
+      expect(raw[18]?.payload).toEqual({
+        output: { outcome: "done", count: expect.any(Number) },
+        stepId: "ingest-link",
+      });
     });
 
     it("a permanent failure by mime leaves a code in the log, not a message", async () => {

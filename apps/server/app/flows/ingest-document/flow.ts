@@ -45,7 +45,6 @@ export const ingestEmbedStep = step$({
   retry: EMBED_RETRY, // an embedder outage outlasts STEP_RETRY (see EMBED_RETRY)
 });
 
-// analyze, summarize and link are placeholders in part 1 (guard only); part 2 swaps their effects.
 export const ingestAnalyzeStep = step$({
   id: "ingest-analyze",
   name: "IngestAnalyze",

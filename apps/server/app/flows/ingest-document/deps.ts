@@ -5,8 +5,9 @@ import type { StepResult } from "./stepEffect";
 import { analyzeEffect } from "./steps/analyze";
 import { type ChunkDeps, chunkEffect } from "./steps/chunk";
 import { type EmbedDeps, embedEffect } from "./steps/embed";
+import { finalizeEffect } from "./steps/finalize";
+import { type LinkDeps, linkEffect } from "./steps/link";
 import { type ParseDeps, parseEffect } from "./steps/parse";
-import { PLACEHOLDER_STEPS, finalizeEffect, placeholderEffect } from "./steps/placeholders";
 import { type SummarizeDeps, summarizeEffect } from "./steps/summarize";
 
 /**
@@ -14,7 +15,7 @@ import { type SummarizeDeps, summarizeEffect } from "./steps/summarize";
  * `buildApp` hands these to the runtime as effects (`execution.registerEffects`), one per step id.
  * The composition root (`main.ts`, or a test) supplies them per app; nothing is process-global.
  */
-export interface IngestDeps extends ParseDeps, ChunkDeps, EmbedDeps, SummarizeDeps {
+export interface IngestDeps extends ParseDeps, ChunkDeps, EmbedDeps, SummarizeDeps, LinkDeps {
   results: DocumentResults;
 }
 
@@ -27,8 +28,6 @@ export const ingestEffects = (
   "ingest-embed": embedEffect(deps),
   "ingest-analyze": analyzeEffect(deps),
   "ingest-summarize": summarizeEffect(deps),
-  ...Object.fromEntries(
-    PLACEHOLDER_STEPS.map((step) => [`ingest-${step}`, placeholderEffect(step, deps.guard, deps)]),
-  ),
+  "ingest-link": linkEffect(deps),
   "ingest-finalize": finalizeEffect(deps),
 });
