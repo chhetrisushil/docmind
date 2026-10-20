@@ -1,7 +1,7 @@
-import { VectorSchemaError } from "@docmind/vector-pg";
+import { VectorSchemaError, VectorVersionError } from "@docmind/vector-pg";
 import { describe, expect, it, vi } from "vitest";
 import { StartupConfigError } from "../../startupError";
-import { NIL_TENANT, VECTOR_MISMATCH, verifyVectors } from "./verifyVectors";
+import { NIL_TENANT, PGVECTOR_TOO_OLD, VECTOR_MISMATCH, verifyVectors } from "./verifyVectors";
 
 describe("verifyVectors", () => {
   it("verifies with the nil tenant and runs no cleanup on success", async () => {
@@ -44,6 +44,17 @@ describe("verifyVectors", () => {
     );
     expect(err).toBe(boom);
     expect(err).not.toBeInstanceOf(StartupConfigError);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns an old pgvector into a StartupConfigError after cleanup", async () => {
+    const cleanup = vi.fn(async () => {});
+    const verify = async () => {
+      throw new VectorVersionError();
+    };
+    const err = await verifyVectors({ verify }, [cleanup]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StartupConfigError);
+    expect((err as Error).message).toBe(PGVECTOR_TOO_OLD);
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 });
