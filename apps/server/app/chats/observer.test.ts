@@ -38,9 +38,9 @@ describe("chatObserver", () => {
 
   it("streams thinking to the bus keyed by the turn, and stores one thinking item at the end of the response", async () => {
     const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
-    o.onThinking("Weighing the Nocturne ");
-    o.onThinking("forecast question carefully.");
-    await o.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]);
+    o.onThinking?.("Weighing the Nocturne ");
+    o.onThinking?.("forecast question carefully.");
+    await o.onBlocks?.([], [{ type: "thinking", thinking: "t", signature: "s" }]);
     expect(events).toEqual([
       { kind: "thinking", turnKey: 3, text: "Weighing the Nocturne " },
       { kind: "thinking", turnKey: 3, text: "forecast question carefully." },
@@ -60,10 +60,8 @@ describe("chatObserver", () => {
       { type: "thinking", thinking: "x", signature: "sig" },
       { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
     ] as const;
-    await o.onBlocks(["toolu_1"], content);
+    await o.onBlocks?.(["toolu_1"], content);
     expect(await blocks.get(REF, ["toolu_1"])).toEqual(content);
-    expect(await o.blocksFor(["toolu_1"])).toEqual(content);
-    expect(await o.blocksFor(["toolu_2"])).toEqual([]);
     expect(items.puts).toEqual([]); // no thinking text was streamed
   });
 
@@ -87,18 +85,18 @@ describe("chatObserver", () => {
 
   it("stores the thinking once, at onBlocks: onUsage stores nothing", async () => {
     const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
-    o.onThinking("abc");
+    o.onThinking?.("abc");
     o.onUsage({ inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 });
     expect(items.puts).toEqual([]);
-    await o.onBlocks([], [{ type: "thinking", thinking: "abc", signature: "s" }]);
+    await o.onBlocks?.([], [{ type: "thinking", thinking: "abc", signature: "s" }]);
     expect(items.puts.filter((p) => p.item.kind === "thinking")).toHaveLength(1);
   });
 
   it("stores no thinking item for a refused turn, and tells the bus to drop what it showed", async () => {
     const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
-    o.onThinking("abc");
+    o.onThinking?.("abc");
     await o.onRefusal({ category: "policy" });
-    await o.onBlocks([], [{ type: "thinking", thinking: "abc", signature: "s" }]);
+    await o.onBlocks?.([], [{ type: "thinking", thinking: "abc", signature: "s" }]);
     expect(items.puts.map((p) => p.item.kind)).toEqual(["outcome"]);
     expect(events.at(-1)).toEqual({ kind: "reset", turnKey: 3 });
   });
@@ -138,11 +136,11 @@ describe("chatObserver", () => {
     const s2: ChatCallScope = { ...SCOPE, userId: U2, chatId: C2 };
     const a = (await chatScope.run(SCOPE, async () => obs())) as CallObserver;
     const b = (await chatScope.run(s2, async () => obs())) as CallObserver;
-    a.onThinking("a1");
-    b.onThinking("b1");
+    a.onThinking?.("a1");
+    b.onThinking?.("b1");
     await Promise.all([
-      a.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]),
-      b.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]),
+      a.onBlocks?.([], [{ type: "thinking", thinking: "t", signature: "s" }]),
+      b.onBlocks?.([], [{ type: "thinking", thinking: "t", signature: "s" }]),
     ]);
     expect(got).toEqual({ [C]: ["a1"], [C2]: ["b1"] });
     expect(refs.map((r) => `${r.userId}/${r.chatId}`).sort()).toEqual(
@@ -153,8 +151,8 @@ describe("chatObserver", () => {
 
   it("caps the stored thinking", async () => {
     const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
-    o.onThinking("x".repeat(40_000));
-    await o.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]);
+    o.onThinking?.("x".repeat(40_000));
+    await o.onBlocks?.([], [{ type: "thinking", thinking: "t", signature: "s" }]);
     const put = items.puts[0]?.item;
     expect(put?.kind === "thinking" && put.body.text.length).toBe(32_000);
   });
@@ -212,77 +210,6 @@ describe("chatObserver with the real provider and FakeAnthropic (Phase A contrac
         .join(""),
     ).toBe(THINKING);
     expect(items.puts.map((p) => p.item)).toEqual([{ kind: "thinking", body: { text: THINKING } }]);
-  });
-
-  it("a tool-use turn: the blocks are stored under the tool-use id, then put back in place of the assistant message on the next request", async () => {
-    const replies = [
-      {
-        stream: {
-          steps: [
-            { thinking: THINKING },
-            { signature: "sig-1" },
-            { toolUse: { id: "toolu_1", name: "search_docs", input: { query: "q" } } },
-            { stop: "tool_use" as const },
-          ],
-        },
-      },
-      { stream: { steps: [{ text: "Done." }, { stop: "end_turn" as const }] } },
-    ];
-    fake.reply(() => replies.shift() as never);
-    const p = provider();
-    await drain(p, [{ role: "user", content: "q" }]);
-    expect(await blocks.get(REF, ["toolu_1"])).toHaveLength(2);
-    await drain(p, [
-      { role: "user", content: "q" },
-      {
-        role: "assistant",
-        content: [{ type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "q" } }],
-      },
-      { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "{}" }] },
-    ]);
-    const second = fake.requests[1]?.body.messages[1]?.content as { type: string }[];
-    expect(second.map((b) => b.type)).toEqual(["thinking", "tool_use"]);
-  });
-
-  it("an interleaved thinking, tool_use, thinking, tool_use response is put back in the order it came", async () => {
-    const replies = [
-      {
-        stream: {
-          steps: [
-            { thinking: "first" },
-            { signature: "sig-1" },
-            { toolUse: { id: "toolu_1", name: "search_docs", input: { query: "q" } } },
-            { thinking: "second" },
-            { signature: "sig-2" },
-            { toolUse: { id: "toolu_2", name: "related", input: {} } },
-            { stop: "tool_use" as const },
-          ],
-        },
-      },
-      { stream: { steps: [{ text: "Done." }, { stop: "end_turn" as const }] } },
-    ];
-    fake.reply(() => replies.shift() as never);
-    const p = provider();
-    await drain(p, [{ role: "user", content: "q" }]);
-    await drain(p, [
-      { role: "user", content: "q" },
-      {
-        role: "assistant",
-        content: [
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "q" } },
-          { type: "tool_use", id: "toolu_2", name: "related", input: {} },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          { type: "tool_result", toolUseId: "toolu_1", content: "{}" },
-          { type: "tool_result", toolUseId: "toolu_2", content: "{}" },
-        ],
-      },
-    ]);
-    const second = fake.requests[1]?.body.messages[1]?.content as { type: string }[];
-    expect(second.map((b) => b.type)).toEqual(["thinking", "tool_use", "thinking", "tool_use"]);
   });
 
   it("a refusal: stored as an outcome item, and the stream ends normally with the text it had", async () => {

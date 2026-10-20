@@ -39,7 +39,6 @@ export function chatObserver(deps: ChatObserverDeps): () => CallObserver | undef
       return stored;
     };
     return {
-      blocksFor: (toolUseIds) => deps.blocks.get(ref, toolUseIds),
       onThinking(text) {
         if (thinking.length < MAX_THINKING_CHARS)
           thinking = (thinking + text).slice(0, MAX_THINKING_CHARS);

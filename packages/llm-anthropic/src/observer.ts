@@ -25,9 +25,8 @@ export interface RefusalDetails {
  * stores one. Every method is called on every path described in the Phase A header, in that order.
  */
 export interface CallObserver {
-  blocksFor(toolUseIds: readonly string[]): Promise<readonly ReasoningBlock[]>;
-  onThinking(text: string): void;
-  onBlocks(toolUseIds: readonly string[], blocks: readonly ReasoningBlock[]): Promise<void>;
+  onThinking?(text: string): void;
+  onBlocks?(toolUseIds: readonly string[], blocks: readonly ReasoningBlock[]): Promise<void>;
   onRefusal(details: RefusalDetails): Promise<void>;
   onUsage(usage: LlmUsageDetail): void;
 }
@@ -39,11 +38,3 @@ export const isReasoningBlock = (b: unknown): b is ReasoningBlock =>
 /** True for a thinking or redacted_thinking block: the blocks that take no `cache_control`. */
 export const isThinkingBlock = (b: { type: string }): boolean =>
   b.type === "thinking" || b.type === "redacted_thinking";
-
-/** The echo condition: every tool_use id is among the stored blocks' tool_use ids (and there is at least one). */
-export function coversToolUses(ids: readonly string[], blocks: readonly ReasoningBlock[]): boolean {
-  const have = new Set(
-    blocks.flatMap((b) => (b.type === "tool_use" && typeof b.id === "string" ? [b.id] : [])),
-  );
-  return ids.length > 0 && ids.every((id) => have.has(id));
-}

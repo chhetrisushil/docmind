@@ -1,8 +1,7 @@
-import type { LlmRequest } from "@loom/llm";
+import type { LlmContentPart, LlmReasoningPart, LlmRequest } from "@loom/llm";
 import { describe, expect, it } from "vitest";
 import { LlmRequestError } from "./errors";
-import { type ReasoningBlock, coversToolUses } from "./observer";
-import { toMessagesBody, toolUseGroups } from "./request";
+import { toMessagesBody } from "./request";
 
 describe("toMessagesBody", () => {
   it("joins system text, keeps roles and maps text, image and pdf parts", () => {
@@ -248,7 +247,6 @@ describe("toMessagesBody options", () => {
       { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "r" }] },
     ],
   };
-  const THINKING = { type: "thinking", thinking: "hm", signature: "SIG" } as const;
 
   it("sends adaptive summarized thinking and effort whenever it is set, and never a temperature", () => {
     const on = toMessagesBody(LOOP, "m", 10, { thinking: true, effort: "medium" });
@@ -288,100 +286,6 @@ describe("toMessagesBody options", () => {
     expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(1);
   });
 
-  it("replaces the assistant message's content with the stored blocks, verbatim and in stored order", () => {
-    const redacted = { type: "redacted_thinking", data: "ENC" } as const;
-    const stored = [
-      THINKING,
-      { type: "text", text: "looking" },
-      { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
-      redacted,
-    ];
-    const body = toMessagesBody(LOOP, "m", 10, {
-      thinking: true,
-      reasoning: new Map([[1, stored]]),
-    });
-    expect(body.messages[1]?.content.map((b) => b.type)).toEqual([
-      "thinking",
-      "text",
-      "tool_use",
-      "redacted_thinking",
-    ]);
-    expect(body.messages[1]?.content).toEqual(stored);
-  });
-
-  it("round-trips an interleaved thinking, tool_use, thinking, tool_use response in order", () => {
-    const second = { type: "thinking", thinking: "again", signature: "SIG2" } as const;
-    const stored = [
-      THINKING,
-      { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
-      second,
-      { type: "tool_use", id: "toolu_2", name: "related", input: { passageId: "p" } },
-    ];
-    const two: LlmRequest = {
-      messages: [
-        { role: "user", content: "find it" },
-        {
-          role: "assistant",
-          content: [
-            { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
-            { type: "tool_use", id: "toolu_2", name: "related", input: { passageId: "p" } },
-          ],
-        },
-      ],
-    };
-    const body = toMessagesBody(two, "m", 10, {
-      thinking: true,
-      reasoning: new Map([[1, stored]]),
-    });
-    expect(body.messages[1]?.content).toEqual(stored);
-    expect(coversToolUses(["toolu_1", "toolu_2"], stored)).toBe(true);
-    expect(coversToolUses(["toolu_1", "toolu_3"], stored)).toBe(false);
-    expect(coversToolUses(["toolu_1"], [])).toBe(false);
-  });
-
-  it("never marks a thinking block as a cache breakpoint, and refuses an entry that is not a content block", () => {
-    const body = toMessagesBody(
-      {
-        messages: [
-          { role: "user", content: "q" },
-          { role: "assistant", content: "" },
-        ],
-      },
-      "m",
-      10,
-      { cache: true, reasoning: new Map([[1, [THINKING]]]) },
-    );
-    expect(body.messages[1]?.content).toEqual([THINKING]);
-    const bogus = [{ thinking: "no type" }] as unknown as readonly ReasoningBlock[];
-    expect(() => toMessagesBody(LOOP, "m", 10, { reasoning: new Map([[1, bogus]]) })).toThrow(
-      LlmRequestError,
-    );
-  });
-
-  it("lists the tool_use ids of each assistant message by its index in request.messages", () => {
-    expect(toolUseGroups(LOOP)).toEqual([{ index: 1, ids: ["toolu_1"] }]);
-    expect(toolUseGroups({ messages: [{ role: "assistant", content: "plain" }] })).toEqual([]);
-  });
-
-  it("does not mutate a stored reasoning block when marking the cache breakpoint", () => {
-    const text = { type: "text", text: "looking" };
-    const stored = [THINKING, text];
-    const req: LlmRequest = {
-      messages: [
-        { role: "user", content: "q" },
-        { role: "assistant", content: [{ type: "tool_use", id: "t", name: "n", input: {} }] },
-      ],
-    };
-    const body = toMessagesBody(req, "m", 10, { cache: true, reasoning: new Map([[1, stored]]) });
-    expect(body.messages[1]?.content.at(-1)).toEqual({
-      type: "text",
-      text: "looking",
-      cache_control: { type: "ephemeral" },
-    });
-    expect(text).toEqual({ type: "text", text: "looking" });
-    expect("cache_control" in text).toBe(false);
-  });
-
   it("drops an assistant message that has only empty text, so no empty content is sent", () => {
     const body = toMessagesBody(
       {
@@ -403,5 +307,109 @@ describe("toMessagesBody options", () => {
     for (const cache of [true, false]) {
       expect("system" in toMessagesBody(req, "m", 10, { cache })).toBe(false);
     }
+  });
+});
+
+describe("toMessagesBody: reasoning parts (ADR 0133 D5)", () => {
+  const part = (over: Partial<LlmReasoningPart> = {}): LlmReasoningPart => ({
+    type: "reasoning",
+    kind: "summary",
+    provider: "anthropic",
+    signature: "SIG",
+    text: "hm",
+    ...over,
+  });
+  const loop = (assistant: LlmContentPart[]): LlmRequest => ({
+    messages: [
+      { role: "user", content: "find it" },
+      { role: "assistant", content: assistant },
+      { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "r" }] },
+    ],
+  });
+  const call = (id: string) => ({ type: "tool_use" as const, id, name: "search_docs", input: {} });
+  const on = { thinking: true } as const;
+
+  it("maps parts back to thinking and redacted_thinking blocks, unchanged and in the recorded order", () => {
+    const body = toMessagesBody(
+      loop([
+        part({ text: "a", signature: "S1" }),
+        { type: "text", text: "looking" },
+        call("toolu_1"),
+        part({ text: "b", signature: "S2" }),
+        part({ kind: "redacted", signature: "ENC", text: undefined }),
+        call("toolu_2"),
+      ]),
+      "m",
+      10,
+      on,
+    );
+    expect(body.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "a", signature: "S1" },
+      { type: "text", text: "looking" },
+      { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+      { type: "thinking", thinking: "b", signature: "S2" },
+      { type: "redacted_thinking", data: "ENC" },
+      { type: "tool_use", id: "toolu_2", name: "search_docs", input: {} },
+    ]);
+  });
+
+  it("sends an omitted-display part as an empty thinking block that keeps its signature", () => {
+    const body = toMessagesBody(
+      loop([part({ kind: "text", text: "", signature: "S0" }), call("toolu_1")]),
+      "m",
+      10,
+      on,
+    );
+    expect(body.messages[1]?.content[0]).toEqual({
+      type: "thinking",
+      thinking: "",
+      signature: "S0",
+    });
+  });
+
+  it("omits another provider's part, and every reasoning part when thinking is off", () => {
+    const parts = [part({ provider: "gemini" }), part(), call("toolu_1")];
+    expect(
+      toMessagesBody(loop(parts), "m", 10, on).messages[1]?.content.map((b) => b.type),
+    ).toEqual(["thinking", "tool_use"]);
+    expect(toMessagesBody(loop(parts), "m", 10).messages[1]?.content.map((b) => b.type)).toEqual([
+      "tool_use",
+    ]);
+  });
+
+  it("drops a part with no signature and every later reasoning part of that message, keeping text and calls", () => {
+    const body = toMessagesBody(
+      loop([
+        part({ text: "ok", signature: "S1" }),
+        part({ text: "unsigned", signature: undefined }),
+        part({ text: "after", signature: "S3" }),
+        { type: "text", text: "t" },
+        call("toolu_1"),
+      ]),
+      "m",
+      10,
+      on,
+    );
+    expect(body.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "ok", signature: "S1" },
+      { type: "text", text: "t" },
+      { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+    ]);
+  });
+
+  it("refuses a reasoning part outside an assistant message with a fixed LlmRequestError", () => {
+    const bad: LlmRequest = { messages: [{ role: "user", content: [part()] }] };
+    expect(() => toMessagesBody(bad, "m", 10, on)).toThrow(LlmRequestError);
+  });
+
+  it("never marks a thinking block as a cache breakpoint", () => {
+    const last: LlmRequest = {
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: [{ type: "text", text: "x" }, part()] },
+      ],
+    };
+    const body = toMessagesBody(last, "m", 10, { thinking: true, cache: true });
+    expect(JSON.stringify(body.messages)).not.toContain("cache_control");
   });
 });

@@ -14,6 +14,5 @@ export { EFFORTS } from "./request";
 export type { BodyOptions, Effort } from "./request";
 export { isReasoningBlock } from "./observer";
 export type { CallObserver, LlmUsageDetail, ReasoningBlock, RefusalDetails } from "./observer";
-export { coversToolUses } from "./observer";
 export { readSse } from "./sse";
 export type { SseEvent } from "./sse";
