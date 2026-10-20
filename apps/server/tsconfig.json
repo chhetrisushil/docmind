@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "dist", "rootDir": ".", "types": ["node"] },
-  "include": ["app/**/*", "loom.config.ts"],
+  "include": ["app/**/*", "scripts/**/*", "loom.config.ts"],
   "exclude": [
     "**/*.test.ts",
     "**/testing.ts",

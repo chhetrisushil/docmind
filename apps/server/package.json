@@ -5,6 +5,7 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "start": "tsx app/main.ts",
+    "backfill:ingest": "node dist/scripts/backfill-ingest.js",
     "gen": "loom gen --dir app",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",

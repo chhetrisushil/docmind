@@ -82,6 +82,17 @@ describe("bootIngest", () => {
     expect(calls).toContain("startSweeper");
   });
 
+  it("background: false starts recovery but no sweeper or session sweep, and stops cleanly", async () => {
+    const boot = await bootIngest(parts({ background: false }));
+    expect(calls).toContain("startRecovery:owner-1");
+    expect(calls).not.toContain("startSweeper");
+    expect(calls).not.toContain("purgeSessions");
+    await boot.stop();
+    expect(calls).toContain("recovery.stop");
+    expect(calls).not.toContain("sweeper.stop");
+    expect(calls.at(-1)).toBe("endPool");
+  });
+
   it("a failed listen cleans up and never starts recovery or the sweepers", async () => {
     await expect(
       bootIngest(
