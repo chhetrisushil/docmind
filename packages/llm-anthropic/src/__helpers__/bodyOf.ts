@@ -45,7 +45,6 @@ export function bodyOf(
   signal?.addEventListener(
     "abort",
     () => {
-      state.released = true;
       ctrl?.error(new DOMException("aborted", "AbortError"));
       wake();
     },
@@ -64,7 +63,7 @@ export function sseFetch(
   const bodies: { released: boolean }[] = [];
   const f: typeof fetch = async (_input, init) => {
     requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-    const { body, state } = bodyOf(parts, end, init?.signal ?? undefined);
+    const { body, state } = bodyOf(parts, end);
     bodies.push(state);
     return new Response(body, { status, headers: { "content-type": "text/event-stream" } });
   };
