@@ -16,19 +16,6 @@ describe("erasure subject of an execution", () => {
     expect(subjectOfExecution({ executionId: `u_${USER}.c-${chat}~4` })).toBe(USER);
   });
 
-  it("is the owning user for the inbox stream of a chat conversation, and only of one", () => {
-    const chat = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
-    expect(subjectOfExecution({ executionId: `__loom_inbox__:u_${USER}.c-${chat}` })).toBe(USER);
-    for (const executionId of [
-      `__loom_inbox__:u_${USER}`,
-      `__loom_inbox__:u_${USER}:x`,
-      `__loom_inbox__:x_${USER}.c-${chat}`,
-      `__loom_inbox__: u_${USER}.c-${chat}`,
-    ]) {
-      expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);
-    }
-  });
-
   it("does not map a lookalike of the chat separator to the user", () => {
     for (const executionId of [`u_${USER}.d-x`, `u_${USER}.c`, `u_${USER}-c-x`, `u_${USER}x.c-y`]) {
       expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);

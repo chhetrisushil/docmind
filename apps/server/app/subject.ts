@@ -5,9 +5,6 @@ const UUID = UUID_PATTERN;
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
 
-/** Loom keeps a conversation's inbox (the user's questions) in a stream of its own: `__loom_inbox__:<conversation id>`. */
-const CHAT_INBOX = new RegExp(`^__loom_inbox__:u_(${UUID})\\.c-`);
-
 export { chatConversationId, chatIdOfConversation } from "./chats/ids";
 export type { ChatConversationId } from "./chats/ids";
 
@@ -42,12 +39,12 @@ export function executionIdFor(userId: string, name: string): UserExecutionId {
 }
 
 /**
- * The erasure subject of an execution: the owning user for `u_<uuid>[:...]` and `u_<uuid>.c-...` (a chat conversation, any generation) and the inbox stream of a chat conversation (`__loom_inbox__:u_<uuid>.c-...`, where the sealed questions are), lower-case only. Any
+ * The erasure subject of an execution: the owning user for `u_<uuid>[:...]` and `u_<uuid>.c-...` (a chat conversation, any generation), lower-case only. Any
  * other id is an execution no user owns; it is keyed as `x:<id>`, outside the bare-UUID user
  * namespace, and survives user erasure, so every user-owned execution must be started with
  * `executionIdFor`.
  */
 export function subjectOfExecution(e: { executionId: string }): string {
-  const match = USER_EXECUTION.exec(e.executionId) ?? CHAT_INBOX.exec(e.executionId);
+  const match = USER_EXECUTION.exec(e.executionId);
   return match?.[1] ?? `x:${e.executionId}`;
 }
