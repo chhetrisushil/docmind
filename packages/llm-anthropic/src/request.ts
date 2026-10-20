@@ -35,7 +35,6 @@ export interface AnthropicBody {
   max_tokens: number;
   stream?: true;
   system?: string | TextBlock[];
-  temperature?: number;
   thinking?: { type: "adaptive"; display: "summarized" };
   output_config?: { effort: Effort };
   tools?: { name: string; description: string; input_schema: Record<string, unknown> }[];
@@ -123,11 +122,18 @@ export function toMessagesBody(
       : fenceUntrustedMedia(parts)
           .map(block)
           .filter((b) => !(m.role === "assistant" && b.type === "text" && b.text === ""));
+    // An assistant message with no content left (only empty text) is dropped: the API rejects
+    // empty content, and consecutive same-role turns are merged by the API.
+    if (content.length === 0) continue;
     messages.push({ role: m.role, content });
   }
   if (options.cache === true) {
-    const last = messages.at(-1)?.content.at(-1);
-    if (last !== undefined && !isThinkingBlock(last)) (last as Cacheable).cache_control = EPHEMERAL;
+    const turn = messages.at(-1);
+    const last = turn?.content.at(-1);
+    // Copy, never mutate: a stored reasoning block is echoed verbatim.
+    if (turn && last !== undefined && !isThinkingBlock(last)) {
+      turn.content = [...turn.content.slice(0, -1), { ...last, cache_control: EPHEMERAL }];
+    }
   }
   const tools = request.tools?.map((t) => ({
     name: t.name,
@@ -139,13 +145,11 @@ export function toMessagesBody(
     model,
     max_tokens: maxTokens,
     ...(options.stream === true && { stream: true as const }),
-    ...(system.length > 0 && {
+    ...(text !== "" && {
       system:
         options.cache === true ? [{ type: "text" as const, text, cache_control: EPHEMERAL }] : text,
     }),
-    // Thinking and a custom temperature do not go together; thinking wins.
-    ...(request.temperature !== undefined &&
-      options.thinking !== true && { temperature: request.temperature }),
+    // `request.temperature` is accepted and ignored: current Claude models reject a non-default value.
     ...(options.thinking === true && {
       thinking: { type: "adaptive" as const, display: "summarized" as const },
     }),

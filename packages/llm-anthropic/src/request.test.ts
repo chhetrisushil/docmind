@@ -26,7 +26,6 @@ describe("toMessagesBody", () => {
       model: "claude-haiku-5-5",
       max_tokens: 512,
       system: "be brief\n\nand exact",
-      temperature: 0,
       messages: [
         {
           role: "user",
@@ -251,13 +250,13 @@ describe("toMessagesBody options", () => {
   };
   const THINKING = { type: "thinking", thinking: "hm", signature: "SIG" } as const;
 
-  it("sends adaptive summarized thinking without temperature, and effort whenever it is set", () => {
+  it("sends adaptive summarized thinking and effort whenever it is set, and never a temperature", () => {
     const on = toMessagesBody(LOOP, "m", 10, { thinking: true, effort: "medium" });
     expect(on.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(on.output_config).toEqual({ effort: "medium" });
     expect("temperature" in on).toBe(false);
     const off = toMessagesBody(LOOP, "m", 10);
-    expect(off.temperature).toBe(0.2);
+    expect("temperature" in off).toBe(false);
     expect("thinking" in off).toBe(false);
     expect("output_config" in off).toBe(false);
     expect(toMessagesBody(LOOP, "m", 10, { effort: "low" }).output_config).toEqual({
@@ -362,5 +361,47 @@ describe("toMessagesBody options", () => {
   it("lists the tool_use ids of each assistant message by its index in request.messages", () => {
     expect(toolUseGroups(LOOP)).toEqual([{ index: 1, ids: ["toolu_1"] }]);
     expect(toolUseGroups({ messages: [{ role: "assistant", content: "plain" }] })).toEqual([]);
+  });
+
+  it("does not mutate a stored reasoning block when marking the cache breakpoint", () => {
+    const text = { type: "text", text: "looking" };
+    const stored = [THINKING, text];
+    const req: LlmRequest = {
+      messages: [
+        { role: "user", content: "q" },
+        { role: "assistant", content: [{ type: "tool_use", id: "t", name: "n", input: {} }] },
+      ],
+    };
+    const body = toMessagesBody(req, "m", 10, { cache: true, reasoning: new Map([[1, stored]]) });
+    expect(body.messages[1]?.content.at(-1)).toEqual({
+      type: "text",
+      text: "looking",
+      cache_control: { type: "ephemeral" },
+    });
+    expect(text).toEqual({ type: "text", text: "looking" });
+    expect("cache_control" in text).toBe(false);
+  });
+
+  it("drops an assistant message that has only empty text, so no empty content is sent", () => {
+    const body = toMessagesBody(
+      {
+        messages: [
+          { role: "user", content: "a" },
+          { role: "assistant", content: "" },
+          { role: "user", content: "b" },
+        ],
+      },
+      "m",
+      10,
+    );
+    expect(body.messages.map((m) => m.role)).toEqual(["user", "user"]);
+    expect(body.messages.every((m) => m.content.length > 0)).toBe(true);
+  });
+
+  it("sends no system block, cached or not, when the system text is empty", () => {
+    const req: LlmRequest = { system: "", messages: [{ role: "user", content: "hi" }] };
+    for (const cache of [true, false]) {
+      expect("system" in toMessagesBody(req, "m", 10, { cache })).toBe(false);
+    }
   });
 });
