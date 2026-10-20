@@ -37,7 +37,7 @@ a websocket transport, a cloud deployment target.
 A **Loom-native modular monolith**:
 
 - **Ingestion** is a durable Loom flow.
-- **Chat** is a Loom `agentLoop$` agent with retrieval tools, streamed over conversation-sse.
+- **Chat** is a Loom `agentLoop$` agent with retrieval tools, streamed over DocMind's own SSE route, built on Loom's conversation stream helpers.
 - **Storage** is Postgres for everything (event log, pgvector, relational tables).
 - **Extension points** are small interfaces wired only in `loom.config.ts`.
 
@@ -58,7 +58,7 @@ apps/
   server/      loom.config.ts (defineConfig = composition root), HTTP API, SSE
     app/flows/ingest-document/        durable ingestion flow
     app/agents/doc-assistant.ts       agentLoop$ + retrieval tools
-    app/projections/chat-sessions.ts  past-sessions read model
+    app/chats/                        chat_sessions table + chat-activity folded model
   web/         Vite + loom-ui Lit renderer + app-local dm-* components
 packages/
   contracts/   zod schemas + types for the HTTP API (server ⇄ web)
@@ -66,7 +66,7 @@ packages/
   keystore-pg/ PostgresKeyStore (implements @loom/plugin-crypto KeyStore)
   parsers/     DocumentParser registry, one file per format
   embeddings/  EmbeddingProvider implementations (Ollama default)
-  llm-anthropic/ loom `llm` provider on @anthropic-ai/sdk (thinking, refusals)
+  llm-anthropic/ loom `llm` provider on fetch (streaming, reasoning, refusals)
   vector-pg/   pgvector ChunkVectorStore (port, in-memory twin, shared conformance suite)
   blob-store/  encrypted filesystem ContentStore
 infra/         docker-compose, SQL migrations
@@ -168,8 +168,7 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
    as `docmind_app`: owns no tables, no `BYPASSRLS`, so RLS always applies to it. Lookups that happen
    before a tenant is known (login by email, session by token hash) go through narrow
    `SECURITY DEFINER` functions owned by the migration role.
-3. **Event log.** Loom streams are tenant-scoped (Loom tenancy). conversation-sse returns 404 across
-   tenants.
+3. **Event log.** Loom streams are tenant-scoped (Loom tenancy). DocMind's chat stream route is owner-scoped (404 otherwise, so 404 across tenants).
 4. **Blobs.** Paths are tenant- and user-prefixed, and the resolver authorizes the tenant (Loom
    media-gallery pattern).
 
