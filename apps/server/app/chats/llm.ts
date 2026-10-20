@@ -3,7 +3,7 @@ import type { LlmProvider } from "@loom/llm";
 import { StartupConfigError } from "../startupError";
 import type { ChatSettings } from "./settings";
 
-/** One request's bound. It covers the whole stream, so it is at least the turn timeout (180 s; ruling P3): the turn's own timer decides first. */
+/** One request's bound (180 s; ruling P3). It covers the whole stream. The chat flow has no turn timer: this provider timeout is what bounds each attempt. */
 export const CHAT_REQUEST_TIMEOUT_MS = 180_000;
 
 export interface ChatLlm {

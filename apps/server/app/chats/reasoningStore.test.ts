@@ -136,10 +136,12 @@ describe("ChatReasoningStore", () => {
     const other = "b".repeat(32);
     await s.rows.put(REF, other, row?.sealed);
     await s.rows.put({ ...REF, chatId: C2 }, ref.__loomContent, row?.sealed);
-    await expect(s.store.readerFor(REF).get({ __loomContent: other })).rejects.toThrow();
+    await expect(s.store.readerFor(REF).get({ __loomContent: other })).rejects.toThrow(
+      /unable to authenticate data/,
+    );
     await expect(
       s.store.readerFor({ ...REF, chatId: C2 }).get({ __loomContent: ref.__loomContent }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/unable to authenticate data/);
   });
 
   it("keeps a byte-order mark: it is refused as a non-envelope, and a stored one reads back byte for byte", async () => {
