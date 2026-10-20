@@ -8,28 +8,56 @@ export interface SseEvent {
 /**
  * Reads server-sent events from a response body without ever buffering more than the caps: one
  * event over `maxEventBytes` or a body over `maxTotalBytes` is an LlmRequestError. The reader is
- * cancelled on every path (end, error, abort, early return of the consumer). An event that the
- * stream ends in the middle of is dropped, as the SSE standard says.
+ * taken eagerly and cancelled on every path (end, error, abort, early return of the consumer, even
+ * before the first `next()`). An event that the stream ends in the middle of is dropped, as the SSE
+ * standard says. Work is linear in the body size: each decoded piece is scanned once.
  */
-export async function* readSse(
+export function readSse(
   body: ReadableStream<Uint8Array>,
   caps: { maxEventBytes: number; maxTotalBytes: number },
   signal?: AbortSignal,
 ): AsyncGenerator<SseEvent, void, undefined> {
   const reader = body.getReader();
+  const release = () => reader.cancel().catch(() => {});
+  const gen = run(reader, release, caps, signal);
+  return {
+    next: () => gen.next(),
+    return: async (value?: unknown) => {
+      await release();
+      return gen.return(value as undefined);
+    },
+    throw: async (err?: unknown) => {
+      await release();
+      return gen.throw(err);
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  } as AsyncGenerator<SseEvent, void, undefined>;
+}
+
+async function* run(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  release: () => Promise<void>,
+  caps: { maxEventBytes: number; maxTotalBytes: number },
+  signal?: AbortSignal,
+): AsyncGenerator<SseEvent, void, undefined> {
   const decoder = new TextDecoder();
   const cancel = () => {
-    reader.cancel().catch(() => {});
+    void release();
   };
   signal?.addEventListener("abort", cancel, { once: true });
+  const bytes = (s: string) => Buffer.byteLength(s);
   let total = 0;
-  let buf = "";
-  let eventBytes = 0;
+  let eventBytes = 0; // bytes of the lines of the event so far, terminators included
   let event = "";
   let data: string[] = [];
+  let partial: string[] = []; // pieces of the current unterminated line
+  let partialBytes = 0;
+  let skipLf = false; // the last piece ended in CR: a following LF belongs to it
 
-  const line = (text: string): SseEvent | undefined => {
-    eventBytes += Buffer.byteLength(text) + 1;
+  const line = (text: string, terminatorBytes: number): SseEvent | undefined => {
+    eventBytes += bytes(text) + terminatorBytes;
     if (eventBytes > caps.maxEventBytes) throw new LlmRequestError();
     if (text === "") {
       const out =
@@ -51,17 +79,38 @@ export async function* readSse(
     return undefined;
   };
 
-  /** Dispatches every complete line in `buf`. A trailing CR may be half of a CRLF, so it waits. */
-  const pump = (final: boolean): SseEvent[] => {
+  /** Dispatches the lines ended inside `t`, scanning only `t`; the open tail is kept as pieces. */
+  const pump = (t: string, final: boolean): SseEvent[] => {
     const out: SseEvent[] = [];
+    let pos = 0;
+    if (skipLf && t.length > 0) {
+      skipLf = false;
+      if (t.startsWith("\n")) {
+        pos = 1;
+        eventBytes += 1;
+        if (eventBytes > caps.maxEventBytes) throw new LlmRequestError();
+      }
+    }
+    const re = /\r\n|\n|\r/g;
     for (;;) {
-      const m = /\r\n|\n|\r/.exec(buf);
-      if (!m || (m[0] === "\r" && m.index + 1 === buf.length && !final)) break;
-      const ev = line(buf.slice(0, m.index));
-      buf = buf.slice(m.index + m[0].length);
+      re.lastIndex = pos;
+      const m = re.exec(t);
+      if (!m) break;
+      const text =
+        partial.length > 0 ? partial.join("") + t.slice(pos, m.index) : t.slice(pos, m.index);
+      partial = [];
+      partialBytes = 0;
+      const ev = line(text, m[0].length);
+      pos = m.index + m[0].length;
+      if (m[0] === "\r" && pos === t.length && !final) skipLf = true;
       if (ev) out.push(ev);
     }
-    if (eventBytes + Buffer.byteLength(buf) > caps.maxEventBytes) throw new LlmRequestError();
+    if (pos < t.length) {
+      const rest = t.slice(pos);
+      partial.push(rest);
+      partialBytes += bytes(rest);
+      if (eventBytes + partialBytes > caps.maxEventBytes) throw new LlmRequestError();
+    }
     return out;
   };
 
@@ -78,13 +127,17 @@ export async function* readSse(
       if (chunk.done) break;
       total += chunk.value.byteLength;
       if (total > caps.maxTotalBytes) throw new LlmRequestError();
-      buf += decoder.decode(chunk.value, { stream: true });
-      for (const ev of pump(false)) yield ev;
+      for (const ev of pump(decoder.decode(chunk.value, { stream: true }), false)) {
+        if (signal?.aborted) throw new LlmAbortedError();
+        yield ev;
+      }
     }
-    buf += decoder.decode();
-    for (const ev of pump(true)) yield ev;
+    for (const ev of pump(decoder.decode(), true)) {
+      if (signal?.aborted) throw new LlmAbortedError();
+      yield ev;
+    }
   } finally {
     signal?.removeEventListener("abort", cancel);
-    await reader.cancel().catch(() => {});
+    await release();
   }
 }

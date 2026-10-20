@@ -1,7 +1,7 @@
 /**
  * A response body made of the given parts. `end`: "close" ends it cleanly, "error" fails it after
  * the last part (a connection reset), "stall" never ends. `state.released` turns true when the body
- * is closed, errored, aborted or cancelled by its reader, so a "stall" body proves a cancel.
+ * is closed or errored by the source, or cancelled by its reader, so a "stall" body proves a cancel.
  */
 export function bodyOf(
   parts: readonly (string | Uint8Array)[],
@@ -45,7 +45,6 @@ export function bodyOf(
   signal?.addEventListener(
     "abort",
     () => {
-      state.released = true;
       ctrl?.error(new DOMException("aborted", "AbortError"));
       wake();
     },

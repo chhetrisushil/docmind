@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bodyOf } from "./__helpers__/bodyOf";
 import { LlmAbortedError, LlmRequestError, LlmStreamError, LlmUnavailableError } from "./errors";
 import { readSse } from "./sse";
@@ -87,9 +87,9 @@ describe("readSse", () => {
     expect(state.released).toBe(true);
   });
 
-  it("throws LlmAbortedError when the signal fires mid-stream, and releases the body", async () => {
+  it("throws LlmAbortedError when the signal fires mid-stream, yields nothing more, and cancels the body", async () => {
     const ac = new AbortController();
-    const { body, state } = bodyOf(["data: 1\n\n"], "stall", ac.signal);
+    const { body, state } = bodyOf(["data: 1\n\ndata: 2\n\n"], "stall");
     const seen: string[] = [];
     const run = async () => {
       for await (const e of readSse(body, CAPS, ac.signal)) {
@@ -100,6 +100,26 @@ describe("readSse", () => {
     await expect(run()).rejects.toBeInstanceOf(LlmAbortedError);
     expect(seen).toEqual(["1"]);
     expect(state.released).toBe(true);
+  });
+
+  it("throws LlmAbortedError when the signal fires during a pending read, and cancels the body", async () => {
+    const ac = new AbortController();
+    const { body, state } = bodyOf([], "stall");
+    const running = all(readSse(body, CAPS, ac.signal));
+    await Promise.resolve();
+    expect(state.released).toBe(false);
+    ac.abort();
+    await expect(running).rejects.toBeInstanceOf(LlmAbortedError);
+    expect(state.released).toBe(true);
+  });
+
+  it("cancels the reader when a read fails", async () => {
+    const cancel = vi.fn(() => Promise.resolve());
+    const body = {
+      getReader: () => ({ read: () => Promise.reject(new Error("reset")), cancel }),
+    } as unknown as ReadableStream<Uint8Array>;
+    await expect(all(readSse(body, CAPS))).rejects.toBeInstanceOf(LlmStreamError);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("throws LlmAbortedError for a signal that was already aborted, and releases the body", async () => {
@@ -117,5 +137,54 @@ describe("readSse", () => {
       break;
     }
     expect(state.released).toBe(true);
+  });
+
+  it("cancels the body when the consumer returns before the first next()", async () => {
+    const { body, state } = bodyOf(["data: 1\n\n"], "stall");
+    const it = readSse(body, CAPS)[Symbol.asyncIterator]();
+    expect(body.locked).toBe(true);
+    await it.return?.();
+    expect(state.released).toBe(true);
+  });
+
+  it("counts a CRLF terminator as two bytes", async () => {
+    const wire = "data: x\r\ndata: y\r\n\r\n"; // 9 + 9 + 2 = 20 bytes
+    const ok = bodyOf([wire]);
+    expect(await all(readSse(ok.body, { maxEventBytes: 20, maxTotalBytes: 1_000 }))).toEqual([
+      { event: "message", data: "x\ny" },
+    ]);
+    const over = bodyOf([wire], "stall");
+    await expect(
+      all(readSse(over.body, { maxEventBytes: 19, maxTotalBytes: 1_000 })),
+    ).rejects.toBeInstanceOf(LlmRequestError);
+    expect(over.state.released).toBe(true);
+  });
+
+  it("counts bytes, not characters, against the event cap, and allows exactly the cap", async () => {
+    const caps = { maxEventBytes: 21, maxTotalBytes: 1_000 };
+    const atCap = bodyOf([`data: ${"x".repeat(13)}\n\n`]); // 21 bytes
+    expect(await all(readSse(atCap.body, caps))).toHaveLength(1);
+    const oneOver = bodyOf([`data: ${"x".repeat(14)}\n\n`], "stall");
+    await expect(all(readSse(oneOver.body, caps))).rejects.toBeInstanceOf(LlmRequestError);
+    // 13 characters (21 or fewer) but 2 bytes each: 6 + 26 + 2 = 34 bytes
+    const wide = bodyOf([`data: ${"é".repeat(13)}\n\n`], "stall");
+    await expect(all(readSse(wide.body, caps))).rejects.toBeInstanceOf(LlmRequestError);
+    expect(wide.state.released).toBe(true);
+  });
+
+  it("counts bytes, not characters, against the total cap, and allows exactly the cap", async () => {
+    const wire = `data: ${"é".repeat(5)}\n\n`; // 6 + 10 + 2 = 18 bytes, 13 characters
+    const caps = (maxTotalBytes: number) => ({ maxEventBytes: 1_000, maxTotalBytes });
+    expect(await all(readSse(bodyOf([wire]).body, caps(18)))).toHaveLength(1);
+    const { body, state } = bodyOf([wire], "stall");
+    await expect(all(readSse(body, caps(17)))).rejects.toBeInstanceOf(LlmRequestError);
+    expect(state.released).toBe(true);
+  });
+
+  it("reads a long line dripped in tiny chunks (the scan is incremental)", async () => {
+    const payload = "x".repeat(512 * 1024);
+    const { body } = bodyOf(pieces(`data: ${payload}\r\n\r\n`, 16));
+    const out = await all(readSse(body, { maxEventBytes: 1_048_576, maxTotalBytes: 2_097_152 }));
+    expect(out).toEqual([{ event: "message", data: payload }]);
   });
 });
