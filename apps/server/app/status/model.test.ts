@@ -169,7 +169,7 @@ describe("the fold", () => {
   it("is registered as one durable fold, with enums and codes only", () => {
     expect([ingestStatus.id, ingestStatus.version, ingestStatus.initialState]).toEqual([
       "ingest-status",
-      "2",
+      "3",
       INITIAL_STATUS,
     ]);
     expect(Object.keys(ingestStatus.handlers).sort()).toEqual([
@@ -204,7 +204,8 @@ describe("through Loom's folded-model service", () => {
       state: { status: "ready", step: "finalize", code: null },
     });
     const [other] = await store.getFolded("ingest-status", [chat]);
-    expect(other).toMatchObject({ key: null, scope: null, state: INITIAL_STATUS });
+    // the neutral state: no key and no value, so no sealed value can ever match it
+    expect(other).toMatchObject({ key: null, scope: null, state: {} });
   });
 });
 
