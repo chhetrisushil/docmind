@@ -45,6 +45,7 @@ export function bodyOf(
   signal?.addEventListener(
     "abort",
     () => {
+      state.released = true;
       ctrl?.error(new DOMException("aborted", "AbortError"));
       wake();
     },
@@ -52,3 +53,23 @@ export function bodyOf(
   );
   return { body, state };
 }
+
+/** A `fetch` that serves the given SSE parts (default: never ends) and records each request body. */
+export function sseFetch(
+  parts: readonly (string | Uint8Array)[],
+  end: "close" | "error" | "stall" = "stall",
+  status = 200,
+) {
+  const requests: Record<string, unknown>[] = [];
+  const bodies: { released: boolean }[] = [];
+  const f: typeof fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const { body, state } = bodyOf(parts, end, init?.signal ?? undefined);
+    bodies.push(state);
+    return new Response(body, { status, headers: { "content-type": "text/event-stream" } });
+  };
+  return { fetch: f, requests, bodies };
+}
+
+export const allReleased = (t: { bodies: { released: boolean }[] }): boolean =>
+  t.bodies.length > 0 && t.bodies.every((b) => b.released);

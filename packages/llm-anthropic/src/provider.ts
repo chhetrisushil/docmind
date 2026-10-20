@@ -1,11 +1,22 @@
-import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
-import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
+import type { LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loom/llm";
+import {
+  LlmAbortedError,
+  LlmRefusalError,
+  LlmRequestError,
+  LlmStreamError,
+  LlmUnavailableError,
+} from "./errors";
 import { type CallObserver, type ReasoningBlock, coversToolUses } from "./observer";
 import { EFFORTS, type Effort, toMessagesBody, toolUseGroups } from "./request";
+import { parseResponse } from "./response";
+import { readSse } from "./sse";
+import { StreamState } from "./streamState";
 
 const TRANSIENT = new Set([408, 409, 429, 529]);
 const DEFAULT_BASE = "https://api.anthropic.com";
 const DEFAULT_MAX_RESPONSE = 4 * 1024 * 1024;
+const DEFAULT_MAX_STREAM = 8 * 1024 * 1024;
+const MAX_EVENT = 1024 * 1024;
 const BAD_KEY = "apiKey must be a header-safe string";
 const BAD_BASE = "baseUrl must be an http(s) URL without credentials, query or fragment";
 
@@ -13,11 +24,12 @@ export interface AnthropicOptions {
   apiKey: string;
   model: string;
   maxTokens: number;
+  /** Bounds the whole response, streamed or not. */
   timeoutMs: number;
   baseUrl?: string;
   fetch?: typeof fetch;
   maxResponseBytes?: number;
-  /** Adaptive thinking with summarized display. The provider never sends `temperature` (any model), whatever the request carries. Default false. */
+  /** Adaptive thinking with summarized display; never sends `temperature`. Default false. */
   thinking?: boolean;
   /** Sent as `output_config.effort` only when set. */
   effort?: Effort;
@@ -45,49 +57,8 @@ function checkedBase(raw: string): string {
   return url.href.replace(/\/+$/, "");
 }
 
-interface Parsed {
-  content: { type: string; text?: string }[];
-  stop_reason: string;
-  usage?: { input_tokens: number; output_tokens: number };
-}
-
-const count = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
-
-/** Validates the response by hand. Never puts the text in an error. */
-function parseResponse(text: string): Parsed {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new LlmRequestError();
-  }
-  const o = raw as Record<string, unknown> | null;
-  if (typeof o !== "object" || o === null) throw new LlmRequestError();
-  const { content, stop_reason: stop, usage } = o;
-  if (
-    !Array.isArray(content) ||
-    typeof stop !== "string" ||
-    !content.every(
-      (b) =>
-        typeof b === "object" &&
-        b !== null &&
-        typeof b.type === "string" &&
-        (b.text === undefined || typeof b.text === "string"),
-    )
-  ) {
-    throw new LlmRequestError();
-  }
-  if (usage !== undefined) {
-    const u = usage as Record<string, unknown> | null;
-    if (typeof u !== "object" || u === null || !count(u.input_tokens) || !count(u.output_tokens)) {
-      throw new LlmRequestError();
-    }
-  }
-  return o as unknown as Parsed;
-}
-
 /**
- * Claude over the Messages API, non-streaming (M3b D6; M4 adds streaming and thinking). Errors are
+ * Claude over the Messages API (M3b D6; M4 adds streaming, tools, thinking and caching). Errors are
  * typed and carry at most an HTTP status: never the body, the prompt or the key. The response is
  * read with a byte cap. Redirects are not followed.
  */
@@ -154,9 +125,11 @@ export class AnthropicMessagesProvider implements LlmProvider {
     );
   }
 
-  async complete(request: LlmRequest): Promise<LlmResponse> {
-    const observer = this.o.observer?.();
-    const body = await this.#body(request, observer, false);
+  /** Sends the request. A non-2xx status releases the body and throws its typed error. */
+  async #open(
+    request: LlmRequest,
+    body: string,
+  ): Promise<{ res: Response; signal: AbortSignal; timeout: AbortSignal }> {
     const timeout = AbortSignal.timeout(this.o.timeoutMs);
     const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
     let res: Response;
@@ -176,12 +149,19 @@ export class AnthropicMessagesProvider implements LlmProvider {
       if (request.signal?.aborted) throw new LlmAbortedError();
       throw new LlmUnavailableError(); // network failure or our own timeout
     }
+    if (res.status >= 300) {
+      await res.body?.cancel().catch(() => {}); // release the socket on every path
+      if (res.status >= 500 || TRANSIENT.has(res.status)) throw new LlmUnavailableError(res.status);
+      throw new LlmRequestError(res.status); // 3xx (not followed) and other 4xx
+    }
+    return { res, signal, timeout };
+  }
+
+  async complete(request: LlmRequest): Promise<LlmResponse> {
+    const observer = this.o.observer?.();
+    const body = await this.#body(request, observer, false);
+    const { res, timeout } = await this.#open(request, body);
     try {
-      if (res.status >= 300) {
-        if (res.status >= 500 || TRANSIENT.has(res.status))
-          throw new LlmUnavailableError(res.status);
-        throw new LlmRequestError(res.status); // 3xx (not followed) and other 4xx
-      }
       const text = await readCapped(res, this.o.maxResponseBytes ?? DEFAULT_MAX_RESPONSE);
       const parsed = parseResponse(text);
       if (parsed.stop_reason === "refusal") throw new LlmRefusalError();
@@ -204,6 +184,36 @@ export class AnthropicMessagesProvider implements LlmProvider {
       throw err;
     } finally {
       await res.body?.cancel().catch(() => {}); // release the socket on every path
+    }
+  }
+
+  async *stream(request: LlmRequest): AsyncIterable<LlmStreamChunk> {
+    const observer = this.o.observer?.();
+    const body = await this.#body(request, observer, true);
+    const { res, signal, timeout } = await this.#open(request, body);
+    const state = new StreamState((text) => observer?.onThinking(text));
+    const max = this.o.maxStreamBytes ?? DEFAULT_MAX_STREAM;
+    try {
+      if (!res.body) throw new LlmRequestError();
+      const caps = { maxEventBytes: Math.min(max, MAX_EVENT), maxTotalBytes: max };
+      for await (const ev of readSse(res.body, caps, signal)) {
+        for (const chunk of state.feed(ev.event, ev.data)) yield chunk;
+        if (state.stopped) break;
+      }
+      const end = state.end();
+      yield {
+        delta: "",
+        done: true,
+        ...(end.toolCalls.length > 0 && { toolCalls: end.toolCalls }),
+        stopReason: end.stopReason,
+        ...(end.usage && { usage: end.usage }),
+      };
+    } catch (err) {
+      if (request.signal?.aborted) throw new LlmAbortedError();
+      if (timeout.aborted) throw new LlmStreamError();
+      throw err;
+    } finally {
+      await res.body?.cancel().catch(() => {}); // a locked body rejects: readSse already cancelled it
     }
   }
 }
