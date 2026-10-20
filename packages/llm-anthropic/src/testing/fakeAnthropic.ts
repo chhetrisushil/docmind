@@ -3,12 +3,15 @@
  *
  * The default reply is the text "ok" with `stop_reason: "end_turn"`. Usage is deterministic:
  * `input_tokens` is the character count of all user text parts plus 1, and `output_tokens` is 1,
- * so a request of "hi" reports 3 / 1. `close()` destroys every open socket, so a request parked
+ * so a request of "hi" reports 3 / 1. A reply with a `stream` script (or any streaming request) is served as server-sent events; see streamScript.ts. `close()` destroys every open socket, so a request parked
  * by `hang` never outlives the server.
  */
-import { createServer } from "node:http";
+import { type ServerResponse, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { AnthropicBody } from "../request";
+import { type StreamScript, normalize, renderEvents, renderJson } from "./streamScript";
+
+export type { StreamScript, StreamStep } from "./streamScript";
 
 export interface FakeRequest {
   headers: Record<string, string | string[] | undefined>;
@@ -26,6 +29,8 @@ export interface FakeReply {
   stallAfterHeaders?: true;
   /** Extra response headers (for example `location` on a 302). */
   headers?: Record<string, string>;
+  /** Steps rendered as SSE for a streaming request and as a JSON message otherwise. */
+  stream?: StreamScript;
 }
 
 export interface FakeAnthropic {
@@ -35,6 +40,8 @@ export interface FakeAnthropic {
   failNext(status: number, times?: number): void;
   /** The next request parks before it is answered: `reached` resolves once it has arrived, `release()` lets it answer. */
   holdNext(): { reached: Promise<void>; release(): void };
+  /** Resolves when a streaming response reaches a `{hold: true}` step; `release()` lets it go on. */
+  streamHold(): Promise<{ release(): void }>;
   close(): Promise<void>;
 }
 
@@ -46,6 +53,9 @@ const userChars = (body: AnthropicBody): number =>
     .flatMap((m) => m.content)
     .reduce((n, b) => n + (b.type === "text" && typeof b.text === "string" ? b.text.length : 0), 0);
 
+const stopOf = (s: string | undefined): "end_turn" | "tool_use" | "max_tokens" | "refusal" =>
+  s === "tool_use" || s === "max_tokens" || s === "refusal" ? s : "end_turn";
+
 export async function startFakeAnthropic(
   options: { reply?: (body: AnthropicBody) => FakeReply } = {},
 ): Promise<FakeAnthropic> {
@@ -54,6 +64,57 @@ export async function startFakeAnthropic(
   const failures: number[] = [];
   const holds: { arrive(): void; released: Promise<void>; release(): void }[] = [];
   const sockets = new Set<import("node:net").Socket>();
+  const reachedHolds: { release(): void }[] = [];
+  const holdWaiters: ((gate: { release(): void }) => void)[] = [];
+  const openHolds = new Set<{ release(): void }>();
+  /** Parks a streaming response until the gate is released, the client leaves or the server closes. */
+  const hold = (res: ServerResponse): Promise<void> => {
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gate = { release };
+    openHolds.add(gate);
+    res.once("close", release);
+    const waiter = holdWaiters.shift();
+    if (waiter) waiter(gate);
+    else reachedHolds.push(gate);
+    return released.then(() => {
+      openHolds.delete(gate);
+    });
+  };
+  const respondScript = async (res: ServerResponse, body: AnthropicBody, r: FakeReply) => {
+    let norm: ReturnType<typeof normalize>;
+    try {
+      norm = normalize(
+        r.stream ?? { steps: [{ text: r.text ?? "ok" }, { stop: stopOf(r.stopReason) }] },
+        userChars(body) + 1,
+      );
+    } catch {
+      res.writeHead(500).end(); // a malformed script is the test's bug
+      return;
+    }
+    if (body.stream !== true) {
+      if (norm.failure) {
+        res.writeHead(norm.failure === "overloaded_error" ? 529 : 500).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(renderJson(norm, body.model)));
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+    for (const item of renderEvents(norm, body.model)) {
+      if (res.destroyed) return;
+      if ("hold" in item) {
+        await hold(res);
+        continue;
+      }
+      const frame = `event: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`;
+      await new Promise<void>((done) => res.write(frame, () => done()));
+    }
+    res.end();
+  };
   const server = createServer((req, res) => {
     if (req.method !== "POST" || req.url !== "/v1/messages") {
       req.resume();
@@ -98,6 +159,10 @@ export async function startFakeAnthropic(
         res.end(r.rawBody ?? "");
         return;
       }
+      if (r.stream !== undefined || body.stream === true) {
+        await respondScript(res, body, r);
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
@@ -138,9 +203,16 @@ export async function startFakeAnthropic(
       holds.push({ arrive, released, release });
       return { reached, release };
     },
+    streamHold: () => {
+      const gate = reachedHolds.shift();
+      return gate
+        ? Promise.resolve(gate)
+        : new Promise<{ release(): void }>((resolve) => holdWaiters.push(resolve));
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const h of holds) h.release();
+        for (const g of openHolds) g.release();
         server.close(() => resolve());
         for (const s of sockets) s.destroy();
       }),
