@@ -2,18 +2,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { sendError } from "./respond";
 
-const MAX_BODY_BYTES = 16 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 16 * 1024;
 const MAX_ISSUES = 10;
 const utf8 = new TextDecoder("utf-8", { fatal: true });
 
-/** The raw body bytes, or null when they exceed the limit (reading stops there). */
-function readBody(req: IncomingMessage): Promise<Buffer | null> {
+/** The raw body bytes, or null when they exceed `max` (reading stops there). */
+function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > max) {
         req.pause();
         resolve(null);
       } else chunks.push(chunk);
@@ -40,7 +40,9 @@ export async function readJson<S extends z.ZodTypeAny>(
   req: IncomingMessage,
   res: ServerResponse,
   schema: S,
+  options: { maxBytes?: number } = {},
 ): Promise<z.infer<S> | undefined> {
+  const max = options.maxBytes ?? DEFAULT_MAX_BODY_BYTES;
   const type = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
   if (type !== "application/json") {
     res.setHeader("connection", "close");
@@ -48,8 +50,8 @@ export async function readJson<S extends z.ZodTypeAny>(
     return undefined;
   }
   const declared = req.headers["content-length"];
-  if (declared !== undefined && Number(declared) > MAX_BODY_BYTES) return tooLarge(req, res);
-  const bytes = await readBody(req);
+  if (declared !== undefined && Number(declared) > max) return tooLarge(req, res);
+  const bytes = await readBody(req, max);
   if (bytes === null) return tooLarge(req, res);
   let raw: unknown;
   try {

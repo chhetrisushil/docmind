@@ -28,7 +28,13 @@ import { chatConversationId } from "./ids";
 import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
 import { insertChat, listChats, softDeleteChat } from "./sessions";
+import type { ChatRef } from "./turnItems";
 import type { ChatWiring } from "./wiring";
+
+/** Starts a chat's auto title (the `chat-title` flow, Task 154): start-once, never throws. */
+export interface ChatTitleTrigger {
+  fire(ref: ChatRef): void;
+}
 
 export interface ChatRouteDeps {
   pool: Pool;
@@ -40,6 +46,8 @@ export interface ChatRouteDeps {
   eventStore: EventStore;
   /** Reads a reply's reasoning (history, endpoint); the create and get routes do not use it. */
   reasoning: ReplyReasoning;
+  /** Called by the send route for an untitled chat after a message was accepted. Absent without a title model. */
+  titles?: ChatTitleTrigger;
 }
 
 export const PAGE = 50;
