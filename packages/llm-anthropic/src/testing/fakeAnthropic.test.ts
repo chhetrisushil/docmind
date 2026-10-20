@@ -206,38 +206,51 @@ describe("FakeAnthropic streaming scripts", () => {
     expect((await post({ stream: true })).status).toBe(500);
   });
 
-  it("a client that disconnects during a hold releases its own gate, and streamHold() skips dead gates", async () => {
-    const own = await startFakeAnthropic({
-      reply: () => ({ stream: { steps: [{ hold: true }, { text: "z" }, { stop: "end_turn" }] } }),
+  const HELD = {
+    stream: { steps: [{ text: "a" }, { hold: true }, { text: "z" }, { stop: "end_turn" }] },
+  } satisfies { stream: StreamScript };
+  const open = (own: FakeAnthropic, signal?: AbortSignal) =>
+    fetch(`${own.url}/v1/messages`, {
+      method: "POST",
+      ...(signal && { signal }),
+      body: JSON.stringify({ model: "m", stream: true, messages: [{ role: "user", content: [] }] }),
     });
+  /** Reads events until the text "a" has arrived (the hold step follows it). */
+  async function untilA(res: Response) {
+    const reader = res.body?.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+    let acc = "";
+    while (!acc.includes('"text":"a"')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      acc += new TextDecoder().decode(value);
+    }
+    return reader;
+  }
+
+  it("a client that disconnects during a hold releases its own gate (not via close())", async () => {
+    const own = await startFakeAnthropic({ reply: () => HELD });
     try {
       const ac = new AbortController();
-      const first = fetch(`${own.url}/v1/messages`, {
-        method: "POST",
-        signal: ac.signal,
-        body: JSON.stringify({
-          model: "m",
-          stream: true,
-          messages: [{ role: "user", content: [] }],
-        }),
-      });
-      const resFirst = await first;
-      const firstRead = resFirst.body
-        ?.getReader()
-        .read()
-        .catch(() => {});
-      const dead = await own.streamHold(); // reached, claimed
+      const res = await open(own, ac.signal);
+      await untilA(res);
+      const gate = await own.streamHold();
       ac.abort();
-      await firstRead;
-      // A second held stream: its gate, not the dead one, must be handed out.
-      const res = await fetch(`${own.url}/v1/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          model: "m",
-          stream: true,
-          messages: [{ role: "user", content: [] }],
-        }),
-      });
+      await gate.closed; // only the response's close handler can settle this
+    } finally {
+      await own.close();
+    }
+  });
+
+  it("an unclaimed gate whose client left is dropped, so streamHold() returns the next live one", async () => {
+    const own = await startFakeAnthropic({ reply: () => HELD });
+    try {
+      const ac = new AbortController();
+      const first = await open(own, ac.signal);
+      await untilA(first);
+      const dead = await own.peekHold(); // reached, not claimed
+      ac.abort();
+      await dead.closed;
+      const res = await open(own);
       const gate = await own.streamHold();
       expect(gate).not.toBe(dead);
       gate.release();
@@ -247,39 +260,15 @@ describe("FakeAnthropic streaming scripts", () => {
     }
   });
 
-  it("drops an unclaimed gate whose client left, so the next streamHold() gets the new one", async () => {
-    const own = await startFakeAnthropic({
-      reply: () => ({ stream: { steps: [{ hold: true }, { text: "z" }, { stop: "end_turn" }] } }),
-    });
+  it("release() settles closed", async () => {
+    const own = await startFakeAnthropic({ reply: () => HELD });
     try {
-      const ac = new AbortController();
-      const first = await fetch(`${own.url}/v1/messages`, {
-        method: "POST",
-        signal: ac.signal,
-        body: JSON.stringify({
-          model: "m",
-          stream: true,
-          messages: [{ role: "user", content: [] }],
-        }),
-      });
-      const firstRead = first.body
-        ?.getReader()
-        .read()
-        .catch(() => {});
-      // Wait for the server to see the abort: the first request's response closes.
-      ac.abort();
-      await firstRead;
-      const res = await fetch(`${own.url}/v1/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-          model: "m",
-          stream: true,
-          messages: [{ role: "user", content: [] }],
-        }),
-      });
+      const res = await open(own);
+      const reading = events(res);
       const gate = await own.streamHold();
       gate.release();
-      expect((await events(res)).at(-1)?.event).toBe("message_stop");
+      await gate.closed;
+      await reading;
     } finally {
       await own.close();
     }
