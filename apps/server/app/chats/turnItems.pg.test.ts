@@ -103,7 +103,7 @@ describe.skipIf(!PG_URL)("chat turn items (needs DOCMIND_TEST_PG_URL)", () => {
         "SELECT id, body_enc FROM chat_turn_items WHERE chat_id = $1 AND ord = 12",
         [chat.chatId],
       );
-      expect(row.id).toBe(chatItemId(chat.chatId, 12, "thinking", "seal"));
+      expect(row.id).toBe(chatItemId(U1, chat.chatId, 12, "thinking", "seal"));
       expect(row.body_enc.__loomEnc).toBe("loom/aes-256-gcm");
       expect(JSON.stringify(row.body_enc)).not.toContain(text);
       const cipher = fx.fields.forUser(U1);
@@ -129,6 +129,32 @@ describe.skipIf(!PG_URL)("chat turn items (needs DOCMIND_TEST_PG_URL)", () => {
       expect((await items.forTurns({ ...chat, tenantId: T2, userId: U2 }, [4])).size).toBe(0);
     });
 
+    it("refuses to overwrite another owner's existing row, and leaves it intact", async () => {
+      await items.put(theirs, 20, "dup", thinking("original"));
+      await expect(
+        items.put({ ...theirs, userId: U1 }, 20, "dup", thinking("hijack")),
+      ).rejects.toMatchObject({ constraint: "chat_turn_items_chat_fkey" });
+      expect((await items.forTurns(theirs, [20])).get(20)).toEqual([thinking("original")]);
+    });
+
+    it("counts the size cap in bytes and refuses bad turn keys in forTurns", async () => {
+      // 100k three-byte characters: 100k UTF-16 units but 300 KB
+      await expect(items.put(chat, 1, "k", thinking("€".repeat(100 * 1024)))).rejects.toThrow(
+        /^turn item: the body is too large$/,
+      );
+      for (const bad of [[-1], [1.5], [2 ** 31], [Number.NaN]])
+        await expect(items.forTurns(chat, bad)).rejects.toThrow(/^turn item: bad turn keys$/);
+      await expect(
+        items.forTurns(
+          chat,
+          Array.from({ length: 501 }, (_, i) => i),
+        ),
+      ).rejects.toThrow(/^turn item: bad turn keys$/);
+      await expect(items.put(chat, 2 ** 31, "k", thinking("x"))).rejects.toThrow(
+        /^turn item: turn key must be a non-negative integer$/,
+      );
+    });
+
     it("refuses a malformed item, a bad turn key or step key, and an oversized body, naming the rule only", async () => {
       const bad = {
         kind: "tool",
@@ -152,7 +178,7 @@ describe.skipIf(!PG_URL)("chat turn items (needs DOCMIND_TEST_PG_URL)", () => {
     });
 
     it("fails a stored item of the wrong shape with a fixed message, never the content", async () => {
-      const id = chatItemId(chat.chatId, 13, "tool", "bad");
+      const id = chatItemId(U1, chat.chatId, 13, "tool", "bad");
       const sealed = await fx.fields
         .forUser(U1)
         .seal(chatItemBind(id), { secret: "do not leak this text" });
