@@ -204,6 +204,10 @@ Backup and erasure runbooks are listed in the spec as M7 work and do not exist y
 - PDFs in CJK scripts that need predefined CMaps extract as empty text and are sent to vision.
 - The word segmentation in =analyze= is synchronous.
 - Vector neighbour search for links is an exact scan (no index) until M4.
+- Documents that reached =ready= before flow 3.0.0 never get stats, summary, entities or links.
+  Re-upload them; a future re-ingest tool will handle it. There is no production data yet.
+- Parse retries use =LLM_RETRY= for every format (a crash is retried as patiently as a Claude outage).
+- A summarize attempt can hold one of the process's ingest slots for up to 10 minutes.
 
 * Documentation map
 
