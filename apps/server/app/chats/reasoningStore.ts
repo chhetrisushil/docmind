@@ -17,7 +17,7 @@ export class ReasoningScopeError extends Error {
 export const MAX_REASONING_BYTES = 512 * 1024;
 
 const ADDRESS = /^[0-9a-f]{32}$/;
-const utf8 = new TextDecoder("utf-8", { fatal: true });
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const encoder = new TextEncoder();
 
 /** The seal binds row and column (spec 4.4); the cipher adds the owner. */
