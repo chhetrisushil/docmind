@@ -1,5 +1,5 @@
 import type { StreamScript } from "@docmind/llm-anthropic/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
 import { type ChatStack, startChatStack } from "./testStack";
@@ -184,17 +184,32 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
     const PARTIAL = "The Nocturne forecast is partial text that was cut off";
     stack = await startChatStack({
       scripts: [
-        { steps: [{ text: PARTIAL }, { hold: true }, { text: " and more" }, { stop: "end_turn" }] },
+        {
+          steps: [
+            { thinking: THINKING },
+            { signature: SIG1 },
+            { text: PARTIAL },
+            { hold: true },
+            { text: " and more" },
+            { stop: "end_turn" },
+          ],
+        },
       ],
     });
     const id = await stack.start();
+    const live: string[] = [];
+    const off = stack.chat.hub.subscribe(id, (ev) => {
+      if (ev.type === "reasoning") live.push(ev.text);
+    });
     await stack.send(id, QUESTION);
     const gate = await stack.fake.streamHold();
+    await vi.waitFor(() => expect(live.join("")).toContain(THINKING)); // streamed before the stop
+    off();
     expect(stack.chat.stops.stop(CONV)).toBe(true);
     gate.release();
     expect((await stack.replies(id, 1))[0]).toMatchObject({ status: "interrupted" });
     const raw = await rawLog(stack);
-    assertNoPlaintext(raw, [PARTIAL, QUESTION]);
+    assertNoPlaintext(raw, [PARTIAL, QUESTION, THINKING, SIG1]);
     expect([...sealedPaths(raw)]).toContain("DECISION_RECORDED:choice.partial");
   });
 
@@ -289,8 +304,18 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
       ],
     });
     const id = await stack.start();
+    const live: string[] = [];
+    const off = stack.chat.hub.subscribe(id, (ev) => {
+      if (ev.type === "reasoning") live.push(ev.text);
+    });
     await stack.send(id, QUESTION);
     await stack.replies(id, 1);
+    off();
+    expect(live.join("")).toContain(THINKING); // thinking really streamed, so "nothing stored" is not vacuous
+    expect(stack.items.puts.map((p) => p.item)).toContainEqual({
+      kind: "outcome",
+      body: { kind: "refusal", details: { category: "policy" } },
+    });
     expect(stack.reasoningRows.rows.size).toBe(0);
     const raw = await rawLog(stack);
     expect(raw.some((e) => e.eventType === "LLM_REASONING_CAPTURED")).toBe(false);
