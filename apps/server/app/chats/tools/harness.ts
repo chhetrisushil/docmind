@@ -69,35 +69,33 @@ export function toolEffect<In, Out>(
   );
 
   async function body(raw: unknown, ctx: EffectContext): Promise<TaintedValue<Out>> {
-    {
-      const scope = scopeOfEffect(ctx);
-      const input = parseInput(schema, raw);
-      const chat = await deps.chats.scopeOf(scope);
-      if (chat === null) throw new ChatScopeError();
-      const call: ToolCall = {
-        vector: { tenantId: scope.tenantId, ownerId: scope.userId },
-        chat,
-        ...(ctx.signal && { signal: ctx.signal }),
-      };
-      const result = await run(input, call, ctx);
-      // Stored before the frame can complete: a recovered turn serves the frame from the log and
-      // never calls the tool again, so the items must already be there.
-      if (result.passages && result.passages.length > 0) {
-        await deps.items.put(scope, scope.turnKey, scope.stepKey, {
-          kind: "passages",
-          body: { passages: result.passages.map(storedOf) },
-        });
-      } else {
-        // A retried attempt of this step that finds nothing must not leave the earlier attempt's passages.
-        await deps.items.remove(scope, scope.turnKey, scope.stepKey, "passages");
-      }
+    const scope = scopeOfEffect(ctx);
+    const input = parseInput(schema, raw);
+    const chat = await deps.chats.scopeOf(scope);
+    if (chat === null) throw new ChatScopeError();
+    const call: ToolCall = {
+      vector: { tenantId: scope.tenantId, ownerId: scope.userId },
+      chat,
+      ...(ctx.signal && { signal: ctx.signal }),
+    };
+    const result = await run(input, call, ctx);
+    // Stored before the frame can complete: a recovered turn serves the frame from the log and
+    // never calls the tool again, so the items must already be there.
+    if (result.passages && result.passages.length > 0) {
       await deps.items.put(scope, scope.turnKey, scope.stepKey, {
-        kind: "tool",
-        body: result.step,
+        kind: "passages",
+        body: { passages: result.passages.map(storedOf) },
       });
-      deps.bus.publish(scope.chatId, { kind: "tool", turnKey: scope.turnKey, step: result.step });
-      return tainted(result.out, TOOL_ORIGIN);
+    } else {
+      // A retried attempt of this step that finds nothing must not leave the earlier attempt's passages.
+      await deps.items.remove(scope, scope.turnKey, scope.stepKey, "passages");
     }
+    await deps.items.put(scope, scope.turnKey, scope.stepKey, {
+      kind: "tool",
+      body: result.step,
+    });
+    deps.bus.publish(scope.chatId, { kind: "tool", turnKey: scope.turnKey, step: result.step });
+    return tainted(result.out, TOOL_ORIGIN);
   }
 }
 
