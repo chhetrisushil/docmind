@@ -40,6 +40,7 @@ describe("assertNoPlaintext", () => {
   });
 
   it("does not echo the secret it found", () => {
+    expect.assertions(1);
     try {
       assertNoPlaintext([ev("A", { t: "a confidential question" })], ["a confidential question"]);
     } catch (err) {

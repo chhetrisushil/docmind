@@ -22,6 +22,9 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
   STEP_STARTED: ["input.messages", "input.query", "input.titleContains"],
   STEP_COMPLETED: ["output.content", "output.toolCalls[].input", "output.value"],
   DECISION_RECORDED: ["choice.text", "choice.partial", "choice.failed", "choice.error"],
+  // Loom writes String(err) here; a tool's collaborator error could carry a query or passage text.
+  STEP_FAILED: ["error"],
+  EXECUTION_FAILED: ["error"],
   EXECUTION_STARTED: [
     "input.turns[].user",
     "input.turns[].assistant",

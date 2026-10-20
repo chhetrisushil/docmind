@@ -5,7 +5,7 @@ import {
 } from "@docmind/llm-anthropic/testing";
 import { followConversation } from "@loom/conversation";
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import { EncryptingEventStore, InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { buildApp } from "../config";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
@@ -24,6 +24,9 @@ export interface ChatStack {
   /** The unsealed log, as Postgres would hold it. */
   raw: InMemoryAsyncEventStore;
   items: FakeItems;
+  blocks: FakeBlocks;
+  /** Every subject a key was requested for: the proof that nothing is sealed under another user. */
+  subjects: ReadonlySet<string>;
   start(): Promise<string>;
   send(conversationId: string, text: string): Promise<void>;
   /** Waits until the conversation has `n` assistant messages and returns all of them so far. */
@@ -44,6 +47,8 @@ export async function startChatStack(o: {
   passages?: Passage[];
   rotateEveryTurns?: number;
   generalKnowledge?: boolean;
+  /** Makes retrieval throw this (to prove a collaborator's message never reaches the log). */
+  searchError?: Error;
 }): Promise<ChatStack> {
   const fake = await startFakeAnthropic();
   const queue = [...o.scripts];
@@ -57,11 +62,25 @@ export async function startChatStack(o: {
   const settings = loadChatSettings(env);
   const llm = createChatLlm(env, settings);
   const raw = new InMemoryAsyncEventStore();
-  const events = new EncryptingEventStore(raw, new InMemoryKeyStore(), {
+  const subjects = new Set<string>();
+  const keys = new InMemoryKeyStore();
+  const recording: KeyStore = {
+    getOrCreate: (id) => {
+      subjects.add(id);
+      return keys.getOrCreate(id);
+    },
+    get: (id) => {
+      subjects.add(id);
+      return keys.get(id);
+    },
+    destroy: (id) => keys.destroy(id),
+  };
+  const events = new EncryptingEventStore(raw, recording, {
     sensitive: { ...SENSITIVE_EVENT_PATHS },
     subjectOf: subjectOfExecution,
   });
   const items = new FakeItems();
+  const blocks = new FakeBlocks();
   const prepared = prepareChat({
     settings,
     ...(llm && { llm }),
@@ -70,8 +89,14 @@ export async function startChatStack(o: {
     ...(o.rotateEveryTurns !== undefined && { rotateEveryTurns: o.rotateEveryTurns }),
     collaborators: {
       items,
-      blocks: new FakeBlocks(),
-      retriever: { search: async () => o.passages ?? [], related: async () => [] },
+      blocks,
+      retriever: {
+        search: async () => {
+          if (o.searchError) throw o.searchError;
+          return o.passages ?? [];
+        },
+        related: async () => [],
+      },
       passages: { read: async () => new Map(), section: async () => [] },
       chats: new FakeChats("all"),
       documents: { summary: async () => null, list: async () => [] },
@@ -85,6 +110,8 @@ export async function startChatStack(o: {
     fake,
     raw,
     items,
+    blocks,
+    subjects,
     async start() {
       const { conversationId } = await chat.conversations.start({
         conversationId: chatConversationId(U, C),

@@ -292,7 +292,9 @@ describe.skipIf(!PG_URL)(
       const ref = await seedTxt("e".repeat(64));
       const raw = proven(await run(ref), ref);
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
-      expect(raw.at(-1)?.payload).toEqual({ error: "Error: ingest step failed: parse" });
+      expect(raw.at(-1)?.payload).toEqual({
+        error: expect.objectContaining({ __loomEnc: "loom/aes-256-gcm" }),
+      }); // sealed since M4
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
 
@@ -335,7 +337,9 @@ describe.skipIf(!PG_URL)(
       // The class name only: no message, cause or id in what the process logs.
       expect(logged.mock.calls).toEqual([["ingest step failed", "embed", "EmbeddingError"]]);
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
-      expect(raw.at(-1)?.payload).toEqual({ error: "Error: ingest step failed: embed" });
+      expect(raw.at(-1)?.payload).toEqual({
+        error: expect.objectContaining({ __loomEnc: "loom/aes-256-gcm" }),
+      }); // sealed since M4
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
 

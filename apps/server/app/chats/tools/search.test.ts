@@ -94,9 +94,9 @@ describe("search_docs", () => {
     expect(s.events).toHaveLength(1);
   });
 
-  it("lets any other failure through", async () => {
-    const s = setup(new RangeError("boom"));
-    await expect(s.run({ query: "q" })).rejects.toBeInstanceOf(RangeError);
+  it("turns any other failure into a fixed class-only error that carries none of its message", async () => {
+    const s = setup(new RangeError("boom with the query text"));
+    await expect(s.run({ query: "q" })).rejects.toThrow(/^chat tool failed: RangeError$/);
     expect(s.items.puts).toEqual([]);
   });
 
