@@ -15,7 +15,7 @@ export interface ChatLookup {
 
 export interface ToolHarnessDeps {
   chats: ChatLookup;
-  items: Pick<PgTurnItems, "put">;
+  items: Pick<PgTurnItems, "put" | "remove">;
   bus: Pick<ChatBus, "publish">;
 }
 
@@ -75,6 +75,9 @@ export function toolEffect<In, Out>(
           kind: "passages",
           body: { passages: result.passages.map(storedOf) },
         });
+      } else {
+        // A retried attempt of this step that finds nothing must not leave the earlier attempt's passages.
+        await deps.items.remove(scope, scope.turnKey, scope.stepKey, "passages");
       }
       await deps.items.put(scope, scope.turnKey, scope.stepKey, {
         kind: "tool",

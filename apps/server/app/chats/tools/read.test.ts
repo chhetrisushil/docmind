@@ -1,5 +1,7 @@
-import { unwrapTainted } from "@loom/classify";
+import { isTainted, taintOf, unwrapTainted } from "@loom/classify";
 import { describe, expect, it } from "vitest";
+import { ChatScopeError } from "../scope";
+import { C, T, U } from "../testing";
 import { ChatToolInputError } from "./harness";
 import { SECTION_MAX_CHARS, SECTION_MAX_PASSAGES, capSection, readEffects } from "./read";
 import { DOC_A, DOC_B, P1, P2, P3, harness, passage, toolCtx, vectorScope } from "./testing";
@@ -10,7 +12,7 @@ function setup(opts: {
   related?: ReturnType<typeof passage>[];
   scope?: Parameters<typeof harness>[0];
 }) {
-  const h = harness(opts.scope ?? "all");
+  const h = harness(opts.scope === undefined ? "all" : opts.scope);
   const calls: { op: string; args: unknown[] }[] = [];
   const passages = {
     async read(...args: unknown[]) {
@@ -169,5 +171,103 @@ describe("capSection", () => {
   it("truncates a first passage that alone is over the budget", () => {
     const out = capSection([p(1, SECTION_MAX_CHARS + 5_000)], p(1, 1).passageId);
     expect(out[0]?.text.length).toBe(SECTION_MAX_CHARS + 1);
+  });
+});
+
+describe("the harness around related and read_section", () => {
+  it("taints both outputs with origin document", async () => {
+    const s = setup({
+      known: [passage()],
+      related: [passage({ passageId: P2 })],
+      section: [passage()],
+    });
+    for (const out of [
+      await s.e.related.execute({ passageId: P1 }, toolCtx()),
+      await s.e.read_section.execute({ passageId: P1 }, toolCtx()),
+    ]) {
+      expect(isTainted(out)).toBe(true);
+      expect(taintOf(out)?.origin).toBe("document");
+    }
+  });
+
+  it.each([5, null, {}])(
+    "refuses a non-string passageId %j before any read or store",
+    async (id) => {
+      const s = setup({ known: [passage()], section: [passage()] });
+      for (const e of [s.e.related, s.e.read_section])
+        await expect(e.execute({ passageId: id }, toolCtx())).rejects.toBeInstanceOf(
+          ChatToolInputError,
+        );
+      expect([s.calls.length, s.items.puts.length, s.events.length]).toEqual([0, 0, 0]);
+    },
+  );
+
+  it("refuses read_section on a deleted chat and on an extra key, doing nothing", async () => {
+    const gone = setup({ section: [passage()], scope: null });
+    await expect(gone.e.read_section.execute({ passageId: P1 }, toolCtx())).rejects.toBeInstanceOf(
+      ChatScopeError,
+    );
+    const extra = setup({ section: [passage()] });
+    await expect(
+      extra.e.read_section.execute({ passageId: P1, tenantId: "x" }, toolCtx()),
+    ).rejects.toBeInstanceOf(ChatToolInputError);
+    expect(
+      [gone, extra].map((s) => [s.calls.length, s.items.puts.length, s.events.length]),
+    ).toEqual([
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+  });
+
+  it("stores the step under the call's turn and step key, and asks for the chat by the context's ids", async () => {
+    const s = setup({
+      known: [passage()],
+      related: [passage({ passageId: P2 })],
+      section: [passage()],
+    });
+    await s.e.related.execute({ passageId: P1 }, toolCtx());
+    await s.e.read_section.execute(
+      { passageId: P1, span: "neighbours" },
+      toolCtx({ stepId: "conv#o3#turn:1:tool:1" }),
+    );
+    const tools = s.items.puts.filter((p) => p.item.kind === "tool");
+    expect(tools.map((p) => [p.turnKey, p.stepKey, p.item])).toEqual([
+      [
+        3,
+        "conv#o3#turn:1:tool:0",
+        {
+          kind: "tool",
+          body: {
+            name: "related",
+            label: 'Followed links from "Nocturne planning memo"',
+            count: 1,
+          },
+        },
+      ],
+      [
+        3,
+        "conv#o3#turn:1:tool:1",
+        {
+          kind: "tool",
+          body: { name: "read_section", label: 'Read around "Nocturne planning memo"', count: 1 },
+        },
+      ],
+    ]);
+    expect(
+      s.chats.asked.map((r) => ({ tenantId: r.tenantId, userId: r.userId, chatId: r.chatId })),
+    ).toEqual([
+      { tenantId: T, userId: U, chatId: C },
+      { tenantId: T, userId: U, chatId: C },
+    ]);
+  });
+
+  it("removes the passages of an earlier attempt when a retry of the same step finds nothing", async () => {
+    const s = setup({ section: [passage()] });
+    await s.e.read_section.execute({ passageId: P1 }, toolCtx());
+    expect(s.items.puts.map((p) => p.item.kind)).toEqual(["passages", "tool"]);
+    s.chats.scope = { documentIds: [DOC_B] };
+    const out = await s.e.read_section.execute({ passageId: P1 }, toolCtx({ attempt: 2 }));
+    expect(unwrapTainted(out)).toEqual({ error: "not_found" });
+    expect(s.items.puts.map((p) => p.item.kind)).toEqual(["tool"]);
   });
 });
