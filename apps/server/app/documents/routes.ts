@@ -246,6 +246,11 @@ async function upload(
   json(res, duplicate ? 200 : 201, { document, duplicate } satisfies UploadDocumentResponse);
 }
 
+/** Attempts at the delete transaction when Postgres picks it as a deadlock victim. */
+const DELETE_ATTEMPTS = 3;
+const isDeadlock = (err: unknown): boolean =>
+  typeof err === "object" && err !== null && (err as { code?: unknown }).code === "40P01";
+
 /** How long a delete waits for that document's pending flow start before it cancels anyway. */
 export const SETTLE_TIMEOUT_MS = 5000;
 
@@ -372,17 +377,31 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
         //    upload of the same bytes cannot slip between the two (the store's contract). If COMMIT
         //    fails the row survives without its blob; deleting again finishes the job.
+        //    A link step's `DELETE FROM chunk_links` can row-lock links that this delete cascades
+        //    into, while its own FK check waits on this delete: Postgres aborts one side with 40P01.
+        //    The transaction re-reads everything, so it is safe to run again; the advisory lock of
+        //    the link step is deliberately not taken here.
         const store = deps.blobs(identity);
-        const removed = await withTenant(deps.pool, identity.tenantId, async (tx) => {
-          await lockTenantForWrite(tx, identity.tenantId);
-          const current = await getDocument(tx, identity.userId, mine.id);
-          if (!current) return false; // a concurrent delete won
-          const gone = await deleteDocument(tx, identity.userId, current.id);
-          if (!gone) return false;
-          await store.delete({ __loomContent: gone.contentAddress });
-          return true;
-        });
-        if (!removed) return sendError(res, 404, "not_found", "document not found");
+        let outcome: { removed: boolean; generation: number } | undefined;
+        for (let attempt = 1; !outcome; attempt++) {
+          try {
+            outcome = await withTenant(deps.pool, identity.tenantId, async (tx) => {
+              await lockTenantForWrite(tx, identity.tenantId);
+              const current = await getDocument(tx, identity.userId, mine.id);
+              if (!current) return { removed: false, generation: mine.ingest_generation }; // a concurrent delete won
+              const gone = await deleteDocument(tx, identity.userId, current.id);
+              if (!gone) return { removed: false, generation: current.ingest_generation };
+              await store.delete({ __loomContent: gone.contentAddress });
+              return { removed: true, generation: current.ingest_generation };
+            });
+          } catch (err) {
+            if (attempt >= DELETE_ATTEMPTS || !isDeadlock(err)) throw err;
+          }
+        }
+        // A retry may have bumped the generation after step 1 read it; that run is still live.
+        if (outcome.generation > mine.ingest_generation)
+          await deps.ingest.cancel(identity, mine.id, outcome.generation);
+        if (!outcome.removed) return sendError(res, 404, "not_found", "document not found");
 
         // 3. The row and blob are gone (committed) and the flow is cancelled: now forget the status
         //    rows. A failure here must not turn a completed delete into an error: log the class only
