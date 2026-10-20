@@ -1,5 +1,7 @@
+import type { ChatReasoningDto } from "@docmind/contracts";
 import type { EffectContext } from "@loom/effect-runtime";
 import { chatConversationId } from "./ids";
+import type { ReplyReasoning, ReplyRef } from "./reasoningRead";
 import type { ReasoningRows } from "./reasoningStore";
 import type { ChatRef, PgTurnItems, TurnItem } from "./turnItems";
 
@@ -58,5 +60,22 @@ export class MemoryReasoningRows implements ReasoningRows {
   }
   async get(ref: ChatRef, address: string): Promise<unknown | null> {
     return this.rows.get(this.key(ref, address))?.sealed ?? null;
+  }
+}
+
+/** A `ReplyReasoning` for route tests: `set(cursor, dto)` decides what a reply gets; every call is recorded. */
+export class FakeReplyReasoning implements ReplyReasoning {
+  readonly calls: ReplyRef[][] = [];
+  private readonly byCursor = new Map<string, ChatReasoningDto | null>();
+  set(cursor: string, dto: ChatReasoningDto | null): void {
+    this.byCursor.set(cursor, dto);
+  }
+  async forReplies(
+    _ref: ChatRef,
+    _conversationId: string,
+    replies: readonly ReplyRef[],
+  ): Promise<Map<string, ChatReasoningDto | null>> {
+    this.calls.push([...replies]);
+    return new Map(replies.map((r) => [r.cursor, this.byCursor.get(r.cursor) ?? null]));
   }
 }
