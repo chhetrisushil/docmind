@@ -46,6 +46,10 @@ function parts(over: Partial<BootIngestParts> = {}, statusBoot?: () => Promise<v
       boot: statusBoot ?? (async () => void calls.push("bootStatus")),
       close: async () => void calls.push("closeStatus"),
     },
+    activity: {
+      boot: async () => void calls.push("bootActivity"),
+      close: async () => void calls.push("closeActivity"),
+    },
     vectors: {},
     events: { closeAll: note("events.closeAll") },
     detachStatusFeed: note("detach"),
@@ -72,17 +76,24 @@ beforeEach(() => {
 describe("bootIngest", () => {
   it("verifies, boots status, primes the decoy, listens, then starts recovery and the sweepers", async () => {
     await bootIngest(parts({ listen: async () => void calls.push("listen") }));
-    expect(calls.slice(0, 4)).toEqual(["verifyVectors", "bootStatus", "primeDecoy", "listen"]);
-    expect(calls[4]).toBe("startRecovery:owner-1");
-    expect(calls.slice(5)).toEqual(expect.arrayContaining(["startSweeper"]));
-    expect(calls.indexOf("startSweeper")).toBeGreaterThan(4);
+    expect(calls.slice(0, 5)).toEqual([
+      "verifyVectors",
+      "bootStatus",
+      "bootActivity",
+      "primeDecoy",
+      "listen",
+    ]);
+    expect(calls[5]).toBe("startRecovery:owner-1");
+    expect(calls.slice(6)).toEqual(expect.arrayContaining(["startSweeper"]));
+    expect(calls.indexOf("startSweeper")).toBeGreaterThan(5);
   });
 
   it("starts recovery and the sweepers without a listen step", async () => {
     await bootIngest(parts());
-    expect(calls.slice(0, 4)).toEqual([
+    expect(calls.slice(0, 5)).toEqual([
       "verifyVectors",
       "bootStatus",
+      "bootActivity",
       "primeDecoy",
       "startRecovery:owner-1",
     ]);
@@ -113,6 +124,7 @@ describe("bootIngest", () => {
     expect(calls).toEqual([
       "verifyVectors",
       "bootStatus",
+      "bootActivity",
       "primeDecoy",
       "closeIngest",
       "closeApp",
@@ -155,6 +167,7 @@ describe("bootIngest", () => {
       "closeHeartbeat",
       "detach",
       "closeStatus",
+      "closeActivity",
       "closeApp",
       "closeDurable",
       "endPool",

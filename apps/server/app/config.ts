@@ -3,6 +3,7 @@ import type { EventEnvelope } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import type { TimerStore } from "@loom/event-runtime";
 import type { RegisteredFlow } from "@loom/workflow-runtime";
+import { isChatExecution } from "./chats/activity";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import {
   agentModules,
@@ -63,12 +64,12 @@ export function buildApp(
     projectionModules,
     ...chat,
     observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
-    // The status model folds each ingest execution's log from its first event, so compaction must never
-    // remove an ingest execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
+    // The status and activity models fold each ingest and chat execution's log from its first event, so compaction
+    // must never remove such an execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
     // Eager heartbeat leases: an ingest runs for seconds, so Loom's default lazy lease (taken only after a
     // run has gone TTL/3 unleased) would leave a fresh execution unvetoed against recovery on another node.
     durability: {
-      retention: { compactionExempt: isIngestExecution },
+      retention: { compactionExempt: (id: string) => isIngestExecution(id) || isChatExecution(id) },
       heartbeat: { acquire: "eager" },
     },
     execution: {
