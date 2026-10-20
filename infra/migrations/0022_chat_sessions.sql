@@ -15,7 +15,7 @@ CREATE TABLE chat_sessions (
   CONSTRAINT chat_sessions_owner_fkey FOREIGN KEY (tenant_id, user_id)
     REFERENCES users (tenant_id, id) ON DELETE CASCADE,
   CONSTRAINT chat_sessions_tenant_id_id_key UNIQUE (tenant_id, id),
-  -- Child tables (chat_turn_items, chat_reasoning_blocks) reference this key, so a row can only
+  -- Child tables (chat_turn_items, chat_reasoning_texts) reference this key, so a row can only
   -- belong to the chat's own owner.
   CONSTRAINT chat_sessions_owner_id_key UNIQUE (tenant_id, user_id, id),
   CONSTRAINT chat_sessions_title_pair CHECK ((title_enc IS NULL) = (title_source = 'none')),
