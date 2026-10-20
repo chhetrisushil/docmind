@@ -24,6 +24,11 @@ export interface BootIngestParts {
   /** Identifies this process's execution leases. */
   recoveryOwner: string;
   /**
+   * Run the hourly session sweep and the upload sweeper (default true). A one-shot script passes false:
+   * recovery still starts, but nothing recurs.
+   */
+  background?: boolean;
+  /**
    * Stops the server accepting requests, runs `then` once it is drained (even if the drain fails), and
    * propagates a drain failure. Default: no server, so `then` runs at once.
    */
@@ -39,7 +44,7 @@ export interface BootIngestParts {
  * (the blob root, the temp dir, the test database).
  */
 export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Promise<void> }> {
-  const { built, ingest, durable, pool, listen, recoveryOwner } = parts;
+  const { built, ingest, durable, pool, listen, recoveryOwner, background = true } = parts;
   const { app, store, throttle, starts, status, vectors, events, detachStatusFeed } = built;
   const cleanup = [
     () => closeIngest(ingest),
@@ -56,8 +61,8 @@ export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Prom
   await primeDecoy();
 
   let recovery!: ReturnType<typeof startRecovery>;
-  let sweepTimer!: ReturnType<typeof setInterval>;
-  let uploadSweeper!: ReturnType<typeof startSweeper>;
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  let uploadSweeper: ReturnType<typeof startSweeper> | undefined;
   const afterListen = () => {
     // Resume what the last process left running, then keep looking. Not awaited: the server must not wait to listen.
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
@@ -66,6 +71,7 @@ export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Prom
         leases: { store: durable.storage.leaseStore, owner: recoveryOwner },
       }),
     });
+    if (!background) return;
     const sweep = () =>
       Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
         console.error(
@@ -97,9 +103,9 @@ export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Prom
     // Timers first, then the open event streams (they never end on their own, so the server drain would
     // wait on them), then the server drain, then the close sequence.
     stopping ??= (async () => {
-      clearInterval(sweepTimer);
+      if (sweepTimer) clearInterval(sweepTimer);
       recovery.stop();
-      const sweeperStopped = uploadSweeper.stop(); // idempotent; no sweep may fire a start once the drain begins
+      const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins
       events.closeAll();
       const close = async () => {
         // Let a sweep that is already running finish.

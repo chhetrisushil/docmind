@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "noEmit": true },
-  "include": ["app/**/*", "loom.config.ts", "vitest.config.ts", "vitest.setup.ts"],
+  "include": ["app/**/*", "scripts/**/*", "loom.config.ts", "vitest.config.ts", "vitest.setup.ts"],
   "exclude": ["dist"]
 }
