@@ -4,14 +4,13 @@ import { buildApp } from "../config";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";
 import { createChatLlm } from "./llm";
 import { loadChatSettings } from "./settings";
-import { FakeBlocks, FakeItems } from "./testing";
+import { FakeItems } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { connectChat, logHopError, prepareChat } from "./wiring";
 
 const KEY = "k".repeat(32);
 const collaborators = () => ({
   items: new FakeItems(),
-  blocks: new FakeBlocks(),
   retriever: { search: async () => [], related: async () => [] },
   passages: { read: async () => new Map(), section: async () => [] },
   chats: new FakeChats("all"),

@@ -47,9 +47,11 @@ export function chatModelEffect(
       const interrupted = () => deps.shutdown?.aborted === true && ctx.signal?.aborted !== true;
       let response: LlmResponse;
       try {
-        // The retried attempt's response replaces the earlier one: drop its stale thinking row.
+        // The retried attempt's response replaces the earlier one: drop its stale outcome row (a refusal or a
+        // max_tokens of the attempt before). Reasoning needs no cleanup: Loom keeps every attempt and marks the
+        // recorded one.
         if (ctx.attempt > 1)
-          await deps.items.remove(scope, scope.turnKey, scope.stepKey, "thinking");
+          await deps.items.remove(scope, scope.turnKey, scope.stepKey, "outcome");
         response = await chatScope.run(scope, () => inner.execute(input, call));
         if (response.stopReason === "max_tokens") {
           await deps.items.put(scope, scope.turnKey, scope.stepKey, {

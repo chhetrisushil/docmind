@@ -13,7 +13,7 @@ import { chatConversationId } from "./ids";
 import { createChatLlm } from "./llm";
 import type { Passage } from "./retrieval";
 import { loadChatSettings } from "./settings";
-import { C, FakeBlocks, FakeItems, T, U } from "./testing";
+import { C, FakeItems, T, U } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { type ChatWiring, connectChat, prepareChat } from "./wiring";
 
@@ -24,7 +24,6 @@ export interface ChatStack {
   /** The unsealed log, as Postgres would hold it. */
   raw: InMemoryAsyncEventStore;
   items: FakeItems;
-  blocks: FakeBlocks;
   /** Every subject a key was requested for: the proof that nothing is sealed under another user. */
   subjects: ReadonlySet<string>;
   start(): Promise<string>;
@@ -80,7 +79,6 @@ export async function startChatStack(o: {
     subjectOf: subjectOfExecution,
   });
   const items = new FakeItems();
-  const blocks = new FakeBlocks();
   const prepared = prepareChat({
     settings,
     ...(llm && { llm }),
@@ -89,7 +87,6 @@ export async function startChatStack(o: {
     ...(o.rotateEveryTurns !== undefined && { rotateEveryTurns: o.rotateEveryTurns }),
     collaborators: {
       items,
-      blocks,
       retriever: {
         search: async () => {
           if (o.searchError) throw o.searchError;
@@ -110,7 +107,6 @@ export async function startChatStack(o: {
     fake,
     raw,
     items,
-    blocks,
     subjects,
     async start() {
       const { conversationId } = await chat.conversations.start({

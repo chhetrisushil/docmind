@@ -8,7 +8,7 @@ export const CHAT_REQUEST_TIMEOUT_MS = 180_000;
 
 export interface ChatLlm {
   provider: LlmProvider;
-  /** Filled by `prepareChat` once the item and block stores exist; read once per request. */
+  /** Filled by `prepareChat` once the item store exists; read once per request. */
   observer: { current?: () => CallObserver | undefined };
 }
 
