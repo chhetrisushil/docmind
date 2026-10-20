@@ -1,5 +1,6 @@
 import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
 import { z } from "zod";
+import { PermanentIngestError } from "./errors";
 import { jsonAnswer } from "./llmJson";
 
 /** The Messages API's per-image limit, which applies to the base64 `source.data`, not the raw bytes. */
@@ -80,6 +81,8 @@ export class VisionReader {
       GUARD,
     );
     const res = await this.provider.complete({ ...request, ...(signal && { signal }) });
+    // A transcription cut off by max_tokens will be cut off again: permanent, not 6 retries ending `internal`.
+    if (res.stopReason === "max_tokens") throw new PermanentIngestError("too_large");
     const out = jsonAnswer(res.content, ImageAnswer);
     return {
       text: out.text.slice(0, TEXT_CAP),
@@ -120,6 +123,7 @@ export class VisionReader {
       GUARD,
     );
     const res = await this.provider.complete({ ...request, ...(signal && { signal }) });
+    if (res.stopReason === "max_tokens") throw new PermanentIngestError("too_large");
     const asked = new Set(pages);
     const out = new Map<number, string>();
     for (const { page, text } of jsonAnswer(res.content, PdfAnswer)) {
