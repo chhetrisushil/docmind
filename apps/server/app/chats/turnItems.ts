@@ -64,19 +64,23 @@ export const chatItemBind = (id: string) => `chatitem:${id}`;
 /** Sealed values larger than this (as JSON) are refused: a runaway tool result must not fill the table. */
 export const MAX_SEALED_BYTES = 256 * 1024;
 export const MAX_STEP_KEY = 200;
+/** Turn keys are int4; one call asks for at most this many turns. */
+export const MAX_TURN_KEY = 2 ** 31 - 1;
+export const MAX_TURN_KEYS = 500;
 
 /**
  * The row id, derived from the natural key (chat, turn key, kind, step key) so a retried attempt rewrites its
  * own row under the same seal bind. A uuid-shaped SHA-256 prefix; it carries no content.
  */
 export function chatItemId(
+  userId: string,
   chatId: string,
   turnKey: number,
   kind: TurnItem["kind"],
   stepKey: string,
 ): string {
   const h = createHash("sha256")
-    .update(["chatitem", chatId, turnKey, kind, stepKey].join("\0"))
+    .update(["chatitem", userId, chatId, turnKey, kind, stepKey].join("\0"))
     .digest();
   h[6] = ((h[6] as number) & 0x0f) | 0x50;
   h[8] = ((h[8] as number) & 0x3f) | 0x80;
@@ -84,7 +88,7 @@ export function chatItemId(
   return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`;
 }
 
-const tooLarge = (v: unknown) => JSON.stringify(v).length > MAX_SEALED_BYTES;
+const tooLarge = (v: unknown) => Buffer.byteLength(JSON.stringify(v), "utf8") > MAX_SEALED_BYTES;
 
 /**
  * What the conversation record cannot carry (D5): thinking, tool steps, retrieved passages and
@@ -100,20 +104,20 @@ export class PgTurnItems {
 
   /** Writes the item for (turnKey, kind, stepKey), replacing an earlier attempt's. */
   async put(ref: ChatRef, turnKey: number, stepKey: string, item: TurnItem): Promise<void> {
-    if (!Number.isInteger(turnKey) || turnKey < 0)
+    if (!Number.isInteger(turnKey) || turnKey < 0 || turnKey > MAX_TURN_KEY)
       throw new RangeError("turn item: turn key must be a non-negative integer");
     if (stepKey.length < 1 || stepKey.length > MAX_STEP_KEY)
       throw new RangeError("turn item: step key has a bad length");
     const parsed = BODIES[item.kind].safeParse(item.body);
     if (!parsed.success) throw new Error("the turn item has an invalid shape");
     if (tooLarge(parsed.data)) throw new RangeError("turn item: the body is too large");
-    const id = chatItemId(ref.chatId, turnKey, item.kind, stepKey);
+    const id = chatItemId(ref.userId, ref.chatId, turnKey, item.kind, stepKey);
     const sealed = await this.fields.forUser(ref.userId).seal(chatItemBind(id), parsed.data);
     await withTenant(this.pool, ref.tenantId, (tx) =>
       tx.query(
         `INSERT INTO chat_turn_items (id, tenant_id, user_id, chat_id, ord, kind, step_key, body_enc)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-         ON CONFLICT (tenant_id, chat_id, ord, kind, step_key) DO UPDATE SET body_enc = EXCLUDED.body_enc`,
+         ON CONFLICT (tenant_id, user_id, chat_id, ord, kind, step_key) DO UPDATE SET body_enc = EXCLUDED.body_enc`,
         [
           id,
           ref.tenantId,
@@ -132,6 +136,11 @@ export class PgTurnItems {
   async forTurns(ref: ChatRef, turnKeys: readonly number[]): Promise<Map<number, TurnItem[]>> {
     const out = new Map<number, TurnItem[]>();
     if (turnKeys.length === 0) return out;
+    if (
+      turnKeys.length > MAX_TURN_KEYS ||
+      !turnKeys.every((k) => Number.isInteger(k) && k >= 0 && k <= MAX_TURN_KEY)
+    )
+      throw new RangeError("turn item: bad turn keys");
     const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
       const res = await tx.query<{
         id: string;
@@ -207,7 +216,7 @@ export class PgReasoningBlocks {
       tx.query(
         `INSERT INTO chat_reasoning_blocks (tenant_id, user_id, chat_id, tool_use_id, blocks_enc)
          SELECT $1, $2, $3, u.id, u.enc::jsonb FROM unnest($4::text[], $5::text[]) AS u(id, enc)
-         ON CONFLICT (tenant_id, chat_id, tool_use_id) DO UPDATE SET blocks_enc = EXCLUDED.blocks_enc`,
+         ON CONFLICT (tenant_id, user_id, chat_id, tool_use_id) DO UPDATE SET blocks_enc = EXCLUDED.blocks_enc`,
         [ref.tenantId, ref.userId, ref.chatId, ids, sealed],
       ),
     );

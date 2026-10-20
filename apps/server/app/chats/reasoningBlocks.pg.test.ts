@@ -121,6 +121,20 @@ describe.skipIf(!PG_URL)("chat reasoning blocks (needs DOCMIND_TEST_PG_URL)", ()
       });
     });
 
+    it("refuses to overwrite another owner's existing tool_use id, and leaves it intact", async () => {
+      await blocks.put(theirs, ["toolu_dup"], [block(11)]);
+      await expect(
+        blocks.put({ ...theirs, userId: U1 }, ["toolu_dup"], [block(12)]),
+      ).rejects.toMatchObject({ constraint: "chat_reasoning_blocks_chat_fkey" });
+      expect(await blocks.get(theirs, ["toolu_dup"])).toEqual([block(11)]);
+    });
+
+    it("counts the size cap in bytes", async () => {
+      await expect(
+        blocks.put(chat, ["t"], [{ type: "text", text: "€".repeat(100 * 1024) }]),
+      ).rejects.toThrow(/^reasoning blocks: too large$/);
+    });
+
     it("refuses bad ids, malformed or oversized blocks, and a stored value of the wrong shape, naming the rule only", async () => {
       await expect(blocks.put(chat, [""], [block(1)])).rejects.toThrow(
         /^reasoning blocks: bad tool use ids$/,

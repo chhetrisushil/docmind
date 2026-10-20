@@ -15,7 +15,7 @@ CREATE TABLE chat_turn_items (
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT chat_turn_items_chat_fkey FOREIGN KEY (tenant_id, user_id, chat_id)
     REFERENCES chat_sessions (tenant_id, user_id, id) ON DELETE CASCADE,
-  CONSTRAINT chat_turn_items_natural_key UNIQUE (tenant_id, chat_id, ord, kind, step_key)
+  CONSTRAINT chat_turn_items_natural_key UNIQUE (tenant_id, user_id, chat_id, ord, kind, step_key)
 );
 ALTER TABLE chat_turn_items ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON chat_turn_items USING (tenant_id = app_tenant_id());
@@ -30,7 +30,7 @@ CREATE TABLE chat_reasoning_blocks (
   tool_use_id text NOT NULL CONSTRAINT chat_reasoning_blocks_tool_use_id_check CHECK (char_length(tool_use_id) BETWEEN 1 AND 200),
   blocks_enc jsonb NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, chat_id, tool_use_id),
+  PRIMARY KEY (tenant_id, user_id, chat_id, tool_use_id),
   CONSTRAINT chat_reasoning_blocks_chat_fkey FOREIGN KEY (tenant_id, user_id, chat_id)
     REFERENCES chat_sessions (tenant_id, user_id, id) ON DELETE CASCADE
 );
