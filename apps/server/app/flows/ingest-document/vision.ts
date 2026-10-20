@@ -16,7 +16,11 @@ export const VISION_PDF_MAX_BYTES = 22 * 1024 * 1024;
 /** Pages in the whole PDF; above this no page is sent. */
 export const VISION_PDF_MAX_PAGES = 100;
 /** Textless pages sent per document. */
-export const VISION_PDF_MAX_SCANNED = 20;
+export const VISION_PDF_MAX_SCANNED = 12;
+/** Textless pages per request: a dense page can take most of a minute, so requests stay small. */
+export const VISION_PDF_PAGES_PER_REQUEST = 4;
+/** Sequential vision requests one PDF can cost. */
+export const VISION_PDF_MAX_REQUESTS = VISION_PDF_MAX_SCANNED / VISION_PDF_PAGES_PER_REQUEST;
 const PAGE_TEXT_CAP = 100_000;
 const TEXT_CAP = 200_000;
 const DESCRIPTION_CAP = 20_000;

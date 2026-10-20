@@ -27,6 +27,7 @@ import {
   VISION_PDF_MAX_BYTES,
   VISION_PDF_MAX_PAGES,
   VISION_PDF_MAX_SCANNED,
+  VISION_PDF_PAGES_PER_REQUEST,
   type VisionReader,
   base64Length,
 } from "../vision";
@@ -79,6 +80,11 @@ async function visionCall<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
+const isPermanentVisionError = (err: unknown): boolean =>
+  err instanceof PermanentIngestError ||
+  err instanceof LlmRequestError ||
+  err instanceof LlmRefusalError;
+
 /** D8: images are read by Claude, in this process, from the original bytes; nothing decodes them here. */
 async function readImageDocument(
   deps: ParseDeps,
@@ -120,9 +126,20 @@ async function withScannedPages(
     if (parsed.sections.length > 0) return { ...parsed, media: [] };
     throw new PermanentIngestError(vision ? "too_large" : "vision_unavailable");
   }
-  const read = await visionCall(() =>
-    vision.readPdfPages(bytes, scanned.slice(0, VISION_PDF_MAX_SCANNED), signal),
-  );
+  const wanted = scanned.slice(0, VISION_PDF_MAX_SCANNED);
+  const read = new Map<number, string>();
+  for (let i = 0; i < wanted.length; i += VISION_PDF_PAGES_PER_REQUEST) {
+    const batch = wanted.slice(i, i + VISION_PDF_PAGES_PER_REQUEST);
+    try {
+      for (const [page, text] of await visionCall(() => vision.readPdfPages(bytes, batch, signal)))
+        read.set(page, text);
+    } catch (err) {
+      // With text pages in hand, a batch Claude will never accept costs only its own pages. A
+      // transient failure (outage, bad output) still propagates so the step retries.
+      if (parsed.sections.length > 0 && isPermanentVisionError(err)) continue;
+      throw err;
+    }
+  }
   const pageOf = (s: ParsedSection) => (s.locator.kind === "page" ? s.locator.page : 0);
   const added: ParsedSection[] = [...read]
     .filter(([, text]) => text.trim() !== "")
