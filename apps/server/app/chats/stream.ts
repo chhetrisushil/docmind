@@ -9,6 +9,7 @@ import {
   parseCursor,
 } from "@loom/conversation";
 import { SseSink, frame } from "@loom/plugin-conversation-sse";
+import { withTenant } from "../db/tenant";
 import { type Schedule, intervalSchedule } from "../documents/events";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
@@ -17,6 +18,7 @@ import { ChatBusLimitError, type LiveChatEvent } from "./bus";
 import { chatConversationId } from "./ids";
 import { toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
+import { getChat } from "./sessions";
 
 /** The route key of the open-ended chat stream; the server exempts it from the request timer. */
 export const CHAT_STREAM_ROUTE = "GET /api/chats/:id/stream";
@@ -137,6 +139,15 @@ interface StreamCall {
   schedule: Schedule;
 }
 
+/** True while the request still authenticates as the stream's user and that user's chat is live. */
+async function stillAllowed(deps: ChatStreamDeps, c: StreamCall): Promise<boolean> {
+  const who = await deps.authenticator.authenticate(c.req);
+  if (!who || who.userId !== c.identity.userId || who.tenantId !== c.identity.tenantId)
+    return false;
+  const row = await withTenant(deps.pool, who.tenantId, (tx) => getChat(tx, who.userId, c.chatId));
+  return row !== null;
+}
+
 function stream(deps: ChatStreamDeps, c: StreamCall): void {
   const { res, identity, conversationId, chatId } = c;
   const ac = new AbortController();
@@ -169,7 +180,7 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
   }
   c.live.set(res, () => end(false));
   res.once("close", () => end(true));
-  res.once("error", () => end(true));
+  res.on("error", () => end(true));
 
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -182,6 +193,20 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
   );
 
   // Task 152b attaches the live listeners here, synchronously after the status frame.
+  // The heartbeat also re-checks the session and the chat: a stream outlives its login otherwise.
+  let checking = false;
+  const tick = () => {
+    sink.send(": ping\n\n");
+    if (checking || ended) return;
+    checking = true;
+    stillAllowed(deps, c)
+      .then((ok) => ok || end(false))
+      .catch(() => end(false)) // fail closed; the client reconnects and is authenticated again
+      .finally(() => {
+        checking = false;
+      });
+  };
+  cleanups.push(c.schedule(tick, deps.heartbeatMs ?? 15_000));
   attachLive(deps, c, sink, cleanups);
 
   void (async () => {
@@ -248,5 +273,4 @@ function attachLive(
   if (thought) sink.send(frame("reasoning-partial", { turn: thought.turn, text: thought.text }));
   const text = deps.chat.hub.partialOf(c.conversationId);
   if (text) sink.send(frame("answer", { turn: text.turn, text: text.text }));
-  cleanups.push(c.schedule(() => sink.send(": ping\n\n"), deps.heartbeatMs ?? 15_000));
 }

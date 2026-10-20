@@ -154,15 +154,17 @@ export function buildServer(options: ComposeOptions) {
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
   const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });
+  const reasoning = chat && replyReasoning({ log: options.status.source, store: chat.reasoning });
   const chatStreams =
     chat &&
+    reasoning &&
     chatStreamRoutes({
       pool,
       authenticator,
       fields,
       chat,
       eventStore: options.status.source,
-      reasoning: replyReasoning({ log: options.status.source, store: chat.reasoning }),
+      reasoning,
     });
   const server = createHttpServer(
     {
@@ -185,13 +187,14 @@ export function buildServer(options: ComposeOptions) {
         status,
       }),
       ...(chat &&
+        reasoning &&
         chatRoutes({
           pool,
           authenticator,
           fields,
           chat,
           eventStore: options.status.source,
-          reasoning: replyReasoning({ log: options.status.source, store: chat.reasoning }),
+          reasoning,
         })),
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
       ...(chatStreams?.routes ?? {}),

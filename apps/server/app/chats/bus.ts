@@ -40,6 +40,10 @@ export class ChatBus {
     }
   }
 
+  subscriberCount(chatId: string): number {
+    return this.subs.get(chatId)?.size ?? 0;
+  }
+
   subscribe(chatId: string, fn: (e: LiveChatEvent) => void): () => void {
     let set = this.subs.get(chatId);
     if (!set) {

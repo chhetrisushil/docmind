@@ -23,7 +23,7 @@ export function chatReasoningRoutes(deps: ChatRouteDeps): Record<string, Handler
       if (!chat) return notFound(res);
       const url = new URL(req.url ?? "/", "http://localhost");
       const query = ReasoningQuery.safeParse(Object.fromEntries(url.searchParams));
-      if (!query.success) return sendError(res, 400, "invalid_request", "a cursor is required");
+      if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
       try {
         const body = await reasoningBody(
           {
