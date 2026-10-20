@@ -1,6 +1,6 @@
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loom/plugin-crypto";
-import { postgresStorage } from "@loom/plugin-postgres";
+import { PostgresTimerStore, postgresStorage } from "@loom/plugin-postgres";
 import { Pool } from "pg";
 import { SENSITIVE_EVENT_PATHS } from "./sensitive";
 import { subjectOfExecution } from "./subject";
@@ -32,6 +32,8 @@ export interface DurableStorage {
   sealed: StorePair;
   raw: StorePair;
   lease: { get?(executionId: string): Promise<unknown> };
+  /** Loom's durable timers; borrows the Loom pool. */
+  timers: PostgresTimerStore;
   /**
    * Ends the Loom pool. Call it after `app.close()` (which closes the stores but, because the pool
    * is lent to them, leaves it open); never before.
@@ -75,6 +77,7 @@ export function createDurableStorage({
     subjectOf: subjectOfExecution,
     events: pg.eventStore,
   });
+  const timers = new PostgresTimerStore(pool as never);
   return {
     storage: {
       kind: "custom",
@@ -87,6 +90,7 @@ export function createDurableStorage({
     sealed: { eventStore: events, snapshotStore: snapshots },
     raw: { eventStore: pg.eventStore, snapshotStore: pg.snapshotStore },
     lease: pg.leaseStore,
+    timers,
     close: () => pool.end(),
   };
 }
@@ -105,6 +109,7 @@ export async function openDurableStorage(options: DurableStorageOptions): Promis
       durable.raw.eventStore.read("boot-probe"),
       durable.raw.snapshotStore.loadLatest("boot-probe"),
       durable.lease.get?.("boot-probe"),
+      durable.timers.due(0, 1),
     ]);
     for (const r of results) if (r.status === "rejected") throw r.reason;
   } catch (err) {

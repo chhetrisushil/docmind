@@ -2,13 +2,17 @@ import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
-import type { EventStore } from "@loom/event-runtime";
+import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
+import type { ChatLlm } from "./chats/llm";
+import { pgCollaborators } from "./chats/pgCollaborators";
+import type { ChatSettings } from "./chats/settings";
+import { connectChat, prepareChat } from "./chats/wiring";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
 import { withTenant } from "./db/tenant";
@@ -20,7 +24,7 @@ import { StartScheduler } from "./documents/startScheduler";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
-import { IngestStatus } from "./status/ingestStatus";
+import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
@@ -53,6 +57,8 @@ export interface ComposeOptions {
   vectors?: ChunkVectorStore & { verify?(tenantId: string): Promise<void> };
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
+  /** M4 chat: the settings, the Claude provider (absent without a key) and the timer store. Absent: no chat (the CLI, most tests). */
+  chat?: { settings: ChatSettings; llm?: ChatLlm; timers: TimerStore };
 }
 
 /**
@@ -81,10 +87,32 @@ export function buildServer(options: ComposeOptions) {
       modelId: embedder.modelId,
       dimensions: embedder.dimensions,
     });
+  // The status model is built after the app (its sensitive map needs defineConfig), and the document tools read it: late-bound.
+  const statusReads: Pick<DocumentStatusReads, "forPage"> = {
+    forPage: (who, docs) => status.forPage(who, docs),
+  };
+  const chatParts = options.chat
+    ? prepareChat({
+        settings: options.chat.settings,
+        ...(options.chat.llm && { llm: options.chat.llm }),
+        timers: options.chat.timers,
+        eventStore: options.status.source,
+        collaborators: pgCollaborators({
+          pool,
+          fields,
+          vectors,
+          embedder,
+          hops: options.chat.settings.hops,
+          status: statusReads,
+        }),
+      })
+    : undefined;
   const app = buildApp(options.storage, options.crypto, {
     ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
+    ...(chatParts && { chat: chatParts.deps }),
     onEvent: (event) => feed.onEvent?.(event),
   });
+  const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
   const status = new IngestStatus({
     writer: options.status.writer,
     readerFor: options.status.readerFor,
@@ -136,6 +164,8 @@ export function buildServer(options: ComposeOptions) {
     vectors,
     bus: options.ingest.bus,
     status,
+    /** The chat wiring; absent when `options.chat` is. No route is mounted from it yet (Task 149). */
+    chat,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
     /** Stops feeding the model; shutdown calls it before `status.close()` so a late event is not folded onto closing pools. */

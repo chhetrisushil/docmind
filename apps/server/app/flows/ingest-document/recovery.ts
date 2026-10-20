@@ -51,6 +51,8 @@ export interface RecoverOptions {
    * scans everything, because a graceful shutdown releases (deletes) its leases.
    */
   leases?: { store: LeaseStore; owner: string };
+  /** Which executions this pass may re-drive; default ingest executions. */
+  owns?: (executionId: string) => boolean;
 }
 
 /**
@@ -71,7 +73,13 @@ export interface RecoverOptions {
 export async function recoverIngest(
   runtime: WorkflowRuntime,
   source: ExecutionEnumerable,
-  { graceMs, maxRecoveries = MAX_RECOVERIES, now = Date.now, leases }: RecoverOptions,
+  {
+    graceMs,
+    maxRecoveries = MAX_RECOVERIES,
+    now = Date.now,
+    leases,
+    owns = isIngestExecution,
+  }: RecoverOptions,
 ) {
   if (!leases) {
     // A full scan also clears ghost leases (a crash between taking a lease and the first append): they
@@ -102,7 +110,7 @@ export async function recoverIngest(
   const summary = await recoverAbandoned(runtime, {
     ...(leases ? { leases } : { source }),
     maxRecoveries,
-    isAbandoned: (c) => isIngestExecution(c.executionId) && now() - c.updatedAt >= graceMs,
+    isAbandoned: (c) => owns(c.executionId) && now() - c.updatedAt >= graceMs,
     onExhausted: (id) => giveUp(id, RECOVERY_EXHAUSTED_REASON),
     onError: (id, err) =>
       err instanceof FlowCodeMismatchError
@@ -132,7 +140,13 @@ export function startRecovery(
     intervalMs = RECOVERY_INTERVAL_MS,
     now,
     leases,
-  }: { intervalMs?: number; now?: () => number; leases?: RecoverOptions["leases"] } = {},
+    owns,
+  }: {
+    intervalMs?: number;
+    now?: () => number;
+    leases?: RecoverOptions["leases"];
+    owns?: RecoverOptions["owns"];
+  } = {},
 ): Recovery {
   let running: Promise<void> | undefined;
   let stopped = false;
@@ -143,6 +157,7 @@ export function startRecovery(
       graceMs,
       ...(now && { now }),
       ...(scan && { leases: scan }),
+      ...(owns && { owns }),
     })
       .then(() => undefined)
       .catch((err: unknown) => console.error("ingest recovery failed", errorClass(err)))

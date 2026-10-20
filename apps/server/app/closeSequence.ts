@@ -34,6 +34,8 @@ export async function bounded(work: Promise<unknown>, ms: number, step: string):
 export interface CloseDeps {
   startsIdle(): Promise<unknown>;
   closeIngest(): Promise<unknown>;
+  /** The chat's in-flight model calls; absent when chat is not composed. */
+  closeChat?(): Promise<unknown>;
   closeHeartbeat(): Promise<unknown>;
   detachStatusFeed(): void;
   closeStatus(): Promise<unknown>;
@@ -46,7 +48,8 @@ export interface CloseDeps {
  * The steps `runAll` runs once the server has stopped accepting requests, in the order that keeps
  * them safe:
  *  1. let fired flow starts settle (bounded: a start stuck on a dead database must not keep the stores open);
- *  2. interrupt the steps, then kill in-flight parses, before any pool ends;
+ *  2. interrupt the ingest steps and the chat's model calls (their steps stay un-completed in the log,
+ *     like ingest's, and recovery re-runs them next boot), then kill in-flight parses, before any pool ends;
  *  3. release this node's execution leases, so the next boot recovers what was interrupted at once
  *     instead of waiting out the lease (after the steps are interrupted, before the stores close);
  *  4. stop feeding the status model (a step still running must not fold onto stores about to close), close it;
@@ -56,15 +59,19 @@ export interface CloseDeps {
 export const closeSequence = (
   d: CloseDeps,
   poolEndMs = POOL_END_MS,
-): (() => Promise<unknown>)[] => [
-  () => drainWithin(d.startsIdle(), SHUTDOWN_DRAIN_MS),
-  () => d.closeIngest(),
-  () => d.closeHeartbeat(),
-  async () => {
-    d.detachStatusFeed();
-    await d.closeStatus();
-  },
-  () => d.closeApp(),
-  () => bounded(d.closeDurable(), poolEndMs, "closeDurable"),
-  () => bounded(d.endPool(), poolEndMs, "endPool"),
-];
+): (() => Promise<unknown>)[] => {
+  const closeChat = d.closeChat?.bind(d);
+  return [
+    () => drainWithin(d.startsIdle(), SHUTDOWN_DRAIN_MS),
+    () => d.closeIngest(),
+    ...(closeChat ? [() => closeChat()] : []),
+    () => d.closeHeartbeat(),
+    async () => {
+      d.detachStatusFeed();
+      await d.closeStatus();
+    },
+    () => d.closeApp(),
+    () => bounded(d.closeDurable(), poolEndMs, "closeDurable"),
+    () => bounded(d.endPool(), poolEndMs, "endPool"),
+  ];
+};

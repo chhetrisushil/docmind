@@ -30,6 +30,35 @@ describe("closeSequence", () => {
     ]);
   });
 
+  it("cuts the chat's in-flight model calls right after the ingest steps, before the leases are released", async () => {
+    const calls: string[] = [];
+    const note = (name: string) => async () => void calls.push(name);
+    await runAll(
+      ...closeSequence({
+        startsIdle: note("starts"),
+        closeIngest: note("closeIngest"),
+        closeChat: note("closeChat"),
+        closeHeartbeat: note("closeHeartbeat"),
+        detachStatusFeed: () => void calls.push("detach"),
+        closeStatus: note("closeStatus"),
+        closeApp: note("closeApp"),
+        closeDurable: note("closeDurable"),
+        endPool: note("endPool"),
+      }),
+    );
+    expect(calls).toEqual([
+      "starts",
+      "closeIngest",
+      "closeChat",
+      "closeHeartbeat",
+      "detach",
+      "closeStatus",
+      "closeApp",
+      "closeDurable",
+      "endPool",
+    ]);
+  });
+
   it("keeps going when a step fails (every store still closes) and rethrows that failure", async () => {
     const calls: string[] = [];
     const ok = async () => void calls.push("ok");

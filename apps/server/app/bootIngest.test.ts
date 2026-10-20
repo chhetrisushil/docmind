@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type BootIngestParts, bootIngest } from "./bootIngest";
 
 const calls: string[] = [];
+const owned: (((id: string) => boolean) | undefined)[] = [];
 const note = (name: string) => () => void calls.push(name);
 
 vi.mock("@docmind/auth", () => ({ primeDecoy: async () => void calls.push("primeDecoy") }));
@@ -15,7 +16,12 @@ vi.mock("./flows/ingest-document/limits", () => ({
   closeIngest: async () => void calls.push("closeIngest"),
 }));
 vi.mock("./flows/ingest-document/recovery", () => ({
-  startRecovery: (_r: unknown, _s: unknown, opts: { leases?: { owner: string } }) => {
+  startRecovery: (
+    _r: unknown,
+    _s: unknown,
+    opts: { leases?: { owner: string }; owns?: (id: string) => boolean },
+  ) => {
+    owned.push(opts.owns);
     calls.push(`startRecovery:${opts.leases?.owner}`);
     return { stop: note("recovery.stop"), idle: async () => {} };
   },
@@ -59,6 +65,7 @@ function parts(over: Partial<BootIngestParts> = {}, statusBoot?: () => Promise<v
 
 beforeEach(() => {
   calls.length = 0;
+  owned.length = 0;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -152,6 +159,36 @@ describe("bootIngest", () => {
       "closeDurable",
       "endPool",
     ]);
+  });
+
+  it("recovery owns ingest and chat executions (conversation, title) and nothing else", async () => {
+    await bootIngest(parts());
+    const owns = owned[0];
+    const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+    const C = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+    expect(owns?.(`u_${U}:ingest-${C}`)).toBe(true);
+    expect(owns?.(`u_${U}.c-${C}`)).toBe(true);
+    expect(owns?.(`u_${U}:chat-title-${C}`)).toBe(true);
+    expect(owns?.(`u_${U}:other-${C}`)).toBe(false);
+  });
+
+  it("stop() closes the chat right after the ingest steps and before the heartbeat; a build without chat is unchanged", async () => {
+    const base = parts();
+    const withChat = parts({
+      built: {
+        ...(base.built as object),
+        chat: { close: async () => void calls.push("closeChat") },
+      },
+    } as unknown as Partial<BootIngestParts>);
+    const handle = await bootIngest(withChat);
+    calls.length = 0;
+    await handle.stop();
+    expect(calls.filter((c) => /^close(Ingest|Chat|Heartbeat)$/.test(c))).toEqual([
+      "closeIngest",
+      "closeChat",
+      "closeHeartbeat",
+    ]);
+    expect(calls.filter((c) => c === "closeChat")).toHaveLength(1);
   });
 
   it("stop() still closes the stores when the server drain fails, and reports the failure", async () => {

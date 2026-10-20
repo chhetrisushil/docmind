@@ -1,6 +1,7 @@
 import { primeDecoy } from "@docmind/auth";
 import type { Pool } from "pg";
 import { bootServing } from "./boot";
+import { isRecoverableChatExecution } from "./chats/ids";
 import { closeSequence } from "./closeSequence";
 import type { buildServer } from "./compose";
 import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
@@ -10,6 +11,7 @@ import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
 import { bootStatus } from "./status/boot";
+import { isIngestExecution } from "./status/model";
 import type { DurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -47,7 +49,7 @@ export async function bootIngest(
   parts: BootIngestParts,
 ): Promise<{ stop(): Promise<void>; recoveryIdle(): Promise<void> }> {
   const { built, ingest, durable, pool, listen, recoveryOwner, background = true } = parts;
-  const { app, store, throttle, starts, status, vectors, events, detachStatusFeed } = built;
+  const { app, store, throttle, starts, status, vectors, events, detachStatusFeed, chat } = built;
   const cleanup = [
     () => closeIngest(ingest),
     () => app.close(),
@@ -68,6 +70,8 @@ export async function bootIngest(
   const afterListen = () => {
     // Resume what the last process left running, then keep looking. Not awaited: the server must not wait to listen.
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
+      // Ingest, and the chat: a conversation mid-turn at a crash, and an interrupted title flow (P5).
+      owns: (id) => isIngestExecution(id) || isRecoverableChatExecution(id),
       // After the boot scan, a crash is found through its expired lease, not by reading every execution.
       ...(durable.storage.leaseStore && {
         leases: { store: durable.storage.leaseStore, owner: recoveryOwner },
@@ -117,6 +121,7 @@ export async function bootIngest(
           ...closeSequence({
             startsIdle: () => starts.idle(),
             closeIngest: () => closeIngest(ingest),
+            ...(chat && { closeChat: () => chat.close() }),
             closeHeartbeat: () => app.runtime.closeHeartbeat(),
             detachStatusFeed,
             closeStatus: () => status.close(),
