@@ -1,6 +1,7 @@
 import { tool$ } from "@loom/core";
 import { z } from "zod";
 import type { Passage, PassageReader, Retriever } from "../retrieval";
+import { SECTION_MAX_CHARS, SECTION_MAX_CHUNKS } from "../retrieval/passages";
 import {
   type ToolHarnessDeps,
   type ToolResult,
@@ -12,8 +13,8 @@ import {
 } from "./harness";
 
 export const LINK_KINDS = ["structure", "reference", "entity", "similar"] as const;
-export const SECTION_MAX_PASSAGES = 8;
-export const SECTION_MAX_CHARS = 12_000;
+export { SECTION_MAX_CHARS };
+export const SECTION_MAX_PASSAGES = SECTION_MAX_CHUNKS;
 /** A passage that would only keep this much of its text is left out instead of cut. */
 const MIN_USEFUL_CHARS = 200;
 
