@@ -50,14 +50,11 @@ describe("createChatLlm", () => {
   it("asks the observer slot per request, so the stores can be attached after construction", async () => {
     const e = env({ ANTHROPIC_BASE_URL: fake.url });
     const llm = createChatLlm(e, loadChatSettings(e));
-    const thinking: string[] = [];
+    let usages = 0;
     if (llm) {
       llm.observer.current = () => ({
-        blocksFor: async () => [],
-        onThinking: (t) => void thinking.push(t),
-        onBlocks: async () => {},
         onRefusal: async () => {},
-        onUsage: () => {},
+        onUsage: () => void usages++,
       });
     }
     fake.reply(() => ({
@@ -74,7 +71,7 @@ describe("createChatLlm", () => {
       messages: [{ role: "user", content: "hello" }],
     }) ?? [])
       void _;
-    expect(thinking.join("")).toBe("Considering the question.");
+    expect(usages).toBe(1);
   });
 
   it("never carries the API key on the object it returns", () => {

@@ -347,95 +347,7 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
     });
   });
 
-  it("gives the observer thinking, usage detail (null cache fields are 0) and the blocks, in that order, and keeps thinking out of content", async () => {
-    reply(
-      message(
-        [
-          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
-          { type: "redacted_thinking", data: "ENC" },
-          { type: "text", text: "answer" },
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
-        ],
-        {
-          stop_reason: "tool_use",
-          usage: {
-            input_tokens: 5,
-            output_tokens: 7,
-            cache_read_input_tokens: 100,
-            cache_creation_input_tokens: null,
-          },
-        },
-      ),
-    );
-    const rec = recordingObserver();
-    const res = await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
-    expect(res.content).toBe("answer");
-    expect(rec.log).toEqual(["thinking", "usage", "blocks"]);
-    expect(rec.thinking).toEqual(["Let me think"]);
-    expect(rec.usage).toEqual([
-      { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 0 },
-    ]);
-    expect(rec.blocks).toEqual([
-      {
-        ids: ["toolu_1"],
-        blocks: [
-          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
-          { type: "redacted_thinking", data: "ENC" },
-          { type: "text", text: "answer" },
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
-        ],
-      },
-    ]);
-  });
-
-  it("hands the full ordered blocks to onBlocks with no ids for a thinking response without a tool call, and calls it for none otherwise", async () => {
-    reply(
-      message([
-        { type: "thinking", thinking: "t", signature: "S" },
-        { type: "text", text: "a" },
-      ]),
-    );
-    const rec = recordingObserver();
-    await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
-    expect(rec.blocks).toEqual([
-      {
-        ids: [],
-        blocks: [
-          { type: "thinking", thinking: "t", signature: "S" },
-          { type: "text", text: "a" },
-        ],
-      },
-    ]);
-    reply(message([{ type: "text", text: "plain" }]));
-    const quiet = recordingObserver();
-    await provider({ thinking: true, observer: () => quiet.observer }).complete(HI);
-    expect(quiet.blocks).toEqual([]);
-  });
-
-  it("keeps an interleaved thinking, tool_use, thinking, tool_use response in order", async () => {
-    reply(
-      message(
-        [
-          { type: "thinking", thinking: "a", signature: "S1" },
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
-          { type: "thinking", thinking: "b", signature: "S2" },
-          { type: "tool_use", id: "toolu_2", name: "related", input: {} },
-        ],
-        { stop_reason: "tool_use" },
-      ),
-    );
-    const rec = recordingObserver();
-    await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
-    expect(rec.blocks[0]?.ids).toEqual(["toolu_1", "toolu_2"]);
-    expect(rec.blocks[0]?.blocks.map((b) => b.type)).toEqual([
-      "thinking",
-      "tool_use",
-      "thinking",
-      "tool_use",
-    ]);
-  });
-
-  it("reports a refusal to the observer in report mode: end_turn, text kept, no tool calls, no blocks", async () => {
+  it("reports a refusal to the observer in report mode: end_turn, text kept, no tool calls", async () => {
     reply(
       message(
         [
@@ -461,7 +373,6 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
       usage: { inputTokens: 5, outputTokens: 7 },
     });
     expect(rec.refusals).toEqual([{ category: "cyber", explanation: "why" }]);
-    expect(rec.blocks).toEqual([]);
   });
 
   it("still throws LlmRefusalError in throw mode, with no stop_details text in the error", async () => {
@@ -494,7 +405,7 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
     }
   });
 
-  it("stores a tool_use block without input with input {} (matching the tool call)", async () => {
+  it("reads a tool_use block without input as a call with input {}", async () => {
     reply(
       message(
         [
@@ -506,14 +417,7 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
         },
       ),
     );
-    const rec = recordingObserver();
-    const res = await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
+    const res = await provider({ thinking: true }).complete(HI);
     expect(res.toolCalls).toEqual([{ id: "toolu_1", name: "list_documents", input: {} }]);
-    expect(rec.blocks[0]?.blocks[1]).toEqual({
-      type: "tool_use",
-      id: "toolu_1",
-      name: "list_documents",
-      input: {},
-    });
   });
 });

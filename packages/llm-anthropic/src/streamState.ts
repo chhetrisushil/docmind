@@ -1,6 +1,7 @@
-import type { LlmStreamChunk, LlmToolCall } from "@loom/llm";
+import type { LlmStreamChunk } from "@loom/llm";
 import { LlmRequestError, LlmStreamError } from "./errors";
 import {
+  type ContentBlock,
   type StopReason,
   type UsageFields,
   mapStopReason,
@@ -10,7 +11,7 @@ import {
   usageDetail,
   usageFieldsOf,
 } from "./mapping";
-import type { LlmUsageDetail, ReasoningBlock, RefusalDetails } from "./observer";
+import type { LlmUsageDetail, RefusalDetails } from "./observer";
 
 type Open =
   | { kind: "text"; text: string }
@@ -21,13 +22,10 @@ type Open =
 
 export interface StreamEnd {
   stopReason: StopReason;
-  /** Set when the API stopped with `refusal`: the tool calls and blocks below are then empty. */
+  /** Set when the API stopped with `refusal`: the caller then ignores `blocks` except their text. */
   refused?: RefusalDetails;
-  toolCalls: LlmToolCall[];
-  /** The response's full content blocks (thinking, redacted_thinking, text, tool_use), verbatim, in the order the API produced them (ruling P1). */
-  blocks: ReasoningBlock[];
-  /** True when the response had a `thinking` or `redacted_thinking` block: then, and only then, `onBlocks` is called. */
-  sawThinking: boolean;
+  /** The response's content blocks (thinking, redacted_thinking, text, tool_use) in the order the API produced them. */
+  blocks: ContentBlock[];
   usage?: { inputTokens: number; outputTokens: number };
   detail: LlmUsageDetail;
 }
@@ -51,27 +49,24 @@ function parseInput(json: string): unknown {
 }
 
 /**
- * The stream's state machine. `feed` takes one SSE event and returns the chunks it produces;
- * `end` is valid once `stopped` (a `message_stop` arrived). It throws only typed errors with fixed
+ * The stream's state machine. `feed` takes one SSE event and returns the chunks it produces (text deltas,
+ * tool deltas and `reasoningDelta`s, ADR 0133 D6); `end` is valid once `stopped` (a `message_stop` arrived). It throws only typed errors with fixed
  * messages: nothing of an event's text reaches an error.
  */
 export class StreamState {
   readonly #open = new Map<number, Open>();
-  readonly #blocks = new Map<number, ReasoningBlock>();
+  readonly #blocks = new Map<number, ContentBlock>();
+  readonly #seen = new Set<number>();
+  #usage: UsageFields = {};
+  #stop: unknown;
+  #details: unknown;
+  stopped = false;
 
   /** Stores a finished block after the shared validation (same rules as complete()). */
   #keep(index: number, raw: Record<string, unknown>): void {
     const block = toContentBlock(raw);
     if (block) this.#blocks.set(index, block);
   }
-  readonly #seen = new Set<number>();
-  #sawThinking = false;
-  #usage: UsageFields = {};
-  #stop: unknown;
-  #details: unknown;
-  stopped = false;
-
-  constructor(private readonly onThinking: (text: string) => void) {}
 
   feed(event: string, data: string): LlmStreamChunk[] {
     if (event === "ping") return [];
@@ -109,8 +104,7 @@ export class StreamState {
           const thinking = typeof b.thinking === "string" ? b.thinking : "";
           const signature = typeof b.signature === "string" ? b.signature : "";
           this.#open.set(index, { kind: "thinking", thinking, signature });
-          if (thinking !== "") this.onThinking(thinking);
-          return [];
+          return thinking !== "" ? [{ delta: "", done: false, reasoningDelta: thinking }] : [];
         }
         if (b.type === "redacted_thinking") {
           if (typeof b.data !== "string") throw new LlmRequestError();
@@ -145,8 +139,7 @@ export class StreamState {
           typeof d.thinking === "string"
         ) {
           open.thinking += d.thinking;
-          if (d.thinking !== "") this.onThinking(d.thinking);
-          return [];
+          return d.thinking === "" ? [] : [{ delta: "", done: false, reasoningDelta: d.thinking }];
         }
         if (
           open.kind === "thinking" &&
@@ -165,15 +158,17 @@ export class StreamState {
           this.#keep(index, { type: "text", text: open.text });
         }
         if (open?.kind === "tool") {
-          const input = parseInput(open.json);
-          this.#keep(index, { type: "tool_use", id: open.id, name: open.name, input });
+          this.#keep(index, {
+            type: "tool_use",
+            id: open.id,
+            name: open.name,
+            input: parseInput(open.json),
+          });
         }
         if (open?.kind === "redacted") {
-          this.#sawThinking = true;
           this.#keep(index, { type: "redacted_thinking", data: open.data });
         }
         if (open?.kind === "thinking") {
-          this.#sawThinking = true;
           this.#keep(index, {
             type: "thinking",
             thinking: open.thinking,
@@ -208,18 +203,13 @@ export class StreamState {
   end(): StreamEnd {
     if (!this.stopped || typeof this.#stop !== "string") throw new LlmStreamError();
     if (this.#open.size > 0) throw new LlmRequestError(); // a block never stopped
-    const ordered = [...this.#blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
-    const toolCalls: LlmToolCall[] = ordered.flatMap((b) =>
-      b.type === "tool_use" ? [{ id: b.id as string, name: b.name as string, input: b.input }] : [],
-    );
+    const blocks = [...this.#blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
     const refused = this.#stop === "refusal" ? refusalDetailsOf(this.#details) : undefined;
     const u = this.#usage;
     return {
       stopReason: mapStopReason(this.#stop),
       ...(refused !== undefined && { refused }),
-      toolCalls: refused ? [] : toolCalls,
-      blocks: refused ? [] : ordered,
-      sawThinking: refused ? false : this.#sawThinking,
+      blocks,
       ...(u.input !== undefined &&
         u.output !== undefined && { usage: { inputTokens: u.input, outputTokens: u.output } }),
       detail: usageDetail(u),

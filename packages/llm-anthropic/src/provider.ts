@@ -1,4 +1,10 @@
-import type { LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loom/llm";
+import type {
+  LlmCapabilities,
+  LlmProvider,
+  LlmRequest,
+  LlmResponse,
+  LlmStreamChunk,
+} from "@loom/llm";
 import {
   LlmAbortedError,
   LlmRefusalError,
@@ -8,6 +14,7 @@ import {
 } from "./errors";
 import { mapStopReason, refusalDetailsOf, usageDetail } from "./mapping";
 import type { CallObserver } from "./observer";
+import { outcomeOf, refusedOutcomeOf } from "./reasoning";
 import { EFFORTS, type Effort, toMessagesBody } from "./request";
 import { parseResponse } from "./response";
 import { readSse } from "./sse";
@@ -30,7 +37,7 @@ export interface AnthropicOptions {
   baseUrl?: string;
   fetch?: typeof fetch;
   maxResponseBytes?: number;
-  /** Adaptive thinking with summarized display; never sends `temperature`. Default false. */
+  /** Adaptive thinking with summarized display; Loom captures it (ADR 0133). Never sends `temperature`. Default false. */
   thinking?: boolean;
   /** Sent as `output_config.effort` only when set. */
   effort?: Effort;
@@ -38,7 +45,7 @@ export interface AnthropicOptions {
   cache?: boolean;
   /** `"report"` hands a refusal to the observer and ends the turn normally; it needs an observer. Default `"throw"`. */
   refusal?: "throw" | "report";
-  /** Called once per request. Ingest passes none. */
+  /** Called once per request: refusal and usage. Ingest passes none. */
   observer?: () => CallObserver | undefined;
   /** Byte cap for one response stream. Default 8 MiB. */
   maxStreamBytes?: number;
@@ -64,10 +71,8 @@ function checkedBase(raw: string): string {
  * read with a byte cap. Redirects are not followed.
  */
 export class AnthropicMessagesProvider implements LlmProvider {
-  readonly capabilities = {
-    image: ["image/jpeg", "image/png", "image/gif", "image/webp"],
-    file: ["application/pdf"],
-  };
+  /** `reasoning` only when thinking is on: ingest providers have it off, so Loom's boot warning never names them. */
+  readonly capabilities: LlmCapabilities;
   readonly model: string;
   private readonly base: string;
   /** Private (not an enumerable property) so logging or diffing the provider never prints it. */
@@ -80,6 +85,11 @@ export class AnthropicMessagesProvider implements LlmProvider {
     }
     this.#apiKey = apiKey;
     this.o = o;
+    this.capabilities = {
+      image: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+      file: ["application/pdf"],
+      ...(o.thinking === true && { reasoning: true }),
+    };
     if (!Number.isSafeInteger(o.maxTokens) || o.maxTokens < 1) {
       throw new RangeError("maxTokens must be a positive integer");
     }
@@ -154,27 +164,21 @@ export class AnthropicMessagesProvider implements LlmProvider {
       const text = await readCapped(res, this.o.maxResponseBytes ?? DEFAULT_MAX_RESPONSE);
       const parsed = parseResponse(text);
       const refused = parsed.stopReason === "refusal";
-      for (const t of parsed.thinking) if (t !== "") observer?.onThinking?.(t);
       if (parsed.usage) observer?.onUsage(usageDetail(parsed.usage));
       if (refused) {
         if (this.o.refusal !== "report" || !observer) throw new LlmRefusalError();
         await observer.onRefusal(refusalDetailsOf(parsed.stopDetails));
       }
-      const toolCalls = refused ? [] : parsed.toolCalls;
-      if (observer && !refused && parsed.sawThinking) {
-        // Once per response that thought, tool calls or not: `[]` ids when it only answered.
-        await observer.onBlocks?.(
-          toolCalls.map((c) => c.id),
-          parsed.blocks,
-        );
-      }
+      const out = refused ? refusedOutcomeOf(parsed.blocks) : outcomeOf(parsed.blocks);
       return {
-        content: parsed.text,
-        ...(toolCalls.length > 0 && { toolCalls }),
+        content: out.content,
+        ...(out.toolCalls.length > 0 && { toolCalls: out.toolCalls }),
         stopReason: mapStopReason(parsed.stopReason),
         ...(parsed.usage && {
           usage: { inputTokens: parsed.usage.input ?? 0, outputTokens: parsed.usage.output ?? 0 },
         }),
+        ...(out.reasoning && { reasoning: out.reasoning }),
+        ...(out.layout && { layout: out.layout }),
       };
     } catch (err) {
       if (request.signal?.aborted) throw new LlmAbortedError();
@@ -189,7 +193,7 @@ export class AnthropicMessagesProvider implements LlmProvider {
     const observer = this.o.observer?.();
     const body = this.#body(request, true);
     const { res, signal, timeout } = await this.#open(request, body);
-    const state = new StreamState((text) => observer?.onThinking?.(text));
+    const state = new StreamState();
     const max = this.o.maxStreamBytes ?? DEFAULT_MAX_STREAM;
     try {
       if (!res.body) throw new LlmRequestError();
@@ -204,19 +208,16 @@ export class AnthropicMessagesProvider implements LlmProvider {
         if (this.o.refusal !== "report" || !observer) throw new LlmRefusalError();
         await observer.onRefusal(end.refused);
       }
-      if (observer && end.sawThinking) {
-        // Once per response that thought, tool calls or not: `[]` ids when it only answered.
-        await observer.onBlocks?.(
-          end.toolCalls.map((c) => c.id),
-          end.blocks,
-        );
-      }
+      // Reasoning deltas streamed before a refusal was known stay streamed; the terminal chunk carries none.
+      const out = end.refused !== undefined ? refusedOutcomeOf(end.blocks) : outcomeOf(end.blocks);
       yield {
         delta: "",
         done: true,
-        ...(end.toolCalls.length > 0 && { toolCalls: end.toolCalls }),
+        ...(out.toolCalls.length > 0 && { toolCalls: out.toolCalls }),
         stopReason: end.stopReason,
         ...(end.usage && { usage: end.usage }),
+        ...(out.reasoning && { reasoning: out.reasoning }),
+        ...(out.layout && { layout: out.layout }),
       };
     } catch (err) {
       if (request.signal?.aborted) throw new LlmAbortedError();
