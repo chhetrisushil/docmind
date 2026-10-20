@@ -1,6 +1,7 @@
 import { type IncomingMessage, request } from "node:http";
 import { type AddressInfo, type Socket, connect } from "node:net";
 import { type MockInstance, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { CHAT_STREAM_ROUTE, chatStreamRoutes } from "./chats/stream";
 import { documentEventRoutes } from "./documents/events";
 import { documentRoutes } from "./documents/routes";
 import { DEFAULT_HTTP_LIMITS, createHttpServer, loadMaxConnections } from "./server";
@@ -289,6 +290,34 @@ describe("server limits", () => {
     server.close();
   });
 
+  it("never times out the chat stream route, which outlives the route timeout", async () => {
+    let timedOut = false;
+    const { server, port } = await started(
+      {
+        [CHAT_STREAM_ROUTE]: (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.write(": open\n\n");
+        },
+        "GET /hang": () => new Promise<void>(() => {}),
+      },
+      { requestTimeoutMs: 20 },
+    );
+    const sse = connect(port, "127.0.0.1");
+    sse.on("error", () => {});
+    sse.on("close", () => {
+      timedOut = true;
+    });
+    sse.write("GET /api/chats/c/stream HTTP/1.1\r\nHost: x\r\n\r\n");
+    await new Promise<void>((resolve) => sse.once("data", () => resolve()));
+    // A non-streaming route armed alongside it times out; the stream is still open after.
+    expect((await fetch(`http://127.0.0.1:${port}/hang`)).status).toBe(503);
+    expect(timedOut).toBe(false);
+    sse.destroy();
+    await closed(sse);
+    server.closeAllConnections();
+    server.close();
+  });
+
   it("refuses the connection past the cap", async () => {
     const { server, port } = await started({}, { maxConnections: 1 });
     const first = connect(port, "127.0.0.1");
@@ -309,6 +338,8 @@ describe("server limits", () => {
       ...Object.keys(documentRoutes({} as any)),
       // biome-ignore lint/suspicious/noExplicitAny: only the route keys are read
       ...Object.keys(documentEventRoutes({} as any).routes),
+      // biome-ignore lint/suspicious/noExplicitAny: only the route keys are read
+      ...Object.keys(chatStreamRoutes({} as any).routes),
     ]);
     expect([...DEFAULT_HTTP_LIMITS.streamingRoutes].filter((k) => !registered.has(k))).toEqual([]);
   });

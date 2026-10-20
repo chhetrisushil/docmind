@@ -1,4 +1,5 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { CHAT_STREAM_ROUTE } from "./chats/stream";
 import { EVENTS_ROUTE } from "./documents/events";
 import { positiveInt } from "./documents/limits";
 import { UPLOAD_ROUTE } from "./documents/routes";
@@ -80,8 +81,8 @@ export const DEFAULT_HTTP_LIMITS: HttpLimits = {
   connectionsCheckingIntervalMs: 5_000,
   maxConnections: DEFAULT_MAX_CONNECTIONS,
   maxHeadersCount: 100,
-  // The upload streams a multipart body; the event stream is open-ended by design.
-  streamingRoutes: new Set([UPLOAD_ROUTE, EVENTS_ROUTE]),
+  // The upload streams a multipart body; the event stream is open-ended by design, and the chat stream is open-ended too.
+  streamingRoutes: new Set([UPLOAD_ROUTE, EVENTS_ROUTE, CHAT_STREAM_ROUTE]),
 };
 
 /** `DOCMIND_MAX_CONNECTIONS` (default 2000, at most 65535); a bad value fails the boot. */

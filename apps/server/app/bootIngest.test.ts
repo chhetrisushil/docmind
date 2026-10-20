@@ -56,6 +56,7 @@ function parts(
     },
     vectors: {},
     events: { closeAll: note("events.closeAll") },
+    chatStreams: { closeAll: note("chatStreams.closeAll") },
     detachStatusFeed: note("detach"),
   };
   return {
@@ -192,6 +193,7 @@ describe("bootIngest", () => {
       "recovery.stop",
       "sweeper.stop",
       "events.closeAll",
+      "chatStreams.closeAll",
       "drainServer",
       "startsIdle",
       "closeIngest",

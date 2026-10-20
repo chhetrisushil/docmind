@@ -3,6 +3,8 @@ import type { Identity } from "@docmind/auth";
 import {
   ConversationNotFoundError,
   InvalidCursorError,
+  type LiveEvent,
+  SubscriberLimitError,
   followConversation,
   parseCursor,
 } from "@loom/conversation";
@@ -11,6 +13,7 @@ import { type Schedule, intervalSchedule } from "../documents/events";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf } from "./access";
+import { ChatBusLimitError, type LiveChatEvent } from "./bus";
 import { chatConversationId } from "./ids";
 import { toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
@@ -207,10 +210,43 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
   })();
 }
 
-/** 152a: no live kinds yet. */
+/**
+ * Subscribes to the hub (answer and reasoning deltas, resets) and the bus (tool steps, tool resets), then sends what
+ * a turn that is already running has produced. The subscriptions come first, so nothing published in between is
+ * lost, and the whole function is synchronous: it runs in the same tick as the status frame.
+ */
 function attachLive(
-  _deps: ChatStreamDeps,
-  _c: StreamCall,
-  _sink: SseSink,
-  _cleanups: (() => void)[],
-): void {}
+  deps: ChatStreamDeps,
+  c: StreamCall,
+  sink: SseSink,
+  cleanups: (() => void)[],
+): void {
+  const answer = (turn: number, text: string) => frame("answer", { turn, text });
+  const reasoning = (turn: number, text: string) => frame("reasoning", { turn, text });
+  const onHub = (e: LiveEvent) => {
+    if (e.type === "reset") return void sink.send(frame("reset", { turn: e.turn }));
+    // Reasoning is its own coalescing channel, so a burst of it never delays or merges into the answer's frames.
+    if (e.type === "reasoning") return void sink.delta(e.turn, e.text, reasoning, "reasoning");
+    sink.delta(e.turn, e.text, answer);
+  };
+  // Bus events carry the turn key; hub events the accepted-turn number. Each keeps its own name.
+  const onBus = (e: LiveChatEvent) => {
+    if (e.kind === "reset") return void sink.send(frame("tool-reset", { turnKey: e.turnKey }));
+    sink.send(frame("tool", { turnKey: e.turnKey, step: e.step }));
+  };
+  try {
+    cleanups.push(deps.chat.hub.subscribe(c.conversationId, onHub));
+    cleanups.push(deps.chat.bus.subscribe(c.chatId, onBus));
+  } catch (err) {
+    if (!(err instanceof SubscriberLimitError || err instanceof ChatBusLimitError)) throw err;
+    sink.send(frame("error", { code: "too_many_streams" }));
+    return;
+  }
+  // The stream is the chat owner's alone (the route loaded the chat row with user_id = identity), which is the
+  // audience Loom's own SSE gives reasoning in owner mode.
+  const thought = deps.chat.hub.reasoningPartialOf(c.conversationId);
+  if (thought) sink.send(frame("reasoning-partial", { turn: thought.turn, text: thought.text }));
+  const text = deps.chat.hub.partialOf(c.conversationId);
+  if (text) sink.send(frame("answer", { turn: text.turn, text: text.text }));
+  cleanups.push(c.schedule(() => sink.send(": ping\n\n"), deps.heartbeatMs ?? 15_000));
+}
