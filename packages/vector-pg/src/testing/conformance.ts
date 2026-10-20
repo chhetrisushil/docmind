@@ -479,5 +479,113 @@ export function runChunkVectorStoreConformance(
         await expect(store.neighbours(A, DOC_A, [], 1, m)).rejects.toBeInstanceOf(RangeError);
       }
     });
+
+    ntest(
+      "search with documentIds keeps only those documents, limits after the filter, and [] matches nothing",
+      async ({ store, seed }) => {
+        const [a1, a2, b1, other] = uuids(4) as [string, string, string, string];
+        const d = store.dimensions;
+        const tilted = basis(d, 0);
+        tilted[1] = 0.1;
+        await seed(A, DOC_A, [a1, a2]);
+        await seed(A, DOC_A2, [b1]);
+        await seed(B, DOC_B, [other]);
+        await store.upsert(A, DOC_A, [
+          { chunkId: a1, vector: tilted },
+          { chunkId: a2, vector: half(d) },
+        ]);
+        await store.upsert(A, DOC_A2, [{ chunkId: b1, vector: basis(d, 0) }]);
+        await store.upsert(B, DOC_B, [{ chunkId: other, vector: basis(d, 0) }]);
+        const q = basis(d, 0);
+        expect(ids(await store.search(A, q, 10))).toEqual([b1, a1, a2]);
+        expect(ids(await store.search(A, q, 10, undefined, {}))).toEqual([b1, a1, a2]);
+        expect(ids(await store.search(A, q, 10, undefined, { documentIds: [DOC_A] }))).toEqual([
+          a1,
+          a2,
+        ]);
+        expect(ids(await store.search(A, q, 1, undefined, { documentIds: [DOC_A] }))).toEqual([a1]);
+        expect(
+          ids(await store.search(A, q, 2, undefined, { documentIds: [DOC_A, DOC_A2] })),
+        ).toEqual([b1, a1]);
+        expect(ids(await store.search(A, q, 10, 0.9, { documentIds: [DOC_A] }))).toEqual([a1]);
+        expect(await store.search(A, q, 10, undefined, { documentIds: [] })).toEqual([]);
+        // a document of another owner or tenant, or one that does not exist, matches nothing
+        expect(
+          await store.search(A, q, 10, undefined, { documentIds: [DOC_B, DOC_C, randomUUID()] }),
+        ).toEqual([]);
+        expect(
+          ids(await store.search(A, q, 10, undefined, { documentIds: [DOC_A2, DOC_B] })),
+        ).toEqual([b1]);
+      },
+    );
+
+    test("search rejects a document filter of more than 1000 ids with a RangeError", async ({
+      store,
+    }) => {
+      const many = Array.from({ length: 1001 }, () => randomUUID());
+      const query = basis(store.dimensions, 0);
+      await expect(store.search(A, query, 5, undefined, { documentIds: many })).rejects.toThrow(
+        /^search: filter\.documentIds is limited to 1000 ids$/,
+      );
+      await expect(
+        store.search(A, query, 5, undefined, { documentIds: many }),
+      ).rejects.toBeInstanceOf(RangeError);
+    });
+
+    ntest(
+      "vectors returns the owner's stored vectors of this model, and leaves out everything else",
+      async ({ store, seed, withModel }) => {
+        const [mine, mine2, zero, unembedded, theirs, foreign, retired, ghost] = uuids(
+          8,
+        ) as string[] as [string, string, string, string, string, string, string, string];
+        const d = store.dimensions;
+        await seed(A, DOC_A, [mine, zero, unembedded, retired]);
+        await seed(A, DOC_A2, [mine2]);
+        await seed(B, DOC_B, [theirs]);
+        await seed(C, DOC_C, [foreign]);
+        const tilted = basis(d, 2);
+        tilted[3] = 0.25;
+        await store.upsert(A, DOC_A, [
+          { chunkId: mine, vector: tilted },
+          { chunkId: zero, vector: new Array(d).fill(0) },
+          { chunkId: retired, vector: basis(d, 0) },
+        ]);
+        await store.upsert(A, DOC_A2, [{ chunkId: mine2, vector: half(d) }]);
+        await store.upsert(B, DOC_B, [{ chunkId: theirs, vector: basis(d, 0) }]);
+        await store.upsert(C, DOC_C, [{ chunkId: foreign, vector: basis(d, 0) }]);
+        await withModel("another-model").upsert(A, DOC_A, [
+          { chunkId: retired, vector: basis(d, 1) },
+        ]);
+        const got = await store.vectors(A, [
+          mine,
+          mine,
+          mine2,
+          zero,
+          unembedded,
+          theirs,
+          foreign,
+          retired,
+          ghost,
+        ]);
+        expect([...got.keys()].sort()).toEqual([mine, mine2].sort());
+        const close = (a: number[] | undefined, b: number[]) => {
+          expect(a).toHaveLength(d);
+          for (const [i, x] of b.entries()) expect(a?.[i]).toBeCloseTo(x, 5);
+        };
+        close(got.get(mine), tilted);
+        close(got.get(mine2), half(d));
+        expect((await store.vectors(B, [mine, theirs])).size).toBe(1);
+        expect([...(await store.vectors(C, [mine, theirs, foreign])).keys()]).toEqual([foreign]);
+        expect((await store.vectors(A, [])).size).toBe(0);
+        await seed(A, DOC_A2, []); // the chunk is deleted: its vector goes with it
+        expect([...(await store.vectors(A, [mine, mine2])).keys()]).toEqual([mine]);
+      },
+    );
+
+    test("vectors rejects more than 1000 ids with a RangeError", async ({ store }) => {
+      const many = Array.from({ length: 1001 }, () => randomUUID());
+      await expect(store.vectors(A, many)).rejects.toThrow(/^vectors: at most 1000 ids$/);
+      await expect(store.vectors(A, many)).rejects.toBeInstanceOf(RangeError);
+    });
   });
 }
