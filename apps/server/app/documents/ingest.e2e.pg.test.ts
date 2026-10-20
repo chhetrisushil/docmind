@@ -236,11 +236,14 @@ describe.skipIf(!PG_URL)(
     );
 
     // The raw event log of one run holds ids, outcomes, counts, fixed codes and the model id only.
+    // A failure's sealed text is read back through the decrypting store and must be the fixed one.
     const assertLogContentFree = async (user: { userId: string; tenantId: string }, id: string) =>
       assertEventsAreContentFree(
         await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id)),
         { tenantId: user.tenantId, userId: user.userId, documentId: id },
         [st.composed.ingestWiring.embedder.modelId],
+        undefined,
+        await st.durable.sealed.eventStore.read(ingestExecutionId(user.userId, id)),
       );
 
     const filesOf = (userId: string) =>

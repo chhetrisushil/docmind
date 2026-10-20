@@ -118,10 +118,11 @@ const sealed: Leaf = (v) => {
 const STEP_IDS: readonly string[] = INGEST_STEPS.map((s) => s.id);
 const STEP_NAMES = STEP_IDS.map((id) => id.replace(/^ingest-/, ""));
 // STEP_FAILED.error / EXECUTION_FAILED.error are sealed (M4: Loom writes String(err), which a chat
-// tool's collaborator could fill with content); the fixed text is still accepted for an unsealed log.
-const fixedFailure: Leaf = (v) =>
-  sealed(v) ||
-  (typeof v === "string" && STEP_NAMES.some((name) => v === `Error: ingest step failed: ${name}`));
+// tool's collaborator could fill with content). The raw shape check accepts the envelope; the
+// fixedness is checked on the DECRYPTED event (the `decrypted` argument of assertEventsAreContentFree).
+const isFixedFailureText = (v: unknown): boolean =>
+  typeof v === "string" && STEP_NAMES.some((name) => v === `Error: ingest step failed: ${name}`);
+const fixedFailure: Leaf = (v) => sealed(v) || isFixedFailureText(v);
 const stepId = oneOf(...STEP_IDS);
 const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
@@ -213,6 +214,8 @@ export function assertEventsAreContentFree(
   /** The configured providers' model ids (embed, summary, vision): the only `model` a result may hold besides "none". */
   models: readonly string[],
   generation = INGEST_GENERATION,
+  /** The same events read through the decrypting store: required when the log holds a failure, to prove its text is the fixed one. */
+  decrypted?: readonly RawEvent[],
 ): void {
   if (events.length === 0) throw new Error("no events to check");
   const executionId = ingestExecutionId(ref.userId, ref.documentId, generation);
@@ -234,6 +237,13 @@ export function assertEventsAreContentFree(
     const at = `${e.eventType}[${i}]`;
     checkShape(e, envelope, at);
     checkShape(e.payload, types[e.eventType] as Shape, `${at}.payload`);
+    const error = (e.payload as { error?: unknown }).error;
+    if (error !== undefined && sealed(error)) {
+      const plain = (decrypted?.[i]?.payload as { error?: unknown } | undefined)?.error;
+      if (decrypted?.[i]?.id !== e.id) throw new Error(`${at} needs its decrypted event`);
+      if (!isFixedFailureText(plain))
+        throw new Error(`${at}.payload.error is not the fixed failure text`);
+    }
     if (e.metadata !== undefined) {
       // `seal` lists the sealed paths of the start; `fence` is the counter of a cancel.
       checkShape(

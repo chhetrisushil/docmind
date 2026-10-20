@@ -151,14 +151,17 @@ describe.skipIf(!PG_URL)(
       return log(ref);
     };
     /** Every event passes the structural check, and none of the seeded text is in the raw JSON. */
-    const proven = (raw: EventEnvelope[], ref: IngestStartInput) => {
-      assertEventsAreContentFree(raw as RawEvent[], ref, [modelId]);
+    const proven = (raw: EventEnvelope[], ref: IngestStartInput, plain?: EventEnvelope[]) => {
+      assertEventsAreContentFree(raw as RawEvent[], ref, [modelId], undefined, plain as RawEvent[]);
       const json = JSON.stringify(raw);
       for (const text of [SENTENCE.slice(0, 30), "Quarterly report", "Quarterly report.pdf"]) {
         expect(json).not.toContain(text); // meaningful: raw events are plain JSON, so a leak would show
       }
       return raw;
     };
+    /** The same log read through the decrypting store: what a failure's sealed text really says. */
+    const decrypted = (ref: IngestStartInput) =>
+      durable.sealed.eventStore.read(ingestExecutionId(ref.userId, ref.documentId));
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
 
     it("a successful run to ready: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
@@ -290,11 +293,15 @@ describe.skipIf(!PG_URL)(
       };
       vi.spyOn(console, "error").mockImplementation(() => {});
       const ref = await seedTxt("e".repeat(64));
-      const raw = proven(await run(ref), ref);
+      const raw = proven(await run(ref), ref, await decrypted(ref));
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
-      expect(raw.at(-1)?.payload).toEqual({
-        error: expect.objectContaining({ __loomEnc: "loom/aes-256-gcm" }),
-      }); // sealed since M4
+      // Raw: an envelope. Decrypted: exactly the fixed text.
+      expect((raw.at(-1)?.payload as { error: unknown }).error).toMatchObject({
+        __loomEnc: "loom/aes-256-gcm",
+      });
+      expect((await decrypted(ref)).at(-1)?.payload).toEqual({
+        error: "Error: ingest step failed: parse",
+      });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
 
@@ -332,14 +339,18 @@ describe.skipIf(!PG_URL)(
       };
       const logged = vi.spyOn(console, "error").mockImplementation(() => {});
       const ref = await seedTxt("8".repeat(64));
-      const raw = proven(await run(ref), ref);
+      const raw = proven(await run(ref), ref, await decrypted(ref));
       expect(calls).toBe(1); // fatal: not retried
       // The class name only: no message, cause or id in what the process logs.
       expect(logged.mock.calls).toEqual([["ingest step failed", "embed", "EmbeddingError"]]);
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
-      expect(raw.at(-1)?.payload).toEqual({
-        error: expect.objectContaining({ __loomEnc: "loom/aes-256-gcm" }),
-      }); // sealed since M4
+      // Raw: an envelope. Decrypted: exactly the fixed text.
+      expect((raw.at(-1)?.payload as { error: unknown }).error).toMatchObject({
+        __loomEnc: "loom/aes-256-gcm",
+      });
+      expect((await decrypted(ref)).at(-1)?.payload).toEqual({
+        error: "Error: ingest step failed: embed",
+      });
       expect(foldIngestStatus(raw)).toMatchObject({ status: "failed", code: "internal" });
     });
 
