@@ -113,4 +113,25 @@ describe("chatFlow (D11)", () => {
       /^the chat envelope key must be at least 32 characters$/,
     );
   });
+
+  it("refuses a short previous key without echoing it", () => {
+    expect(() => chatFlow({ ...base(), previousKeys: ["p".repeat(32), "tiny-old-key"] })).toThrow(
+      /^every previous chat envelope key must be at least 32 characters$/,
+    );
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    "refuses contextTokens %s",
+    (n) => {
+      expect(() => chatFlow({ ...base(), contextTokens: n })).toThrow(
+        /^contextTokens must be a positive safe integer$/,
+      );
+    },
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("refuses maxTokens %s", (n) => {
+    expect(() => chatFlow({ ...base(), maxTokens: n })).toThrow(
+      /^maxTokens must be a positive safe integer$/,
+    );
+  });
 });
