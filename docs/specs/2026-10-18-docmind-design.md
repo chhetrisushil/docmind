@@ -269,7 +269,7 @@ lease-only periodic scan).
 | org | `orga` | heading path |
 | docx | `mammoth` → HTML → section tree (zip budget checked first) | heading path |
 | doc | `word-extractor` | paragraph range |
-| pdf | `unpdf` (pdf.js), page by page; pages without text go to Claude, at most 20 per document; PDFs ≤ 100 pages / 22 MiB raw for vision (the Messages API caps a request at 32 MB and base64 adds a third) | page number |
+| pdf | `unpdf` (pdf.js), page by page; pages without text go to Claude, at most 12 per document in requests of 4 pages (own `DOCMIND_VISION_TIMEOUT_MS`, default 180 s); a batch Claude permanently rejects is dropped when the PDF has text pages, while an outage still retries the step; PDFs ≤ 100 pages / 22 MiB raw for vision (the Messages API caps a request at 32 MB and base64 adds a third) | page number |
 | image | Claude vision: transcribe text and describe the image; ≤ 5 MiB of base64 (≈ 3.75 MiB raw), ≤ 8000 px a side; an answer truncated by `max_tokens` is `too_large` | image region |
 
 Scanned PDF pages with no text layer are routed through the image path. Known limit: CJK PDFs that need predefined CMaps extract as empty text and so go to vision.

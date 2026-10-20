@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import type { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
@@ -179,9 +180,9 @@ describe("loadGateLimits", () => {
 });
 
 describe("parseStepTimeoutMs", () => {
-  it("covers a slot wait, the run itself, one LLM call and 30s of slack", () => {
-    expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 }, 60_000)).toBe(
-      150_000,
+  it("covers a slot wait, the run itself, three sequential vision requests and 30s of slack", () => {
+    expect(parseStepTimeoutMs({ ...loadParseLimits({}), wallClockMs: 30_000 }, 180_000)).toBe(
+      630_000,
     );
   });
 });
@@ -196,8 +197,21 @@ describe("LLM config and providers", () => {
         summaryModel: "claude-haiku-5-5",
         visionModel: "claude-sonnet-5-5",
         timeoutMs: 60_000,
+        visionTimeoutMs: 180_000,
       });
     }
+  });
+
+  it("reads the vision timeout, accepts the maximum, and keeps the key out of the wiring", () => {
+    expect(loadLlmConfig({ DOCMIND_VISION_TIMEOUT_MS: "600000" }).visionTimeoutMs).toBe(600_000);
+    const w = createIngestWiring({
+      ANTHROPIC_API_KEY: "k-secret-123",
+      DOCMIND_LLM_TIMEOUT_MS: "1000",
+    });
+    expect(w.llm.summary).toBeDefined();
+    expect(JSON.stringify(w.llm)).not.toContain("k-secret-123");
+    expect(inspect(w.llm, { depth: 6, showHidden: true })).not.toContain("k-secret-123");
+    expect(Object.keys(w.llm.config)).not.toContain("apiKey");
   });
 
   it("builds both providers with their own models when the key is set", () => {
@@ -214,6 +228,10 @@ describe("LLM config and providers", () => {
       /^DOCMIND_SUMMARY_MODEL must be a model id$/,
     );
     expect(() => loadLlmConfig({ DOCMIND_LLM_TIMEOUT_MS: "0" })).toThrow(/DOCMIND_LLM_TIMEOUT_MS/);
+    for (const v of ["0", "600001", "abc"])
+      expect(() => loadLlmConfig({ DOCMIND_VISION_TIMEOUT_MS: v })).toThrow(
+        /DOCMIND_VISION_TIMEOUT_MS/,
+      );
     expect(() =>
       createIngestWiring({ ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "http://u:SECRETPW@h" }),
     ).toThrow(

@@ -121,7 +121,8 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =ANTHROPIC_API_KEY=                          | Enables summaries and image/scanned-PDF vision; without it summaries are skipped and vision documents fail as =vision_unavailable= |
 | =ANTHROPIC_BASE_URL=                         | Optional gateway or proxy for the Anthropic API       |
 | =DOCMIND_SUMMARY_MODEL=, =DOCMIND_VISION_MODEL= | Models for summaries (default =claude-haiku-5-5=) and vision (default =claude-sonnet-5-5=) |
-| =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request Claude timeout (default 60000)            |
+| =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request Claude timeout for summaries (default 60000) |
+| =DOCMIND_VISION_TIMEOUT_MS=                  | Per-request Claude timeout for vision (default 180000, max 600000) |
 | =DOCMIND_SUMMARY_MAX_CHARS=                  | Most document text one summary reads (default 400000, at most 5000000) |
 | =DOCMIND_PUBLIC_ORIGIN=                      | Browser-visible origin, exactly =scheme://host[:port]= (punycode, no default port), for a proxy that rewrites Host |
 | =DOCMIND_MAX_CONNECTIONS=                    | Most simultaneous HTTP connections (default 2000, at most 65535) |
@@ -165,7 +166,7 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
   (=ingest-flow-mismatch=); the user can retry them.
 - Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters:
   at least about 17 map requests, up to about twice that when sections are just over 12,000
-  characters, since whole sections are packed) plus one reduce request. Vision reads at most 20 text-less pages per PDF
+  characters, since whole sections are packed) plus one reduce request. Vision reads at most 12 text-less pages per PDF, 4 per request
   (PDFs over 100 pages or 22 MiB raw are refused for vision); images are limited to 5 MiB of base64
   and 8000 px a side. Per-tenant token budgets come in M7.
 - A backlog of interrupted summaries is re-driven one step at a time on recovery (up to 10 minutes

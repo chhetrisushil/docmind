@@ -9,6 +9,7 @@ import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress"
 import { StartupConfigError } from "../../startupError";
 import { IngestGate } from "./gate";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
+import { VISION_PDF_MAX_REQUESTS } from "./vision";
 
 /** The ingest flow's dependencies, built once by the composition root and passed down. */
 export interface IngestWiring {
@@ -26,14 +27,17 @@ export interface IngestWiring {
   /** Claude providers; both are undefined without ANTHROPIC_API_KEY (summaries skipped, images fail as vision_unavailable). */
   /** The most document text a summary reads. */
   summaryMaxChars: number;
-  llm: { summary?: LlmProvider; vision?: LlmProvider; config: LlmConfig };
+  llm: { summary?: LlmProvider; vision?: LlmProvider; config: LlmSettings };
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-/** One parse attempt: a wait for a runner slot, its own run (or one vision call), and database and blob slack. */
-export const parseStepTimeoutMs = (limits: ParseLimits, llmTimeoutMs: number): number =>
-  2 * limits.wallClockMs + llmTimeoutMs + 30_000;
+/**
+ * One parse attempt: a wait for a runner slot, its own run, up to VISION_PDF_MAX_REQUESTS sequential
+ * vision requests, and database and blob slack.
+ */
+export const parseStepTimeoutMs = (limits: ParseLimits, visionTimeoutMs: number): number =>
+  2 * limits.wallClockMs + VISION_PDF_MAX_REQUESTS * visionTimeoutMs + 30_000;
 
 /** The one way to stop ingest: signals the steps first, then kills the in-flight parses. */
 export function closeIngest(wiring: IngestWiring): Promise<void> {
@@ -92,15 +96,17 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
 
 const MODEL_ID = /^[a-z0-9][a-z0-9.\-]{0,99}$/;
 const MAX_LLM_TIMEOUT_MS = 300_000;
+const MAX_VISION_TIMEOUT_MS = 600_000;
 const SUMMARY_MAX_TOKENS = 2_048;
 const VISION_MAX_TOKENS = 16_000;
 
-export interface LlmConfig {
-  apiKey?: string;
+/** Claude settings kept on the wiring. It never holds the API key (R10): the key lives only inside the providers. */
+export interface LlmSettings {
   baseUrl?: string;
   summaryModel: string;
   visionModel: string;
   timeoutMs: number;
+  visionTimeoutMs: number;
 }
 
 const modelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
@@ -110,29 +116,30 @@ const modelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string
 };
 
 /** Claude settings. The key is optional (D7): without it summaries are skipped and images fail as vision_unavailable. */
-export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig {
-  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
+export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmSettings {
   const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || undefined;
   return {
-    ...(apiKey && { apiKey }),
     ...(baseUrl && { baseUrl }),
     summaryModel: modelId(env, "DOCMIND_SUMMARY_MODEL", "claude-haiku-5-5"),
     visionModel: modelId(env, "DOCMIND_VISION_MODEL", "claude-sonnet-5-5"),
     timeoutMs: positiveInt(env, "DOCMIND_LLM_TIMEOUT_MS", 60_000, MAX_LLM_TIMEOUT_MS),
+    // A vision request reads up to VISION_PDF_PAGES_PER_REQUEST dense pages: far slower than a summary.
+    visionTimeoutMs: positiveInt(env, "DOCMIND_VISION_TIMEOUT_MS", 180_000, MAX_VISION_TIMEOUT_MS),
   };
 }
 
 function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
   const config = loadLlmConfig(env);
-  const { apiKey, baseUrl } = config;
+  const { baseUrl } = config;
+  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
   if (!apiKey) return { config };
-  const make = (model: string, maxTokens: number) => {
+  const make = (model: string, maxTokens: number, timeoutMs: number) => {
     try {
       return new AnthropicMessagesProvider({
         apiKey,
         model,
         maxTokens,
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
         ...(baseUrl && { baseUrl }),
       });
     } catch (err) {
@@ -146,8 +153,8 @@ function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
   };
   return {
     config,
-    summary: make(config.summaryModel, SUMMARY_MAX_TOKENS),
-    vision: make(config.visionModel, VISION_MAX_TOKENS),
+    summary: make(config.summaryModel, SUMMARY_MAX_TOKENS, config.timeoutMs),
+    vision: make(config.visionModel, VISION_MAX_TOKENS, config.visionTimeoutMs),
   };
 }
 

@@ -12,7 +12,7 @@ import {
   createDefaultParsers,
 } from "@docmind/parsers";
 import { describe, expect, it, vi } from "vitest";
-import { DocumentGoneError } from "../errors";
+import { DocumentGoneError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import { pngBytes } from "../imageFixtures";
 import { LLM_RETRY } from "../stepEffect";
@@ -398,7 +398,7 @@ describe("parse step: scanned pdf pages", () => {
     expect(await run(pdfDeps(none).d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
   });
 
-  it("sends at most 20 scanned pages and skips vision for a pdf over 100 pages or 22 MiB", async () => {
+  it("sends at most 12 scanned pages, in batches of 4, and skips vision for a pdf over 100 pages or 22 MiB", async () => {
     const vision = {
       readImage: vi.fn(),
       readPdfPages: vi.fn(
@@ -411,9 +411,11 @@ describe("parse step: scanned pdf pages", () => {
       media: Array.from({ length: 30 }, (_, i) => scanned(i + 1)),
     };
     await run(pdfDeps(many, { vision }).d);
-    expect(vision.readPdfPages.mock.calls[0]?.[1]).toEqual(
-      Array.from({ length: 20 }, (_, i) => i + 1),
-    );
+    expect(vision.readPdfPages.mock.calls.map((c) => c[1])).toEqual([
+      [1, 2, 3, 4],
+      [5, 6, 7, 8],
+      [9, 10, 11, 12],
+    ]);
     const huge = {
       text: "x",
       sections: [page(1, "x")],
@@ -431,6 +433,45 @@ describe("parse step: scanned pdf pages", () => {
       source: pdfSource(new Uint8Array(22 * 1024 * 1024 + 1)),
     });
     expect(await run(tooBig.d)).toEqual({ outcome: "failed", code: "too_large" });
+  });
+
+  it("drops a batch that fails permanently when text pages exist, and keeps the other batches", async () => {
+    const parsed = {
+      text: "zero",
+      sections: [page(20, "zero")],
+      media: Array.from({ length: 8 }, (_, i) => scanned(i + 1)),
+    };
+    const readPdfPages = vi.fn(async (_b: Uint8Array, pages: number[]) => {
+      if (pages[0] === 5) throw new LlmRequestError(400);
+      return new Map(pages.map((p) => [p, `p${p}`]));
+    });
+    const { d, stored } = pdfDeps(parsed, { vision: { readImage: vi.fn(), readPdfPages } });
+    expect(await run(d)).toEqual({ outcome: "done", count: 5 });
+    const out = stored[0] as { sections: { text: string }[] };
+    expect(out.sections.map((s) => s.text)).toEqual(["p1", "p2", "p3", "p4", "zero"]);
+    for (const err of [new LlmRefusalError(), new PermanentIngestError("too_large")]) {
+      const one = vi.fn(async () => {
+        throw err;
+      });
+      const kept = pdfDeps(
+        { text: "x", sections: [page(1, "x")], media: [scanned(2)] },
+        { vision: { readImage: vi.fn(), readPdfPages: one } },
+      );
+      expect(await run(kept.d)).toEqual({ outcome: "done", count: 1 });
+    }
+  });
+
+  it("still retries a transient vision failure even when text pages exist", async () => {
+    const readPdfPages = vi.fn(async () => {
+      throw new LlmUnavailableError(529);
+    });
+    const sleep = vi.fn(async () => {});
+    const { d } = pdfDeps(
+      { text: "x", sections: [page(1, "x")], media: [scanned(2)] },
+      { vision: { readImage: vi.fn(), readPdfPages }, sleep },
+    );
+    await expect(run(d)).rejects.toThrow(/^ingest step failed: parse$/);
+    expect(readPdfPages).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts);
   });
 
   it("fails as too_large when the merged text exceeds maxChars", async () => {

@@ -63,7 +63,7 @@ export function pgIngestDeps({
     maxChars: wiring.runnerLimits.maxChars,
     shutdown: wiring.shutdown.signal,
     gate: wiring.gate,
-    parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits, wiring.llm.config.timeoutMs),
+    parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits, wiring.llm.config.visionTimeoutMs),
     ...(wiring.llm.vision && { vision: new VisionReader(wiring.llm.vision) }),
     ...(wiring.sleep && { sleep: wiring.sleep }),
   };
