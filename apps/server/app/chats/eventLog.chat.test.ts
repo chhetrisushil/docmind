@@ -134,7 +134,9 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
         ),
       ),
     );
-    expect(texts.some((t) => t.includes(THINKING))).toBe(true);
+    // Loom stores an envelope {e: executionId, t: text}; the text is what the owner reads back.
+    const opened = texts.map((t) => (JSON.parse(t) as { e: string; t: string }).t);
+    expect(opened.sort()).toEqual([THINKING, THINK2].sort());
     // Only the owner's key was used.
     expect([...stack.subjects]).toEqual([U]);
     // The same log, read through the decrypting store, is the conversation.
@@ -173,11 +175,23 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
   });
 
   it("a failed turn records a fixed reason and leaks nothing", async () => {
-    stack = await startChatStack({ scripts: [{ steps: [{ error: "api_error" }] }] });
+    stack = await startChatStack({
+      scripts: [{ steps: [{ thinking: THINKING }, { signature: SIG1 }, { error: "api_error" }] }],
+    });
     const id = await stack.start();
+    const live: string[] = [];
+    const off = stack.chat.hub.subscribe(id, (ev) => {
+      if (ev.type === "reasoning") live.push(ev.text);
+    });
     await stack.send(id, QUESTION);
     expect((await stack.replies(id, 1))[0]).toMatchObject({ status: "failed", text: "" });
-    assertNoPlaintext(await rawLog(stack), [QUESTION]);
+    await vi.waitFor(() => expect(live.join("")).toContain(THINKING)); // streamed before the failure
+    off();
+    const raw = await rawLog(stack);
+    expect(
+      raw.some((e) => e.eventType === "STEP_FAILED" || e.eventType === "EXECUTION_FAILED"),
+    ).toBe(true);
+    assertNoPlaintext(raw, [QUESTION, THINKING, SIG1]);
   });
 
   it("a stopped turn seals its partial text and keeps it out of the log", async () => {
