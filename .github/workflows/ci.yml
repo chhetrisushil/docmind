@@ -25,7 +25,7 @@ concurrency:
 env:
   # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
   # new commit, re-run the whole gate, then change this line.
-  LOOM_REF: 006dfdaf63319fa61594c42e2d5b2c8b87add2ca
+  LOOM_REF: 58fb2f5c4de9ac1dac85dbd7412b44cd81fdd03d
 
 jobs:
   gate:
