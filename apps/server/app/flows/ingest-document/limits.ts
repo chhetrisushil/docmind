@@ -109,7 +109,7 @@ export interface LlmSettings {
   visionTimeoutMs: number;
 }
 
-const modelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
+export const envModelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
   const v = env[name]?.trim() || fallback;
   if (!MODEL_ID.test(v)) throw new StartupConfigError(`${name} must be a model id`);
   return v;
@@ -120,8 +120,8 @@ export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmSettings
   const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || undefined;
   return {
     ...(baseUrl && { baseUrl }),
-    summaryModel: modelId(env, "DOCMIND_SUMMARY_MODEL", "claude-haiku-5-5"),
-    visionModel: modelId(env, "DOCMIND_VISION_MODEL", "claude-sonnet-5-5"),
+    summaryModel: envModelId(env, "DOCMIND_SUMMARY_MODEL", "claude-haiku-5-5"),
+    visionModel: envModelId(env, "DOCMIND_VISION_MODEL", "claude-sonnet-5-5"),
     timeoutMs: positiveInt(env, "DOCMIND_LLM_TIMEOUT_MS", 60_000, MAX_LLM_TIMEOUT_MS),
     // A vision request reads up to VISION_PDF_PAGES_PER_REQUEST dense pages: far slower than a summary.
     visionTimeoutMs: positiveInt(env, "DOCMIND_VISION_TIMEOUT_MS", 180_000, MAX_VISION_TIMEOUT_MS),
