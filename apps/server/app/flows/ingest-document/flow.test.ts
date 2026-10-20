@@ -24,7 +24,7 @@ import {
   runIngestSteps,
 } from "./flow";
 import { type IngestWiring, closeIngest } from "./limits";
-import { EMBED_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
+import { EMBED_RETRY, LLM_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 import { fakeIngestDeps } from "./testing";
 
 afterEach(() => vi.restoreAllMocks());
@@ -265,8 +265,22 @@ describe("the step runner", () => {
 
 describe("the parse step's failures and restarts", () => {
   it("declares the retry policy on the step and keeps it small", () => {
-    expect(ingestParseStep.retry).toBe(STEP_RETRY);
+    expect(ingestParseStep.retry).toBe(LLM_RETRY); // parse calls Claude for images and scanned pages
     expect(STEP_RETRY.maxAttempts).toBe(3);
+  });
+
+  it("declares exactly the retry policy each step enforces", () => {
+    const declared = Object.fromEntries(INGEST_STEPS.map((s) => [s.id, s.retry]));
+    expect(declared).toEqual({
+      "ingest-parse": LLM_RETRY,
+      "ingest-chunk": STEP_RETRY,
+      "ingest-embed": EMBED_RETRY,
+      "ingest-analyze": STEP_RETRY,
+      "ingest-summarize": LLM_RETRY,
+      "ingest-link": STEP_RETRY,
+      "ingest-finalize": STEP_RETRY,
+    });
+    expect(ingestDocumentFlow.definition.version).toBe("3.0.0");
   });
 
   it("gives the embed step its own, longer retry policy", () => {
@@ -288,7 +302,7 @@ describe("the parse step's failures and restarts", () => {
     await expect((await run(ids(), app)).waitForCompletion()).rejects.toThrow(
       /ingest step failed: parse/,
     );
-    expect(calls).toBe(STEP_RETRY.maxAttempts);
+    expect(calls).toBe(LLM_RETRY.maxAttempts);
     await app.close();
   });
 

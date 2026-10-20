@@ -134,7 +134,7 @@ describe.skipIf(!PG_URL)(
         assertEventsAreContentFree(
           await st.durable.raw.eventStore.read(ingestExecutionId(ada.userId, id)),
           { tenantId: ada.tenantId, userId: ada.userId, documentId: id },
-          MODEL,
+          [MODEL],
         );
       },
       WAIT,
@@ -240,7 +240,7 @@ describe.skipIf(!PG_URL)(
       assertEventsAreContentFree(
         await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id)),
         { tenantId: user.tenantId, userId: user.userId, documentId: id },
-        st.composed.ingestWiring.embedder.modelId,
+        [st.composed.ingestWiring.embedder.modelId],
       );
 
     const filesOf = (userId: string) =>

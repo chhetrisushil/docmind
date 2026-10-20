@@ -7,6 +7,8 @@ import type { EntityStore } from "../pgEntities";
 import type { ParsedStore } from "../pgParsed";
 import type { DocumentResults } from "../pgResults";
 import {
+  LLM_BACKOFF_CAP_MS,
+  LLM_RETRY,
   type StepGuard,
   type StepResult,
   type StepSeams,
@@ -72,9 +74,10 @@ export function summarizeEffect(deps: SummarizeDeps): Effect<IngestStartInput, S
       await deps.results.putSummary(ref, run.summary, signal); // last: its presence means "summarize done" (D2)
       return { count: run.groups.length, model };
     },
-    ingestStepOptions({
-      ...deps,
-      stepTimeoutMs: deps.summarizeStepTimeoutMs ?? SUMMARIZE_STEP_TIMEOUT_MS,
-    }),
+    ingestStepOptions(
+      { ...deps, stepTimeoutMs: deps.summarizeStepTimeoutMs ?? SUMMARIZE_STEP_TIMEOUT_MS },
+      LLM_RETRY,
+      LLM_BACKOFF_CAP_MS,
+    ),
   );
 }

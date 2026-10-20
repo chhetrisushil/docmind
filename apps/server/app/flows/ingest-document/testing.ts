@@ -3,8 +3,9 @@ import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
 import { HashingEmbeddingProvider } from "@loom/memory";
 import { isBase64Of } from "../../crypto/fields";
-import { ingestExecutionId } from "../../documents/ingest";
+import { INGEST_GENERATION, ingestExecutionId } from "../../documents/ingest";
 import type { IngestDeps } from "./deps";
+import { FAILURE_CODES } from "./errors";
 import { INGEST_STEPS, type IngestStartInput } from "./flow";
 import type { DocumentResults } from "./pgResults";
 
@@ -121,17 +122,17 @@ const fixedFailure: Leaf = (v) =>
 const stepId = oneOf(...STEP_IDS);
 const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
-  code: { optional: oneOf("unsupported_content", "corrupt_content", "too_large") },
+  code: { optional: oneOf(...FAILURE_CODES) },
 };
-/** `model` is exactly the configured provider's id, or "none" (summarize without a key): a closed value, never a free pattern. */
-const stepOutput = (modelId: string | undefined): Shape => ({
+/** `model` is one of the configured providers' ids, or "none" (summarize without a key): a closed value, never a free pattern. */
+const stepOutput = (models: readonly string[]): Shape => ({
   ...flowOutput,
   count: { optional: count },
-  model: { optional: (v) => v === "none" || (modelId !== undefined && v === modelId) },
+  model: { optional: (v) => v === "none" || (typeof v === "string" && models.includes(v)) },
 });
 
 /** The payload of every event type, per key the only values it may hold; an unlisted type or key fails. */
-const payloads = (ref: IngestStartInput, modelId: string | undefined): Record<string, Shape> => {
+const payloads = (ref: IngestStartInput, models: readonly string[]): Record<string, Shape> => {
   const ids: Shape = {
     documentId: exactly(ref.documentId),
     tenantId: exactly(ref.tenantId),
@@ -144,7 +145,7 @@ const payloads = (ref: IngestStartInput, modelId: string | undefined): Record<st
       principal: { v: exactly(1), identity: { actor: sealed, tenant: sealed } },
     },
     STEP_STARTED: { input: ids, stepId },
-    STEP_COMPLETED: { output: stepOutput(modelId), stepId },
+    STEP_COMPLETED: { output: stepOutput(models), stepId },
     STEP_FAILED: { error: fixedFailure, stepId },
     RESOURCE_METERED: { ms: count, tokens: count },
     EXECUTION_COMPLETED: { output: flowOutput },
@@ -206,12 +207,13 @@ export interface RawEvent {
 export function assertEventsAreContentFree(
   events: RawEvent[],
   ref: IngestStartInput,
-  /** The configured embedder's `modelId`: the only `model` an embed result may hold (none given: any `model` fails). */
-  modelId?: string,
+  /** The configured providers' model ids (embed, summary, vision): the only `model` a result may hold besides "none". */
+  models: readonly string[],
+  generation = INGEST_GENERATION,
 ): void {
   if (events.length === 0) throw new Error("no events to check");
-  const executionId = ingestExecutionId(ref.userId, ref.documentId);
-  const types = payloads(ref, modelId);
+  const executionId = ingestExecutionId(ref.userId, ref.documentId, generation);
+  const types = payloads(ref, models);
   const envelope: Shape = {
     id: (v) =>
       typeof v === "string" &&

@@ -1,7 +1,7 @@
 import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
-import { EMBED_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
+import { EMBED_RETRY, LLM_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 
 /**
  * Start input: ids only (never a filename, title or text), and strict so a field added later fails
@@ -25,8 +25,8 @@ export const ingestParseStep = step$({
   name: "IngestParse",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  // Declared policy; stepEffect enforces it (STEP_RETRY).
-  retry: STEP_RETRY,
+  // Declared policy; stepEffect enforces it. Parse calls Claude for images and scanned pages.
+  retry: LLM_RETRY,
 });
 
 export const ingestChunkStep = step$({
@@ -58,7 +58,7 @@ export const ingestSummarizeStep = step$({
   name: "IngestSummarize",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  retry: STEP_RETRY,
+  retry: LLM_RETRY,
 });
 
 export const ingestLinkStep = step$({
@@ -106,7 +106,9 @@ export const ingestDocumentFlow: RegisteredFlow = {
   definition: flow$({
     id: "ingest-document",
     name: "IngestDocument",
-    version: "2.3.0", // Loom refuses a changed flow under an old version: 2.3.0 gave the embed step its own retry policy (EMBED_RETRY)
+    // Loom refuses a changed flow under an old version. 2.3.0: embed got its own retry policy (EMBED_RETRY).
+    // 3.0.0: parse and summarize retry with LLM_RETRY (Claude outages).
+    version: "3.0.0",
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,
     steps: INGEST_STEPS,

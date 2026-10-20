@@ -13,6 +13,8 @@ import { imageSize } from "../imageSize";
 import type { ParsedStore } from "../pgParsed";
 import type { DocumentSource } from "../pgSource";
 import {
+  LLM_BACKOFF_CAP_MS,
+  LLM_RETRY,
   type StepGuard,
   type StepResult,
   type StepSeams,
@@ -165,9 +167,13 @@ export function parseEffect(deps: ParseDeps): Effect<IngestStartInput, StepResul
       await deps.parsed.put(ref, merged, signal);
       return { count: merged.sections.length };
     },
-    ingestStepOptions({
-      ...deps,
-      ...(deps.parseStepTimeoutMs !== undefined && { stepTimeoutMs: deps.parseStepTimeoutMs }),
-    }),
+    ingestStepOptions(
+      {
+        ...deps,
+        ...(deps.parseStepTimeoutMs !== undefined && { stepTimeoutMs: deps.parseStepTimeoutMs }),
+      },
+      LLM_RETRY,
+      LLM_BACKOFF_CAP_MS,
+    ),
   );
 }
