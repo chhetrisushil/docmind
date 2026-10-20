@@ -11,6 +11,8 @@ export class StartScheduler {
   private readonly pending = new Set<Promise<void>>();
   // Keyed by user and lower-cased document id (the same normalisation as `ingestStartInput`).
   // The key is never logged.
+  // Executions the port started that have not finished yet (their completion promises never reject).
+  private readonly running = new Set<Promise<void>>();
   private readonly byDocument = new Map<string, Set<Promise<void>>>();
   constructor(private readonly port: IngestPort) {}
 
@@ -28,7 +30,17 @@ export class StartScheduler {
     const key = StartScheduler.key(identity, documentId);
     const run = (async () => {
       try {
-        await this.port.start(identity, documentId, generation);
+        const handle = await this.port.start(identity, documentId, generation);
+        if (handle) {
+          const done: Promise<void> = handle
+            .waitForCompletion()
+            .then(
+              () => undefined,
+              () => undefined,
+            )
+            .finally(() => this.running.delete(done));
+          this.running.add(done);
+        }
       } catch (err) {
         console.error(
           "ingest start failed",
@@ -50,6 +62,12 @@ export class StartScheduler {
 
   async idle(): Promise<void> {
     while (this.pending.size > 0) await Promise.all([...this.pending]);
+  }
+
+  /** Resolves once every execution started so far has finished, whatever its outcome (a backfill script waits on this). */
+  async finished(): Promise<void> {
+    await this.idle();
+    while (this.running.size > 0) await Promise.all([...this.running]);
   }
 
   /** Resolves once this document's pending start (if any) has finished, successfully or not. Never rejects. */
