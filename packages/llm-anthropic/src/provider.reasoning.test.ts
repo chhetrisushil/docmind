@@ -1,4 +1,10 @@
-import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loom/llm";
+import {
+  type LlmReasoningPart,
+  type LlmRequest,
+  type LlmStreamChunk,
+  assembleStream,
+  assistantMessageOf,
+} from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { allReleased, sseFetch } from "./__helpers__/bodyOf";
 import * as f from "./__helpers__/frames";
@@ -253,6 +259,11 @@ describe("complete() and stream() report the same reasoning and layout (parity, 
   afterAll(async () => {
     await fake?.close();
   });
+  const LAYOUTS: Record<string, unknown> = {
+    canonical: undefined,
+    interleaved: ["reasoning", { call: "toolu_1" }, "reasoning", { call: "toolu_2" }],
+    textAfterCall: ["reasoning", { text: 2 }, { call: "toolu_1" }, { text: 1 }],
+  };
   const SCRIPTS = {
     canonical: [
       { thinking: "Considering." },
@@ -285,6 +296,8 @@ describe("complete() and stream() report the same reasoning and layout (parity, 
       const completed = await p.complete(HI);
       const chunks = await collect(p.stream(HI));
       expect(assembleStream(chunks)).toEqual(completed);
+      expect(completed.layout).toEqual(LAYOUTS[name]);
+      expect(assembleStream(chunks).layout).toEqual(LAYOUTS[name]);
       expect(completed.reasoning?.length).toBeGreaterThan(0);
       const readable = (completed.reasoning ?? []).map((r) => r.text ?? "").join("");
       expect(chunks.map((c) => c.reasoningDelta ?? "").join("")).toBe(readable);
@@ -299,4 +312,85 @@ describe("capabilities", () => {
     expect(make().capabilities.file).toEqual(["application/pdf"]);
     expect(make().capabilities.image).toContain("image/png");
   });
+});
+
+describe("offline round trip: the recorded order goes back to the API unchanged (ADR 0133 D5)", () => {
+  let fake: FakeAnthropic;
+  beforeAll(async () => {
+    fake = await startFakeAnthropic();
+  });
+  afterAll(async () => {
+    await fake?.close();
+  });
+  const CASES = {
+    interleaved: {
+      steps: [
+        { thinking: "a" },
+        { signature: "S1" },
+        { toolUse: { id: "toolu_1", name: "search_docs", input: { query: "x" } } },
+        { thinking: "b" },
+        { signature: "S2" },
+        { toolUse: { id: "toolu_2", name: "related", input: {} } },
+        { stop: "tool_use" as const },
+      ],
+      blocks: [
+        { type: "thinking", thinking: "a", signature: "S1" },
+        { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
+        { type: "thinking", thinking: "b", signature: "S2" },
+        { type: "tool_use", id: "toolu_2", name: "related", input: {} },
+      ],
+    },
+    textAfterCall: {
+      steps: [
+        { thinking: "a" },
+        { signature: "S1" },
+        { text: "ab" },
+        { toolUse: { id: "toolu_1", name: "search_docs", input: {} } },
+        { text: "c" },
+        { stop: "tool_use" as const },
+      ],
+      blocks: [
+        { type: "thinking", thinking: "a", signature: "S1" },
+        { type: "text", text: "ab" },
+        { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+        { type: "text", text: "c" },
+      ],
+    },
+  };
+  for (const [name, c] of Object.entries(CASES)) {
+    it(`${name}: stream, record with assistantMessageOf, send back: the blocks are identical, signatures included`, async () => {
+      let n = 0;
+      fake.reply(() =>
+        n++ === 0
+          ? { stream: { steps: c.steps } }
+          : { stream: { steps: [{ text: "ok" }, { stop: "end_turn" as const }] } },
+      );
+      const p = make({ baseUrl: fake.url });
+      const end = assembleStream(await collect(p.stream(HI)));
+      // What Loom records: reasoning as parts (readable text resolved back from the store).
+      const parts: LlmReasoningPart[] = (end.reasoning ?? []).map((r) => ({
+        type: "reasoning",
+        kind: r.kind,
+        provider: r.provider,
+        ...(r.signature !== undefined && { signature: r.signature }),
+        ...(r.text !== undefined && r.text !== "" && { text: r.text }),
+      }));
+      const assistant = assistantMessageOf({
+        content: end.content,
+        ...(end.toolCalls && { toolCalls: end.toolCalls }),
+        reasoning: parts,
+        ...(end.layout && { layout: end.layout }),
+      });
+      const results = {
+        role: "user" as const,
+        content: (end.toolCalls ?? []).map((t) => ({
+          type: "tool_result" as const,
+          toolUseId: t.id,
+          content: "r",
+        })),
+      };
+      await collect(p.stream({ messages: [...HI.messages, assistant, results] }));
+      expect(fake.requests.at(-1)?.body.messages[1]?.content).toEqual(c.blocks);
+    });
+  }
 });

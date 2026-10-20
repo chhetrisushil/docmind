@@ -1,3 +1,4 @@
+import type { StreamScript } from "@docmind/llm-anthropic/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
@@ -42,36 +43,42 @@ async function rawLog(s: ChatStack) {
 
 describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
   it("a question, a tool call over a retrieved passage, thinking, an answer, then two more turns and a rotation", async () => {
-    stack = await startChatStack({
-      rotateEveryTurns: 2,
-      passages: [PASSAGE],
-      scripts: [
-        {
-          steps: [
-            { thinking: THINKING },
-            { signature: "sig-1" },
-            { toolUse: { id: "toolu_1", name: "search_docs", input: { query: QUERY } } },
-            { stop: "tool_use" },
-          ],
-        },
-        {
-          steps: [
-            { thinking: "Checking the figure against the passage." },
-            { signature: "sig-2" },
-            { text: `${ANSWER} [[${PASSAGE.passageId}]].` },
-            { stop: "end_turn" },
-          ],
-        },
-        {
-          steps: [
-            { text: "Hiring is planned for the second half of the year." },
-            { stop: "end_turn" },
-          ],
-        },
-        {
-          steps: [{ text: "Hiring starts in the second half of next year." }, { stop: "end_turn" }],
-        },
-      ],
+    const scripts: StreamScript[] = [
+      {
+        steps: [
+          { thinking: THINKING },
+          { signature: "sig-1" },
+          { toolUse: { id: "toolu_1", name: "search_docs", input: { query: QUERY } } },
+          { stop: "tool_use" },
+        ],
+      },
+      {
+        steps: [
+          { thinking: "Checking the figure against the passage." },
+          { signature: "sig-2" },
+          { text: `${ANSWER} [[${PASSAGE.passageId}]].` },
+          { stop: "end_turn" },
+        ],
+      },
+      {
+        steps: [
+          { text: "Hiring is planned for the second half of the year." },
+          { stop: "end_turn" },
+        ],
+      },
+      {
+        steps: [{ text: "Hiring starts in the second half of next year." }, { stop: "end_turn" }],
+      },
+    ];
+    stack = await startChatStack({ rotateEveryTurns: 2, passages: [PASSAGE], scripts });
+    // Serve the same scripts through a recording reply: the provider turns the first one's thinking into
+    // reasoning (provider tests), so THINKING really reached it and the scan below is not vacuous for it.
+    const served: StreamScript[] = [];
+    const queue = [...scripts];
+    stack.fake.reply(() => {
+      const next = queue.shift() as StreamScript;
+      served.push(next);
+      return { stream: next };
     });
     const id = await stack.start();
     await stack.send(id, QUESTION);
@@ -105,6 +112,7 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
         "STEP_STARTED:input.query",
       ]),
     );
+    expect(JSON.stringify(served)).toContain(THINKING);
     // Only the owner's key was used. THINKING stays in SECRETS: from Task 162 Loom records it in the log, sealed.
     expect([...stack.subjects]).toEqual([U]);
     // The same log, read through the decrypting store, is the conversation.
