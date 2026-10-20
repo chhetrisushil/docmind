@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { EmbeddingUnavailableError } from "@docmind/embeddings";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
+import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { ParseAbortedError, ParseRejectedError } from "@docmind/parsers";
 import type { EventEnvelope } from "@loom/core";
 import { flow$, step$ } from "@loom/core";
@@ -14,11 +15,12 @@ import { setRolePassword } from "../../db/migrate";
 import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
 import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
-import { insertDocument } from "../../documents/repo";
+import { filenameBind, insertDocument, titleBind } from "../../documents/repo";
 import { T1, U1, newDocument, twinOverPgChunks } from "../../documents/testHarness";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
+import { docxBytes } from "./docxFixture";
 import {
   INGEST_STEPS,
   IngestOutput,
@@ -30,6 +32,7 @@ import {
   runIngestSteps,
 } from "./flow";
 import { IngestGate } from "./gate";
+import { pngBytes } from "./imageFixtures";
 import { createIngestWiring, loadGateLimits } from "./limits";
 import { PgChunkStore } from "./pgChunks";
 import { pgIngestDeps } from "./pgDeps";
@@ -604,6 +607,183 @@ describe.skipIf(!PG_URL)(
         payload: { op: "cancel", reason: "only the execution's owner may do this" },
       });
       expect(JSON.stringify(raw)).not.toContain("user asked for it"); // the caller's reason is not recorded
+    });
+  },
+);
+
+/** A two-page PDF: page 1 has the text layer `text`, page 2 has none (a scan, read by vision). */
+const twoPagePdf = (text: string): Buffer => {
+  const stream = `BT /F1 18 Tf 20 100 Td (${text}) Tj ET`;
+  const page = (contents: number) =>
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents ${contents} 0 R /Resources << /Font << /F1 6 0 R >> >> >>`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+    page(5),
+    page(7),
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Length 0 >>\nstream\n\nendstream",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets = objs.map((o, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+};
+
+describe.skipIf(!PG_URL)(
+  "the event log of a keyed ingest of every format holds no content (needs DOCMIND_TEST_PG_URL)",
+  () => {
+    const MD = "Marmalade ledger reconciliation notes for the Kestrel programme";
+    const DOCX = "Heliotrope procurement addendum covering the Osprey contract";
+    const PNG_TEXT = "Cormorant shipping manifest, container seven";
+    const PNG_DESC = "A photographed manifest lying on a wooden desk.";
+    const PDF_TEXT = "Tamarind";
+    const PDF_SCAN = "Bittern inspection certificate, second page";
+    const TLDR = "Summary marker: the Wombat reorganisation is complete";
+    const TITLE = "Distinctive title Quillfeather";
+    const FILENAME = "distinctive-filename-quillfeather";
+    let f: PgFixture;
+    let durable: Awaited<ReturnType<typeof openDurableStorage>>;
+    let app: ReturnType<typeof buildApp>;
+    let root: string;
+    let ollama: FakeOllama;
+    let claude: FakeAnthropic;
+    let wiring: ReturnType<typeof createIngestWiring>;
+    const blobs = (id: { tenantId: string; userId: string }) =>
+      new EncryptedFsContentStore({
+        root,
+        tenantId: id.tenantId,
+        userId: id.userId,
+        keys: f.keys,
+        maxBytes: 1 << 20,
+      });
+
+    beforeAll(async () => {
+      ollama = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
+      claude = await startFakeAnthropic();
+      claude.reply((body) => {
+        const system = String((body as { system?: unknown }).system ?? "");
+        if (system.includes("one JSON array"))
+          return { text: JSON.stringify([{ page: 2, text: PDF_SCAN }]) };
+        if (system.startsWith("You combine"))
+          return {
+            text: JSON.stringify({
+              tldr: TLDR,
+              keyPoints: ["k"],
+              entities: [],
+              topics: ["t"],
+              suggestedQuestions: ["q?"],
+            }),
+          };
+        if (system.startsWith("You summarize one part"))
+          return { text: JSON.stringify({ summary: TLDR, entities: [] }) };
+        return { text: JSON.stringify({ text: PNG_TEXT, description: PNG_DESC }) }; // the image prompt
+      });
+      wiring = createIngestWiring({
+        DOCMIND_OLLAMA_URL: ollama.url,
+        DOCMIND_EMBED_MODEL: "fake-embed",
+        DOCMIND_EMBED_DIMENSIONS: "64",
+        ANTHROPIC_API_KEY: "test-key-not-real",
+        ANTHROPIC_BASE_URL: claude.url,
+      });
+      wiring.sleep = async () => {};
+      f = await startPgFixture();
+      await setRolePassword(f.db.owner, "docmind_loom", LOOM_PASSWORD);
+      durable = await openDurableStorage({ loomUrl: f.db.loomUrl, keys: f.keys });
+      root = mkdtempSync(join(tmpdir(), "dm-eventlog-formats-"));
+      app = buildApp(durable.storage, durable.crypto, {
+        ingest: pgIngestDeps({
+          pool: f.app,
+          fields: f.fields,
+          keys: f.keys,
+          blobs,
+          wiring,
+          vectors: twinOverPgChunks(f.app, wiring),
+        }),
+      });
+    });
+    afterAll(async () => {
+      await app?.close();
+      await wiring?.runner.close();
+      await durable?.close();
+      await f?.close();
+      await ollama?.close();
+      await claude?.close();
+      if (root) rmSync(root, { recursive: true, force: true });
+    });
+
+    async function seed(n: number, mime: string, bytes: Uint8Array): Promise<IngestStartInput> {
+      const stored = await blobs({ tenantId: T1, userId: U1 }).put(bytes);
+      const doc = await newDocument(f.fields, T1, U1, String(n).repeat(64), {
+        contentAddress: stored.__loomContent,
+        mime,
+        sizeBytes: bytes.length,
+      });
+      const cipher = f.fields.forUser(U1);
+      doc.titleEnc = await cipher.seal(titleBind(doc.id), TITLE);
+      doc.filenameEnc = await cipher.seal(filenameBind(doc.id), `${FILENAME}-${n}`);
+      await withTenant(f.app, T1, (tx) => insertDocument(tx, doc));
+      return { tenantId: T1, userId: U1, documentId: doc.id };
+    }
+
+    it("md, docx, png and a two-page pdf: every raw event passes the proof and holds none of the texts", async () => {
+      const refs = [
+        await seed(1, "text/markdown", Buffer.from(`# Heading\n\n${MD}\n`)),
+        await seed(
+          2,
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          docxBytes([DOCX]),
+        ),
+        await seed(3, "image/png", pngBytes(640, 480)),
+        await seed(4, "application/pdf", twoPagePdf(PDF_TEXT)),
+      ];
+      const models = [
+        wiring.embedder.modelId,
+        wiring.llm.config.summaryModel,
+        wiring.llm.config.visionModel,
+      ];
+      for (const ref of refs) {
+        const handle = await app.runtime.start(ingestDocumentFlow, ref, {
+          executionId: ingestExecutionId(ref.userId, ref.documentId),
+          principal: { tenant: ref.tenantId, actor: ref.userId },
+        });
+        await handle.waitForCompletion();
+        const raw = await durable.raw.eventStore.read(
+          ingestExecutionId(ref.userId, ref.documentId),
+        );
+        assertEventsAreContentFree(raw as RawEvent[], ref, models);
+        expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null });
+        const json = JSON.stringify(raw);
+        for (const text of [
+          MD,
+          DOCX,
+          PNG_TEXT,
+          PNG_DESC,
+          PDF_TEXT,
+          PDF_SCAN,
+          TLDR,
+          TITLE,
+          FILENAME,
+        ])
+          expect(json).not.toContain(text);
+        // meaningful: the models the steps report are the real providers', not "none"
+        expect(json).toContain(wiring.llm.config.summaryModel);
+      }
+      // the fake really served every Claude path: the pdf scan, the image, and both summary calls
+      const systems = claude.requests.map((r) => String(r.body.system));
+      for (const marker of ["one JSON array", "You summarize one part", "You combine"])
+        expect(systems.some((x) => x.includes(marker))).toBe(true);
+      expect(
+        systems.some((x) => x.startsWith("You read documents") && x.includes("one JSON object")),
+      ).toBe(true);
     });
   },
 );
