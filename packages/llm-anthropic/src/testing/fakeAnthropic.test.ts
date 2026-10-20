@@ -161,13 +161,19 @@ describe("FakeAnthropic streaming scripts", () => {
     const res = await post({ stream: true });
     const seen: string[] = [];
     const texts: string[] = [];
+    let sawA: () => void = () => {};
+    const aArrived = new Promise<void>((r) => {
+      sawA = r;
+    });
     const reading = (async () => {
       for await (const e of readSse(res.body as ReadableStream<Uint8Array>, CAPS)) {
         seen.push(e.event);
         const d = JSON.parse(e.data).delta;
         if (d?.type === "text_delta") texts.push(d.text);
+        if (texts.includes("a")) sawA();
       }
     })();
+    await aArrived; // "a" was delivered before the hold
     const gate = await fake.streamHold();
     expect(seen).not.toContain("message_stop"); // the server has not sent it yet, whatever the client has read
     expect(texts).not.toContain("b");
@@ -193,5 +199,96 @@ describe("FakeAnthropic streaming scripts", () => {
   it("refuses a signature step that does not follow a thinking step", async () => {
     fake.reply(() => ({ stream: { steps: [{ signature: "S" }] } }));
     expect((await post({ stream: true })).status).toBe(500);
+  });
+
+  it("refuses an empty signature step", async () => {
+    fake.reply(() => ({ stream: { steps: [{ thinking: "x" }, { signature: "" }] } }));
+    expect((await post({ stream: true })).status).toBe(500);
+  });
+
+  it("a client that disconnects during a hold releases its own gate, and streamHold() skips dead gates", async () => {
+    const own = await startFakeAnthropic({
+      reply: () => ({ stream: { steps: [{ hold: true }, { text: "z" }, { stop: "end_turn" }] } }),
+    });
+    try {
+      const ac = new AbortController();
+      const first = fetch(`${own.url}/v1/messages`, {
+        method: "POST",
+        signal: ac.signal,
+        body: JSON.stringify({
+          model: "m",
+          stream: true,
+          messages: [{ role: "user", content: [] }],
+        }),
+      });
+      const resFirst = await first;
+      const firstRead = resFirst.body
+        ?.getReader()
+        .read()
+        .catch(() => {});
+      const dead = await own.streamHold(); // reached, claimed
+      ac.abort();
+      await firstRead;
+      // A second held stream: its gate, not the dead one, must be handed out.
+      const res = await fetch(`${own.url}/v1/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          model: "m",
+          stream: true,
+          messages: [{ role: "user", content: [] }],
+        }),
+      });
+      const gate = await own.streamHold();
+      expect(gate).not.toBe(dead);
+      gate.release();
+      expect((await events(res)).at(-1)?.event).toBe("message_stop");
+    } finally {
+      await own.close();
+    }
+  });
+
+  it("drops an unclaimed gate whose client left, so the next streamHold() gets the new one", async () => {
+    const own = await startFakeAnthropic({
+      reply: () => ({ stream: { steps: [{ hold: true }, { text: "z" }, { stop: "end_turn" }] } }),
+    });
+    try {
+      const ac = new AbortController();
+      const first = await fetch(`${own.url}/v1/messages`, {
+        method: "POST",
+        signal: ac.signal,
+        body: JSON.stringify({
+          model: "m",
+          stream: true,
+          messages: [{ role: "user", content: [] }],
+        }),
+      });
+      const firstRead = first.body
+        ?.getReader()
+        .read()
+        .catch(() => {});
+      // Wait for the server to see the abort: the first request's response closes.
+      ac.abort();
+      await firstRead;
+      const res = await fetch(`${own.url}/v1/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          model: "m",
+          stream: true,
+          messages: [{ role: "user", content: [] }],
+        }),
+      });
+      const gate = await own.streamHold();
+      gate.release();
+      expect((await events(res)).at(-1)?.event).toBe("message_stop");
+    } finally {
+      await own.close();
+    }
+  });
+
+  it("close() rejects a streamHold() that is still waiting", async () => {
+    const own = await startFakeAnthropic();
+    const pending = own.streamHold();
+    await own.close();
+    await expect(pending).rejects.toThrow(/closed/);
   });
 });
