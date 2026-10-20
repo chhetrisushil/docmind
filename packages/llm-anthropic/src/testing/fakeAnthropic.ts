@@ -96,9 +96,12 @@ export async function startFakeAnthropic(
         release();
       },
     };
+    if (res.destroyed || res.closed) {
+      release(); // the client already left: never register or hand out a dead gate
+      return released;
+    }
     openHolds.add(gate);
     res.once("close", gate.release);
-    if (res.destroyed || res.closed) gate.release(); // the client left before the hold step
     for (const w of peekWaiters.splice(0)) w.resolve(gate);
     const waiter = holdWaiters.shift();
     if (waiter) waiter.resolve(gate);
@@ -129,11 +132,11 @@ export async function startFakeAnthropic(
     }
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
     for (const item of renderEvents(norm, body.model)) {
-      if (res.destroyed) return;
       if ("hold" in item) {
-        await hold(res);
+        await hold(res); // returns at once for a response that is already gone
         continue;
       }
+      if (res.destroyed) return;
       const frame = `event: ${item.event}\ndata: ${JSON.stringify(item.data)}\n\n`;
       await new Promise<void>((done) => res.write(frame, () => done()));
     }

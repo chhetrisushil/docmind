@@ -280,4 +280,37 @@ describe("FakeAnthropic streaming scripts", () => {
     await own.close();
     await expect(pending).rejects.toThrow(/closed/);
   });
+
+  it("never registers or hands out a gate for a response that is already gone", async () => {
+    const own = await startFakeAnthropic({
+      reply: () => ({
+        stream: {
+          steps: [
+            { text: "a" },
+            { hold: true },
+            { hold: true },
+            { text: "z" },
+            { stop: "end_turn" },
+          ],
+        },
+      }),
+    });
+    try {
+      const ac = new AbortController();
+      const first = await open(own, ac.signal);
+      await untilA(first);
+      const firstGate = await own.streamHold(); // the first hold
+      ac.abort();
+      await firstGate.closed; // the server then reaches the second hold with a dead response
+      const res = await open(own);
+      const gate = await own.streamHold();
+      expect(gate).not.toBe(firstGate);
+      gate.release(); // request 2's first hold
+      const second = await own.streamHold(); // request 2's second hold, a live gate
+      second.release();
+      expect((await events(res)).at(-1)?.event).toBe("message_stop");
+    } finally {
+      await own.close();
+    }
+  });
 });
