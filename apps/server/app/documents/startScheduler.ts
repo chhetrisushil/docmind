@@ -7,12 +7,27 @@ import type { IngestPort } from "./ingest";
  * shutdown wait for everything fired so far (and anything fired while waiting); `settle()` lets a
  * delete wait for one document's pending start so a cancel never runs before the start lands.
  */
+export interface StartCounts {
+  started: number;
+  alreadyRunning: number;
+  failed: number;
+  completed: number;
+  executionsFailed: number;
+}
+
 export class StartScheduler {
   private readonly pending = new Set<Promise<void>>();
   // Keyed by user and lower-cased document id (the same normalisation as `ingestStartInput`).
   // The key is never logged.
   // Executions the port started that have not finished yet (their completion promises never reject).
   private readonly running = new Set<Promise<void>>();
+  private readonly tally = {
+    started: 0,
+    alreadyRunning: 0,
+    failed: 0,
+    completed: 0,
+    executionsFailed: 0,
+  };
   private readonly byDocument = new Map<string, Set<Promise<void>>>();
   constructor(private readonly port: IngestPort) {}
 
@@ -31,17 +46,20 @@ export class StartScheduler {
     const run = (async () => {
       try {
         const handle = await this.port.start(identity, documentId, generation);
-        if (handle) {
+        if (!handle) this.tally.alreadyRunning++;
+        else {
+          this.tally.started++;
           const done: Promise<void> = handle
             .waitForCompletion()
             .then(
-              () => undefined,
-              () => undefined,
+              () => void this.tally.completed++,
+              () => void this.tally.executionsFailed++,
             )
             .finally(() => this.running.delete(done));
           this.running.add(done);
         }
       } catch (err) {
+        this.tally.failed++;
         console.error(
           "ingest start failed",
           err instanceof Error ? err.constructor.name : typeof err,
@@ -58,6 +76,11 @@ export class StartScheduler {
       runs.delete(run);
       if (runs.size === 0 && this.byDocument.get(key) === runs) this.byDocument.delete(key);
     });
+  }
+
+  /** Counts since construction: starts that created an execution, ones that already existed, failed starts, and how the started executions ended so far. */
+  counts(): Readonly<StartCounts> {
+    return { ...this.tally };
   }
 
   async idle(): Promise<void> {

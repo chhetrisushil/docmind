@@ -29,27 +29,54 @@ describe("runBackfill", () => {
   it("sweeps until a batch comes back short, waiting for the starts between batches", async () => {
     const { pool, lookbacks } = fakePool([[1, 2], [3, 4], [5]]);
     const s = fakeStarts();
-    expect(await runBackfill(pool, s.starts as never, { lookbackDays: 60, batch: 2 })).toBe(5);
+    expect(await runBackfill(pool, s.starts as never, { lookbackDays: 60, batch: 2 })).toEqual({
+      fired: 5,
+      incomplete: false,
+    });
     expect(s.fired).toEqual(["d1", "d2", "d3", "d4", "d5"]);
     expect(s.idles()).toBe(3);
     expect(lookbacks).toEqual([60 * 86400, 60 * 86400, 60 * 86400]);
   });
 
-  it("fires each document once and stops when a full batch brings nothing new", async () => {
-    const { pool } = fakePool([
-      [1, 2],
-      [1, 2],
-      [1, 2],
-    ]);
+  it("a full batch that repeats while more lie behind it is retried after the status drain", async () => {
+    const { pool } = fakePool([[1, 2], [1, 2], [1, 2], [3]]);
     const s = fakeStarts();
-    expect(await runBackfill(pool, s.starts as never, { lookbackDays: 7, batch: 2 })).toBe(2);
+    const drain = vi.fn(async () => {});
+    const out = await runBackfill(pool, s.starts as never, { lookbackDays: 7, batch: 2, drain });
+    expect(out).toEqual({ fired: 3, incomplete: false });
+    expect(s.fired).toEqual(["d1", "d2", "d3"]);
+    expect(drain).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports incomplete when a full batch stays stuck, firing each document once", async () => {
+    const { pool } = fakePool(Array.from({ length: 8 }, () => [1, 2]));
+    const s = fakeStarts();
+    const drain = vi.fn(async () => {});
+    const out = await runBackfill(pool, s.starts as never, { lookbackDays: 7, batch: 2, drain });
+    expect(out).toEqual({ fired: 2, incomplete: true });
     expect(s.fired).toEqual(["d1", "d2"]);
+    expect(drain).toHaveBeenCalledTimes(3);
+  });
+
+  it("a failed sweep query rejects instead of reading as nothing stale", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pool = {
+      query: async () => {
+        throw new RangeError("boom");
+      },
+    } as unknown as Pool;
+    await expect(
+      runBackfill(pool, fakeStarts().starts as never, { lookbackDays: 7 }),
+    ).rejects.toBeInstanceOf(RangeError);
   });
 
   it("starts nothing when nothing is stale", async () => {
     const { pool } = fakePool([[]]);
     const s = fakeStarts();
-    expect(await runBackfill(pool, s.starts as never, { lookbackDays: 7 })).toBe(0);
+    expect(await runBackfill(pool, s.starts as never, { lookbackDays: 7 })).toEqual({
+      fired: 0,
+      incomplete: false,
+    });
   });
 
   it("refuses a lookback outside 1 to 400 days", async () => {
