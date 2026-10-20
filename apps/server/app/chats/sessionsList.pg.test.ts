@@ -112,10 +112,11 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       const fresh = await Promise.all([make(user), make(user), make(user)]);
       // three newer rows tied within one millisecond: two share .123456, one is .123400; a page boundary
       // falls between the .123456 pair and the rest, so a cursor cut to milliseconds would skip a row
-      const micro = await Promise.all([make(user), make(user), make(user)]);
-      await activity(micro[0]!.id, user, 1, "2032-06-01T00:00:00.123456Z");
-      await activity(micro[1]!.id, user, 1, "2032-06-01T00:00:00.123456Z");
-      await activity(micro[2]!.id, user, 1, "2032-06-01T00:00:00.123400Z");
+      const [m0, m1, m2] = await Promise.all([make(user), make(user), make(user)]);
+      const micro = [m0, m1, m2];
+      await activity(m0.id, user, 1, "2032-06-01T00:00:00.123456Z");
+      await activity(m1.id, user, 1, "2032-06-01T00:00:00.123456Z");
+      await activity(m2.id, user, 1, "2032-06-01T00:00:00.123400Z");
       // all three created in one millisecond window and given the SAME last activity: only the id splits them
       for (const c of fresh) await activity(c.id, user, 1, "2032-01-01T00:00:00.000Z");
       const want = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
@@ -131,7 +132,7 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
           .map((c) => c.id)
           .sort()
           .reverse(),
-        micro[2]!.id,
+        m2.id,
       ]);
       expect(want).toHaveLength(before.length + 6);
       const seen: string[] = [];
