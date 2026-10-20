@@ -2,6 +2,7 @@ import { BlobKeyUnavailableError } from "@docmind/blob-store";
 import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError } from "@docmind/llm-anthropic";
 import {
+  PARSE_REJECT_CODES,
   ParseAbortedError,
   ParseLimitError,
   ParseMemoryError,
@@ -133,9 +134,15 @@ export function isDocumentGone(err: unknown): boolean {
  * are never recorded as a code.
  */
 export function permanentCode(err: unknown): FailureCode | undefined {
-  if (err instanceof PermanentIngestError || err instanceof ParseRejectedError) {
+  if (err instanceof PermanentIngestError) {
     // Runtime guard: a code outside the contract is never recorded.
     return (FAILURE_CODES as readonly string[]).includes(err.code) ? err.code : undefined;
+  }
+  if (err instanceof ParseRejectedError) {
+    // A parser may only reject with its own three codes; `vision_unavailable` is the vision step's, never a parse result.
+    return (PARSE_REJECT_CODES as readonly string[]).includes(err.code)
+      ? (err.code as FailureCode)
+      : undefined;
   }
   // ParseLimitError ("input" or "output") is deterministic for the same bytes.
   if (

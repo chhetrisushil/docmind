@@ -109,6 +109,25 @@ export interface LlmSettings {
   visionTimeoutMs: number;
 }
 
+const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+
+/**
+ * A warning (fixed text, no address) when ANTHROPIC_BASE_URL is plain http:// to a host other than this machine: the key
+ * and the document text would cross the network unencrypted. Silent for https, loopback and anything that is not a URL
+ * (the provider rejects that with its own message). Called once, at boot.
+ */
+export function insecureBaseUrlWarning(baseUrl: string | undefined): string | undefined {
+  if (!baseUrl) return undefined;
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "http:" || LOOPBACK_HOST.test(url.hostname)) return undefined;
+  return "ANTHROPIC_BASE_URL is plain http:// to a host that is not this machine: the API key and document text travel unencrypted";
+}
+
 export const envModelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
   const v = env[name]?.trim() || fallback;
   if (!MODEL_ID.test(v)) throw new StartupConfigError(`${name} must be a model id`);

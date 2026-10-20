@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLinks, findReferences } from "./links";
+import { buildLinks, findReferences, referenceMatcher } from "./links";
 import type { Link, LinkKind } from "./pgLinks";
 
 const EMPTY = { chunks: [], similar: [], shared: [], references: [] };
@@ -96,5 +96,29 @@ describe("findReferences", () => {
       ],
     );
     expect(refs).toEqual([{ chunkId: "a", targetChunkId: "t2" }]);
+  });
+});
+
+describe("referenceMatcher", () => {
+  const titles = [
+    { title: "Master Services Agreement", firstChunkId: "t1" },
+    { title: "Statement of Work", firstChunkId: "t2" },
+  ];
+  const batches = [
+    [{ id: "a", text: "As agreed in the master services agreement, payment is due." }],
+    [{ id: "b", text: "See the Statement of Work (SOW) for scope." }],
+    [{ id: "t1", text: "Master Services Agreement" }],
+  ];
+
+  it("finds what findReferences finds, batch after batch, with one matcher reused", () => {
+    const match = referenceMatcher(titles);
+    const expected = [
+      { chunkId: "a", targetChunkId: "t1" },
+      { chunkId: "b", targetChunkId: "t2" },
+    ];
+    expect(batches.flatMap((b) => match(b))).toEqual(expected);
+    expect(batches.flatMap((b) => findReferences(b, titles))).toEqual(expected);
+    // A second pass over the same batches gives the same answer: no state is kept between calls.
+    expect(batches.flatMap((b) => match(b))).toEqual(expected);
   });
 });

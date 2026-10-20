@@ -7,7 +7,7 @@ import {
   SIMILAR_MIN,
   SIMILAR_PER_CHUNK,
   buildLinks,
-  findReferences,
+  referenceMatcher,
 } from "../links";
 import type { ChunkStore } from "../pgChunks";
 import type { EntityStore } from "../pgEntities";
@@ -38,7 +38,7 @@ export interface LinkDeps extends StepSeams {
 /**
  * Link step (D12): structure, similar, entity and reference links, replaced as a set. Progress is
  * reported after each neighbour batch, so a long scan that makes progress does not spend the retry
- * budget. Titles and chunk text stay in memory and reach only `findReferences`.
+ * budget. Titles and chunk text stay in memory and reach only `referenceMatcher`.
  */
 export function linkEffect(deps: LinkDeps): Effect<IngestStartInput, StepResult> {
   return stepEffect(
@@ -67,13 +67,14 @@ export function linkEffect(deps: LinkDeps): Effect<IngestStartInput, StepResult>
       const titles = (await deps.titles.others(ref)).flatMap((t) =>
         t.firstChunkId === null ? [] : [{ title: t.title, firstChunkId: t.firstChunkId }],
       );
+      const matchReferences = referenceMatcher(titles); // up to 2,000 patterns: compiled once, not once per read batch
       const references: LinkInput["references"] = [];
       for (let i = 0; i < chunks.length; i += READ_BATCH) {
         const texts = await deps.chunks.read(
           ref,
           chunks.slice(i, i + READ_BATCH).map((c) => c.id),
         );
-        references.push(...findReferences(texts, titles));
+        references.push(...matchReferences(texts));
       }
       const links = buildLinks({
         chunks: chunks.map((c, ordinal) => ({ ...c, ordinal })),
