@@ -1,7 +1,9 @@
 import { inspect } from "node:util";
 import type { LlmRequest } from "@loom/llm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { recordingObserver } from "./__helpers__/observer";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
+import type { ReasoningBlock } from "./observer";
 import { AnthropicMessagesProvider } from "./provider";
 import { type FakeAnthropic, type FakeReply, startFakeAnthropic } from "./testing/fakeAnthropic";
 
@@ -223,5 +225,93 @@ describe("response body release", () => {
     ac.abort();
     await expect(pending).rejects.toBeInstanceOf(LlmAbortedError);
     expectReleased(t);
+  });
+});
+
+describe("request options and the observer", () => {
+  beforeEach(() => {
+    fake.reply(() => ({})); // earlier tests in this file leave their own reply installed
+  });
+
+  const LOOP: LlmRequest = {
+    system: "sys",
+    messages: [
+      { role: "user", content: "find it" },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "search_docs", input: {} }],
+      },
+      { role: "user", content: [{ type: "tool_result", toolUseId: "toolu_1", content: "r" }] },
+    ],
+  };
+  const stored = new Map<string, readonly ReasoningBlock[]>([
+    [
+      "toolu_1",
+      [
+        { type: "thinking", thinking: "t", signature: "S" },
+        { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+      ],
+    ],
+  ]);
+
+  it("asks the observer for the blocks of each tool_use message and sends them in its place, with thinking, effort and cache", async () => {
+    const rec = recordingObserver(stored);
+    await provider({
+      thinking: true,
+      effort: "low",
+      cache: true,
+      observer: () => rec.observer,
+    }).complete(LOOP);
+    expect(rec.asked).toEqual([["toolu_1"]]);
+    const body = fake.requests.at(-1)?.body;
+    expect(body?.messages[1]?.content[0]).toEqual({
+      type: "thinking",
+      thinking: "t",
+      signature: "S",
+    });
+    expect(body?.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(body?.output_config).toEqual({ effort: "low" });
+  });
+
+  it("sends the message as Loom built it when the stored blocks do not cover every tool_use id", async () => {
+    const rec = recordingObserver(
+      new Map<string, readonly ReasoningBlock[]>([
+        ["toolu_1", [{ type: "thinking", thinking: "t", signature: "S" }]],
+      ]),
+    );
+    await provider({ thinking: true, observer: () => rec.observer }).complete(LOOP);
+    expect(fake.requests.at(-1)?.body?.messages[1]?.content).toEqual([
+      { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} },
+    ]);
+  });
+
+  it("does not ask the observer, and sends no reasoning blocks, when thinking is off", async () => {
+    const rec = recordingObserver(stored);
+    await provider({ observer: () => rec.observer }).complete(LOOP);
+    expect(rec.asked).toEqual([]);
+    expect(JSON.stringify(fake.requests.at(-1)?.body)).not.toContain("thinking");
+  });
+
+  it("calls the observer factory once per request", async () => {
+    let made = 0;
+    const rec = recordingObserver();
+    await provider({
+      thinking: true,
+      observer: () => {
+        made++;
+        return rec.observer;
+      },
+    }).complete(LOOP);
+    expect(made).toBe(1);
+  });
+
+  it("validates the new options with fixed messages", () => {
+    expect(() => provider({ effort: "ultra" as never })).toThrow(
+      /^effort must be one of low, medium, high, max$/,
+    );
+    expect(() => provider({ refusal: "report" })).toThrow(/^refusal "report" needs an observer$/);
+    expect(() => provider({ maxStreamBytes: 0 })).toThrow(
+      /^maxStreamBytes must be a positive integer$/,
+    );
   });
 });

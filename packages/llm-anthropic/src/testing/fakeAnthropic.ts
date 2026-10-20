@@ -44,7 +44,7 @@ const userChars = (body: AnthropicBody): number =>
   body.messages
     .filter((m) => m.role === "user")
     .flatMap((m) => m.content)
-    .reduce((n, b) => n + (b.type === "text" ? b.text.length : 0), 0);
+    .reduce((n, b) => n + (b.type === "text" && typeof b.text === "string" ? b.text.length : 0), 0);
 
 export async function startFakeAnthropic(
   options: { reply?: (body: AnthropicBody) => FakeReply } = {},
