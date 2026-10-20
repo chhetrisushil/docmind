@@ -43,6 +43,8 @@ export interface ComposeOptions {
   trustProxy: boolean;
   /** `DOCMIND_PUBLIC_ORIGIN`, already validated; the origin guard compares `Origin` against it. */
   publicOrigin?: string;
+  /** `DOCMIND_MAX_CONNECTIONS`, already validated. */
+  maxConnections?: number;
   /** Parser registry, runner and progress bus; the runner and registry reach the parse ports through pgIngestDeps. */
   ingest: IngestWiring;
   /** The ingest-status model's stores. */
@@ -122,6 +124,7 @@ export function buildServer(options: ComposeOptions) {
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
     },
     { secure: options.secureCookies, publicOrigin: options.publicOrigin },
+    options.maxConnections === undefined ? {} : { maxConnections: options.maxConnections },
   );
   return {
     app,
