@@ -1,28 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { primeDecoy } from "@docmind/auth";
 import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
-import { bootServing, listen, loadPort } from "./boot";
-import { closeSequence } from "./closeSequence";
+import { listen, loadPort } from "./boot";
+import { bootIngest } from "./bootIngest";
 import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
-import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
-import { startSweeper } from "./documents/sweeper";
-import { closeIngest, createIngestWiring } from "./flows/ingest-document/limits";
-import { startRecovery } from "./flows/ingest-document/recovery";
-import { verifyVectors } from "./flows/ingest-document/verifyVectors";
-import {
-  FORCE_EXIT_DEADLINE_MS,
-  SHUTDOWN_DRAIN_MS,
-  drainWithin,
-  runAll,
-  scheduleForceExit,
-  shutdown,
-} from "./shutdown";
+import { createIngestWiring } from "./flows/ingest-document/limits";
+import { FORCE_EXIT_DEADLINE_MS, scheduleForceExit, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
-import { bootStatus } from "./status/boot";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
 
@@ -102,129 +89,47 @@ async function main(): Promise<void> {
     throw err;
   }
   // The flows are static modules; the ingest step gets its database access as a registered effect.
-  const { app, server, store, throttle, starts, status, vectors, events, detachStatusFeed } =
-    buildServer({
-      pool,
-      keys,
-      storage: durable.storage,
-      crypto: durable.crypto,
-      limits,
-      blobRoot,
-      secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
-      trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
-      ingest,
-      // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
-      status: {
-        writer: pgStatusWriter(durable.pool),
-        readerFor: pgStatusReaderFor(pool),
-        source: durable.storage.eventStore,
-      },
-    });
-
-  // The schema (applied out of band by `pnpm db:migrate`) must fit the embedder before anything else
-  // starts. The embedder holds no resources, so closeIngest (the runner) covers its share.
-  await verifyVectors(vectors, [
-    () => closeIngest(ingest),
-    () => app.close(),
-    () => durable.close(),
-    () => pool.end(),
-  ]);
-
-  // Boot order (ADR 0132 D13): register, then catch up on what the log holds, before anything is served.
-  await bootStatus(status, [
-    () => closeIngest(ingest),
-    () => app.close(),
-    () => durable.close(),
-    () => pool.end(),
-  ]);
-
-  // Hash the decoy now so the first unknown-email login is not measurably slower.
-  await primeDecoy();
-
-  // Bind first. Recovery spends each in-flight document's recovery budget (every re-drive is recorded),
-  // so a bind failure (EADDRINUSE) must not start it; the failure cleans up and takes the normal
-  // startup-failure path (class-only log, exit 1).
-  let recovery!: ReturnType<typeof startRecovery>;
-  let sweepTimer!: ReturnType<typeof setInterval>;
-  let uploadSweeper!: ReturnType<typeof startSweeper>;
-  await bootServing({
-    bind: async () => {
-      await listen(server, port, host);
-      console.log(`docmind server listening on http://${host}:${port}`);
-    },
-    cleanup: () =>
-      runAll(
-        () => closeIngest(ingest),
-        () => app.close(),
-        () => durable.close(),
-        () => pool.end(),
-      ),
-    afterListen: () => {
-      // Resume what the last process left running (a crash, or a shutdown that released its leases), then keep
-      // looking. Not awaited: a pass settles each step it re-drives, and the server must not wait to listen.
-      recovery = startRecovery(app.runtime, durable.storage.eventStore, {
-        // After the boot scan, a crash is found through its expired lease, not by reading every execution.
-        ...(durable.storage.leaseStore && {
-          leases: { store: durable.storage.leaseStore, owner: randomUUID() },
-        }),
-      });
-
-      const sweep = () =>
-        Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
-          console.error(
-            "session sweep failed",
-            err instanceof Error ? err.constructor.name : typeof err,
-          ),
-        );
-      void sweep();
-      sweepTimer = setInterval(sweep, HOUR_MS);
-      sweepTimer.unref();
-
-      uploadSweeper = startSweeper({
-        pool,
-        starts,
-        status,
-        olderThanMs: STALE_UPLOAD_MS,
-        lookbackMs: SWEEP_LOOKBACK_MS,
-        limit: SWEEP_BATCH,
-      });
+  const built = buildServer({
+    pool,
+    keys,
+    storage: durable.storage,
+    crypto: durable.crypto,
+    limits,
+    blobRoot,
+    secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
+    trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
+    ingest,
+    // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
+    status: {
+      writer: pgStatusWriter(durable.pool),
+      readerFor: pgStatusReaderFor(pool),
+      source: durable.storage.eventStore,
     },
   });
 
-  // One shutdown, shared by every signal: a second signal reuses the same promise instead of
-  // calling server.close() again, which would reject with ERR_SERVER_NOT_RUNNING. The server
-  // drains first; then the app closes (which closes the Loom stores), then the Loom pool, then
-  // the pool the key store reads from.
+  // Boot order lives in bootIngest, shared with the acceptance stack: verify, register, decoy, bind, then
+  // recovery and the sweepers. The bind comes first so a failed bind does not spend recovery budget.
+  const ingestBoot = await bootIngest({
+    built,
+    ingest,
+    durable,
+    pool,
+    recoveryOwner: randomUUID(),
+    listen: async () => {
+      await listen(built.server, port, host);
+      console.log(`docmind server listening on http://${host}:${port}`);
+    },
+    drainServer: (then) => shutdown(built.server, { close: then }),
+  });
+
+  // One shutdown, shared by every signal: a second signal reuses the same promise (bootIngest's stop is
+  // idempotent, and a second server.close() would reject with ERR_SERVER_NOT_RUNNING).
+  // The deadline starts at the first signal, so a drain that never ends (a slow upload) cannot outlive it: exit 1.
   let closing: Promise<void> | undefined;
   const stop = () => {
-    // Timers first, then the open event streams (they never end on their own, so the server drain
-    // below would wait on them until SIGKILL), then the server drain and the close sequence.
-    // The deadline starts now, so a drain that never ends (a slow upload) cannot outlive it: exit 1.
     if (!closing) scheduleForceExit(process.exit, () => 1, FORCE_EXIT_DEADLINE_MS);
-    clearInterval(sweepTimer);
-    recovery.stop();
-    const sweeperStopped = uploadSweeper.stop(); // idempotent; no sweep may fire a start once the drain begins
-    events.closeAll();
-    closing ??= shutdown(server, {
-      close: async () => {
-        // Let a sweep that is already running finish.
-        await drainWithin(sweeperStopped, SHUTDOWN_DRAIN_MS);
-        // The server has stopped accepting uploads; let every fired flow start settle (bounded: a
-        // start stuck on a dead database must not keep the stores open), then close everything.
-        await runAll(
-          ...closeSequence({
-            startsIdle: () => starts.idle(),
-            closeIngest: () => closeIngest(ingest),
-            closeHeartbeat: () => app.runtime.closeHeartbeat(),
-            detachStatusFeed,
-            closeStatus: () => status.close(),
-            closeApp: () => app.close(),
-            closeDurable: () => durable.close(),
-            endPool: () => pool.end(),
-          }),
-        );
-      },
-    })
+    closing ??= ingestBoot
+      .stop()
       .catch((err: unknown) => {
         console.error("shutdown failed", err instanceof Error ? err.constructor.name : typeof err);
         process.exitCode = 1;
