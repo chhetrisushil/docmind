@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { Authenticator } from "@docmind/auth";
-import { CreateChatRequest } from "@docmind/contracts";
+import type { Authenticator, Identity } from "@docmind/auth";
+import {
+  type ChatSessionDto,
+  CreateChatRequest,
+  ListChatsQuery,
+  type ListChatsResponse,
+} from "@docmind/contracts";
 import type { EventStore } from "@loom/event-runtime";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
+import { decodeCursor, encodeCursor } from "../documents/cursor";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -20,7 +26,7 @@ import { chatActivityOf } from "./activityRead";
 import { toChatDto } from "./dto";
 import { chatConversationId } from "./ids";
 import type { ReplyReasoning } from "./reasoningRead";
-import { insertChat, softDeleteChat } from "./sessions";
+import { insertChat, listChats, softDeleteChat } from "./sessions";
 import type { ChatWiring } from "./wiring";
 
 export interface ChatRouteDeps {
@@ -35,9 +41,75 @@ export interface ChatRouteDeps {
   reasoning: ReplyReasoning;
 }
 
+export const PAGE = 50;
+/** `q` filters after decryption: the server scans the owner's live chats in batches, at most SCAN_MAX in one request. */
+export const SCAN_BATCH = 200;
+export const SCAN_MAX = 2000;
+
+/**
+ * One page of the caller's chats, newest activity first. Without `q` it is one query. With `q` it pages through the
+ * owner's chats, decrypts each title and keeps the matches until a page is full or the scan cap is reached; the cursor
+ * then continues the scan, so a rare match is found by following `nextCursor` (an empty page with a cursor is not the end).
+ */
+export async function listChatsPage(
+  deps: Pick<ChatRouteDeps, "pool" | "fields">,
+  identity: Identity,
+  start: { t: string; i: string } | null,
+  q: string | undefined,
+): Promise<{ items: ChatSessionDto[]; next: string | null }> {
+  const cipher = deps.fields.forUser(identity.userId);
+  const needle = q?.toLowerCase();
+  const size = needle === undefined ? PAGE + 1 : SCAN_BATCH;
+  const items: ChatSessionDto[] = [];
+  const cursors: string[] = []; // the cursor of each kept item
+  let after = start;
+  let scanned = 0;
+  let lastScanned: string | null = null;
+  let exhausted = false;
+  while (!exhausted && scanned < SCAN_MAX) {
+    const rows = await withTenant(deps.pool, identity.tenantId, (tx) =>
+      listChats(tx, identity.userId, { ...(after && { cursor: after }), limit: size }),
+    );
+    exhausted = rows.length < size;
+    for (const row of rows) {
+      scanned++;
+      const dto = await toChatDto(row, cipher, row);
+      lastScanned = encodeCursor({ created_cursor: row.sort_cursor, id: row.id });
+      if (needle !== undefined && !(dto.title ?? "").toLowerCase().includes(needle)) continue;
+      if (items.length === PAGE) {
+        // A 51st match: there is more, and the next page starts after the 50th.
+        return { items, next: cursors[PAGE - 1] ?? null };
+      }
+      items.push(dto);
+      cursors.push(lastScanned);
+    }
+    const last = rows.at(-1);
+    if (last) after = { t: last.sort_cursor, i: last.id };
+  }
+  return { items, next: exhausted ? null : lastScanned };
+}
+
 /** The chat API. Every route takes tenant and user from the session and loads the chat with `user_id = identity.userId`. */
 export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
   return {
+    "GET /api/chats": requireAuth(deps.authenticator, async (req, res, identity) => {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const query = ListChatsQuery.safeParse(Object.fromEntries(url.searchParams));
+      if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
+      let cursor: { t: string; i: string } | null = null;
+      if (query.data.cursor !== undefined) {
+        cursor = decodeCursor(query.data.cursor);
+        if (!cursor) return sendError(res, 400, "invalid_cursor", "cursor is not valid");
+      }
+      const page = await listChatsPage(
+        deps,
+        identity,
+        cursor,
+        query.data.q === "" ? undefined : query.data.q,
+      );
+      json(res, 200, { items: page.items, nextCursor: page.next } satisfies ListChatsResponse);
+    }),
+
     "POST /api/chats": requireAuth(deps.authenticator, async (req, res, identity) => {
       if (!deps.chat.available) {
         req.resume(); // the body is not read: let the socket move on
