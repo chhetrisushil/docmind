@@ -39,7 +39,7 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
         `u_${user}.c-${chatId}${gen ? `~${gen}` : ""}`,
         chatId,
         user,
-        JSON.stringify({ messages, lastOrd: messages - 1, lastAt: Date.parse(lastAt) }),
+        JSON.stringify({ messages, lastOrd: messages - 1, lastAt: Date.parse(lastAt) + 0.5 }),
       ],
     );
 
@@ -106,7 +106,34 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
       expect(rows[2]?.sort_at).toEqual(quiet.created_at);
     });
 
-    it("pages by keyset without a gap or a repeat, to the microsecond", async () => {
+    it("pages activity-less chats whose created_at differ only in microseconds, with no gap or repeat", async () => {
+      const user = U1;
+      const chats = await Promise.all([make(user), make(user), make(user)]);
+      const stamps = ["900000", "900001", "900002"];
+      for (const [i, c] of chats.entries()) {
+        await fx.db.owner.query(
+          "UPDATE chat_sessions SET created_at = $2::timestamptz WHERE id = $1",
+          [c.id, `2036-01-01T00:00:00.${stamps[i]}Z`],
+        );
+      }
+      const mine = chats.map((c) => c.id).reverse(); // newest microsecond first
+      const want = ids(await as(T1, (tx) => listChats(tx, user, { limit: 100 })));
+      expect(want.slice(0, 3)).toEqual(mine);
+      const seen: string[] = [];
+      let cursor: { t: string; i: string } | undefined;
+      for (let guard = 0; guard < 60; guard++) {
+        const rows = await as(T1, (tx) =>
+          listChats(tx, user, { limit: 2, ...(cursor && { cursor }) }),
+        );
+        seen.push(...ids(rows));
+        const last = rows[rows.length - 1];
+        if (rows.length < 2 || !last) break;
+        cursor = { t: last.sort_cursor, i: last.id };
+      }
+      expect(seen).toEqual(want);
+    });
+
+    it("pages by keyset without a gap or a repeat, across tied times and the id tiebreak", async () => {
       const user = U1B;
       const before = ids(await as(T1, (tx) => listChats(tx, user, { limit: 50 })));
       const fresh = await Promise.all([make(user), make(user), make(user)]);
@@ -166,7 +193,7 @@ describe.skipIf(!PG_URL)("chat_sessions titles, scope and list (needs DOCMIND_TE
           JSON.stringify({
             messages: 99,
             lastOrd: 98,
-            lastAt: Date.parse("2035-01-01T00:00:00.000Z"),
+            lastAt: Date.parse("2035-01-01T00:00:00.000Z") + 0.5,
           }),
         ],
       );
