@@ -13,6 +13,8 @@ import { authRoutes } from "./auth/routes";
 import { ChatActivity } from "./chats/activity";
 import type { ChatLlm } from "./chats/llm";
 import { pgCollaborators } from "./chats/pgCollaborators";
+import { replyReasoning } from "./chats/reasoningRead";
+import { chatRoutes } from "./chats/routes";
 import type { ChatSettings } from "./chats/settings";
 import { connectChat, prepareChat } from "./chats/wiring";
 import { buildApp } from "./config";
@@ -171,6 +173,15 @@ export function buildServer(options: ComposeOptions) {
         starts,
         status,
       }),
+      ...(chat &&
+        chatRoutes({
+          pool,
+          authenticator,
+          fields,
+          chat,
+          eventStore: options.status.source,
+          reasoning: replyReasoning({ log: options.status.source, store: chat.reasoning }),
+        })),
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
     },
     { secure: options.secureCookies, publicOrigin: options.publicOrigin },
@@ -187,7 +198,7 @@ export function buildServer(options: ComposeOptions) {
     bus: options.ingest.bus,
     status,
     activity,
-    /** The chat wiring; absent when `options.chat` is. No route is mounted from it yet (Task 149). */
+    /** The chat wiring; absent when `options.chat` is. Its routes are mounted from `chatRoutes`. */
     chat,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
