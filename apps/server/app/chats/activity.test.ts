@@ -3,6 +3,7 @@ import type { EventEnvelope } from "@loom/core";
 import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { MemoryLog, evt } from "../status/testing";
+import { flowSteps, statusSensitive } from "../status/wire";
 import {
   CHAT_ACTIVITY_MODEL,
   ChatActivity,
@@ -127,7 +128,7 @@ describe("ChatActivity", () => {
     expect(await rows()).toEqual([
       {
         executionId: CONV,
-        state: { messages: 2, lastOrd: 1, lastAt: new Date(1_002).toISOString() },
+        state: { messages: 2, lastOrd: 1, lastAt: 1_002 },
       },
     ]);
   });
@@ -164,10 +165,10 @@ describe("ChatActivity", () => {
       }),
     );
     await activity.drain();
-    // Only the chat's own execution can have a row, and a decision of another source changes nothing in it.
-    expect((await rows()).every((r) => r.executionId === CONV && r.state.messages === 0)).toBe(
-      true,
-    );
+    // Only the chat's own execution has a row, and the other-source decision changed nothing in it.
+    expect(await rows()).toEqual([
+      { executionId: CONV, state: { messages: 0, lastOrd: 0, lastAt: null } },
+    ]);
   });
 
   it("folds a record whose body is masked, by its decision id alone", async () => {
@@ -185,5 +186,75 @@ describe("ChatActivity", () => {
     log.append(record(CONV, 0, 1, "user"), record(CONV, 1, 1, "reply"));
     await activity.boot();
     expect((await rows())[0]?.state.messages).toBe(2);
+  });
+
+  it("counts a record once when the same envelope is fed twice", async () => {
+    const { feed, log, activity, rows } = await setup();
+    const user = record(CONV, 1, 1, "user");
+    feed(evt(CONV, 0, "EXECUTION_STARTED", { input: {} }), user);
+    activity.onEvent(user); // the same envelope again
+    await activity.drain();
+    expect((await rows())[0]?.state.messages).toBe(1);
+  });
+
+  it("boot after live events leaves the count unchanged", async () => {
+    const { store, log, activity, rows } = await setup();
+    const e = [record(CONV, 0, 1, "user"), record(CONV, 1, 1, "reply")];
+    for (const x of e) {
+      log.append(x);
+      activity.onEvent(x);
+    }
+    await activity.drain();
+    const second = new ChatActivity({
+      writer: store,
+      source: log,
+      sensitive: {},
+      onError: () => {},
+    });
+    await second.boot(); // catch-up over the same log
+    expect((await rows())[0]?.state.messages).toBe(2);
+  });
+
+  it("a rotated generation's EXECUTION_STARTED carrying turns adds nothing", async () => {
+    const { feed, activity, rows } = await setup();
+    feed(
+      evt(`${CONV}~1`, 0, "EXECUTION_STARTED", {
+        input: { turns: [{ role: "user", text: "carried" }] },
+      }),
+    );
+    await activity.drain();
+    expect((await rows()).map((r) => r.state.messages)).toEqual([0]);
+  });
+
+  it("folds a user record whose text equals the event's own ISO time (the sensitive guard cannot trip)", async () => {
+    const store = new InMemoryReadModelStore();
+    const log = new MemoryLog();
+    const errors: unknown[] = [];
+    const sensitive = statusSensitive(flowSteps(), {
+      sealingCapability: () => ({ covers: ["DECISION_RECORDED.choice.text"] }) as never,
+    });
+    const activity = new ChatActivity({
+      writer: store,
+      source: log,
+      sensitive,
+      onError: (e) => errors.push(e),
+    });
+    await activity.boot();
+    const at = new Date(1_001).toISOString();
+    const e = record(CONV, 1, 1, "user", "complete", {
+      turn: 1,
+      role: "user",
+      status: "complete",
+      ord: 1,
+      text: at,
+    });
+    for (const x of [evt(CONV, 0, "EXECUTION_STARTED", { input: {} }), e]) {
+      log.append(x);
+      activity.onEvent(x);
+    }
+    await activity.drain();
+    expect(errors.map((x) => String(x))).toEqual([]);
+    const rows = foldedStates((await store.getFoldedByKey?.(CHAT_ACTIVITY_MODEL, [C])) ?? []);
+    expect(rows.map((r) => r.state)).toEqual([{ messages: 1, lastOrd: 1, lastAt: 1_001 }]);
   });
 });

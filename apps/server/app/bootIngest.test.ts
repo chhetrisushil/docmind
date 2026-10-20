@@ -33,7 +33,11 @@ vi.mock("./documents/sweeper", () => ({
   },
 }));
 
-function parts(over: Partial<BootIngestParts> = {}, statusBoot?: () => Promise<void>) {
+function parts(
+  over: Partial<BootIngestParts> = {},
+  statusBoot?: () => Promise<void>,
+  activityBoot?: () => Promise<void>,
+) {
   const built = {
     app: {
       runtime: { closeHeartbeat: async () => void calls.push("closeHeartbeat") },
@@ -47,7 +51,7 @@ function parts(over: Partial<BootIngestParts> = {}, statusBoot?: () => Promise<v
       close: async () => void calls.push("closeStatus"),
     },
     activity: {
-      boot: async () => void calls.push("bootActivity"),
+      boot: activityBoot ?? (async () => void calls.push("bootActivity")),
       close: async () => void calls.push("closeActivity"),
     },
     vectors: {},
@@ -144,6 +148,33 @@ describe("bootIngest", () => {
     ).rejects.toThrow(/ingest status failed to boot/);
     expect(listen).not.toHaveBeenCalled();
     expect(calls).toEqual(["verifyVectors", "closeIngest", "closeApp", "closeDurable", "endPool"]);
+  });
+
+  it("a failing chat-activity boot is logged by class and does not stop serving", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const listen = vi.fn(async () => {});
+    await bootIngest(
+      parts({ listen }, undefined, async () => {
+        throw new RangeError("u_secret");
+      }),
+    );
+    expect(listen).toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledWith(
+      "chat activity failed to boot; serving without it",
+      "RangeError",
+    );
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("u_secret");
+  });
+
+  it("stop() closes the activity model even when the status close throws", async () => {
+    const built = parts();
+    built.built.status.close = async () => {
+      throw new Error("x");
+    };
+    const handle = await bootIngest(built);
+    calls.length = 0;
+    await handle.stop().catch(() => undefined);
+    expect(calls).toContain("closeActivity");
   });
 
   it("stop() stops the background work, drains the server, then runs the close sequence, once", async () => {

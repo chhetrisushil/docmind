@@ -11,11 +11,17 @@ import { CHAT_ACTIVITY_MODEL } from "./sessions";
 
 export { CHAT_ACTIVITY_MODEL };
 
-/** Numbers and an ISO time: Loom's sensitive-state guard refuses anything else. One row per conversation generation; `messages` counts that generation only. */
+/**
+ * Numbers only. Loom's sensitive-state guard refuses a state leaf equal to a value lifted from a sealed path,
+ * and sealed values are strings (a user can type any text, an ISO time included), so `lastAt` is the event's
+ * epoch milliseconds: a number leaf never matches. One row per conversation generation; `messages` counts that
+ * generation only. `lastOrd` is informational (the highest turn key seen), NOT a dedupe guard: Loom's per-execution
+ * sequence watermark makes each event fold exactly once.
+ */
 export interface ChatActivityState {
   messages: number;
   lastOrd: number;
-  lastAt: string | null;
+  lastAt: number | null;
 }
 export const INITIAL_ACTIVITY: ChatActivityState = {
   messages: 0,
@@ -74,7 +80,7 @@ export const activityHandlers = {
     return {
       messages: s.messages + 1,
       lastOrd: Math.max(s.lastOrd, fact.ord),
-      lastAt: Number.isFinite(e.timestamp) ? new Date(e.timestamp).toISOString() : s.lastAt,
+      lastAt: Number.isFinite(e.timestamp) ? e.timestamp : s.lastAt,
     };
   },
 } satisfies Record<string, Handler>;
