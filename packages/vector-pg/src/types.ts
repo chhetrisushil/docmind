@@ -100,6 +100,14 @@ export const isValidVector = (vector: readonly number[], dimensions: number): bo
   vector.length === dimensions &&
   vector.every((x) => Number.isFinite(x) && Math.abs(x) <= FLOAT4_MAX);
 
+/** pgvector is older than 0.8.0, which has no iterative index scans (`hnsw.iterative_scan`). A deployment fault; the message carries configuration only. */
+export class VectorVersionError extends Error {
+  constructor() {
+    super("pgvector 0.8.0 or newer is required");
+    this.name = "VectorVersionError";
+  }
+}
+
 /** The `chunks.embedding` column is not `vector(<dimensions>)`: a deployment fault. The message carries configuration only, never data. */
 export class VectorSchemaError extends Error {
   constructor(dimensions: number) {

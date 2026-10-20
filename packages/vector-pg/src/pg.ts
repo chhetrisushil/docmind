@@ -5,6 +5,7 @@ import {
   VectorDimensionError,
   VectorSchemaError,
   type VectorScope,
+  VectorVersionError,
   checkNeighbourParams,
   checkSearchFilter,
   checkVectorIds,
@@ -15,6 +16,20 @@ export interface PgVectorOptions {
   tenant: <T>(tenantId: string, fn: (tx: PoolClient) => Promise<T>) => Promise<T>;
   modelId: string;
   dimensions: number;
+}
+
+/** The first pgvector with iterative index scans. */
+export const MIN_PGVECTOR = [0, 8, 0] as const;
+
+/** True when `version` ("0.8.0", "0.10.1", ...) is at least `min`, compared number by number. */
+export function atLeast(version: string, min: readonly [number, number, number]): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!m) return false;
+  const have = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (const [i, want] of min.entries()) {
+    if ((have[i] as number) !== want) return (have[i] as number) > want;
+  }
+  return true;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -190,14 +205,18 @@ export class PgChunkVectorStore implements ChunkVectorStore {
 
   /** Boot check. `tenantId` only opens a tenant transaction; any uuid that owns no rows will do. */
   async verify(tenantId: string): Promise<void> {
-    const found = await this.options.tenant(tenantId, async (tx) => {
-      const { rows } = await tx.query<{ t: string }>(
+    const { type, version } = await this.options.tenant(tenantId, async (tx) => {
+      const col = await tx.query<{ t: string }>(
         "SELECT format_type(atttypid, atttypmod) AS t FROM pg_attribute WHERE attrelid = 'chunks'::regclass AND attname = 'embedding'",
       );
-      return rows[0]?.t;
+      const ext = await tx.query<{ v: string }>(
+        "SELECT extversion AS v FROM pg_extension WHERE extname = 'vector'",
+      );
+      return { type: col.rows[0]?.t, version: ext.rows[0]?.v };
     });
-    if (found !== `vector(${this.dimensions})`) {
+    if (type !== `vector(${this.dimensions})`) {
       throw new VectorSchemaError(this.dimensions);
     }
+    if (version === undefined || !atLeast(version, MIN_PGVECTOR)) throw new VectorVersionError();
   }
 }
