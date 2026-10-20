@@ -2,6 +2,7 @@ import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
+import { createConversationReader } from "@loom/conversation";
 import type { EventEnvelope } from "@loom/core";
 import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { LlmProvider } from "@loom/llm";
@@ -27,6 +28,7 @@ import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
+import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
@@ -99,6 +101,7 @@ export function buildServer(options: ComposeOptions) {
   const statusReads: Pick<DocumentStatusReads, "forPage"> = {
     forPage: (who, docs) => status.forPage(who, docs),
   };
+  const titleLlm = options.chat?.titleLlm;
   const chatParts = options.chat
     ? prepareChat({
         settings: options.chat.settings,
@@ -118,6 +121,14 @@ export function buildServer(options: ComposeOptions) {
   const app = buildApp(options.storage, options.crypto, {
     ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
     ...(chatParts && { chat: chatParts.deps }),
+    ...(options.chat && {
+      chatTitle: {
+        pool,
+        fields,
+        reader: createConversationReader(options.status.source), // a reader is only the decrypting event store
+        ...(titleLlm && { llm: titleLlm }),
+      },
+    }),
     onEvent: (event) => {
       for (const sink of feed.sinks) {
         try {
@@ -132,6 +143,7 @@ export function buildServer(options: ComposeOptions) {
       }
     },
   });
+  const titles = options.chat && loomTitleStarter(app.runtime);
   const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
   const sensitive = statusSensitive(flowSteps(), options.status.source);
   const status = new IngestStatus({
@@ -196,6 +208,7 @@ export function buildServer(options: ComposeOptions) {
           chat,
           eventStore: options.status.source,
           reasoning,
+          ...(titleLlm && titles && { titles }),
         })),
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
       ...(chatStreams?.routes ?? {}),
@@ -216,6 +229,8 @@ export function buildServer(options: ComposeOptions) {
     activity,
     /** The chat wiring; absent when `options.chat` is. Its routes are mounted from `chatRoutes`. */
     chat,
+    /** Starts a chat's auto title; absent when `options.chat` is. `idle()` is awaited at shutdown with the ingest starts. */
+    titles,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
     /** Ends every open chat stream; shutdown calls it right after `events.closeAll()` (a stream never ends on its own). Absent without chat. */

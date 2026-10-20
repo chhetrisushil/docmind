@@ -61,6 +61,7 @@ export async function bootIngest(
     chatStreams,
     detachStatusFeed,
     chat,
+    titles,
   } = built;
   const cleanup = [
     () => closeIngest(ingest),
@@ -139,7 +140,10 @@ export async function bootIngest(
         // The server has stopped accepting uploads; let every fired flow start settle, then close everything.
         await runAll(
           ...closeSequence({
-            startsIdle: () => starts.idle(),
+            startsIdle: async () => {
+              await starts.idle();
+              await titles?.idle();
+            },
             closeIngest: () => closeIngest(ingest),
             ...(chat && { closeChat: () => chat.close() }),
             closeHeartbeat: () => app.runtime.closeHeartbeat(),

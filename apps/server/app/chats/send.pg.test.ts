@@ -10,13 +10,13 @@ import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";
-import type { ChatTitleTrigger } from "./routes";
+import type { TitleStarter } from "../flows/chat-title/start";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 import type { ChatRef } from "./turnItems";
 
 describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL)", () => {
   const fired: ChatRef[] = [];
-  const titles: ChatTitleTrigger = { fire: (ref) => void fired.push(ref) };
+  const titles: Pick<TitleStarter, "fire"> = { fire: (ref) => void fired.push(ref) };
   let h: ChatHarness;
   let noKey: ChatHarness;
   beforeAll(async () => {
