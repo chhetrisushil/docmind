@@ -71,6 +71,9 @@ export function openStream(
   return stop;
 }
 
+/** The route key of the open-ended progress stream; the server exempts it from the request timer. */
+export const EVENTS_ROUTE = "GET /api/documents/events";
+
 export interface EventRoutesDeps {
   authenticator: Authenticator;
   bus: ProgressBus;
@@ -100,7 +103,7 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
   const stops = new Map<ServerResponse, () => void>();
   let closing = false; // set by closeAll: shutdown has begun, no new stream may stay open
   const routes: Record<string, Handler> = {
-    "GET /api/documents/events": requireAuth(deps.authenticator, (_req, res, identity) => {
+    [EVENTS_ROUTE]: requireAuth(deps.authenticator, (_req, res, identity) => {
       const { userId } = identity;
       // A request that finished authenticating after closeAll: answer 200 and end at once (a non-200
       // would stop EventSource for good; a 200 makes it reconnect to the next process). No slot, no subscription.

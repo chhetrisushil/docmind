@@ -1,5 +1,7 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { EVENTS_ROUTE } from "./documents/events";
 import { positiveInt } from "./documents/limits";
+import { UPLOAD_ROUTE } from "./documents/routes";
 import { type OriginGuardOptions, isSameOriginRequest, refusalLogger } from "./http/originGuard";
 import { type Handler, type RouteContext, json, sendError } from "./http/respond";
 
@@ -75,10 +77,11 @@ export const DEFAULT_HTTP_LIMITS: HttpLimits = {
   headersTimeoutMs: 20_000,
   requestTimeoutMs: 60_000,
   keepAliveTimeoutMs: 5_000,
+  connectionsCheckingIntervalMs: 5_000,
   maxConnections: DEFAULT_MAX_CONNECTIONS,
   maxHeadersCount: 100,
   // The upload streams a multipart body; the event stream is open-ended by design.
-  streamingRoutes: new Set(["POST /api/documents", "GET /api/documents/events"]),
+  streamingRoutes: new Set([UPLOAD_ROUTE, EVENTS_ROUTE]),
 };
 
 /** `DOCMIND_MAX_CONNECTIONS` (default 2000, at most 65535); a bad value fails the boot. */
@@ -153,6 +156,7 @@ export function createHttpServer(
 /** Cut a request that outlives its budget; the timer never outlives the response. */
 function armRequestTimeout(req: IncomingMessage, res: ServerResponse, limits: HttpLimits): void {
   const timer = setTimeout(() => {
+    if (res.writableEnded) return; // ended, not yet flushed: let it go out
     if (res.headersSent) req.socket.destroy();
     else {
       res.setHeader("connection", "close");

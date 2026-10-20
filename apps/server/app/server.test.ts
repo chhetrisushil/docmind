@@ -1,7 +1,9 @@
 import { type IncomingMessage, request } from "node:http";
 import { type AddressInfo, type Socket, connect } from "node:net";
 import { type MockInstance, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createHttpServer, loadMaxConnections } from "./server";
+import { documentEventRoutes } from "./documents/events";
+import { documentRoutes } from "./documents/routes";
+import { DEFAULT_HTTP_LIMITS, createHttpServer, loadMaxConnections } from "./server";
 
 const server = createHttpServer();
 let base = "";
@@ -178,6 +180,7 @@ describe("server limits", () => {
     const s = createHttpServer();
     expect([s.headersTimeout, s.requestTimeout, s.keepAliveTimeout]).toEqual([20_000, 0, 5_000]);
     expect([s.maxConnections, s.maxHeadersCount]).toEqual([2000, 100]);
+    expect(DEFAULT_HTTP_LIMITS.connectionsCheckingIntervalMs).toBe(5_000);
   });
 
   it("reads DOCMIND_MAX_CONNECTIONS, naming the variable on a bad value", () => {
@@ -296,6 +299,48 @@ describe("server limits", () => {
     await closed(second);
     expect(first.destroyed).toBe(false);
     first.destroy();
+    server.closeAllConnections();
+    server.close();
+  });
+
+  it("exempts only keys the real route tables register", () => {
+    const registered = new Set([
+      // biome-ignore lint/suspicious/noExplicitAny: only the route keys are read
+      ...Object.keys(documentRoutes({} as any)),
+      // biome-ignore lint/suspicious/noExplicitAny: only the route keys are read
+      ...Object.keys(documentEventRoutes({} as any).routes),
+    ]);
+    expect([...DEFAULT_HTTP_LIMITS.streamingRoutes].filter((k) => !registered.has(k))).toEqual([]);
+  });
+
+  it("survives a handler that settles after its 503", async () => {
+    let settle: () => void = () => {};
+    const late = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { server, port } = await started(
+      {
+        "GET /late": async (_req, res) => {
+          await late;
+          res.writeHead(200); // headers already sent by the 503: throws inside the wrapper
+          res.end();
+        },
+      },
+      { requestTimeoutMs: 20 },
+    );
+    expect((await fetch(`http://127.0.0.1:${port}/late`)).status).toBe(503);
+    settle();
+    await vi.waitFor(() =>
+      expect(errors).toHaveBeenCalledWith("handler failed", "GET", "/late", "Error"),
+    );
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    expect(unhandled).toEqual([]);
+    process.off("unhandledRejection", onUnhandled);
+    errors.mockRestore();
     server.closeAllConnections();
     server.close();
   });
