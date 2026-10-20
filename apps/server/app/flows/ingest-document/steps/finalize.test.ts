@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { DocumentGoneError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ParsedStore } from "../pgParsed";
-import { STEP_RETRY, type StepGuard } from "../stepEffect";
-import { PLACEHOLDER_STEPS, finalizeEffect, placeholderEffect } from "./placeholders";
+import type { StepGuard } from "../stepEffect";
+import { finalizeEffect } from "./finalize";
 
 const ref = (): IngestStartInput => ({
   tenantId: randomUUID(),
@@ -24,45 +24,6 @@ const store = (count: () => Promise<number>) => ({
   count,
   read: async () => [],
   sectionsOf: async () => [],
-});
-
-describe("placeholders", () => {
-  // Part 2 replaces these names with real steps and updates this guard in the same PR.
-  it("are exactly link", () => {
-    expect([...PLACEHOLDER_STEPS]).toEqual(["link"]);
-  });
-
-  it.each(PLACEHOLDER_STEPS)("%s only checks the document and reports done", async (step) => {
-    const { calls, guard } = recorder();
-    expect(await run(placeholderEffect(step, guard))).toEqual({ outcome: "done" });
-    expect(calls).toEqual([step]);
-  });
-
-  it("stop as document_gone when the document is gone", async () => {
-    const guard: StepGuard = {
-      begin: async () => {
-        throw new DocumentGoneError();
-      },
-    };
-    expect(await run(placeholderEffect("link", guard))).toEqual({ outcome: "document_gone" });
-  });
-
-  it("retry a transient guard failure under STEP_RETRY, like every other step", async () => {
-    let n = 0;
-    const guard: StepGuard = {
-      begin: async () => {
-        if (++n < STEP_RETRY.maxAttempts) throw new Error("transient");
-      },
-    };
-    const waits: number[] = [];
-    const effect = placeholderEffect("link", guard, {
-      sleep: async (ms) => void waits.push(ms),
-    });
-    expect(await run(effect)).toEqual({ outcome: "done" });
-    expect(n).toBe(STEP_RETRY.maxAttempts);
-    const { backoffMs = 0, backoffMultiplier = 1 } = STEP_RETRY;
-    expect(waits).toEqual([backoffMs, backoffMs * backoffMultiplier]);
-  });
 });
 
 const parsedStore = (present = true) => {

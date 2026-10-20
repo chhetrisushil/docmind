@@ -54,6 +54,8 @@ export function fakeIngestDeps(over: Partial<IngestDeps> = {}): IngestDeps {
       sectionsOf: async () => [],
     },
     entities: { replaceForDocument: async () => 0, sharedWith: async () => [] },
+    links: { replaceForDocument: async (_r, l) => l.length, countForDocument: async () => 0 },
+    titles: { others: async () => [] },
     summaryMaxChars: 400_000,
     vectors: new InMemoryChunkVectors({
       modelId: EMBEDDER.modelId,
