@@ -11,6 +11,7 @@ import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { decodeCursor, encodeCursor } from "../documents/cursor";
+import type { TitleStarter } from "../flows/chat-title/start";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -33,11 +34,6 @@ import { insertChat, listChats, softDeleteChat } from "./sessions";
 import type { ChatRef } from "./turnItems";
 import type { ChatWiring } from "./wiring";
 
-/** Starts a chat's auto title (the `chat-title` flow, Task 154): start-once, never throws. */
-export interface ChatTitleTrigger {
-  fire(ref: ChatRef): void;
-}
-
 export interface ChatRouteDeps {
   pool: Pool;
   authenticator: Authenticator;
@@ -49,7 +45,7 @@ export interface ChatRouteDeps {
   /** Reads a reply's reasoning (history, endpoint); the create and get routes do not use it. */
   reasoning: ReplyReasoning;
   /** Called by the send route for an untitled chat after a message was accepted. Absent without a title model. */
-  titles?: ChatTitleTrigger;
+  titles?: Pick<TitleStarter, "fire">;
 }
 
 export const PAGE = 50;

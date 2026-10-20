@@ -56,6 +56,7 @@ function parts(
     },
     vectors: {},
     events: { closeAll: note("events.closeAll") },
+    titles: { idle: async () => void calls.push("titlesIdle") },
     chatStreams: { closeAll: note("chatStreams.closeAll") },
     detachStatusFeed: note("detach"),
   };
@@ -196,6 +197,7 @@ describe("bootIngest", () => {
       "chatStreams.closeAll",
       "drainServer",
       "startsIdle",
+      "titlesIdle",
       "closeIngest",
       "closeHeartbeat",
       "detach",

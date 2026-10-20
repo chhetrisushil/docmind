@@ -12,6 +12,7 @@ import { migrate, setAppRolePassword } from "../db/migrate";
 import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import { seedUsers, testAuthenticator } from "../documents/testHarness";
+import type { TitleStarter } from "../flows/chat-title/start";
 import { createHttpServer } from "../server";
 import { MemoryLog } from "../status/testing";
 import { ChatActivity } from "./activity";
@@ -20,7 +21,7 @@ import { type FakeConversations, fakeConversations } from "./fakeConversations";
 import { chatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
 import { ChatReasoningStore } from "./reasoningStore";
-import { type ChatRouteDeps, type ChatTitleTrigger, chatRoutes } from "./routes";
+import { type ChatRouteDeps, chatRoutes } from "./routes";
 import { type ChatCallScope, chatScope } from "./scope";
 import { chatTitleBind, insertChat, setTitle } from "./sessions";
 import type { ChatSettings } from "./settings";
@@ -54,7 +55,7 @@ export async function startChatServer(
   o: {
     available?: boolean;
     pageCap?: number;
-    titles?: ChatTitleTrigger;
+    titles?: Pick<TitleStarter, "fire">;
     stream?: Partial<ChatStreamDeps>;
   } = {},
 ): Promise<ChatHarness> {
