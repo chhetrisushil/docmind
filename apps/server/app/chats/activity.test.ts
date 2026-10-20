@@ -128,7 +128,7 @@ describe("ChatActivity", () => {
     expect(await rows()).toEqual([
       {
         executionId: CONV,
-        state: { messages: 2, lastOrd: 1, lastAt: 1_002 },
+        state: { messages: 2, lastOrd: 1, lastAt: 1_002.5 },
       },
     ]);
   });
@@ -189,7 +189,7 @@ describe("ChatActivity", () => {
   });
 
   it("counts a record once when the same envelope is fed twice", async () => {
-    const { feed, log, activity, rows } = await setup();
+    const { feed, activity, rows } = await setup();
     const user = record(CONV, 1, 1, "user");
     feed(evt(CONV, 0, "EXECUTION_STARTED", { input: {} }), user);
     activity.onEvent(user); // the same envelope again
@@ -226,35 +226,45 @@ describe("ChatActivity", () => {
     expect((await rows()).map((r) => r.state.messages)).toEqual([0]);
   });
 
-  it("folds a user record whose text equals the event's own ISO time (the sensitive guard cannot trip)", async () => {
-    const store = new InMemoryReadModelStore();
-    const log = new MemoryLog();
-    const errors: unknown[] = [];
-    const sensitive = statusSensitive(flowSteps(), {
-      sealingCapability: () => ({ covers: ["DECISION_RECORDED.choice.text"] }) as never,
-    });
-    const activity = new ChatActivity({
-      writer: store,
-      source: log,
-      sensitive,
-      onError: (e) => errors.push(e),
-    });
-    await activity.boot();
-    const at = new Date(1_001).toISOString();
-    const e = record(CONV, 1, 1, "user", "complete", {
-      turn: 1,
-      role: "user",
-      status: "complete",
-      ord: 1,
-      text: at,
-    });
-    for (const x of [evt(CONV, 0, "EXECUTION_STARTED", { input: {} }), e]) {
-      log.append(x);
-      activity.onEvent(x);
-    }
-    await activity.drain();
-    expect(errors.map((x) => String(x))).toEqual([]);
-    const rows = foldedStates((await store.getFoldedByKey?.(CHAT_ACTIVITY_MODEL, [C])) ?? []);
-    expect(rows.map((r) => r.state)).toEqual([{ messages: 1, lastOrd: 1, lastAt: 1_001 }]);
-  });
+  const TS = 1_760_000_000_123; // a real 13-digit epoch-ms
+  it.each([
+    ["its ISO time", new Date(TS).toISOString()],
+    ["its epoch ms", String(TS)],
+    ["its stored lastAt", String(TS + 0.5)],
+  ])(
+    "folds a user record whose text equals %s (the sensitive guard cannot trip)",
+    async (_n, text) => {
+      const store = new InMemoryReadModelStore();
+      const log = new MemoryLog();
+      const errors: unknown[] = [];
+      const sensitive = statusSensitive(flowSteps(), {
+        sealingCapability: () => ({ covers: ["DECISION_RECORDED.choice.text"] }) as never,
+      });
+      const activity = new ChatActivity({
+        writer: store,
+        source: log,
+        sensitive,
+        onError: (e) => errors.push(e),
+      });
+      await activity.boot();
+      const stamp = (e: EventEnvelope): EventEnvelope => ({ ...e, timestamp: TS });
+      const e = stamp(
+        record(CONV, 1, 1, "user", "complete", {
+          turn: 1,
+          role: "user",
+          status: "complete",
+          ord: 1,
+          text,
+        }),
+      );
+      for (const x of [stamp(evt(CONV, 0, "EXECUTION_STARTED", { input: {} })), e]) {
+        log.append(x);
+        activity.onEvent(x);
+      }
+      await activity.drain();
+      expect(errors.map((x) => String(x))).toEqual([]);
+      const rows = foldedStates((await store.getFoldedByKey?.(CHAT_ACTIVITY_MODEL, [C])) ?? []);
+      expect(rows.map((r) => r.state)).toEqual([{ messages: 1, lastOrd: 1, lastAt: TS + 0.5 }]);
+    },
+  );
 });

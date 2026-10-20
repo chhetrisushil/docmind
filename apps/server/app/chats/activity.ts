@@ -12,11 +12,13 @@ import { CHAT_ACTIVITY_MODEL } from "./sessions";
 export { CHAT_ACTIVITY_MODEL };
 
 /**
- * Numbers only. Loom's sensitive-state guard refuses a state leaf equal to a value lifted from a sealed path,
- * and sealed values are strings (a user can type any text, an ISO time included), so `lastAt` is the event's
- * epoch milliseconds: a number leaf never matches. One row per conversation generation; `messages` counts that
- * generation only. `lastOrd` is informational (the highest turn key seen), NOT a dedupe guard: Loom's per-execution
- * sequence watermark makes each event fold exactly once.
+ * Numbers only. Loom's sensitive-state guard (read-model `sensitiveState`, `leaksNumber`) refuses a number leaf that
+ * equals a lifted sealed number, or that is an INTEGER whose decimal text equals a lifted sealed string. A conversation
+ * record seals only strings (`choice.text` ...), so its lifted set holds no numbers, but a user can type any text, an
+ * epoch-ms string included. So `lastAt` is the event's epoch milliseconds PLUS 0.5: never an integer, so the
+ * integer-to-string check never applies. Readers subtract 0.5 (`listChats`). One row per conversation generation;
+ * `messages` counts that generation only. `lastOrd` is informational (the highest turn key seen), NOT a dedupe guard:
+ * Loom's per-execution sequence watermark makes each event fold exactly once.
  */
 export interface ChatActivityState {
   messages: number;
@@ -80,7 +82,7 @@ export const activityHandlers = {
     return {
       messages: s.messages + 1,
       lastOrd: Math.max(s.lastOrd, fact.ord),
-      lastAt: Number.isFinite(e.timestamp) ? e.timestamp : s.lastAt,
+      lastAt: Number.isFinite(e.timestamp) ? e.timestamp + 0.5 : s.lastAt,
     };
   },
 } satisfies Record<string, Handler>;
