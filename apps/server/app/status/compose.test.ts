@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
+import { loadChatSettings } from "../chats/settings";
 import { buildServer } from "../compose";
 import { ingestExecutionId, ingestStartInput } from "../documents/ingest";
 import { loadBlobRoot, loadLimits } from "../documents/limits";
@@ -30,7 +31,7 @@ class RecordingStore extends InMemoryReadModelStore {
   }
 }
 
-function compose() {
+function compose(chat = false) {
   // The encrypting store the app uses in production, over an in-memory log: its sealing covers feed the map.
   const events = new EncryptingEventStore(new InMemoryAsyncEventStore(), new InMemoryKeyStore(), {
     sensitive: { ...SENSITIVE_EVENT_PATHS },
@@ -48,6 +49,7 @@ function compose() {
     trustProxy: false,
     ingest: { ...createIngestWiring({}), sleep: async () => {} }, // no real backoff on the failing guard
     status: { writer: store, readerFor: () => store, source: events },
+    ...(chat && { chat: { settings: loadChatSettings({}), timers: new InMemoryTimerStore() } }),
   });
   return { composed, store };
 }
@@ -70,6 +72,24 @@ async function runFailingIngest(composed: ReturnType<typeof compose>["composed"]
 }
 
 describe("buildServer and the ingest-status model", () => {
+  it("mounts the chat routes when chat is configured, and not otherwise", async () => {
+    const path = `/api/chats/${randomUUID()}`;
+    const status = async (composed: ReturnType<typeof compose>["composed"]) => {
+      await new Promise<void>((resolve) => composed.server.listen(0, "127.0.0.1", resolve));
+      const port = (composed.server.address() as AddressInfo).port;
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      await new Promise<void>((resolve) => {
+        composed.server.close(() => resolve());
+        composed.server.closeAllConnections();
+      });
+      await composed.status.close();
+      await composed.app.close();
+      return res.status;
+    };
+    expect(await status(compose(true).composed)).toBe(401); // mounted: the session is checked first
+    expect(await status(compose().composed)).toBe(404);
+  });
+
   it("registers the model under the sensitive map computed from the sealing store, not the declared version alone", async () => {
     const { composed, store } = compose();
     await composed.status.boot();
