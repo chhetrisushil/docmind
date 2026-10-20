@@ -15,7 +15,7 @@ export interface OriginGuardOptions {
    * the `Origin` fallback compares against it instead of the `Host`-derived origin.
    */
   publicOrigin?: string;
-  /** Where a refusal is reported (already rate-limited by `refusalLogger`). Defaults to `console.error`. */
+  /** Where a refusal is reported with its matched route pattern, or "(unrouted)" (rate-limited by `refusalLogger`). */
   log?: (method: string, path: string) => void;
 }
 
@@ -34,36 +34,23 @@ export function parsePublicOrigin(raw: string | undefined): string | undefined {
 }
 
 const WINDOW_MS = 60_000;
-const MAX_KEYS = 256;
-
-/** A path with id-like segments (digits, or 8+ hex/dash characters) collapsed, so a log line never carries a document id. */
-function routeShape(path: string): string {
-  return path
-    .split("/")
-    .map((seg) => (/^\d+$/.test(seg) || /^[0-9a-f-]{8,}$/i.test(seg) ? ":id" : seg))
-    .join("/");
-}
-
 /**
- * Rate-limits the refusal line to one per window per method + path; the next line after a window
- * reports how many were suppressed. `now` is injectable so tests need no timers.
+ * Rate-limits the refusal line to one per window per method + route pattern; the next line after a
+ * window reports how many were suppressed. The key set is bounded by the route table. `now` is
+ * injectable so tests need no timers.
  */
 export function refusalLogger(
   emit: (line: string) => void = (line) => console.error(line),
-  now: () => number = Date.now,
-): (method: string, path: string) => void {
+  now: () => number = () => performance.now(),
+): (method: string, route: string) => void {
   const seen = new Map<string, { at: number; suppressed: number }>();
-  return (method, rawPath) => {
-    const line = `${method} ${routeShape(rawPath)}`;
+  return (method, route) => {
+    const line = `${method} ${route}`;
     const t = now();
     const entry = seen.get(line);
     if (entry && t - entry.at < WINDOW_MS) {
       entry.suppressed += 1;
       return;
-    }
-    if (!entry && seen.size >= MAX_KEYS) {
-      for (const [k, v] of seen) if (t - v.at >= WINDOW_MS) seen.delete(k);
-      if (seen.size >= MAX_KEYS) seen.clear();
     }
     const more = entry?.suppressed ?? 0;
     seen.set(line, { at: t, suppressed: 0 });
