@@ -24,11 +24,10 @@ import { StopRegistry, stoppableBargeIn } from "./stop";
 import { chatTools } from "./tools";
 import type { DocumentReads } from "./tools/documents";
 import type { ChatLookup } from "./tools/harness";
-import type { PgReasoningBlocks, PgTurnItems } from "./turnItems";
+import type { PgTurnItems } from "./turnItems";
 
 export interface ChatCollaborators {
   items: Pick<PgTurnItems, "put" | "remove" | "forTurns">;
-  blocks: Pick<PgReasoningBlocks, "put" | "get">;
   retriever: Pick<Retriever, "search" | "related">;
   passages: Pick<PassageReader, "read" | "section">;
   chats: ChatLookup;

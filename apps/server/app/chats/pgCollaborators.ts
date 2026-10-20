@@ -7,7 +7,7 @@ import type { DocumentStatusReads } from "../status/ingestStatus";
 import { LinkReader, PassageReader, Retriever } from "./retrieval";
 import { getChat } from "./sessions";
 import { PgDocumentReads } from "./tools/pgDocumentReads";
-import { PgReasoningBlocks, PgTurnItems } from "./turnItems";
+import { PgTurnItems } from "./turnItems";
 import { type ChatCollaborators, logHopError } from "./wiring";
 
 export function pgCollaborators(o: {
@@ -21,7 +21,6 @@ export function pgCollaborators(o: {
   const passages = new PassageReader(o.pool, o.fields);
   return {
     items: new PgTurnItems(o.pool, o.fields),
-    blocks: new PgReasoningBlocks(o.pool, o.fields),
     passages,
     retriever: new Retriever({
       embedder: o.embedder,

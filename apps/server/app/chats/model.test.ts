@@ -134,15 +134,15 @@ describe("chatModelEffect behaviour", () => {
     expect(winner).toBe(SENTINEL);
   });
 
-  it("a retried attempt drops the earlier attempt's thinking row, and keeps other frames' rows", async () => {
+  it("a retried attempt drops the earlier attempt's outcome row of its own step, and keeps other frames' rows", async () => {
     const s = setup();
     await s.items.put({} as never, 3, "conv#o3#turn:1", {
-      kind: "thinking",
-      body: { text: "old" },
+      kind: "outcome",
+      body: { kind: "max_tokens" },
     });
     await s.items.put({} as never, 3, "conv#o3#turn:0", {
-      kind: "thinking",
-      body: { text: "earlier frame" },
+      kind: "outcome",
+      body: { kind: "max_tokens" },
     });
     await s.runtime.execute("chat-model", CALL, modelCtx({ attempt: 2 }));
     expect(s.items.puts.map((p) => p.stepKey)).toEqual(["conv#o3#turn:0"]);

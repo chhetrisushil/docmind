@@ -1,12 +1,6 @@
 import type { EffectContext } from "@loom/effect-runtime";
 import { chatConversationId } from "./ids";
-import type {
-  ChatRef,
-  PgReasoningBlocks,
-  PgTurnItems,
-  ReasoningBlock,
-  TurnItem,
-} from "./turnItems";
+import type { ChatRef, PgTurnItems, TurnItem } from "./turnItems";
 
 export const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
@@ -49,24 +43,5 @@ export class FakeItems implements Pick<PgTurnItems, "put" | "remove" | "forTurns
     for (const p of this.puts)
       if (turnKeys.includes(p.turnKey)) out.set(p.turnKey, [...(out.get(p.turnKey) ?? []), p.item]);
     return out;
-  }
-}
-
-export class FakeBlocks implements Pick<PgReasoningBlocks, "put" | "get"> {
-  private readonly store = new Map<string, readonly ReasoningBlock[]>();
-  /** Every put, in order (so a test can prove a block was really stored). */
-  readonly puts: { ids: readonly string[]; blocks: readonly ReasoningBlock[] }[] = [];
-  async put(
-    _ref: ChatRef,
-    ids: readonly string[],
-    blocks: readonly ReasoningBlock[],
-  ): Promise<void> {
-    if (blocks.length === 0) return;
-    this.puts.push({ ids, blocks });
-    for (const id of ids) this.store.set(id, blocks);
-  }
-  async get(_ref: ChatRef, ids: readonly string[]): Promise<ReasoningBlock[]> {
-    const first = ids.map((id) => this.store.get(id)).find((b) => b !== undefined);
-    return first ? [...first] : [];
   }
 }
