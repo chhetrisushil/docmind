@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Identity } from "@docmind/auth";
 import { ConversationHub } from "@loom/conversation";
+import type { EventStore } from "@loom/event-runtime";
+import { captureReasoning } from "@loom/llm";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import { Pool } from "pg";
@@ -19,11 +21,12 @@ import { chatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
 import { ChatReasoningStore } from "./reasoningStore";
 import { type ChatRouteDeps, type ChatTitleTrigger, chatRoutes } from "./routes";
+import { type ChatCallScope, chatScope } from "./scope";
 import { chatTitleBind, insertChat, setTitle } from "./sessions";
 import type { ChatSettings } from "./settings";
 import { StopRegistry } from "./stop";
 import { type ChatStreamDeps, chatStreamRoutes } from "./stream";
-import { FakeReplyReasoning } from "./testing";
+import { FakeReplyReasoning, modelCtx } from "./testing";
 import { PgTurnItems } from "./turnItems";
 import type { ChatWiring } from "./wiring";
 
@@ -38,6 +41,8 @@ export interface ChatHarness {
   activity: ChatActivity;
   reasoning: FakeReplyReasoning;
   deps: ChatRouteDeps;
+  /** The event log the reasoning endpoint reads (`deps.eventStore.read`). */
+  log: { executionId: string; eventType: string; payload: unknown }[];
   streams: ReturnType<typeof chatStreamRoutes>;
   /** A request as one of the harness users (alice, alice2, bob). */
   req(user: string, method: string, path: string, body?: unknown): Promise<Response>;
@@ -80,12 +85,17 @@ export async function startChatServer(
     close: async () => {},
   };
   const reasoning = new FakeReplyReasoning();
+  const log: ChatHarness["log"] = [];
+  const eventStore = {
+    ...fake.eventStore,
+    read: async (executionId: string) => log.filter((e) => e.executionId === executionId),
+  } as unknown as EventStore;
   const deps: ChatRouteDeps = {
     pool: app,
     authenticator: testAuthenticator,
     fields,
     chat: wiring,
-    eventStore: fake.eventStore,
+    eventStore,
     reasoning,
     ...(o.titles && { titles: o.titles }),
   };
@@ -104,6 +114,7 @@ export async function startChatServer(
     activity,
     reasoning,
     deps,
+    log,
     streams,
     req(user, method, path, body) {
       return fetch(`${base}${path}`, {
@@ -177,4 +188,45 @@ export async function seedManyChats(owner: Pool, who: Identity, n: number): Prom
        FROM generate_series(1, $3::int) g`,
     [who.tenantId, who.userId, n],
   );
+}
+
+/**
+ * Records `text` as the reasoning of the reply of turn `turnKey`, the way the model effect does (Loom's own capture),
+ * after seeding the turn itself, and returns the reply's history cursor.
+ */
+export async function seedReasoning(
+  h: ChatHarness,
+  who: Identity,
+  chatId: string,
+  turnKey: number,
+  text: string,
+): Promise<string> {
+  const conversationId = chatConversationId(who.userId, chatId);
+  h.fake.addTurn(conversationId, { question: "q", answer: "a" });
+  const stepId = `conv#o${turnKey}#turn:0`;
+  const ctx = modelCtx({
+    executionId: conversationId,
+    stepId,
+    principal: { tenant: who.tenantId, actor: who.userId },
+    emit: (eventType, payload) => h.log.push({ executionId: conversationId, eventType, payload }),
+  });
+  const scope: ChatCallScope = {
+    tenantId: who.tenantId,
+    userId: who.userId,
+    chatId,
+    turnKey,
+    stepKey: stepId,
+    attempt: 1,
+  };
+  await chatScope.run(scope, () =>
+    captureReasoning(
+      [{ kind: "summary", text, signature: "S", provider: "anthropic" }],
+      { store: h.wiring.reasoning as ChatReasoningStore, model: "m" },
+      ctx,
+    ),
+  );
+  h.log.push({ executionId: conversationId, eventType: "STEP_COMPLETED", payload: { stepId } });
+  const reply = h.fake.entriesOf(conversationId).at(-1);
+  if (!reply) throw new Error("no reply was seeded");
+  return reply.cursor;
 }
