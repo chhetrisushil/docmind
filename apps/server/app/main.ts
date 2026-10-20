@@ -8,6 +8,7 @@ import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createIngestWiring } from "./flows/ingest-document/limits";
+import { parsePublicOrigin } from "./http/originGuard";
 import { FORCE_EXIT_DEADLINE_MS, scheduleForceExit, shutdown } from "./shutdown";
 import { StartupConfigError, reportStartupFailure } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   const keks = loadKeks();
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
+  const publicOrigin = parsePublicOrigin(process.env.DOCMIND_PUBLIC_ORIGIN);
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   if (!ingest.llm.summary)
     console.warn("summaries and image reading are off: ANTHROPIC_API_KEY is not set");
@@ -98,6 +100,7 @@ async function main(): Promise<void> {
     blobRoot,
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
     trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
+    publicOrigin,
     ingest,
     // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
     status: {
