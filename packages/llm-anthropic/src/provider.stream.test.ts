@@ -394,3 +394,78 @@ describe("stream(): errors, each releasing the body", () => {
     expect(new LlmStreamError().name).toBe("LlmStreamError");
   });
 });
+
+describe("stream(): malformed block structure", () => {
+  const failure = (parts: string[]) => {
+    const t = sseFetch(parts);
+    return collect(provider(t.fetch, { thinking: true }).stream(REQ)).then(
+      () => ({ e: undefined as unknown, t }),
+      (e: unknown) => ({ e, t }),
+    );
+  };
+
+  it("refuses a block that was opened but never stopped, instead of dropping it", async () => {
+    const r = await failure([
+      f.start(),
+      f.open(0, { type: "tool_use", id: "toolu_1", name: "search_docs", input: {} }),
+      f.end("tool_use"),
+      f.stop(),
+    ]);
+    expect(r.e).toBeInstanceOf(LlmRequestError);
+    expect(allReleased(r.t)).toBe(true);
+  });
+
+  it("refuses a second content_block_start for an open or already closed index", async () => {
+    for (const again of [
+      [f.open(0, { type: "text", text: "" }), f.open(0, { type: "text", text: "" })],
+      [...f.text(0, "a"), f.open(0, { type: "text", text: "" })],
+    ]) {
+      const r = await failure([f.start(), ...again, f.end("end_turn"), f.stop()]);
+      expect(r.e).toBeInstanceOf(LlmRequestError);
+      expect(allReleased(r.t)).toBe(true);
+    }
+  });
+
+  it("refuses a thinking block that ends without a signature", async () => {
+    const r = await failure([
+      f.start(),
+      f.open(0, { type: "thinking", thinking: "" }),
+      f.delta(0, { type: "thinking_delta", thinking: "x" }),
+      f.close(0),
+      f.end("end_turn"),
+      f.stop(),
+    ]);
+    expect(r.e).toBeInstanceOf(LlmRequestError);
+    expect(allReleased(r.t)).toBe(true);
+  });
+
+  it("emits blocks and tool calls in index order even when blocks stop out of order", async () => {
+    const rec = recordingObserver();
+    const t = sseFetch([
+      f.start(),
+      f.open(0, { type: "thinking", thinking: "" }),
+      f.delta(0, { type: "signature_delta", signature: "S" }),
+      f.open(1, { type: "redacted_thinking", data: "ENC" }),
+      f.open(2, { type: "tool_use", id: "toolu_1", name: "a", input: {} }),
+      f.close(2),
+      f.close(1),
+      f.close(0),
+      f.end("tool_use"),
+      f.stop(),
+    ]);
+    const chunks = await collect(
+      provider(t.fetch, { thinking: true, observer: () => rec.observer }).stream(REQ),
+    );
+    expect(rec.blocks).toEqual([
+      {
+        ids: ["toolu_1"],
+        blocks: [
+          { type: "thinking", thinking: "", signature: "S" },
+          { type: "redacted_thinking", data: "ENC" },
+          { type: "tool_use", id: "toolu_1", name: "a", input: {} },
+        ],
+      },
+    ]);
+    expect(chunks.at(-1)?.toolCalls).toEqual([{ id: "toolu_1", name: "a", input: {} }]);
+  });
+});

@@ -14,6 +14,7 @@ type Open =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; json: string }
   | { kind: "thinking"; thinking: string; signature: string }
+  | { kind: "redacted"; data: string }
   | { kind: "ignored" };
 
 export interface StreamEnd {
@@ -59,8 +60,8 @@ function parseInput(json: string): unknown {
  */
 export class StreamState {
   readonly #open = new Map<number, Open>();
-  readonly #toolCalls: LlmToolCall[] = [];
-  readonly #blocks: ReasoningBlock[] = [];
+  readonly #blocks = new Map<number, ReasoningBlock>();
+  readonly #seen = new Set<number>();
   #sawThinking = false;
   #usage: UsageFields = {};
   #stop: unknown;
@@ -87,7 +88,8 @@ export class StreamState {
         return [];
       case "content_block_start": {
         const b = obj(o.content_block);
-        if (!b || index < 0) throw new LlmRequestError();
+        if (!b || index < 0 || this.#seen.has(index)) throw new LlmRequestError();
+        this.#seen.add(index);
         if (b.type === "text") {
           const first = typeof b.text === "string" ? b.text : "";
           this.#open.set(index, { kind: "text", text: first });
@@ -109,9 +111,7 @@ export class StreamState {
         }
         if (b.type === "redacted_thinking") {
           if (typeof b.data !== "string") throw new LlmRequestError();
-          this.#sawThinking = true;
-          this.#blocks.push({ type: "redacted_thinking", data: b.data });
-          this.#open.set(index, { kind: "ignored" });
+          this.#open.set(index, { kind: "redacted", data: b.data });
           return [];
         }
         this.#open.set(index, { kind: "ignored" });
@@ -159,16 +159,20 @@ export class StreamState {
         const open = this.#open.get(index);
         this.#open.delete(index);
         if (open?.kind === "text" && open.text !== "") {
-          this.#blocks.push({ type: "text", text: open.text });
+          this.#blocks.set(index, { type: "text", text: open.text });
         }
         if (open?.kind === "tool") {
           const input = parseInput(open.json);
-          this.#toolCalls.push({ id: open.id, name: open.name, input });
-          this.#blocks.push({ type: "tool_use", id: open.id, name: open.name, input });
+          this.#blocks.set(index, { type: "tool_use", id: open.id, name: open.name, input });
+        }
+        if (open?.kind === "redacted") {
+          this.#sawThinking = true;
+          this.#blocks.set(index, { type: "redacted_thinking", data: open.data });
         }
         if (open?.kind === "thinking") {
+          if (open.signature === "") throw new LlmRequestError();
           this.#sawThinking = true;
-          this.#blocks.push({
+          this.#blocks.set(index, {
             type: "thinking",
             thinking: open.thinking,
             signature: open.signature,
@@ -201,13 +205,18 @@ export class StreamState {
   /** A stream that ended without `message_stop` and a stop reason is truncated: transient. */
   end(): StreamEnd {
     if (!this.stopped || typeof this.#stop !== "string") throw new LlmStreamError();
+    if (this.#open.size > 0) throw new LlmRequestError(); // a block never stopped
+    const ordered = [...this.#blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
+    const toolCalls: LlmToolCall[] = ordered.flatMap((b) =>
+      b.type === "tool_use" ? [{ id: b.id as string, name: b.name as string, input: b.input }] : [],
+    );
     const refused = this.#stop === "refusal" ? refusalDetailsOf(this.#details) : undefined;
     const u = this.#usage;
     return {
       stopReason: mapStopReason(this.#stop),
       ...(refused !== undefined && { refused }),
-      toolCalls: refused ? [] : this.#toolCalls,
-      blocks: refused ? [] : this.#blocks,
+      toolCalls: refused ? [] : toolCalls,
+      blocks: refused ? [] : ordered,
       sawThinking: refused ? false : this.#sawThinking,
       ...(u.input !== undefined &&
         u.output !== undefined && { usage: { inputTokens: u.input, outputTokens: u.output } }),
