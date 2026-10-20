@@ -12,7 +12,7 @@ export const SWEEP_ORPHAN_EVERY_TICKS = 60;
 const SWEEP_LABEL = "stale upload sweep";
 
 // The SQL function never returns more than this, whatever limit is asked for.
-const MAX_BATCH = 500;
+export const MAX_BATCH = 500;
 
 const className = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
@@ -24,6 +24,8 @@ export interface SweepArgs {
   limit: number;
   /** When aborted after the query, nothing is fired (shutdown: the starts are about to drain). */
   signal?: AbortSignal;
+  /** Rethrow a failed query (after logging it) instead of returning 0: a backfill must not read it as "nothing stale". */
+  rethrow?: boolean;
 }
 
 /**
@@ -32,7 +34,7 @@ export interface SweepArgs {
  * owner, as an upload builds it. Never throws: a failure is logged by class only.
  */
 export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
-  const { pool, starts, olderThanMs, lookbackMs, limit, signal } = args;
+  const { pool, starts, olderThanMs, lookbackMs, limit, signal, rethrow } = args;
   try {
     const { rows } = await pool.query<{
       tenant_id: string;
@@ -53,6 +55,7 @@ export async function sweepStaleUploads(args: SweepArgs): Promise<number> {
     return rows.length;
   } catch (err) {
     console.error("stale upload sweep failed", className(err));
+    if (rethrow) throw err;
     return 0;
   }
 }

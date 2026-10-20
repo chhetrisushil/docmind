@@ -186,6 +186,11 @@ export class IngestStatus implements DocumentStatusReads {
     return this.service.purgeFolded(INGEST_STATUS_MODEL, { scope });
   }
 
+  /** Wait for every fold scheduled so far, leaving the model open (a backfill waits for the rows of the executions it started). */
+  async drain(): Promise<void> {
+    await this.service.drain();
+  }
+
   /** Wait for every fold scheduled so far (shutdown, tests). Callers close the event feed first: events fed afterwards are not awaited. */
   async close(): Promise<void> {
     await this.publishing;

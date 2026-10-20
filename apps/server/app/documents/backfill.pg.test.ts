@@ -13,14 +13,23 @@ describe.skipIf(!PG_URL)("runBackfill (needs DOCMIND_TEST_PG_URL)", () => {
     try {
       const fields = new FieldCrypto(h.keys);
       const doc = await seedDoc(h.owner, h.app, fields, ALICE, "4".repeat(64), 30 * DAY);
-      expect(await runBackfill(h.app, h.starts, { lookbackDays: 7 })).toBe(0);
+      expect(await runBackfill(h.app, h.starts, { lookbackDays: 7 })).toEqual({
+        fired: 0,
+        incomplete: false,
+      });
       expect(h.ingest.calls).toEqual([]);
-      expect(await runBackfill(h.app, h.starts, { lookbackDays: 60 })).toBe(1);
+      expect(await runBackfill(h.app, h.starts, { lookbackDays: 60 })).toEqual({
+        fired: 1,
+        incomplete: false,
+      });
       expect(h.ingest.calls).toEqual([`start:${doc}`]);
       await h.starts.finished();
       // The harness's status model is in memory; store the row the real writer would have.
       await seedRow(h.owner, ingestExecutionId(U1, doc), doc, U1);
-      expect(await runBackfill(h.app, h.starts, { lookbackDays: 60 })).toBe(0);
+      expect(await runBackfill(h.app, h.starts, { lookbackDays: 60 })).toEqual({
+        fired: 0,
+        incomplete: false,
+      });
       expect(h.ingest.calls).toEqual([`start:${doc}`]);
     } finally {
       await h.close();

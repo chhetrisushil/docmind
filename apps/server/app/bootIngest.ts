@@ -43,7 +43,9 @@ export interface BootIngestParts {
  * safe and is idempotent; it does not close what `bootIngest` did not open the caller's way
  * (the blob root, the temp dir, the test database).
  */
-export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Promise<void> }> {
+export async function bootIngest(
+  parts: BootIngestParts,
+): Promise<{ stop(): Promise<void>; recoveryIdle(): Promise<void> }> {
   const { built, ingest, durable, pool, listen, recoveryOwner, background = true } = parts;
   const { app, store, throttle, starts, status, vectors, events, detachStatusFeed } = built;
   const cleanup = [
@@ -128,5 +130,5 @@ export async function bootIngest(parts: BootIngestParts): Promise<{ stop(): Prom
     })();
     return stopping;
   };
-  return { stop };
+  return { stop, recoveryIdle: () => recovery.idle() };
 }

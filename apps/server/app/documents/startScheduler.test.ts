@@ -139,5 +139,28 @@ describe("StartScheduler", () => {
     finish();
     await waiting;
     expect(done).toBe(true);
+    expect(s.counts()).toEqual({
+      started: 2,
+      alreadyRunning: 0,
+      failed: 0,
+      completed: 1,
+      executionsFailed: 1,
+    });
+  });
+
+  it("counts a null start as already running and a throwing start as failed", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const results = [null, new RangeError("x")];
+    const s = new StartScheduler(
+      port(async () => {
+        const r = results.shift();
+        if (r instanceof Error) throw r;
+        return r ?? null;
+      }),
+    );
+    s.fire(IDENTITY, "d1", GEN);
+    s.fire(IDENTITY, "d2", GEN);
+    await s.idle();
+    expect(s.counts()).toMatchObject({ started: 0, alreadyRunning: 1, failed: 1 });
   });
 });
