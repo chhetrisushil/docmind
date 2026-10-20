@@ -117,12 +117,16 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
 
   it("joins each reply to its own turn's items by turn key, across several turns", async () => {
     const chatId = await seedChat(h, ALICE);
-    for (const n of [1, 2, 3])
+    // A rejected envelope before turns 2 and 3 consumes a message each, so the turn keys are 1, 3 and 5.
+    const keys = [1, 3, 5];
+    for (const [i, n] of [1, 2, 3].entries()) {
+      if (i > 0) h.fake.addRejected(convOf(chatId));
       h.fake.addTurn(convOf(chatId), { question: `q${n}`, answer: `a${n}` });
-    for (const n of [1, 2, 3])
-      await h.wiring.items.put(ref(chatId), n, `conv#o${n}#turn:0:tool:0`, {
+    }
+    for (const [i, key] of keys.entries())
+      await h.wiring.items.put(ref(chatId), key, `conv#o${key}#turn:0:tool:0`, {
         kind: "tool",
-        body: { name: "search_docs", label: `step ${n}`, count: n },
+        body: { name: "search_docs", label: `step ${i + 1}`, count: i + 1 },
       });
     const { body: three } = await history(h, "alice", chatId);
     const replies = three.items.filter((m) => m.role === "assistant");
@@ -131,7 +135,7 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
       ["step 2"],
       ["step 3"],
     ]);
-    expect(h.reasoning.calls.at(-1)?.map((r) => r.turnKey)).toEqual([1, 2, 3]);
+    expect(h.reasoning.calls.at(-1)?.map((r) => r.turnKey)).toEqual(keys);
   });
 
   it("names a deleted document, and never the title of a document that is not the caller's", async () => {
@@ -240,6 +244,19 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
     }
   });
 
+  it("answers 404 when the chat row exists but its conversation does not", async () => {
+    const id = randomUUID();
+    await h.owner.query(
+      "INSERT INTO chat_sessions (id, tenant_id, user_id, scope) VALUES ($1, $2, $3, '\"all\"'::jsonb)",
+      [id, ALICE.tenantId, ALICE.userId],
+    );
+    const res = await h.req("alice", "GET", `/api/chats/${id}/messages`);
+    expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+      404,
+      "not_found",
+    ]);
+  });
+
   it("still serves history without a Claude key", async () => {
     const chatId = await seedChat(noKey, ALICE);
     noKey.fake.addTurn(convOf(chatId), { question: "old question", answer: "old answer" });
@@ -260,8 +277,11 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
 
   it("turnKeyOf equals the o of Loom's conv#o<o>:reply decision id for every reply, and of conv#o<o>:user for its question", async () => {
     const chatId = await seedChat(h, ALICE);
-    for (let n = 1; n <= 4; n++)
+    // Two counters, as in Loom: rejected envelopes consume a message and write a record but are no turn.
+    for (let n = 1; n <= 4; n++) {
+      if (n === 2 || n === 3) h.fake.addRejected(convOf(chatId));
       h.fake.addTurn(convOf(chatId), { question: `q${n}`, answer: `a${n}` });
+    }
     const { entries } = await readHistoryPage(
       h.wiring.conversations,
       convOf(chatId),
@@ -269,8 +289,11 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
       undefined,
       30,
     );
-    expect(entries).toHaveLength(8);
-    for (const e of entries) {
+    expect(entries).toHaveLength(10);
+    expect(entries.filter((e) => e.turn === 0)).toHaveLength(2);
+    // record ordinals and message ids drift apart: the last reply is record 10 of message 7
+    expect(entries.at(-1)).toMatchObject({ ord: 10, turn: 4 });
+    for (const e of entries.filter((x) => x.turn >= 1)) {
       const seq = Number(e.cursor.split(".")[1]);
       const events = (await h.fake.eventStore.readRange?.(convOf(chatId), seq, seq)) ?? [];
       const event = events[0];

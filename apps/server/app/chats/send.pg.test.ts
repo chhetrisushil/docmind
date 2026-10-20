@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { SendMessageResponse } from "@docmind/contracts";
-import { InvalidTurnError, QueueFullError } from "@loom/conversation";
-import { InboxClosedError } from "@loom/workflow-runtime";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  ConversationNotFoundError,
+  InvalidTurnError,
+  QueueFullError,
+  SubscriberLimitError,
+} from "@loom/conversation";
+import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";
 import type { ChatTitleTrigger } from "./routes";
@@ -45,16 +50,26 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
     expect(typeof SendMessageResponse.parse(await res.json()).messageId).toBe("string");
   });
 
-  it("accepts 8000 multi-byte characters, refuses 8001 characters and refuses a body over 40 KiB", async () => {
+  it("accepts 8000 multi-byte characters, refuses 8001 characters and refuses a body over 64 KiB", async () => {
     const chatId = await seedChat(h, ALICE);
     expect((await send("alice", chatId, { text: "é".repeat(8000) })).status).toBe(202);
     expect((await send("alice", chatId, { text: "é".repeat(8001) })).status).toBe(400);
     const huge = await fetch(`${h.base}/api/chats/${chatId}/messages`, {
       method: "POST",
       headers: { "x-test-user": "alice", "content-type": "application/json" },
-      body: JSON.stringify({ text: "x".repeat(41 * 1024) }),
+      body: JSON.stringify({ text: "x".repeat(65 * 1024) }),
     });
     expect(huge.status).toBe(413);
+  });
+
+  it("accepts 8000 units written as \\uXXXX escapes (48,000 bytes of body)", async () => {
+    const chatId = await seedChat(h, ALICE);
+    const res = await fetch(`${h.base}/api/chats/${chatId}/messages`, {
+      method: "POST",
+      headers: { "x-test-user": "alice", "content-type": "application/json" },
+      body: `{"text":"${"\\u00e9".repeat(8000)}"}`,
+    });
+    expect(res.status).toBe(202);
   });
 
   it("refuses an empty question and a body that is not a message", async () => {
@@ -110,6 +125,40 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
       [400, "invalid_turn"],
       [429, "too_many_requests"],
     ]);
+  });
+
+  it("maps the rest of Loom's refusals: a full inbox and a subscriber limit are 429 with retry-after, a missing conversation 404", async () => {
+    const chatId = await seedChat(h, ALICE);
+    h.fake.failNextSend(new InboxFullError("x", 5));
+    h.fake.failNextSend(new SubscriberLimitError("x", 3));
+    h.fake.failNextSend(new ConversationNotFoundError("x"));
+    const got = [];
+    for (let i = 0; i < 3; i++) {
+      const res = await send("alice", chatId, { text: "hi" });
+      got.push([
+        res.status,
+        res.headers.get("retry-after"),
+        ((await res.json()) as { error: { code: string } }).error.code,
+      ]);
+    }
+    expect(got).toEqual([
+      [429, "1", "too_many_requests"],
+      [429, "1", "too_many_requests"],
+      [404, null, "not_found"],
+    ]);
+  });
+
+  it("answers 500 for an error it does not know, without its message", async () => {
+    const chatId = await seedChat(h, ALICE);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      h.fake.failNextSend(new RangeError("SECRET-DETAIL"));
+      const res = await send("alice", chatId, { text: "hi" });
+      expect(res.status).toBe(500);
+      expect(await res.text()).not.toContain("SECRET-DETAIL");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   describe("auto title (D14, P5)", () => {

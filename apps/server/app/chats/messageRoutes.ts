@@ -17,8 +17,8 @@ import { chatConversationId } from "./ids";
 import { HISTORY_PAGE, readHistoryPage, toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
 
-/** 8,000 characters are at most 32,000 bytes of UTF-8 plus the JSON around them (H10). */
-export const SEND_MAX_BYTES = 40 * 1024;
+/** 8,000 UTF-16 units: a client that \uXXXX-escapes every one sends up to 6 bytes each (about 48 KB) plus the JSON around them (H10). */
+export const SEND_MAX_BYTES = 64 * 1024;
 
 /** Loom's refusals as HTTP answers. Fixed text: an error's own message can carry the conversation id. */
 function sendFailure(res: ServerResponse, err: unknown): void {
