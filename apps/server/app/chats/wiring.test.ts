@@ -1,12 +1,12 @@
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../config";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";
 import { createChatLlm } from "./llm";
 import { loadChatSettings } from "./settings";
 import { FakeBlocks, FakeItems } from "./testing";
 import { FakeChats } from "./tools/testing";
-import { connectChat, prepareChat } from "./wiring";
+import { connectChat, logHopError, prepareChat } from "./wiring";
 
 const KEY = "k".repeat(32);
 const collaborators = () => ({
@@ -90,5 +90,14 @@ describe("connectChat and buildApp", () => {
     await chat.close();
     expect(prepared.shutdown.signal.aborted).toBe(true);
     await app.close();
+  });
+});
+
+describe("logHopError", () => {
+  it("logs the hop and the error class only", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    logHopError(2, "TypeError");
+    expect(spy.mock.calls).toEqual([["chat retrieval hop failed", 2, "TypeError"]]);
+    spy.mockRestore();
   });
 });

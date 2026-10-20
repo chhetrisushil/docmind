@@ -4,7 +4,7 @@ import { type TaintedValue, tainted } from "@loom/classify";
 import { type EffectContext, ToolEffect } from "@loom/effect-runtime";
 import type { ZodType, ZodTypeDef } from "zod";
 import type { ChatBus } from "../bus";
-import type { Passage } from "../retrieval";
+import { type Passage, SearchUnavailableError } from "../retrieval";
 import { ChatScopeError, scopeOfEffect } from "../scope";
 import type { ChatRef, PgTurnItems, StoredPassage } from "../turnItems";
 
@@ -58,6 +58,18 @@ export function toolEffect<In, Out>(
 ): ToolEffect<unknown, TaintedValue<Out>> {
   return new ToolEffect<unknown, TaintedValue<Out>>(
     async (raw, ctx) => {
+      try {
+        return await body(raw, ctx);
+      } catch (err) {
+        throw sanitizedToolError(err);
+      }
+    },
+    // Read-only: a re-run after a crash is safe, and the effect needs no in-doubt parking.
+    { idempotent: true },
+  );
+
+  async function body(raw: unknown, ctx: EffectContext): Promise<TaintedValue<Out>> {
+    {
       const scope = scopeOfEffect(ctx);
       const input = parseInput(schema, raw);
       const chat = await deps.chats.scopeOf(scope);
@@ -85,10 +97,24 @@ export function toolEffect<In, Out>(
       });
       deps.bus.publish(scope.chatId, { kind: "tool", turnKey: scope.turnKey, step: result.step });
       return tainted(result.out, TOOL_ORIGIN);
-    },
-    // Read-only: a re-run after a crash is safe, and the effect needs no in-doubt parking.
-    { idempotent: true },
-  );
+    }
+  }
+}
+
+/**
+ * A step failure's message lands in the event log (Loom writes String(err)), and a collaborator's error
+ * can carry the query or a document's text. Only the tool's own typed errors and aborts pass through;
+ * anything else becomes a fixed message with the error class.
+ */
+function sanitizedToolError(err: unknown): unknown {
+  if (
+    err instanceof ChatToolInputError ||
+    err instanceof ChatScopeError ||
+    err instanceof SearchUnavailableError
+  )
+    return err;
+  if (err instanceof Error && err.name === "AbortError") return err;
+  return new Error(`chat tool failed: ${err instanceof Error ? err.constructor.name : typeof err}`);
 }
 
 /** Whether a document is inside the chat's scope. */

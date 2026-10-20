@@ -49,12 +49,15 @@ export class FakeItems implements Pick<PgTurnItems, "put" | "remove" | "forTurns
 
 export class FakeBlocks implements Pick<PgReasoningBlocks, "put" | "get"> {
   private readonly store = new Map<string, readonly ReasoningBlock[]>();
+  /** Every put, in order (so a test can prove a block was really stored). */
+  readonly puts: { ids: readonly string[]; blocks: readonly ReasoningBlock[] }[] = [];
   async put(
     _ref: ChatRef,
     ids: readonly string[],
     blocks: readonly ReasoningBlock[],
   ): Promise<void> {
     if (blocks.length === 0) return;
+    this.puts.push({ ids, blocks });
     for (const id of ids) this.store.set(id, blocks);
   }
   async get(_ref: ChatRef, ids: readonly string[]): Promise<ReasoningBlock[]> {

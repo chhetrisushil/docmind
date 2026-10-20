@@ -414,8 +414,10 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
     // this expectation: an event written before its path is registered stays readable forever.
     expect(Object.keys(SENSITIVE_EVENT_PATHS).sort()).toEqual([
       "DECISION_RECORDED",
+      "EXECUTION_FAILED",
       "EXECUTION_STARTED",
       "STEP_COMPLETED",
+      "STEP_FAILED",
       "STEP_STARTED",
     ]);
   });

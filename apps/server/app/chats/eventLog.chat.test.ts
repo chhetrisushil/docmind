@@ -1,4 +1,3 @@
-import { inboxStreamId, inboxTopicStreamId } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
@@ -35,15 +34,10 @@ afterEach(async () => {
   stack = undefined;
 });
 
-/** Every raw (sealed) event of the conversation: both generations and both inbox layouts. */
+/** Every raw (sealed) event in the store: every execution, generation and inbox stream, not a listed set. */
 async function rawLog(s: ChatStack) {
-  const streams = [
-    CONV,
-    `${CONV}~1`,
-    inboxStreamId(CONV),
-    inboxTopicStreamId(CONV, "conversation:turn"),
-  ];
-  return (await Promise.all(streams.map((id) => s.raw.read(id)))).flat();
+  const ids = await s.raw.listExecutions();
+  return (await Promise.all(ids.map((id) => s.raw.read(id)))).flat();
 }
 
 describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
@@ -111,6 +105,9 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
         "STEP_STARTED:input.query",
       ]),
     );
+    // The thinking was really stored (so the scan above is not vacuous for it), and only the owner's key was used.
+    expect(JSON.stringify(stack.blocks.puts)).toContain(THINKING);
+    expect([...stack.subjects]).toEqual([U]);
     // The same log, read through the decrypting store, is the conversation.
     const history = await stack.chat.reader.read(CONV, { limit: 50 });
     expect(history.entries.map((e) => e.role)).toEqual([
@@ -152,5 +149,46 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
     await stack.send(id, QUESTION);
     expect((await stack.replies(id, 1))[0]).toMatchObject({ status: "failed", text: "" });
     assertNoPlaintext(await rawLog(stack), [QUESTION]);
+  });
+
+  it("a stopped turn seals its partial text and keeps it out of the log", async () => {
+    const PARTIAL = "The Nocturne forecast is partial text that was cut off";
+    stack = await startChatStack({
+      scripts: [
+        { steps: [{ text: PARTIAL }, { hold: true }, { text: " and more" }, { stop: "end_turn" }] },
+      ],
+    });
+    const id = await stack.start();
+    await stack.send(id, QUESTION);
+    const gate = await stack.fake.streamHold();
+    expect(stack.chat.stops.stop(CONV)).toBe(true);
+    gate.release();
+    expect((await stack.replies(id, 1))[0]).toMatchObject({ status: "interrupted" });
+    const raw = await rawLog(stack);
+    assertNoPlaintext(raw, [PARTIAL, QUESTION]);
+    expect([...sealedPaths(raw)]).toContain("DECISION_RECORDED:choice.partial");
+  });
+
+  it("a failing tool's collaborator message never reaches the log", async () => {
+    const LEAK = "connection refused for Nocturne quarterly revenue forecast";
+    stack = await startChatStack({
+      searchError: new Error(LEAK),
+      scripts: [
+        {
+          steps: [
+            { toolUse: { id: "toolu_1", name: "search_docs", input: { query: QUERY } } },
+            { stop: "tool_use" },
+          ],
+        },
+        { steps: [{ text: "I could not search just now." }, { stop: "end_turn" }] },
+      ],
+    });
+    const id = await stack.start();
+    await stack.send(id, QUESTION);
+    await stack.replies(id, 1);
+    const raw = await rawLog(stack);
+    assertNoPlaintext(raw, [LEAK, QUERY]);
+    expect(raw.some((e) => e.eventType === "STEP_FAILED")).toBe(true);
+    expect([...sealedPaths(raw)]).toContain("STEP_FAILED:error");
   });
 });

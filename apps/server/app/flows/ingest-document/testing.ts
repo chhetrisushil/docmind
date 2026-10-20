@@ -117,8 +117,11 @@ const sealed: Leaf = (v) => {
 /** The closed set of step ids: a step added to the flow is allowed here by being in INGEST_STEPS. */
 const STEP_IDS: readonly string[] = INGEST_STEPS.map((s) => s.id);
 const STEP_NAMES = STEP_IDS.map((id) => id.replace(/^ingest-/, ""));
+// STEP_FAILED.error / EXECUTION_FAILED.error are sealed (M4: Loom writes String(err), which a chat
+// tool's collaborator could fill with content); the fixed text is still accepted for an unsealed log.
 const fixedFailure: Leaf = (v) =>
-  typeof v === "string" && STEP_NAMES.some((name) => v === `Error: ingest step failed: ${name}`);
+  sealed(v) ||
+  (typeof v === "string" && STEP_NAMES.some((name) => v === `Error: ingest step failed: ${name}`));
 const stepId = oneOf(...STEP_IDS);
 const flowOutput: Shape = {
   outcome: oneOf("done", "document_gone", "failed"),
@@ -247,5 +250,9 @@ const SEAL: Shape = {
   cipher: exactly("loom/aes-256-gcm"),
   covers: (v) =>
     Array.isArray(v) &&
-    v.every((p) => /^EXECUTION_STARTED\.principal\.identity\.(actor|tenant)$/.test(String(p))),
+    v.every((p) =>
+      /^(EXECUTION_STARTED\.principal\.identity\.(actor|tenant)|(STEP|EXECUTION)_FAILED\.error)$/.test(
+        String(p),
+      ),
+    ),
 };
