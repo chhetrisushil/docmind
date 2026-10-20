@@ -55,6 +55,12 @@ describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG
     payload: { text, author: "kept in the clear" },
   });
 
+  it("exposes Loom's durable timers on the Loom pool", async () => {
+    expect(typeof stores.timers.schedule).toBe("function");
+    expect(typeof stores.timers.complete).toBe("function");
+    await expect(stores.timers.due(0, 1)).resolves.toEqual([]);
+  });
+
   it("boots Loom's schema as docmind_loom with no privilege warning", async () => {
     const notices: string[] = [];
     const pool = new Pool(loomPoolConfig(db.loomUrl));

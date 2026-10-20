@@ -1,6 +1,8 @@
 import { removeStaleTemp } from "@docmind/blob-store";
 import { PostgresKeyStore, loadKeks } from "@docmind/keystore-pg";
 import { loadPort } from "./boot";
+import { createChatLlm } from "./chats/llm";
+import { loadChatSettings } from "./chats/settings";
 import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
@@ -42,6 +44,9 @@ export async function setupServer() {
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   if (!ingest.llm.summary)
     console.warn("summaries and image reading are off: ANTHROPIC_API_KEY is not set");
+  const chatSettings = loadChatSettings(); // before any connection opens: a bad variable must not reach recovery
+  const chatLlm = createChatLlm(process.env, chatSettings);
+  if (!chatLlm) console.warn("chat is off: ANTHROPIC_API_KEY is not set");
 
   const pool = await createAppPool(databaseUrl);
 
@@ -107,6 +112,7 @@ export async function setupServer() {
     publicOrigin,
     maxConnections,
     ingest,
+    chat: { settings: chatSettings, ...(chatLlm && { llm: chatLlm }), timers: durable.timers },
     // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
     status: {
       writer: pgStatusWriter(durable.pool),
