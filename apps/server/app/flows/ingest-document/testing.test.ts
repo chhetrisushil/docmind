@@ -27,8 +27,8 @@ const SEALED = {
   data: Buffer.alloc(20, 3).toString("base64"),
 };
 const MODEL = "ollama/fake-embed";
-const check = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref);
-const checkEmbed = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref, MODEL);
+const check = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref, []);
+const checkEmbed = (...events: RawEvent[]) => assertEventsAreContentFree(events, ref, [MODEL]);
 const embedDone = (output: Record<string, unknown>) =>
   ev("STEP_COMPLETED", { output, stepId: "ingest-embed" });
 

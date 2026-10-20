@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DocumentGoneError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import { pngBytes } from "../imageFixtures";
+import { LLM_RETRY } from "../stepEffect";
 import { type ParseDeps, parseEffect } from "./parse";
 
 const ref = (): IngestStartInput => ({
@@ -51,6 +52,7 @@ function deps(over: Partial<ParseDeps> = {}) {
       drop: async () => {},
     },
     maxChars: 1_000_000,
+    sleep: async () => {}, // a retried attempt never waits
     registry: new ParserRegistry(createDefaultParsers()),
     runner: {
       run: async (id) => {
@@ -460,5 +462,22 @@ describe("parse step: scanned pdf pages", () => {
       }),
     };
     expect(await run(pdfDeps(none, { vision: bad }).d)).toMatchObject({ code: "corrupt_content" });
+  });
+});
+
+describe("parse step: LLM_RETRY", () => {
+  it("retries a Claude outage LLM_RETRY.maxAttempts attempts in all, then fails with the fixed message", async () => {
+    const readImage = vi.fn(async () => {
+      throw new LlmUnavailableError(529);
+    });
+    const sleep = vi.fn(async () => {});
+    const source = {
+      meta: async () => ({ mime: "image/png", contentAddress: "a" }),
+      read: async () => pngBytes(640, 480),
+    };
+    const { d } = deps({ source, vision: { readImage, readPdfPages: vi.fn() }, sleep });
+    await expect(run(d)).rejects.toThrow(/^ingest step failed: parse$/);
+    expect(readImage).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts);
+    expect(sleep).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts - 1);
   });
 });

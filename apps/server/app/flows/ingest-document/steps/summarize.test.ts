@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import type { ParsedDocument } from "@docmind/parsers";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { IngestStartInput } from "../flow";
 import type { EntityMention } from "../pgEntities";
+import { LLM_RETRY } from "../stepEffect";
 import { fakeResults } from "../testing";
 import { summarizeEffect } from "./summarize";
 
@@ -50,7 +51,14 @@ const SOME_SUMMARY = {
   suggestedQuestions: [],
 };
 
-function deps(over: { llm?: LlmProvider; summary?: boolean; onWrite?: (w: string) => void } = {}) {
+function deps(
+  over: {
+    llm?: LlmProvider;
+    summary?: boolean;
+    onWrite?: (w: string) => void;
+    sleep?: () => Promise<void>;
+  } = {},
+) {
   const results = fakeResults();
   const ref: IngestStartInput = {
     tenantId: randomUUID(),
@@ -98,7 +106,7 @@ function deps(over: { llm?: LlmProvider; summary?: boolean; onWrite?: (w: string
       entities,
       ...(over.llm && { llm: over.llm }),
       summaryMaxChars: 1_000,
-      sleep: async () => {},
+      sleep: over.sleep ?? (async () => {}),
     },
   };
 }
@@ -155,5 +163,18 @@ describe("summarize step", () => {
       throw new LlmRequestError(401);
     });
     await expect(run(deps({ llm: denied }))).rejects.toThrow(/^ingest step failed: summarize$/);
+  });
+});
+
+describe("summarize step: LLM_RETRY", () => {
+  it("retries a Claude outage LLM_RETRY.maxAttempts attempts in all, then fails with the fixed message", async () => {
+    const down = withModel(async () => {
+      throw new LlmUnavailableError(529);
+    });
+    const sleep = vi.fn(async () => {});
+    await expect(run(deps({ llm: down, sleep }))).rejects.toThrow(
+      /^ingest step failed: summarize$/,
+    );
+    expect(sleep).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts - 1);
   });
 });

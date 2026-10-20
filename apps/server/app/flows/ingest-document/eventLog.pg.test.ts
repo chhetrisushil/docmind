@@ -149,7 +149,7 @@ describe.skipIf(!PG_URL)(
     };
     /** Every event passes the structural check, and none of the seeded text is in the raw JSON. */
     const proven = (raw: EventEnvelope[], ref: IngestStartInput) => {
-      assertEventsAreContentFree(raw as RawEvent[], ref, modelId);
+      assertEventsAreContentFree(raw as RawEvent[], ref, [modelId]);
       const json = JSON.stringify(raw);
       for (const text of [SENTENCE.slice(0, 30), "Quarterly report", "Quarterly report.pdf"]) {
         expect(json).not.toContain(text); // meaningful: raw events are plain JSON, so a leak would show
