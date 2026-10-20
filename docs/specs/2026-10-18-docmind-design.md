@@ -84,11 +84,12 @@ Dependency rules:
 | `Authenticator` | packages/auth | `authenticate(req) → {tenantId, userId} \| null` | email+password, HTTP-only session cookie |
 | `DocumentParser` | packages/parsers | `accepts(mime, ext)`, `parse(bytes) → ParsedDocument` | one per format (§5.3) |
 | `EmbeddingProvider` | `@loom/memory` | `modelId`, `dimensions`, `embed(texts)` | Ollama `nomic-embed-text` |
-| `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector |
+| `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search(…, {documentIds?})`, `vectors`, `neighbours` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector. Search uses the HNSW index with iterative scans, so **pgvector 0.8.0 or newer is a boot requirement** (`verify` fails the boot below it). A search filtered by `documentIds` is exact; an unfiltered one is approximate. Which of several chunks with exactly equal scores fill the last places of `limit` is unspecified (an index scan does not break ties); returned hits are still ordered by score then id. |
 | `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
 | `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
-| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` (§6.5); non-streaming from M3 (summaries, vision), M4 completes it |
-| `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | Loom projection → Postgres |
+| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). It never sends `temperature` (the 5.x models answer 400 to any non-default value). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors. Non-streaming from M3 (summaries, vision), streaming and reasoning from M4 |
+| `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | `chat_sessions` table plus the `chat-activity` folded model; no projection writes to Postgres |
+| `PassageReader`, `LinkReader`, `Retriever` | apps/server | owner-scoped reads of passages and links, and the linked retrieval of `docs/design/linked-retrieval.md` | Postgres through `withTenant` |
 
 Each interface has **one shared conformance test suite** that every implementation must pass.
 
@@ -98,12 +99,13 @@ Each interface has **one shared conformance test suite** that every implementati
 |---|---|
 | Composition root, compliance/erasure | `@loom/app` `defineConfig`, `app.eraseSubject` |
 | Durable flows, steps, logged non-determinism | `@loom/core` |
-| ReAct agent loop, delta chunking | `@loom/agent` |
+| ReAct agent loop (`agentLoop$` through `conversation$`), delta chunking | `@loom/agent` |
 | LLM effects, provider interface, untrusted-input guard | `@loom/llm` (its Anthropic provider is replaced by `packages/llm-anthropic`, §6.5) |
-| Idempotent sync, grounding, `checkCitations` (chunking is app-local: `@loom/knowledge` has no overlap, offsets or token budget) | `@loom/knowledge` |
+| Idempotent sync, grounding, `checkCitations` on the markers DocMind extracts (chunking is app-local: `@loom/knowledge` has no overlap, offsets or token budget) | `@loom/knowledge` |
 | Embedding/vector-index interfaces, `recallRelevant` | `@loom/memory` |
-| Multi-turn conversations, history reader, barge-in, token-window rotation | `@loom/conversation` |
-| Authenticated, resumable SSE | `@loom/plugin-conversation-sse` |
+| Multi-turn conversations (`createConversations`, `followConversation`, `ConversationHub`), history reader, barge-in (`inboxBargeIn`, wrapped by `stoppableBargeIn`), token-window rotation | `@loom/conversation` |
+| Model reasoning (ADR 0133) | `@loom/llm`: `createAgentModelEffect(..., { reasoning })` captures, `ConversationHub.reasoningSink` streams, `Conversations.reasoningTarget` plus `readReasoningBounded` read it back. DocMind supplies the `ReasoningStore`, sealed under the owner's key. |
+| `frame` and `SseSink` only: DocMind serves its own SSE routes | `@loom/plugin-conversation-sse` |
 | Event store | `@loom/plugin-postgres` |
 | Blob seam, GC of unpinned content | `@loom/plugin-content` |
 | Encrypting event and snapshot stores, `shredSubject` | `@loom/plugin-crypto` |
@@ -118,14 +120,14 @@ Each interface has **one shared conformance test suite** that every implementati
 
 | Data | Store |
 |---|---|
-| Chat messages and citations | Loom event log (`@loom/conversation`). Never copied elsewhere. |
+| Chats | Chat messages: Loom event log (`@loom/conversation`). Citations and tool steps: sealed `chat_turn_items`, merged on read. Model reasoning: Loom's ADR 0133 capture; the readable text is a sealed `chat_reasoning_texts` row, the signatures are sealed in the log. |
 | Ingestion progress | Loom event log (ingest flow). A document's status is the `ingest-status` folded read model's state (a document with no row is `uploaded`); there is no `documents.status` column. |
 | Original files | `ContentStore`, path `<tenant>/<user>/<sha256>`, encrypted |
 | Everything else | Postgres tables (§4.2) |
 
 ### 4.2 Tables
 
-Every table carries `tenant_id`, except the two folded-state tables of the ingest status model (`read_model_state`, `read_model_folds`, Loom's layout): their row-level security maps `scope` (a user id) to the tenant through `users`.
+Every table carries `tenant_id`, except the two folded-state tables of the folded models (`read_model_state`, `read_model_folds`, Loom's layout; the two models are `ingest-status` and `chat-activity`): their row-level security maps `scope` (a user id) to the tenant through `users`.
 
 - **`tenants`** `(id, name, created_at)`. Sign-up creates a personal tenant.
 - **`users`** `(id, tenant_id, email UNIQUE, password_hash, created_at)`. Passwords are hashed with
@@ -144,10 +146,11 @@ Every table carries `tenant_id`, except the two folded-state tables of the inges
 - **`entities`** `(id, tenant_id, owner_id, kind, name_enc, name_key, created_at)`. `kind` is `person | organization | product | project | place | other`. `name_enc` is sealed; `name_key` is an HMAC of the normalised name under a key derived from the owner's DEK, `UNIQUE(tenant_id, owner_id, name_key)`. Entities are per owner, never shared across users, and cascade with the user.
 - **`chunk_entities`** `(tenant_id, chunk_id → chunks ON DELETE CASCADE, entity_id → entities ON DELETE CASCADE)`, primary key on all three.
 - **`chunk_links`** `(tenant_id, src_chunk_id, dst_chunk_id, kind, weight, created_at)`, stored in both directions, primary key `(tenant_id, src_chunk_id, dst_chunk_id, kind)`; both chunk FKs cascade. `kind` is `structure | reference | entity | similar`; `weight` is in (0, 1]. Each chunk keeps its top 24 links by weight.
-- **`chat_sessions`** `(id = Loom conversationId, tenant_id, user_id, title_enc, scope jsonb,
-  created_at, last_message_at, message_count, deleted_at)`
-  - Maintained by the `chat-sessions` projection.
+- **`chat_sessions`** `(id uuid, tenant_id, user_id, title_enc, title_source none|auto|user, scope jsonb, created_at, updated_at, deleted_at)`
+  - `id` is minted by the server; the Loom conversation id is `u_<user>.c-<chat>`. Message count and last activity come from the `chat-activity` folded model, summed over a conversation's generations.
   - `scope` is `"all"` or `{documentIds: [...]}`.
+- **`chat_turn_items`** (kinds `tool`, `passages`, `outcome`; sealed `body_enc`, plaintext `ord`, `kind` and `step_key`; unique on the chat, the turn and the step key as in the M4 plan's D5).
+- **`chat_reasoning_texts`** `(tenant_id, user_id, chat_id, address, text_enc, created_at)`: `address` is 32 random hex digits, the composite foreign key to `chat_sessions` cascades, RLS `tenant_isolation`.
 - **`data_keys`** `(subject_id, wrapped_dek, kek_id, created_at)`. Owned by `PostgresKeyStore`.
 
 The `_enc` suffix marks a column encrypted at the app level with the owning user's data key (§4.4).
@@ -189,14 +192,15 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
 | Loom event log | `EncryptingEventStore` | Reads yield `{ $shredded }` |
 | Loom snapshots | `EncryptingSnapshotStore` with `sealState: true`, same KeyStore | Unreadable |
 | Blobs | Envelope-encrypted before writing to `ContentStore` | Ciphertext only |
-| `*_enc` columns | App-level AEAD with the user's DEK | Rows also hard-deleted |
+| `*_enc` columns | App-level AEAD with the user's DEK: `chat_sessions.title_enc` (`chat:<id>:title`), `chat_turn_items.body_enc` (`chatitem:<id>`), `chat_reasoning_texts.text_enc` (`chatreasoning:<chatId>:<address>`) and the document columns | Rows also hard-deleted |
+| Chat event paths | Every conversation event path that can hold content is sealed, including `STEP_COMPLETED` `output.reasoning` and `output.layout` and `LLM_REASONING_CAPTURED` `parts` (signatures, text references, digests, sizes) | Reads yield `{ $shredded }` |
 | `chunks.embedding` | **Plaintext** (pgvector must compare raw vectors) | Hard-deleted |
 | `chunk_links`, `entities.name_key`, `chunk_entities` | **Plaintext** metadata (link existence and weight; an HMAC; ids) | Hard-deleted with their rows |
 
 - **Erasure flow.** `DELETE /api/me` runs these steps in order:
   1. `app.eraseSubject(userId)`. This is liveness-gated: shredding is deferred while any of the
      user's executions is still live.
-  2. Hard-delete the user's rows.
+  2. Hard-delete the user's rows. M5 must also cover `chat_sessions`, `chat_turn_items`, `chat_reasoning_texts` and the `chat-activity` read-model rows.
   3. Delete the user's blobs.
   4. `KeyStore.destroy(userId)`.
 
@@ -212,6 +216,7 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
      `parsed_documents` until a retry or a delete.
   5. Copies retained by the LLM provider are outside the app's control. Requests carry only the
      content they need.
+  6. Chats: `ord`, `kind` and `step_key` of a turn item and the capture event's `stepId`, `attempt`, `provider` and `model` are plaintext. The live reasoning, partial answer and stop registry live in process memory only. `DOCMIND_CHAT_ENVELOPE_KEY` signs inbox envelopes and is never logged. Crypto-shredding the owner's key leaves the references in the log dangling, which Loom reports as erased and treats as a hole in continuation.
 
 ## 5. Ingestion
 
@@ -238,7 +243,7 @@ the same transaction, so chunks always derive from the current parsed row. A sup
 | **embed** | Batches of 64 → `EmbeddingProvider` → `ChunkVectorStore.upsert` (onto the existing chunk rows), idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
 | **analyze** | Deterministic and local: word and page counts, reading time (230 words/min), language (stop-word vote over 8 languages, else null), outline (depth ≤ 2, ≤ 50 entries), notable dates and numbers (≤ 20 each). Stored sealed in `documents.stats_enc`. Word segmentation (`Intl.Segmenter`) is synchronous. |
 | **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest` and `fenceUntrustedMedia`. Without `ANTHROPIC_API_KEY`, summaries are skipped. |
-| **link** | Writes `chunk_links`: `structure` (next chunk within a section 0.9; other chunks of a section of at most 8 chunks 0.6), `similar` (5 nearest chunks of the owner's other documents, score ≥ 0.80; exact vector scans until M4), `entity` (shared entity, weight 1/(1+ln n)) and `reference` (another document's title, ≥ 8 characters, as a whole phrase: 0.7). Owner-scoped, top 24 links per chunk. The LLM fallback for ambiguous references is M4. |
+| **link** | Writes `chunk_links`: `structure` (next chunk within a section 0.9; other chunks of a section of at most 8 chunks 0.6), `similar` (5 nearest chunks of the owner's other documents, score ≥ 0.80; exact vector scans until M4, an index search from M4), `entity` (shared entity, weight 1/(1+ln n)) and `reference` (another document's title, ≥ 8 characters, as a whole phrase: 0.7). Owner-scoped, top 24 links per chunk. The LLM fallback for ambiguous references is M7, beside the retrieval eval. |
 | **finalize** | Set `status=ready`. |
 
 **Progress.** Every step emits a progress event, streamed to the browser over
@@ -280,21 +285,23 @@ Scanned PDF pages with no text layer are routed through the image path. Known li
 
 | Endpoint | Behavior |
 |---|---|
-| `POST /api/chats {scope?}` | Create a Loom conversation. The projection creates the session row. |
-| `GET /api/chats?cursor&q` | List sessions, newest first, 50 per page. `q` filters by title after decryption. |
-| `GET /api/chats/:id/messages?cursor` | Paged history via `ConversationReader.read()`, including stored citations. |
-| `POST /api/chats/:id/messages` | Send a turn. |
-| `GET /api/chats/:id/stream` | conversation-sse: reply deltas, tool activity, citations. Resumable via `Last-Event-ID`. |
-| `POST /api/chats/:id/stop` | Stop generating (barge-in). |
-| `PATCH /api/chats/:id` | Rename or change scope. |
-| `DELETE /api/chats/:id` | Soft-delete (`deleted_at`). |
+| `POST /api/chats {scope?}` | Create a chat (503 `chat_unavailable` without an Anthropic key). The only place a conversation starts. |
+| `GET /api/chats?cursor&q` | List sessions, newest activity first, 50 per page. `q` filters by title after decryption (the newest 2,000 are scanned). |
+| `GET /api/chats/:id/messages?cursor` | Paged history, 30 per page, oldest first within a page, merged with the sealed turn items (citations, tool steps) and reasoning. `ChatMessageDto` carries `reasoning` (folded, bounded) and `cursor`. |
+| `POST /api/chats/:id/messages` | Send a turn: 202 with `messageId`; `editOf` regenerates or edits; body at most 64 KiB. A message sent while a turn runs interrupts it. |
+| `GET /api/chats/:id/stream` | DocMind's own SSE (`frame` and `SseSink` from the plugin): `status`, `message`, `reasoning`, `reasoning-partial`, `tool`, `tool-reset`, `answer`, `reset`, `closed`, `error`; `reasoning`, `reasoning-partial` and `reset` are loom-ui's `ChatFeed` events. Resumable via `Last-Event-ID`. Every heartbeat the stream re-checks the session and the chat and ends if either is gone. |
+| `GET /api/chats/:id/reasoning?cursor=<a reply's cursor>` | The reply's durable reasoning in Loom's `/reasoning` body shape (`steps`, `attempts`, `parts`, `truncated`); owner only (404 otherwise); at most 256 parts and 1 MiB. |
+| `POST /api/chats/:id/stop` | Stop generating (barge-in); answers `{stopped}`. |
+| `PATCH /api/chats/:id` | Rename or change scope. A rename wins over an automatic title. |
+| `DELETE /api/chats/:id` | Soft-delete (`deleted_at`); stops the turn and closes the conversation. |
 
 **Chat lifecycle:**
 
 - Opening an old session loads its history and continues the same conversation.
 - Long sessions use Loom's token-window rotation.
-- A short LLM call titles the session after its first reply, recorded as an event the projection
-  folds. The user can rename it.
+- The title is written by the `chat-title` flow (not a projection event), named from the first question. `POST /api/chats/:id/messages` starts it once, while the chat is still untitled; a rename wins, and if the flow ends skipped the title stays empty. It runs on `DOCMIND_TITLE_MODEL`.
+- The chat flow sets no turn deadline: the provider's 180 s request timeout bounds each attempt, and a tool times out after 30 s. A chat left on an old flow version is logged and left at recovery; the migration plan is to register the previous version beside the new one.
+- If the chat-activity model fails at boot or catch-up, the server logs the class and serves without activity (display only; the list falls back to `created_at`).
 
 ### 6.2 `doc-assistant` agent
 
@@ -305,18 +312,20 @@ Scanned PDF pages with no text layer are routed through the image path. Known li
 
 | Tool | Behavior |
 |---|---|
-| `search_docs(query, k≤12)` | Embed the query, run pgvector top-k within the scope, re-rank with MMR. Returns `{passageId, docTitle, locator, text}` with the text marked untrusted. |
-| `read_section(documentId, locator)` | Return neighbouring chunks or the whole section. |
+| `search_docs(query, k≤12)` | Embed the query, run pgvector top-k within the scope, re-rank with MMR, then follow links (`DOCMIND_RETRIEVAL_HOPS`, default 1; `docs/design/linked-retrieval.md`). Returns `{passageId, docTitle, locator, text}` with the text marked untrusted. |
+| `read_section(passageId, span?)` | Return neighbouring chunks or the whole section around a passage. |
+| `related(passageId, kinds?)` | The deliberate link hop from a passage already found. |
 | `get_summary(documentId)` | Return the precomputed summary and analysis. |
 | `list_documents(filter?)` | Return titles, types and status. |
 
+Five tools. Chunks are searchable once embedded, whatever the document's status.
+
 ### 6.3 Grounding and citations
 
-- **Citation requirement.** The system prompt requires claims to cite `[[passageId]]` and to answer
+- **Citation requirement.** The system prompt requires claims to cite `[[<chunk id>]]` and to answer
   "not found in your documents" when retrieval is weak. Falling back to general knowledge is a config
   flag, off by default.
-- **Validation.** Each answer passes through `@loom/knowledge` `checkCitations`. Citations to passages
-  that were not retrieved are stripped.
+- **Validation.** Validation and citation building happen on read (`citeReply`) through `@loom/knowledge` `checkCitations`. The stored text is the model's raw reply; the shown text has ungrounded markers removed.
 - **Rendering.** Valid citations become numbered markers with source cards (document, page or heading,
   snippet) and are stored in the message metadata.
 
@@ -325,37 +334,26 @@ Scanned PDF pages with no text layer are routed through the image path. Known li
 - **Untrusted input.** Document text is untrusted, the tools have no side effects, and Loom's
   capability ring grants the agent only these tools. A prompt injection in a document can skew an
   answer but cannot leak data or act.
-- **Determinism.** LLM calls go through `@loom/llm` effects, and retrieval runs inside `ctx.decide` /
-  `recallRelevant`, so `loom debug --at` replays a conversation exactly.
+- **Determinism.** LLM calls go through `@loom/llm` effects and tool calls are journaled frames of `agentLoop$` (not `ctx.decide` / `recallRelevant`), so a replay serves recorded results.
 - **Cost.** The system prompt and tool definitions come first, followed by a prompt-cache breakpoint;
-  per-turn content comes after it. Usage is charged against the tenant's token budget.
+  per-turn content comes after it (breakpoints on the system block and the last message). Usage is recorded, not yet budgeted (M7 item 47).
 - **Errors:**
-  - An LLM error or timeout puts an error event on the stream, and the UI offers "Regenerate".
-  - `stop_reason: refusal` is shown as an explicit message.
-  - An embedder outage returns "search unavailable", never an answer without sources.
+  - A failed reply shows `failed`, and "Regenerate" is `editOf`.
+  - `stop_reason: refusal` is `outcome: "refusal"`, shown as an explicit message; an empty reply after the iteration cap is `max_iterations`; `max_tokens` is `max_tokens`.
+  - An embedder outage is a `search_unavailable` tool result, and the agent says so, never an answer without sources.
 
-### 6.5 Thinking
+### 6.5 Reasoning
 
-The chat shows the model's thinking.
+The chat shows the model's reasoning.
 
 - **What is shown.** Claude's *summarized* thinking: requests use
   `thinking: {type: "adaptive", display: "summarized"}`. The raw chain of thought is never exposed by
   the API on any model.
-- **Provider.** Loom's `AnthropicProvider` sends no `thinking` setting, drops thinking deltas, does not
-  preserve thinking blocks across turns, and maps `stop_reason: "refusal"` to `end_turn`. DocMind adds
-  `packages/llm-anthropic`, which implements Loom's `llm` interface on the official
-  `@anthropic-ai/sdk`. It:
-  - streams thinking-summary deltas as their own chunk kind, separate from answer text;
-  - keeps every thinking block (with its signature) in the assistant turn and passes it back unchanged
-    on later requests, as Claude Opus 5.5 requires (preserved thinking). History is append-only; turns
-    are never edited;
-  - reports `refusal` with its `stop_details`;
-  - sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`).
-  It is a candidate for upstreaming into `@loom/llm` later.
-- **Stream.** conversation-sse carries three ordered event kinds per turn: `thinking` deltas,
-  `tool` activity (for example "Searched documents: 'Q3 revenue' → 8 passages"), and `answer` deltas.
-- **Storage.** Thinking summaries and tool-activity steps are stored in the assistant message metadata,
-  encrypted under the user's key like all event-log content, so past chats show them.
+- **Provider.** Loom's `AnthropicProvider` sends no `thinking` setting, sends no effort or cache breakpoints, maps `stop_reason: "refusal"` to `end_turn` and puts the response body in its errors. DocMind adds
+  `packages/llm-anthropic`, which implements Loom's `llm` interface on `fetch` with its own byte-capped SSE reader, not the SDK (open question 7). It streams, reports `refusal` with its `stop_details`, sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`), places cache breakpoints, never sends `temperature`, and implements Loom's ADR 0133 reasoning contract. It is a candidate for upstreaming into `@loom/llm` later.
+- **Reasoning follows Loom's ADR 0133.** The provider returns the model's summarized thinking and the order of its blocks. Loom records the signatures in the log, keeps the readable text in a sidecar store (DocMind's, sealed under the owner's key), sends the signed blocks back unchanged within one tool loop and drops them on any edit. A restart in the middle of a loop keeps them because both live in durable storage. What the API returns with `display: "summarized"` is a summary, never the raw chain of thought, and is shown as such. Across turns the history is text only, which the API accepts. A refused or stopped reply keeps no durable reasoning.
+- **Stream.** DocMind's own SSE (H2) shows `reasoning` and `reasoning-partial`, `tool` and `tool-reset` (for example "Searched documents: 'Q3 revenue' → 8 passages"), and `answer` deltas; see §6.1. History carries the same as `ChatMessageDto.reasoning`.
+- **Storage.** Tool steps are sealed `chat_turn_items`; reasoning is the Loom capture plus sealed `chat_reasoning_texts`, so past chats show them.
 - **UI.** `dm-thinking` is the mocks' tool-step list above each answer, always visible. Its first row,
   "Thinking", expands to the streamed summary, opens by default while thinking streams, and collapses
   automatically when the answer starts. It stays expandable in history. Tool-step rows follow in order
@@ -499,13 +497,13 @@ Each milestone ends with something runnable.
 
 **M4 — Chat and history** (runnable: cited chat over the API)
 
-27. Chat create, `chat-sessions` projection, list endpoint.
-28. History endpoint, send route, conversation-sse stream.
-29. `search_docs` (with MMR) and `list_documents` tools.
-30. `read_section` and `get_summary` tools.
-31. `packages/llm-anthropic`: Loom `llm` interface on `@anthropic-ai/sdk` with summarized thinking, preserved thinking blocks and refusal handling. *(Split: the non-streaming half is done in M3 part 2; streaming, thinking and refusals stay in M4.)*
-32. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata.
-33. Auto titles, rename, delete, scope change, stop.
+27. Chat create, `chat_sessions` and `chat-activity`, list endpoint. (M4, Tasks 148, 149)
+28. History endpoint, send route, SSE stream. (M4, Tasks 151, 152, 152c)
+29. `search_docs` (with MMR) and `list_documents` tools. (M4, Phase C tools)
+30. `read_section` and `get_summary` tools. (M4, Phase C tools)
+31. `packages/llm-anthropic`: Loom `llm` interface on `fetch` with streaming, summarized reasoning (ADR 0133) and refusal handling. *(Split: the non-streaming half is done in M3 part 2; the rest is M4, Phase A and the M4 amendment, Tasks 158 to 163.)*
+32. `doc-assistant` agent: system prompt, prompt caching, citation checking and metadata. (M4, Phase C and Task 150)
+33. Auto titles, rename, delete, scope change, stop. (M4, Tasks 153, 154)
 
 **M5 — Erasure**
 
@@ -542,7 +540,13 @@ Each milestone ends with something runnable.
 |---|---|
 | `lu-chat` may lack an inline-citation hook | PR 35 spike; fallback is a custom renderer over `ChatFeed` |
 | Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out the private `chhetrisushil/loom` at a pinned `LOOM_REF` using a read-only `LOOM_TOKEN` secret (as loom-ui does). Publishing `@loom/*` is tracked as platform work. |
-| conversation-sse runs its own HTTP server (no mountable handler) | From M4, the app router proxies `/api/chats/:id/stream` to it on an internal `127.0.0.1` port, keeping one origin for the session cookie |
+| conversation-sse runs its own HTTP server (no mountable handler) | Retired: DocMind serves its own chat SSE; only `frame` and `SseSink` come from the plugin |
+| pgvector below 0.8.0 has no iterative index scans | `verify` fails the boot as a `StartupConfigError` |
+| One process holds the stop registry, the stream partials and the hub (§5.2); a crash mid-turn re-runs the turn | The stream sends `reset`; one server per database |
+| Thinking is not carried across turns | History is text only, which the API accepts |
+| A lost `DOCMIND_CHAT_ENVELOPE_KEY` makes queued messages unreadable | Configure the previous key until they are consumed |
+| Loom's Anthropic reasoning mapping and DocMind's FakeAnthropic rest on recorded wire shapes, not on a live API (ADR 0133); the opt-in real-API suite is the check | Run it before relying on continuation in production |
+| Event log growth: Loom re-sends every earlier signature in each model frame's `STEP_STARTED.input.messages` (about 36 part copies for a loop of 8 iterations), sealed | Accepted |
 | Loom is CJS-only in the browser | Vite source aliases (AetherOS precedent) |
 | Embedding residue in backups | Bounded backup retention, documented in the runbook |
 | Parsing untrusted files | Sandbox, magic-byte sniffing, size and decompression caps |

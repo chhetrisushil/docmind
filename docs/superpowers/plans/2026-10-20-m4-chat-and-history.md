@@ -15,14 +15,14 @@ This covers spec §9 items 27–33 and the retrieval half of the accepted linked
 
 | Need | Extension point used |
 |---|---|
-| Thinking, preserved thinking blocks, refusals | The app registers the agent's model effect (`modelToolId`). DocMind's effect wraps `createAgentModelEffect` and passes the call's scope (chat, turn, step) to the provider through an `AsyncLocalStorage`. The provider's `observer` hook stores reasoning blocks, routes thinking deltas and records refusals. |
+| Thinking, preserved thinking blocks, refusals | The app registers the agent's model effect (`modelToolId`). DocMind's effect wraps `createAgentModelEffect` and passes the call's scope (chat, turn, step) to the provider through an `AsyncLocalStorage`. The provider's `observer` hook stores reasoning blocks, routes thinking deltas and records refusals. | *(Superseded by the M4 amendment.)*
 | Stop | `ConversationConfig.bargeIn` is a function. DocMind's `stoppableBargeIn` wraps `inboxBargeIn` and adds an in-process stop signal fired by `POST /api/chats/:id/stop`. |
 | Citations, thinking and tool steps in history | A sealed side table `chat_turn_items`, keyed by chat and the turn key, written by the model effect and the tools, merged into history reads. |
-| `thinking` / `tool` / `answer` stream kinds | DocMind's own SSE route, built from Loom's `followConversation`, `ConversationHub` and the plugin's `frame` helper, plus a DocMind `ChatBus` for thinking and tool events. There is no internal proxy. |
+| `thinking` / `tool` / `answer` stream kinds | DocMind's own SSE route, built from Loom's `followConversation`, `ConversationHub` and the plugin's `frame` helper, plus a DocMind `ChatBus` for thinking and tool events. There is no internal proxy. | *(Superseded by the M4 amendment.)*
 | Session list | A relational `chat_sessions` table (titles, scope, soft delete) joined with a `chat-activity` folded read model (message count, last activity) on `@loom/plugin-read-model`, the same plugin the ingest status uses. |
 | Auto titles | A one-step durable flow, `chat-title`, started once per chat by the send route, titled from the first question. |
 
-**Tech Stack:** everything through M3 part 2, plus `@loom/conversation`, `@loom/agent`, `@loom/knowledge` (`checkCitations`) and `@loom/plugin-conversation-sse` (only its `frame` helper and `SseSink`). Loom stays pinned at `006dfdaf63319fa61594c42e2d5b2c8b87add2ca`; nothing here needs a Loom change. pgvector ≥ 0.8.0 (iterative index scans); the local cluster has 0.8.0.
+**Tech Stack:** everything through M3 part 2, plus `@loom/conversation`, `@loom/agent`, `@loom/knowledge` (`checkCitations`) and `@loom/plugin-conversation-sse` (only its `frame` helper and `SseSink`). Loom is pinned at `58fb2f5c…` (ADR 0133); nothing here needs a Loom change. pgvector ≥ 0.8.0 (iterative index scans); the local cluster has 0.8.0.
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md`:
 - §3.1 interfaces, §3.2 reuse, §4.2 tables, §4.3 tenancy, §4.4 crypto-shredding;
