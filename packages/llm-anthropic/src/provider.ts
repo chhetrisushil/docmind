@@ -17,7 +17,7 @@ export interface AnthropicOptions {
   baseUrl?: string;
   fetch?: typeof fetch;
   maxResponseBytes?: number;
-  /** Adaptive thinking with summarized display; never sends `temperature`. Default false. */
+  /** Adaptive thinking with summarized display. The provider never sends `temperature` (any model), whatever the request carries. Default false. */
   thinking?: boolean;
   /** Sent as `output_config.effort` only when set. */
   effort?: Effort;

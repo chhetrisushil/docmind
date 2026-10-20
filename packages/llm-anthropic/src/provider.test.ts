@@ -271,6 +271,14 @@ describe("request options and the observer", () => {
     });
     expect(body?.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(body?.output_config).toEqual({ effort: "low" });
+    expect(body?.system).toEqual([
+      { type: "text", text: "sys", cache_control: { type: "ephemeral" } },
+    ]);
+    expect(body?.messages.at(-1)?.content.at(-1)).toMatchObject({
+      type: "tool_result",
+      cache_control: { type: "ephemeral" },
+    });
+    expect(JSON.stringify(body).match(/cache_control/g)).toHaveLength(2);
   });
 
   it("sends the message as Loom built it when the stored blocks do not cover every tool_use id", async () => {
