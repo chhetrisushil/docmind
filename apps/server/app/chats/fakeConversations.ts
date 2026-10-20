@@ -32,7 +32,11 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
   const wake = new Set<() => void>();
   const calls: string[] = [];
   const sent: { id: string; text: string; messageId?: string; editOf?: number }[] = [];
-  const failures: { start: number; send: Error[] } = { start: 0, send: [] };
+  const failures: { start: number; send: Error[]; close: Error[] } = {
+    start: 0,
+    send: [],
+    close: [],
+  };
 
   const gate = (id: string, o?: { principal?: PrincipalChain }) => {
     if (owners.get(id) !== keyOf(o?.principal)) throw new ConversationNotFoundError(id);
@@ -105,6 +109,8 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
       return { messageId: o?.messageId ?? `m-${sent.length}`, inboxSeq: sent.length };
     },
     async close(id: string, o?: { principal?: PrincipalChain }) {
+      const failure = failures.close.shift();
+      if (failure) throw failure;
       gate(id, o);
       closed.add(id);
       calls.push(`close:${id}`);
@@ -206,6 +212,7 @@ export function fakeConversations(opts: { pageCap?: number } = {}) {
     ownerOf: (id: string) => owners.get(id),
     failNextStart: () => void failures.start++,
     failNextSend: (err: Error) => void failures.send.push(err),
+    failNextClose: (err: Error) => void failures.close.push(err),
     /**
      * Appends a user message and its reply as Loom's flow records them. Two counters, as in conversation.ts:
      * `consumed` (every message taken from the inbox, accepted or not) names the decision ids `conv#o<consumed>:...`;
