@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { ChatSessionDto } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, T1, U1, U1B, seedDoc } from "../documents/testHarness";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
@@ -118,6 +118,80 @@ describe.skipIf(!PG_URL)(
         [U1],
       );
       expect(gone.rows[0].n).toBeGreaterThanOrEqual(1);
+    });
+
+    it("logs the class only when the rollback itself fails, and still answers 500", async () => {
+      const log = vi.spyOn(console, "error").mockImplementation(() => {});
+      const real = h.app.connect.bind(h.app) as (...a: unknown[]) => Promise<unknown>;
+      let calls = 0;
+      const connect = vi.spyOn(h.app, "connect").mockImplementation(((...a: unknown[]) => {
+        calls++;
+        return calls === 1 ? real(...a) : Promise.reject(new Error("pool down secret"));
+      }) as never);
+      try {
+        h.fake.failNextStart();
+        const res = await h.req("alice", "POST", "/api/chats", {});
+        expect(res.status).toBe(500);
+        expect(log).toHaveBeenCalledWith("chat create rollback failed", "Error");
+        expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
+      } finally {
+        connect.mockRestore();
+        log.mockRestore();
+      }
+    });
+
+    it("keeps one lower-cased id for ids that differ only in case", async () => {
+      const documentId = await seedDoc(
+        h.owner,
+        h.app,
+        h.fields,
+        ALICE,
+        randomBytes(32).toString("hex"),
+        0,
+      );
+      const res = await h.req("alice", "POST", "/api/chats", {
+        scope: { documentIds: [documentId, documentId.toUpperCase()] },
+      });
+      expect(res.status).toBe(201);
+      expect(ChatSessionDto.parse(await res.json()).scope).toEqual({ documentIds: [documentId] });
+    });
+
+    it("refuses a scope of one owned and one foreign document", async () => {
+      const mine = await seedDoc(
+        h.owner,
+        h.app,
+        h.fields,
+        ALICE,
+        randomBytes(32).toString("hex"),
+        0,
+      );
+      const theirs = await seedDoc(
+        h.owner,
+        h.app,
+        h.fields,
+        { tenantId: T1, userId: U1B },
+        randomBytes(32).toString("hex"),
+        0,
+      );
+      const res = await h.req("alice", "POST", "/api/chats", {
+        scope: { documentIds: [mine, theirs] },
+      });
+      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+        400,
+        "invalid_scope",
+      ]);
+    });
+
+    it("lists and reads chats without an API key", async () => {
+      const id = await seedChat(hNoKey, ALICE, { title: "Offline" });
+      const one = await hNoKey.req("alice", "GET", `/api/chats/${id}`);
+      expect(one.status).toBe(200);
+      expect(ChatSessionDto.parse(await one.json()).id).toBe(id);
+      const list = await hNoKey.req("alice", "GET", "/api/chats");
+      expect(list.status).toBe(200);
+      expect(((await list.json()) as { items: { id: string }[] }).items.map((c) => c.id)).toContain(
+        id,
+      );
     });
 
     it("requires a session", async () => {

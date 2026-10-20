@@ -136,7 +136,12 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
         // A chat nobody can talk to must not stay in the list.
         await withTenant(deps.pool, identity.tenantId, (tx) =>
           softDeleteChat(tx, identity.userId, id),
-        ).catch(() => {});
+        ).catch((rollbackErr) =>
+          console.error(
+            "chat create rollback failed",
+            rollbackErr instanceof Error ? rollbackErr.constructor.name : typeof rollbackErr,
+          ),
+        );
         throw err;
       }
       json(
