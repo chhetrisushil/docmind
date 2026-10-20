@@ -4,6 +4,7 @@ import type { Effect } from "@loom/effect-runtime";
 import type { TimerStore } from "@loom/event-runtime";
 import type { RegisteredFlow } from "@loom/workflow-runtime";
 import { isChatExecution } from "./chats/activity";
+import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import {
   agentModules,
@@ -38,6 +39,8 @@ export interface ChatDeps {
 export interface FlowDeps {
   ingest?: IngestDeps;
   chat?: ChatDeps;
+  /** The auto-title step's dependencies; without them the flow's step fails at its first use (like an unregistered ingest step). */
+  chatTitle?: ChatTitleDeps;
   /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
   onEvent?: (event: EventEnvelope) => void;
 }
@@ -83,6 +86,7 @@ export function buildApp(
           for (const [id, effect] of Object.entries(deps.chat.effects))
             effects.register(id, effect);
         }
+        if (deps.chatTitle) effects.register("chat-title", chatTitleEffect(deps.chatTitle));
       },
     },
     security: {

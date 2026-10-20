@@ -7,6 +7,7 @@ import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadMaxConnections } from "./server";
@@ -46,6 +47,7 @@ export async function setupServer() {
     console.warn("summaries and image reading are off: ANTHROPIC_API_KEY is not set");
   const chatSettings = loadChatSettings(); // before any connection opens: a bad variable must not reach recovery
   const chatLlm = createChatLlm(process.env, chatSettings);
+  const titleLlm = createTitleLlm(process.env, chatSettings);
   if (!chatLlm) console.warn("chat is off: ANTHROPIC_API_KEY is not set");
 
   const pool = await createAppPool(databaseUrl);
@@ -112,7 +114,12 @@ export async function setupServer() {
     publicOrigin,
     maxConnections,
     ingest,
-    chat: { settings: chatSettings, ...(chatLlm && { llm: chatLlm }), timers: durable.timers },
+    chat: {
+      settings: chatSettings,
+      ...(chatLlm && { llm: chatLlm }),
+      ...(titleLlm && { titleLlm }),
+      timers: durable.timers,
+    },
     // The status writer shares the Loom pool; the reader is the app pool (every read inside withTenant).
     status: {
       writer: pgStatusWriter(durable.pool),
