@@ -498,6 +498,7 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
     for (const rawBody of [
       message([{ type: "tool_use", name: "x", input: {} }]),
       message([{ type: "thinking", thinking: "t" }]),
+      message([{ type: "thinking", thinking: "t", signature: "" }]),
       message([{ type: "redacted_thinking" }]),
       message([{ type: "text", text: 5 }]),
       message([], { usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: -3 } }),
@@ -505,5 +506,28 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
       reply(rawBody);
       await expect(provider().complete(HI)).rejects.toBeInstanceOf(LlmRequestError);
     }
+  });
+
+  it("stores a tool_use block without input with input {} (matching the tool call)", async () => {
+    reply(
+      message(
+        [
+          { type: "thinking", thinking: "t", signature: "S" },
+          { type: "tool_use", id: "toolu_1", name: "list_documents" },
+        ],
+        {
+          stop_reason: "tool_use",
+        },
+      ),
+    );
+    const rec = recordingObserver();
+    const res = await provider({ thinking: true, observer: () => rec.observer }).complete(HI);
+    expect(res.toolCalls).toEqual([{ id: "toolu_1", name: "list_documents", input: {} }]);
+    expect(rec.blocks[0]?.blocks[1]).toEqual({
+      type: "tool_use",
+      id: "toolu_1",
+      name: "list_documents",
+      input: {},
+    });
   });
 });

@@ -4,7 +4,9 @@ import {
   type StopReason,
   type UsageFields,
   mapStopReason,
+  obj,
   refusalDetailsOf,
+  toContentBlock,
   usageDetail,
   usageFieldsOf,
 } from "./mapping";
@@ -29,11 +31,6 @@ export interface StreamEnd {
   usage?: { inputTokens: number; outputTokens: number };
   detail: LlmUsageDetail;
 }
-
-const obj = (v: unknown): Record<string, unknown> | undefined =>
-  typeof v === "object" && v !== null && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : undefined;
 
 /** `error` event types that blame the request: permanent. Everything else is transient. */
 const PERMANENT = new Set([
@@ -61,6 +58,12 @@ function parseInput(json: string): unknown {
 export class StreamState {
   readonly #open = new Map<number, Open>();
   readonly #blocks = new Map<number, ReasoningBlock>();
+
+  /** Stores a finished block after the shared validation (same rules as complete()). */
+  #keep(index: number, raw: Record<string, unknown>): void {
+    const block = toContentBlock(raw);
+    if (block) this.#blocks.set(index, block);
+  }
   readonly #seen = new Set<number>();
   #sawThinking = false;
   #usage: UsageFields = {};
@@ -159,20 +162,19 @@ export class StreamState {
         const open = this.#open.get(index);
         this.#open.delete(index);
         if (open?.kind === "text" && open.text !== "") {
-          this.#blocks.set(index, { type: "text", text: open.text });
+          this.#keep(index, { type: "text", text: open.text });
         }
         if (open?.kind === "tool") {
           const input = parseInput(open.json);
-          this.#blocks.set(index, { type: "tool_use", id: open.id, name: open.name, input });
+          this.#keep(index, { type: "tool_use", id: open.id, name: open.name, input });
         }
         if (open?.kind === "redacted") {
           this.#sawThinking = true;
-          this.#blocks.set(index, { type: "redacted_thinking", data: open.data });
+          this.#keep(index, { type: "redacted_thinking", data: open.data });
         }
         if (open?.kind === "thinking") {
-          if (open.signature === "") throw new LlmRequestError();
           this.#sawThinking = true;
-          this.#blocks.set(index, {
+          this.#keep(index, {
             type: "thinking",
             thinking: open.thinking,
             signature: open.signature,
