@@ -189,13 +189,16 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
           },
         },
       });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
         const chatId = await seedChat(throwing, ALICE);
         const res = await throwing.req("alice", "POST", `/api/chats/${chatId}/messages`, {
           text: "hi",
         });
         expect(res.status).toBe(202);
+        expect(errors.mock.calls).toEqual([["chat title start failed", "RangeError"]]);
       } finally {
+        errors.mockRestore();
         await throwing.close();
       }
     });
