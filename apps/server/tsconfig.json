@@ -10,6 +10,7 @@
     "**/recoveryHarness.ts",
     "**/pgFixture.ts",
     "**/ingestStack.ts",
+    "**/testStack.ts",
     "dist"
   ]
 }

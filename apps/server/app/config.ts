@@ -1,5 +1,8 @@
 import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loom/app";
 import type { EventEnvelope } from "@loom/core";
+import type { Effect } from "@loom/effect-runtime";
+import type { TimerStore } from "@loom/event-runtime";
+import type { RegisteredFlow } from "@loom/workflow-runtime";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import {
   agentModules,
@@ -21,8 +24,19 @@ import { isIngestExecution } from "./status/model";
  * `deps` are the outside-world dependencies of the flows, registered as effects (flows are static
  * modules, so this is the per-app injection point). A flow whose deps are missing fails at its step.
  */
+/** What the chat needs registered on the Loom app (built by `prepareChat`, chats/wiring.ts). */
+export interface ChatDeps {
+  /** Both chat flows (strict and general knowledge): a recovered conversation must find its flow at boot. */
+  flows: readonly RegisteredFlow[];
+  /** `chat-model` (only with an API key) and the five tools, by effect id. */
+  effects: Readonly<Record<string, Effect>>;
+  /** The durable timers the inbox needs to wake a parked conversation. */
+  timers: TimerStore;
+}
+
 export interface FlowDeps {
   ingest?: IngestDeps;
+  chat?: ChatDeps;
   /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
   onEvent?: (event: EventEnvelope) => void;
 }
@@ -32,6 +46,14 @@ export function buildApp(
   crypto?: PrincipalCryptoOptions,
   deps: FlowDeps = {},
 ) {
+  // A conversation parks on the inbox and rotates with continue-as-new; the inbox needs durable timers.
+  const chat = deps.chat
+    ? {
+        flows: [...deps.chat.flows],
+        timers: { store: deps.chat.timers },
+        kernel: { features: { inbox: true, continueAsNew: true } },
+      }
+    : {};
   return defineConfig({
     storage,
     flowModules,
@@ -39,6 +61,7 @@ export function buildApp(
     toolModules,
     skillModules,
     projectionModules,
+    ...chat,
     observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
     // The status model folds each ingest execution's log from its first event, so compaction must never
     // remove an ingest execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
@@ -50,9 +73,14 @@ export function buildApp(
     },
     execution: {
       registerEffects: (effects) => {
-        if (!deps.ingest) return;
-        for (const [id, effect] of Object.entries(ingestEffects(deps.ingest))) {
-          effects.register(id, effect);
+        if (deps.ingest) {
+          for (const [id, effect] of Object.entries(ingestEffects(deps.ingest))) {
+            effects.register(id, effect);
+          }
+        }
+        if (deps.chat) {
+          for (const [id, effect] of Object.entries(deps.chat.effects))
+            effects.register(id, effect);
         }
       },
     },

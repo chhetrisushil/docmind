@@ -44,3 +44,10 @@ describe.skipIf(!PG_URL)("buildApp on durable storage (needs DOCMIND_TEST_PG_URL
     await durable.close();
   });
 });
+
+it("composes without chat exactly as before: no chat flow, no chat effect", async () => {
+  const app = buildApp({ kind: "memory" });
+  expect(app.runtime.getFlowIds()).not.toContain("doc-chat");
+  expect(app.effectRuntime.kindOf("search_docs")).toBeUndefined();
+  await app.close();
+});
