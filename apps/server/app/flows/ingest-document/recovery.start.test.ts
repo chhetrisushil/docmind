@@ -39,7 +39,7 @@ describe("startRecovery", () => {
     } as never);
     await recovery.idle();
     recovery.stop();
-    expect(errors).toHaveBeenCalledWith("ingest recovery failed", "StoreDownError");
+    expect(errors).toHaveBeenCalledWith("recovery failed", "StoreDownError");
     expect(JSON.stringify(errors.mock.calls)).not.toMatch(/secret|postgres/);
   });
 

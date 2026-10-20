@@ -49,7 +49,8 @@ export interface CloseDeps {
  * them safe:
  *  1. let fired flow starts settle (bounded: a start stuck on a dead database must not keep the stores open);
  *  2. interrupt the ingest steps and the chat's model calls (their steps stay un-completed in the log,
- *     like ingest's, and recovery re-runs them next boot), then kill in-flight parses, before any pool ends;
+ *     like ingest's, and recovery re-runs them next boot; the chat flow declares no turn deadline, so
+ *     Loom cannot time the pending model step out and fail it while the close runs), then kill in-flight parses, before any pool ends;
  *  3. release this node's execution leases, so the next boot recovers what was interrupted at once
  *     instead of waiting out the lease (after the steps are interrupted, before the stores close);
  *  4. stop feeding the status model (a step still running must not fold onto stores about to close), close it;
