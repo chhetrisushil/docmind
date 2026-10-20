@@ -143,7 +143,7 @@ describe.skipIf(!PG_URL)(
           gate = await claude().streamHold();
           const del = await st.chatReq(ada.cookie, "DELETE", `/api/chats/${chat.id}`);
           expect(del.status).toBe(204);
-          await expect(collectUntil(stream, () => false)).rejects.toThrow(); // the stream ended
+          await expect(collectUntil(stream, () => false)).rejects.toThrow("stream ended"); // the server ended it
           await gate.closed;
           expect((await st.chatReq(ada.cookie, "GET", `/api/chats/${chat.id}`)).status).toBe(404);
         } finally {

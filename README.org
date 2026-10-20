@@ -215,7 +215,7 @@ Backup and erasure runbooks are listed in the spec as M7 work and do not exist y
 - A chat left on an old flow version is logged and left at recovery; a flow version bump needs the previous version registered beside the new one.
 - A title is skipped (and not retried) if the model is down or the first question is not recorded in time.
 - Search filtered by documents is exact; unfiltered search is approximate (HNSW with iterative scans). Chunks are searchable once embedded, whatever the document's status.
-- Erasure (M5) must also cover =chat_sessions=, =chat_turn_items=, =chat_reasoning_texts= and the =chat-activity= read-model rows.
+- Erasure (M5) must also cover =chat_sessions=, =chat_turn_items=, =chat_reasoning_texts= and the =chat-activity= read-model rows, plus: the =ingest-status= and =chat-activity= read-model rows of chat and chat-title executions (their key and scope may be NULL, so purge by execution id prefix =u_<user>=), the Loom timers rows, the chat-title executions, and the conversation streams (destroying the user's key covers their content).
 - Documents that reached =ready= before flow 3.0.0 never get stats, summary, entities or links.
   Re-upload them; a re-ingest tool is planned for M7. There is no production data yet.
 - Parse retries use =LLM_RETRY= for every format (a crash is retried as patiently as a Claude outage).
