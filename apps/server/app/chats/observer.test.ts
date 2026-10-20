@@ -103,6 +103,54 @@ describe("chatObserver", () => {
     expect(events.at(-1)).toEqual({ kind: "reset", turnKey: 3 });
   });
 
+  it("a refusal removes the thinking row an earlier attempt of the step left, not other frames'", async () => {
+    await items.put(REF, 3, "conv#o3#turn:0", { kind: "thinking", body: { text: "stale" } });
+    await items.put(REF, 3, "conv#o3#turn:1", { kind: "thinking", body: { text: "other frame" } });
+    const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
+    await o.onRefusal({ category: "policy" });
+    expect(items.puts.map((p) => `${p.stepKey}:${p.item.kind}`)).toEqual([
+      "conv#o3#turn:1:thinking",
+      "conv#o3#turn:0:outcome",
+    ]);
+  });
+
+  it("keeps two concurrent observers of different chats apart", async () => {
+    const C2 = "c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4";
+    const U2 = "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2";
+    const refs: { userId: string; chatId: string }[] = [];
+    const puts: { chatId: string; kind: string }[] = [];
+    const bus = new ChatBus();
+    const got: Record<string, string[]> = { [C]: [], [C2]: [] };
+    bus.subscribe(C, (e) => e.kind === "thinking" && got[C]?.push(e.text));
+    bus.subscribe(C2, (e) => e.kind === "thinking" && got[C2]?.push(e.text));
+    const obs = chatObserver({
+      items: {
+        put: async (r, _t, _s, i) => {
+          refs.push(r);
+          await Promise.resolve();
+          puts.push({ chatId: r.chatId, kind: i.kind });
+        },
+        remove: async () => {},
+      },
+      blocks: new FakeBlocks(),
+      bus,
+    });
+    const s2: ChatCallScope = { ...SCOPE, userId: U2, chatId: C2 };
+    const a = (await chatScope.run(SCOPE, async () => obs())) as CallObserver;
+    const b = (await chatScope.run(s2, async () => obs())) as CallObserver;
+    a.onThinking("a1");
+    b.onThinking("b1");
+    await Promise.all([
+      a.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]),
+      b.onBlocks([], [{ type: "thinking", thinking: "t", signature: "s" }]),
+    ]);
+    expect(got).toEqual({ [C]: ["a1"], [C2]: ["b1"] });
+    expect(refs.map((r) => `${r.userId}/${r.chatId}`).sort()).toEqual(
+      [`${U}/${C}`, `${U2}/${C2}`].sort(),
+    );
+    expect(puts.map((p) => p.chatId).sort()).toEqual([C, C2].sort());
+  });
+
   it("caps the stored thinking", async () => {
     const o = (await chatScope.run(SCOPE, async () => observe())) as CallObserver;
     o.onThinking("x".repeat(40_000));

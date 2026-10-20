@@ -54,6 +54,8 @@ describe("ChatBus", () => {
     bus.publish("a", { kind: "reset", turnKey: 2 });
     expect(bus.partial("a")).toBeNull();
     bus.publish("a", { kind: "thinking", turnKey: 2, text: "new" });
+    bus.publish("a", { kind: "reset", turnKey: 1 }); // another turn's reset changes nothing either
+    expect(bus.partial("a")).toEqual({ turnKey: 2, thinking: "new" });
     bus.end("a", 1); // an earlier turn's end must not clear this one
     expect(bus.partial("a")).toEqual({ turnKey: 2, thinking: "new" });
     bus.end("a", 2);

@@ -4,7 +4,7 @@ import { type ChatCallScope, chatScope } from "./scope";
 import type { PgReasoningBlocks, PgTurnItems } from "./turnItems";
 
 export interface ChatObserverDeps {
-  items: Pick<PgTurnItems, "put">;
+  items: Pick<PgTurnItems, "put" | "remove">;
   blocks: Pick<PgReasoningBlocks, "put" | "get">;
   bus: Pick<ChatBus, "publish">;
 }
@@ -55,6 +55,7 @@ export function chatObserver(deps: ChatObserverDeps): () => CallObserver | undef
         // Thinking streamed before the refusal was known: the bus may have shown it, so drop it there
         // and store none (Task 130 carry).
         refused = true;
+        await deps.items.remove(ref, scope.turnKey, scope.stepKey, "thinking"); // an earlier attempt's row
         deps.bus.publish(scope.chatId, { kind: "reset", turnKey: scope.turnKey });
         await deps.items.put(ref, scope.turnKey, scope.stepKey, {
           kind: "outcome",

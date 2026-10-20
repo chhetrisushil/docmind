@@ -132,6 +132,26 @@ export class PgTurnItems {
     );
   }
 
+  /** Deletes the item of (turnKey, kind, stepKey), if any: a retried or refused attempt's stale row. Owner-scoped. */
+  async remove(
+    ref: ChatRef,
+    turnKey: number,
+    stepKey: string,
+    kind: TurnItem["kind"],
+  ): Promise<void> {
+    if (!Number.isInteger(turnKey) || turnKey < 0 || turnKey > MAX_TURN_KEY)
+      throw new RangeError("turn item: turn key must be a non-negative integer");
+    if (stepKey.length < 1 || stepKey.length > MAX_STEP_KEY)
+      throw new RangeError("turn item: step key has a bad length");
+    await withTenant(this.pool, ref.tenantId, (tx) =>
+      tx.query(
+        `DELETE FROM chat_turn_items
+          WHERE chat_id = $1 AND user_id = $2 AND ord = $3 AND kind = $4 AND step_key = $5`,
+        [ref.chatId, ref.userId, turnKey, kind, stepKey],
+      ),
+    );
+  }
+
   /** The items of the listed turn keys, each turn's in the order first written. Turns without items are absent. */
   async forTurns(ref: ChatRef, turnKeys: readonly number[]): Promise<Map<number, TurnItem[]>> {
     const out = new Map<number, TurnItem[]>();

@@ -19,7 +19,7 @@ export const modelCtx = (over: Partial<EffectContext> = {}): EffectContext => ({
 });
 
 /** Records every `put`; an item put twice under one key is overwritten, like the table's ON CONFLICT. */
-export class FakeItems implements Pick<PgTurnItems, "put" | "forTurns"> {
+export class FakeItems implements Pick<PgTurnItems, "put" | "remove" | "forTurns"> {
   readonly puts: { turnKey: number; stepKey: string; item: TurnItem }[] = [];
   async put(_ref: ChatRef, turnKey: number, stepKey: string, item: TurnItem): Promise<void> {
     const at = this.puts.findIndex(
@@ -27,6 +27,17 @@ export class FakeItems implements Pick<PgTurnItems, "put" | "forTurns"> {
     );
     if (at >= 0) this.puts[at] = { turnKey, stepKey, item };
     else this.puts.push({ turnKey, stepKey, item });
+  }
+  async remove(
+    _ref: ChatRef,
+    turnKey: number,
+    stepKey: string,
+    kind: TurnItem["kind"],
+  ): Promise<void> {
+    const at = this.puts.findIndex(
+      (p) => p.turnKey === turnKey && p.stepKey === stepKey && p.item.kind === kind,
+    );
+    if (at >= 0) this.puts.splice(at, 1);
   }
   async forTurns(_ref: ChatRef, turnKeys: readonly number[]): Promise<Map<number, TurnItem[]>> {
     const out = new Map<number, TurnItem[]>();
