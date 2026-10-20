@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { ReasoningBlock } from "@docmind/llm-anthropic";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { T1, T2, U1, U1B, U2 } from "../documents/testHarness";
 import { type PgFixture, startPgFixture } from "../flows/ingest-document/pgFixture";
 import { insertChat } from "./sessions";
-import { type ChatRef, PgReasoningBlocks, chatBlocksBind } from "./turnItems";
+import { type ChatRef, PgReasoningBlocks, type ReasoningBlock, chatBlocksBind } from "./turnItems";
 
 describe.skipIf(!PG_URL)("chat reasoning blocks (needs DOCMIND_TEST_PG_URL)", () => {
   let fx: PgFixture;

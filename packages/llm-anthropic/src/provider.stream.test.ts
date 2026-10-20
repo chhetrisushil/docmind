@@ -177,108 +177,6 @@ describe("stream(): HTTP status, abort and early stop", () => {
   });
 });
 
-describe("stream(): thinking, reasoning blocks and usage detail", () => {
-  it("sends thinking text to onThinking, never into delta, and hands the full blocks to onBlocks with no ids when there is no tool call", async () => {
-    const rec = recordingObserver();
-    const t = sseFetch([
-      f.start(),
-      ...f.thinking(0, ["Let me ", "think"], "SIG=="),
-      ...f.text(1, "answer"),
-      f.end("end_turn"),
-      f.stop(),
-    ]);
-    const chunks = await collect(
-      provider(t.fetch, { thinking: true, observer: () => rec.observer }).stream(REQ),
-    );
-    expect(chunks.map((c) => c.delta)).toEqual(["answer", ""]);
-    expect(rec.thinking).toEqual(["Let me ", "think"]);
-    expect(rec.blocks).toEqual([
-      {
-        ids: [],
-        blocks: [
-          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
-          { type: "text", text: "answer" },
-        ],
-      },
-    ]);
-    expect(allReleased(t)).toBe(true);
-  });
-
-  it("does not call onBlocks for a response without thinking", async () => {
-    const rec = recordingObserver();
-    const t = sseFetch([f.start(), ...f.text(0, "plain"), f.end("end_turn"), f.stop()]);
-    await collect(provider(t.fetch, { thinking: true, observer: () => rec.observer }).stream(REQ));
-    expect(rec.blocks).toEqual([]);
-  });
-
-  it("hands the full ordered blocks, signature included, to onBlocks with the tool_use ids before the terminal chunk", async () => {
-    const rec = recordingObserver();
-    const t = sseFetch([
-      f.start({
-        input_tokens: 5,
-        output_tokens: 1,
-        cache_read_input_tokens: 100,
-        cache_creation_input_tokens: 20,
-      }),
-      ...f.thinking(0, ["Let me ", "think"], "SIG=="),
-      f.open(1, { type: "redacted_thinking", data: "ENC" }),
-      f.close(1),
-      ...f.tool(2, "toolu_1", "search_docs", '{"query":"x"}'),
-      ...f.tool(3, "toolu_2", "related", "{}"),
-      f.end("tool_use"),
-      f.stop(),
-    ]);
-    let seen = -1; // how many observer calls had happened when the terminal chunk arrived
-    for await (const c of provider(t.fetch, {
-      thinking: true,
-      observer: () => rec.observer,
-    }).stream(REQ)) {
-      if (c.done) seen = rec.log.length;
-    }
-    expect(rec.blocks).toEqual([
-      {
-        ids: ["toolu_1", "toolu_2"],
-        blocks: [
-          { type: "thinking", thinking: "Let me think", signature: "SIG==" },
-          { type: "redacted_thinking", data: "ENC" },
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
-          { type: "tool_use", id: "toolu_2", name: "related", input: {} },
-        ],
-      },
-    ]);
-    expect(rec.usage).toEqual([
-      { inputTokens: 5, outputTokens: 7, cacheReadTokens: 100, cacheWriteTokens: 20 },
-    ]);
-    expect(rec.log).toEqual(["thinking", "thinking", "usage", "blocks"]);
-    expect(seen).toBe(4);
-  });
-
-  it("keeps an interleaved thinking, tool_use, thinking, tool_use response in the order the API returned it", async () => {
-    const rec = recordingObserver();
-    const t = sseFetch([
-      f.start(),
-      ...f.thinking(0, ["first"], "S1"),
-      ...f.tool(1, "toolu_1", "search_docs", '{"query":"x"}'),
-      ...f.thinking(2, ["second"], "S2"),
-      ...f.tool(3, "toolu_2", "related", "{}"),
-      f.end("tool_use"),
-      f.stop(),
-    ]);
-    await collect(provider(t.fetch, { thinking: true, observer: () => rec.observer }).stream(REQ));
-    expect(rec.blocks).toEqual([
-      {
-        ids: ["toolu_1", "toolu_2"],
-        blocks: [
-          { type: "thinking", thinking: "first", signature: "S1" },
-          { type: "tool_use", id: "toolu_1", name: "search_docs", input: { query: "x" } },
-          { type: "thinking", thinking: "second", signature: "S2" },
-          { type: "tool_use", id: "toolu_2", name: "related", input: {} },
-        ],
-      },
-    ]);
-  });
-});
-
 describe("stream(): refusal", () => {
   const REFUSED = (extra: string[] = []) => [
     f.start(),
@@ -311,7 +209,8 @@ describe("stream(): refusal", () => {
       ),
     );
     expect(rec.refusals).toEqual([{ category: "cyber", explanation: "why" }]);
-    expect(rec.blocks).toEqual([]);
+    // thinking streamed before the refusal was known stays streamed; the terminal chunk carries none of it
+    expect(chunks.some((c) => c.reasoningDelta === "t")).toBe(true);
     expect(chunks.filter((c) => c.delta !== "").map((c) => c.delta)).toEqual(["I can't help"]);
     expect(chunks.at(-1)).toEqual({
       delta: "",
@@ -440,7 +339,6 @@ describe("stream(): malformed block structure", () => {
   });
 
   it("emits blocks and tool calls in index order even when blocks stop out of order", async () => {
-    const rec = recordingObserver();
     const t = sseFetch([
       f.start(),
       f.open(0, { type: "thinking", thinking: "" }),
@@ -453,19 +351,12 @@ describe("stream(): malformed block structure", () => {
       f.end("tool_use"),
       f.stop(),
     ]);
-    const chunks = await collect(
-      provider(t.fetch, { thinking: true, observer: () => rec.observer }).stream(REQ),
-    );
-    expect(rec.blocks).toEqual([
-      {
-        ids: ["toolu_1"],
-        blocks: [
-          { type: "thinking", thinking: "", signature: "S" },
-          { type: "redacted_thinking", data: "ENC" },
-          { type: "tool_use", id: "toolu_1", name: "a", input: {} },
-        ],
-      },
+    const chunks = await collect(provider(t.fetch, { thinking: true }).stream(REQ));
+    expect(chunks.at(-1)?.reasoning).toEqual([
+      { kind: "text", text: "", signature: "S", provider: "anthropic" },
+      { kind: "redacted", signature: "ENC", provider: "anthropic" },
     ]);
+    expect(chunks.at(-1)?.layout).toBeUndefined();
     expect(chunks.at(-1)?.toolCalls).toEqual([{ id: "toolu_1", name: "a", input: {} }]);
   });
 });

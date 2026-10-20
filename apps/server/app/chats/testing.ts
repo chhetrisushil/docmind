@@ -1,7 +1,12 @@
-import type { ReasoningBlock } from "@docmind/llm-anthropic";
 import type { EffectContext } from "@loom/effect-runtime";
 import { chatConversationId } from "./ids";
-import type { ChatRef, PgReasoningBlocks, PgTurnItems, TurnItem } from "./turnItems";
+import type {
+  ChatRef,
+  PgReasoningBlocks,
+  PgTurnItems,
+  ReasoningBlock,
+  TurnItem,
+} from "./turnItems";
 
 export const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";

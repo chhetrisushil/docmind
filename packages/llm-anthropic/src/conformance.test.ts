@@ -70,13 +70,27 @@ runLlmProviderConformance(
   { toolRequest: TOOL_REQUEST },
 );
 
+// Loom's reasoning parity rule (ADR 0133 D2) runs inside the thinking configuration above only if that
+// configuration really reports reasoning: prove the run is not vacuous.
+describe("the thinking configuration reports reasoning, so the parity rule has something to check", () => {
+  it("returns the summary with its signature and no layout", async () => {
+    const done = await make({ thinking: true }).complete({
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(done.reasoning).toEqual([
+      { kind: "summary", text: "Considering.", signature: "fake-signature", provider: "anthropic" },
+    ]);
+    expect(done.layout).toBeUndefined();
+  });
+});
+
 async function chunksOf(it: AsyncIterable<LlmStreamChunk>): Promise<LlmStreamChunk[]> {
   const out: LlmStreamChunk[] = [];
   for await (const c of it) out.push(c);
   return out;
 }
 
-describe("complete() and stream() agree on refusals, usage detail and reasoning blocks", () => {
+describe("complete() and stream() agree on refusals, usage detail, reasoning and layout", () => {
   let own: FakeAnthropic;
   beforeAll(async () => {
     own = await startFakeAnthropic();
@@ -118,7 +132,7 @@ describe("complete() and stream() agree on refusals, usage detail and reasoning 
     expect(b.refusals).toEqual(a.refusals);
   });
 
-  it("reports the same usage detail, thinking text and reasoning blocks from both", async () => {
+  it("reports the same usage detail, reasoning and layout from both", async () => {
     own.reply(() => ({
       stream: {
         steps: [
@@ -140,21 +154,13 @@ describe("complete() and stream() agree on refusals, usage detail and reasoning 
     );
     expect(streamed).toEqual(completed);
     expect(completed.toolCalls).toEqual([CALL]);
+    expect(completed.reasoning).toEqual([
+      { kind: "summary", text: "hm", signature: "S1", provider: "anthropic" },
+    ]);
+    expect(completed.layout).toBeUndefined(); // thinking, text, tool_use is the canonical order
     expect(a.usage).toEqual([
       { inputTokens: 3, outputTokens: 1, cacheReadTokens: 40, cacheWriteTokens: 8 },
     ]);
     expect(b.usage).toEqual(a.usage);
-    expect(a.blocks).toEqual([
-      {
-        ids: ["toolu_conf"],
-        blocks: [
-          { type: "thinking", thinking: "hm", signature: "S1" },
-          { type: "text", text: "t" },
-          { type: "tool_use", id: CALL.id, name: CALL.name, input: CALL.input },
-        ],
-      },
-    ]);
-    expect(b.blocks).toEqual(a.blocks);
-    expect(b.thinking.join("")).toBe(a.thinking.join(""));
   });
 });

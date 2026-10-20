@@ -1,5 +1,11 @@
 import { LlmRequestError } from "./errors";
-import type { LlmUsageDetail, ReasoningBlock, RefusalDetails } from "./observer";
+import type { LlmUsageDetail, RefusalDetails } from "./observer";
+
+/** A validated content block of a response (text, tool_use, thinking or redacted_thinking), as the API sent it. */
+export interface ContentBlock {
+  type: string;
+  [k: string]: unknown;
+}
 
 export const isCount = (n: unknown): n is number =>
   typeof n === "number" && Number.isInteger(n) && n >= 0;
@@ -67,7 +73,7 @@ export const obj = (v: unknown): Record<string, unknown> | undefined =>
  * that is not kept (an empty text block, or an unknown type such as a server tool block).
  * Throws LlmRequestError (no values) for a malformed block.
  */
-export function toContentBlock(b: Record<string, unknown>): ReasoningBlock | undefined {
+export function toContentBlock(b: Record<string, unknown>): ContentBlock | undefined {
   switch (b.type) {
     case "text":
       if (b.text !== undefined && typeof b.text !== "string") throw new LlmRequestError();

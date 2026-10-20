@@ -120,4 +120,23 @@ describe("chatObserver with the real provider and FakeAnthropic", () => {
       { kind: "outcome", body: { kind: "refusal", details: { category: "policy" } } },
     ]);
   });
+
+  it("a thinking answer stores no item: reasoning is Loom's, not the observer's", async () => {
+    fake.reply(() => ({
+      stream: {
+        steps: [
+          { thinking: "Weighing it." },
+          { signature: "sig-1" },
+          { text: "Done." },
+          { stop: "end_turn" },
+        ],
+      },
+    }));
+    const chunks = await drain([{ role: "user", content: "q" }]);
+    expect(chunks.map((c) => c.delta).join("")).toBe("Done.");
+    expect(chunks.at(-1)?.reasoning).toEqual([
+      { kind: "summary", text: "Weighing it.", signature: "sig-1", provider: "anthropic" },
+    ]);
+    expect(items.puts).toEqual([]);
+  });
 });

@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 import { ChatToolStep, Locator } from "@docmind/contracts";
-import type { ReasoningBlock, RefusalDetails } from "@docmind/llm-anthropic";
+import type { RefusalDetails } from "@docmind/llm-anthropic";
 import type { Pool } from "pg";
 import { z } from "zod";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
+
+/**
+ * An opaque vendor content block held by the reasoning-block store. The provider package no longer exports it
+ * (ADR 0133 amendment); the store and this type go in Task 160a.
+ */
+export interface ReasoningBlock {
+  type: string;
+  [k: string]: unknown;
+}
 
 export interface ChatRef {
   tenantId: string;
