@@ -2,9 +2,11 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { AuthService, PasswordAuthenticator } from "@docmind/auth";
 import { MemoryAuthStore, MemoryThrottle } from "@docmind/auth/testing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { authRoutes } from "../auth/routes";
 import { createHttpServer } from "../server";
+import { StartupConfigError } from "../startupError";
+import { parsePublicOrigin, refusalLogger } from "./originGuard";
 import { json } from "./respond";
 
 const ok = (_req: unknown, res: Parameters<typeof json>[0]) => json(res, 200, { ran: true });
@@ -25,7 +27,8 @@ const routes = {
   "GET /t": ok,
   "POST /t/:id": ok,
 };
-const http = createHttpServer(routes);
+const logged: [string, string][] = [];
+const http = createHttpServer(routes, { secure: false, log: (m, p) => logged.push([m, p]) });
 const https = createHttpServer(routes, { secure: true });
 let port = 0;
 let securePort = 0;
@@ -77,24 +80,14 @@ describe("origin guard", () => {
   for (const [method, path] of STATE_CHANGING) {
     for (const site of ["same-site", "cross-site"]) {
       it(`refuses ${method} ${path} with Sec-Fetch-Site ${site}`, async () => {
-        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+        logged.length = 0;
         const res = await send(method, path, { "sec-fetch-site": site });
         expect(res).toEqual({ status: 403, body: REFUSED });
-        // The method only; never a header value or the path.
-        expect(spy.mock.calls).toEqual([["cross-origin request refused", method]]);
-        spy.mockRestore();
+        // Method and path only; never a header value.
+        expect(logged).toEqual([[method, path]]);
       });
     }
   }
-
-  it("does not log the raw path, which can carry a document id", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const id = "0b9c1d2e-3f40-4a51-8b62-73849a5b6c7d";
-    const res = await send("DELETE", `/api/documents/${id}`, { "sec-fetch-site": "cross-site" });
-    expect(res.status).toBe(403);
-    expect(JSON.stringify(spy.mock.calls)).not.toContain(id);
-    spy.mockRestore();
-  });
 
   it.each(["same-origin", "none"])("lets Sec-Fetch-Site %s through", async (site) => {
     expect((await send("POST", "/t", { "sec-fetch-site": site })).status).toBe(200);
@@ -163,5 +156,95 @@ describe("origin guard", () => {
       });
       expect(res.status).toBe(status);
     }
+  });
+});
+
+describe("DOCMIND_PUBLIC_ORIGIN", () => {
+  const PUBLIC = "https://docmind.example.com";
+  const proxied = createHttpServer(routes, { secure: false, publicOrigin: PUBLIC, log: () => {} });
+  let proxiedPort = 0;
+  beforeAll(async () => {
+    await new Promise<void>((r) => proxied.listen(0, "127.0.0.1", r));
+    proxiedPort = (proxied.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    await new Promise<void>((r) => {
+      proxied.close(() => r());
+      proxied.closeAllConnections();
+    });
+  });
+
+  it("accepts the public origin and refuses the rewritten Host's origin", async () => {
+    const host = "app.internal:3000";
+    const pass = await send("POST", "/t", { host, origin: PUBLIC }, proxiedPort);
+    expect(pass.status).toBe(200);
+    const refused = await send("POST", "/t", { host, origin: `http://${host}` }, proxiedPort);
+    expect(refused).toEqual({ status: 403, body: REFUSED });
+  });
+
+  it("still lets Sec-Fetch-Site decide first", async () => {
+    const res = await send(
+      "POST",
+      "/t",
+      { origin: PUBLIC, "sec-fetch-site": "cross-site" },
+      proxiedPort,
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("accepts well-formed values, and treats unset or empty as off", () => {
+    expect(parsePublicOrigin("https://a.example")).toBe("https://a.example");
+    expect(parsePublicOrigin("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+    expect(parsePublicOrigin(undefined)).toBeUndefined();
+    expect(parsePublicOrigin("")).toBeUndefined();
+  });
+
+  it.each([
+    "docmind.example.com",
+    "https://a.example/",
+    "https://a.example/app",
+    "https://a.example?x=1",
+    "https://user:pw@a.example",
+    "ftp://a.example",
+    "HTTPS://A.example",
+    "not a url",
+  ])("refuses to start on %s, naming only the variable", (v) => {
+    expect(() => parsePublicOrigin(v)).toThrow(StartupConfigError);
+    expect(() => parsePublicOrigin(v)).toThrow(
+      /^DOCMIND_PUBLIC_ORIGIN must be scheme:\/\/host\[:port\]$/,
+    );
+  });
+});
+
+describe("refusal log sampling", () => {
+  it("logs once per window per method + path, then reports the suppressed count", () => {
+    const lines: string[] = [];
+    let now = 1_000;
+    const log = refusalLogger(
+      (l) => lines.push(l),
+      () => now,
+    );
+    for (let i = 0; i < 100; i++) log("POST", "/api/documents");
+    expect(lines).toEqual(["cross-origin request refused POST /api/documents"]);
+    log("DELETE", "/api/documents");
+    expect(lines).toHaveLength(2);
+    now += 60_000;
+    log("POST", "/api/documents");
+    expect(lines[2]).toBe(
+      "cross-origin request refused POST /api/documents (and 99 more since the last line)",
+    );
+    now += 60_000;
+    log("POST", "/api/documents");
+    expect(lines[3]).toBe("cross-origin request refused POST /api/documents");
+  });
+
+  it("collapses id segments so the line carries no document id", () => {
+    const lines: string[] = [];
+    const log = refusalLogger(
+      (l) => lines.push(l),
+      () => 0,
+    );
+    log("DELETE", "/api/documents/0b9c1d2e-3f40-4a51-8b62-73849a5b6c7d");
+    expect(lines).toEqual(["cross-origin request refused DELETE /api/documents/:id"]);
   });
 });

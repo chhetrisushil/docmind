@@ -1,5 +1,5 @@
 import { type Server, createServer } from "node:http";
-import { type OriginGuardOptions, isSameOriginRequest } from "./http/originGuard";
+import { type OriginGuardOptions, isSameOriginRequest, refusalLogger } from "./http/originGuard";
 import { type Handler, type RouteContext, json, sendError } from "./http/respond";
 
 const baseRoutes: Record<string, Handler> = {
@@ -58,6 +58,7 @@ export function createHttpServer(
   guard: OriginGuardOptions = { secure: false },
 ): Server {
   const routes = { ...baseRoutes, ...extraRoutes };
+  const logRefusal = guard.log ?? refusalLogger();
   const patterns = compile(routes);
   // Parameterised keys never match literally: `GET /things/:id` as a request is a pattern match.
   const exactRoutes = Object.fromEntries(
@@ -73,8 +74,8 @@ export function createHttpServer(
     const method = req.method ?? "GET";
     // The one place a state-changing request is checked, before routing, so no route can skip it.
     if (!isSameOriginRequest(req, guard)) {
-      // The method only: the path of an unauthenticated, attacker-driven request can carry a document id.
-      console.error("cross-origin request refused", method);
+      // Method and id-collapsed path only, at most once a minute each; never a header value.
+      logRefusal(method, path);
       req.resume();
       res.setHeader("connection", "close");
       return json(res, 403, { error: { code: "cross_origin_request" } });
