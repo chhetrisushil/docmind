@@ -25,6 +25,7 @@ import {
 import { chatActivityOf } from "./activityRead";
 import { toChatDto } from "./dto";
 import { chatConversationId } from "./ids";
+import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
 import { insertChat, listChats, softDeleteChat } from "./sessions";
 import type { ChatWiring } from "./wiring";
@@ -91,7 +92,7 @@ export async function listChatsPage(
 
 /** The chat API. Every route takes tenant and user from the session and loads the chat with `user_id = identity.userId`. */
 export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
-  return {
+  const core: Record<string, Handler> = {
     "GET /api/chats": requireAuth(deps.authenticator, async (req, res, identity) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const query = ListChatsQuery.safeParse(Object.fromEntries(url.searchParams));
@@ -160,4 +161,5 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       json(res, 200, await toChatDto(row, deps.fields.forUser(identity.userId), activity));
     }),
   };
+  return { ...core, ...chatMessageRoutes(deps) };
 }
