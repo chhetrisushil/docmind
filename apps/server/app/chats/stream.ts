@@ -49,6 +49,51 @@ const errorCodeOf = (err: unknown): "invalid_cursor" | "not_found" | "internal" 
   return "internal";
 };
 
+const MAX_BATCH = 500;
+
+/**
+ * Groups an async sequence into the runs that arrive without waiting for I/O. `followConversation` yields every
+ * entry of one read back to back (no await between them), and the next read needs the database or the event store,
+ * which takes a later turn of the event loop; so the items that are ready before the next macrotask are one read's
+ * page. Order is preserved and nothing is dropped; the grouping only decides how many items share one batch.
+ */
+async function* batches<T>(source: AsyncGenerator<T>): AsyncGenerator<T[]> {
+  const TICK = Symbol("tick");
+  let pending: Promise<IteratorResult<T>> | undefined;
+  try {
+    for (;;) {
+      const first = await (pending ?? source.next());
+      pending = undefined;
+      if (first.done) return;
+      const batch: T[] = [first.value];
+      let finished = false;
+      while (batch.length < MAX_BATCH) {
+        const next = source.next();
+        const raced = await Promise.race([
+          next,
+          new Promise<typeof TICK>((resolve) => setImmediate(() => resolve(TICK))),
+        ]);
+        if (raced === TICK) {
+          pending = next;
+          break;
+        }
+        if (raced.done) {
+          finished = true;
+          break;
+        }
+        batch.push(raced.value);
+      }
+      yield batch;
+      if (finished) return;
+    }
+  } finally {
+    // A read still in flight is abandoned with the stream: its failure must not surface as unhandled.
+    // Not awaited: a return queues behind that read, which only ends when the stream's own abort wakes it.
+    pending?.catch(() => undefined);
+    source.return(undefined).catch(() => undefined);
+  }
+}
+
 /** The resume point: `Last-Event-ID` (what EventSource sends on its own) or `?cursor=`. */
 function resumeOf(req: IncomingMessage): string | undefined {
   const header = req.headers["last-event-id"];
@@ -211,7 +256,7 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
 
   void (async () => {
     try {
-      for await (const item of followConversation(
+      const follow = followConversation(
         { reader: deps.chat.reader, eventStore: deps.eventStore },
         conversationId,
         {
@@ -219,13 +264,19 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
           signal: ac.signal,
           ...(deps.pollMs !== undefined && { pollMs: deps.pollMs }),
         },
-      )) {
-        if (item.type === "closed") {
+      );
+      // One toMessageDtos per batch (the entries one read of Loom's reader produced), so a replay reads each
+      // generation's log, the turn items and the titles once per batch, not once per message.
+      for await (const batch of batches(follow)) {
+        const entries = batch.flatMap((item) => (item.type === "message" ? [item.entry] : []));
+        if (entries.length > 0) {
+          for (const message of await toMessageDtos(deps, identity, chatId, entries))
+            sink.send(frame("message", message, message.cursor));
+        }
+        if (batch.some((item) => item.type === "closed")) {
           sink.send(frame("closed", {}));
           break;
         }
-        const [message] = await toMessageDtos(deps, identity, chatId, [item.entry]);
-        if (message) sink.send(frame("message", message, item.entry.cursor));
       }
     } catch (err) {
       if (!ended) sink.send(frame("error", { code: errorCodeOf(err) }));

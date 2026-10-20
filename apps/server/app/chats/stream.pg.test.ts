@@ -180,6 +180,66 @@ describe.skipIf(!PG_URL)(
 );
 
 describe.skipIf(!PG_URL)(
+  "GET /api/chats/:id/stream, replay cost (needs DOCMIND_TEST_PG_URL)",
+  () => {
+    let h: ChatHarness;
+    beforeAll(async () => {
+      h = await startChatServer();
+    });
+    afterAll(async () => {
+      await h.close();
+    });
+
+    it("replays 20 turns with one reasoning-log read batch for the page, not one per message, in order with their cursors", async () => {
+      const chatId = await seedChat(h, ALICE);
+      for (let i = 1; i <= 20; i++)
+        h.fake.addTurn(convOf(chatId), { question: `q${i}`, answer: `a${i}` });
+      h.reasoning.calls.length = 0;
+      const s = await openSse(`${h.base}/api/chats/${chatId}/stream`, { "x-test-user": "alice" });
+      await s.next();
+      await s.next();
+      const frames: string[] = [];
+      for (let i = 0; i < 40; i++) frames.push(await s.next());
+      s.close();
+      expect(frames.map((f) => f.split("\n")[0])).toEqual(
+        Array.from({ length: 40 }, (_, i) => `id: 0.${i + 1}`),
+      );
+      expect(frames.map((f) => (dataOf(f) as { text: string }).text)).toEqual(
+        Array.from({ length: 20 }, (_, i) => [`q${i + 1}`, `a${i + 1}`]).flat(),
+      );
+      // The fake's history is one page of 40 entries: one call for all 20 replies (it was 40 calls, one per entry).
+      expect(h.reasoning.calls.map((c) => c.length)).toEqual([20]);
+    });
+
+    it("keeps the cursors of a replay that is read in several pages", async () => {
+      const paged = await startChatServer({ pageCap: 10 });
+      try {
+        const chatId = await seedChat(paged, ALICE);
+        for (let i = 1; i <= 20; i++)
+          paged.fake.addTurn(convOf(chatId), { question: `q${i}`, answer: `a${i}` });
+        paged.reasoning.calls.length = 0;
+        const s = await openSse(`${paged.base}/api/chats/${chatId}/stream`, {
+          "x-test-user": "alice",
+        });
+        await s.next();
+        await s.next();
+        const ids: string[] = [];
+        for (let i = 0; i < 40; i++) ids.push((await s.next()).split("\n")[0] as string);
+        s.close();
+        expect(ids).toEqual(Array.from({ length: 40 }, (_, i) => `id: 0.${i + 1}`));
+        // Never more than one call per page of the reader (4 pages of 10), and every reply is read exactly once.
+        expect(paged.reasoning.calls.length).toBeLessThanOrEqual(4);
+        expect(paged.reasoning.calls.flat().map((r) => r.cursor)).toEqual(
+          Array.from({ length: 20 }, (_, i) => `0.${(i + 1) * 2}`),
+        );
+      } finally {
+        await paged.close();
+      }
+    });
+  },
+);
+
+describe.skipIf(!PG_URL)(
   "GET /api/chats/:id/stream, slots are released on every path (needs DOCMIND_TEST_PG_URL)",
   () => {
     let h: ChatHarness;
