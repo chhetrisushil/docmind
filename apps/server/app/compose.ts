@@ -4,6 +4,7 @@ import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import type { EventEnvelope } from "@loom/core";
 import type { EventStore, TimerStore } from "@loom/event-runtime";
+import type { LlmProvider } from "@loom/llm";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
@@ -63,7 +64,7 @@ export interface ComposeOptions {
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
   /** M4 chat: the settings, the Claude provider (absent without a key) and the timer store. Absent: no chat (the CLI, most tests). */
-  chat?: { settings: ChatSettings; llm?: ChatLlm; timers: TimerStore };
+  chat?: { settings: ChatSettings; llm?: ChatLlm; titleLlm?: LlmProvider; timers: TimerStore };
 }
 
 /**
