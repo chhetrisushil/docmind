@@ -58,10 +58,11 @@ describe("chatFlow (D11)", () => {
       maxIterations: 8,
       parallelTools: true,
       toolErrors: "feedback",
-      turnTimeoutMs: 180_000,
       toolTimeoutMs: 30_000,
       systemPrompt: DOC_ASSISTANT_PROMPT,
     });
+    // No kernel turn deadline (anchored to the first start: a recovered or shut-down turn would fail).
+    expect(flow.config.agent).not.toHaveProperty("turnTimeoutMs");
     expect(flow.config.agent.definition).toBe(docAssistant);
     expect(flow.config).toMatchObject({
       budget: { contextWindow: 150_000, reserveOutputTokens: 16_000 },

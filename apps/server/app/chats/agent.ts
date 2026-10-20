@@ -101,7 +101,10 @@ export function chatFlow(config: ChatFlowConfig): ConversationFlow {
         maxIterations: 8,
         parallelTools: true,
         toolErrors: "feedback",
-        turnTimeoutMs: 180_000,
+        // No turnTimeoutMs: Loom makes it a kernel step deadline anchored to the step's FIRST logged start, so a
+        // turn recovered after a restart (or cut by shutdown) would fail at once. The provider's own request
+        // timeout (CHAT_REQUEST_TIMEOUT_MS, chats/llm.ts) bounds each attempt instead.
+        // A tool timeout is fed back to the model (toolErrors "feedback": StepTimeoutError is not terminal), so it stays.
         toolTimeoutMs: 30_000,
       },
       // No summarizer: turns that fall out of the window leave the prompt but stay in history.

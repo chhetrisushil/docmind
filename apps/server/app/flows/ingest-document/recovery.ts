@@ -5,6 +5,7 @@ import {
   collectGhostLeases,
   recoverAbandoned,
 } from "@loom/workflow-runtime";
+import { isRecoverableChatExecution } from "../../chats/ids";
 import {
   FLOW_MISMATCH_REASON,
   RECOVERY_EXHAUSTED_REASON,
@@ -84,7 +85,7 @@ export async function recoverIngest(
   if (!leases) {
     // A full scan also clears ghost leases (a crash between taking a lease and the first append): they
     // have no stream, so no pass would ever re-drive or remove them, and lease mode lists them forever.
-    // Loom's own GC runs only from TimerService, which this server does not run.
+    // Loom's own GC runs from TimerService, which this server runs only when chat is composed; ingest-only builds rely on this pass.
     try {
       const store = runtime.leaseKeeper?.leaseStore;
       // One round per page of expired leases, until that many rounds in a row collect nothing.
@@ -96,7 +97,7 @@ export async function recoverIngest(
         else if (++empty >= pages) break;
       }
     } catch (err) {
-      console.error("ingest ghost lease gc failed", errorClass(err));
+      console.error("ghost lease gc failed", errorClass(err));
     }
   }
   const ending: Promise<unknown>[] = [];
@@ -104,9 +105,16 @@ export async function recoverIngest(
     ending.push(
       runtime
         .cancel(executionId, reason, runtime.systemOptions())
-        .catch((err: unknown) => console.error("ingest recovery cancel failed", errorClass(err))),
+        .catch((err: unknown) => console.error("recovery cancel failed", errorClass(err))),
     );
   };
+  // An ingest flow whose identity changed is given up. A chat is NOT: cancelling would end a user's conversation
+  // for good. It is logged and left, and every pass logs it again until a build that still carries the old flow
+  // version resumes it. Migration plan: register the previous chat flow version beside the new one.
+  const mismatch = (id: string, err: unknown) =>
+    isRecoverableChatExecution(id)
+      ? console.error("recovery left a chat on an old flow version", errorClass(err))
+      : giveUp(id, FLOW_MISMATCH_REASON);
   const summary = await recoverAbandoned(runtime, {
     ...(leases ? { leases } : { source }),
     maxRecoveries,
@@ -114,8 +122,8 @@ export async function recoverIngest(
     onExhausted: (id) => giveUp(id, RECOVERY_EXHAUSTED_REASON),
     onError: (id, err) =>
       err instanceof FlowCodeMismatchError
-        ? giveUp(id, FLOW_MISMATCH_REASON)
-        : console.error("ingest recovery failed", errorClass(err)),
+        ? mismatch(id, err)
+        : console.error("recovery failed", errorClass(err)),
   });
   await Promise.all(ending);
   return summary;
@@ -160,7 +168,7 @@ export function startRecovery(
       ...(owns && { owns }),
     })
       .then(() => undefined)
-      .catch((err: unknown) => console.error("ingest recovery failed", errorClass(err)))
+      .catch((err: unknown) => console.error("recovery failed", errorClass(err)))
       .finally(() => {
         running = undefined;
       });
