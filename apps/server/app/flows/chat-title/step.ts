@@ -24,11 +24,24 @@ export interface ChatTitleDeps {
   /** Absent without a Claude key: the step then skips. */
   llm?: LlmProvider;
   /** Test seam: the wait between attempts. */
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 const SKIPPED: ChatTitleOutput = { outcome: "skipped" };
-const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or rejects at once when the signal aborts. */
+const defaultSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 
 /** The chat's first user message that was not rejected, or null when none is recorded yet. */
 async function firstQuestion(
@@ -74,14 +87,18 @@ export function chatTitleEffect(deps: ChatTitleDeps): Effect<ChatTitleInput, Cha
       );
       if (!row || row.title_source !== "none") return SKIPPED;
       const conversationId = chatConversationId(ref.userId, ref.chatId);
-      const wait = (attempt: number) =>
-        sleep(
+      const wait = async (attempt: number) => {
+        await sleep(
           (CHAT_TITLE_RETRY.backoffMs ?? 0) *
             (CHAT_TITLE_RETRY.backoffMultiplier ?? 1) ** (attempt - 1),
+          ctx?.signal,
         );
+        ctx?.signal?.throwIfAborted(); // an abort during the wait is a shutdown, never a "skipped"
+      };
       let question: string | null = null;
       let title: string | null = null;
       for (let attempt = 1; attempt <= CHAT_TITLE_RETRY.maxAttempts; attempt++) {
+        ctx?.signal?.throwIfAborted();
         question ??= await firstQuestion(deps.reader, conversationId, ctx?.signal);
         if (question === null) {
           // Not recorded yet: the send route fires right after the message was accepted. Transient.

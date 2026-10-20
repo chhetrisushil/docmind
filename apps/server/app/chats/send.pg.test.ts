@@ -98,6 +98,17 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
     expect(fired).toHaveLength(firedBefore);
   });
 
+  it("fires again on every send to a chat that is still untitled (start-once is Loom's, not the route's)", async () => {
+    const chatId = await seedChat(h, ALICE);
+    const before = fired.length;
+    expect((await send("alice", chatId, { text: "first" })).status).toBe(202);
+    expect((await send("alice", chatId, { text: "second" })).status).toBe(202);
+    expect(fired.slice(before)).toEqual([
+      { tenantId: ALICE.tenantId, userId: ALICE.userId, chatId },
+      { tenantId: ALICE.tenantId, userId: ALICE.userId, chatId },
+    ]);
+  });
+
   it("answers 503 chat_unavailable without a Claude key, and sends nothing", async () => {
     const chatId = await seedChat(noKey, ALICE);
     const firedBefore = fired.length;

@@ -219,4 +219,36 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
     for (const id of [outage, refused, blank, aborted])
       expect((await titleRow(id)).title_source).toBe("none");
   });
+
+  it("rejects, never skips, when the shutdown signal aborts during a backoff wait or before an attempt", async () => {
+    const waiting = await seedChat(h, ALICE);
+    exchange(waiting);
+    const controller = new AbortController();
+    const reader = lateReader(5);
+    const effect = chatTitleEffect({
+      pool: h.app,
+      fields: h.fields,
+      reader: reader as never,
+      llm: provider([]).llm,
+      sleep: async (_ms, signal) => {
+        expect(signal).toBe(controller.signal);
+        controller.abort();
+      },
+    });
+    await expect(
+      effect.execute(ref(waiting), { signal: controller.signal } as never),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(reader.reads).toBe(1);
+
+    const before = new AbortController();
+    before.abort();
+    await expect(
+      chatTitleEffect({
+        pool: h.app,
+        fields: h.fields,
+        reader: h.fake.api.reader,
+        llm: provider(["x"]).llm,
+      }).execute(ref(waiting), { signal: before.signal } as never),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

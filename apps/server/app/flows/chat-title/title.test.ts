@@ -11,6 +11,9 @@ describe("cleanTitle", () => {
     ["Quarterly budget review\nA second line", "Quarterly budget review"],
     ["  Quarterly   budget  review  ", "Quarterly budget review"],
     ["`Q3`", "Q3"],
+    ["Quarterly\u0000 budget\u001b[31m review", "Quarterly budget[31m review"],
+    ["\u202EQuarterly budget\u202C review", "Quarterly budget review"],
+    ["Quar\u200Bterly\u2060 bud\uFEFFget review", "Quarterly budget review"],
   ])("cleans %j to %j", (raw, clean) => {
     expect(cleanTitle(raw)).toBe(clean);
   });
