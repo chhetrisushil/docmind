@@ -17,7 +17,7 @@ import {
 } from "../stepEffect";
 import { type SummaryRun, summarizeDocument } from "../summarize/summarize";
 
-/** About 17 map calls at 4 at a time and 60 s each, plus the reduce: far above STEP_TIMEOUT_MS, and applied to this step only. */
+/** About 17 map calls (up to about twice that when sections are just over 12,000 characters) at 4 at a time and 60 s each, plus the reduce: far above STEP_TIMEOUT_MS, and applied to this step only. */
 export const SUMMARIZE_STEP_TIMEOUT_MS = 600_000;
 
 export interface SummarizeDeps extends StepSeams {
