@@ -1,7 +1,7 @@
 import { type IncomingMessage, request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, type Socket, connect } from "node:net";
 import { type MockInstance, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createHttpServer } from "./server";
+import { createHttpServer, loadMaxConnections } from "./server";
 
 const server = createHttpServer();
 let base = "";
@@ -170,5 +170,133 @@ describe("route parameters", () => {
     expect(await (await fetch(`${paramBase}/things/__proto__`)).json()).toEqual({
       id: "__proto__",
     });
+  });
+});
+
+describe("server limits", () => {
+  it("applies the documented defaults", () => {
+    const s = createHttpServer();
+    expect([s.headersTimeout, s.requestTimeout, s.keepAliveTimeout]).toEqual([20_000, 0, 5_000]);
+    expect([s.maxConnections, s.maxHeadersCount]).toEqual([2000, 100]);
+  });
+
+  it("reads DOCMIND_MAX_CONNECTIONS, naming the variable on a bad value", () => {
+    expect(loadMaxConnections({})).toBe(2000);
+    expect(loadMaxConnections({ DOCMIND_MAX_CONNECTIONS: "65535" })).toBe(65_535);
+    for (const bad of ["0", "-1", "abc", "65536", "1.5"]) {
+      expect(() => loadMaxConnections({ DOCMIND_MAX_CONNECTIONS: bad })).toThrow(
+        /DOCMIND_MAX_CONNECTIONS must be/,
+      );
+    }
+  });
+
+  async function started(
+    routes: Parameters<typeof createHttpServer>[0],
+    limits: Parameters<typeof createHttpServer>[2],
+  ) {
+    const server = createHttpServer(routes, { secure: false, log: () => {} }, limits);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return { server, port: (server.address() as AddressInfo).port };
+  }
+  const closed = (socket: Socket) =>
+    new Promise<void>((resolve) => socket.once("close", () => resolve()));
+
+  it("cuts a client that sends its headers too slowly, destroying the socket", async () => {
+    const { server, port } = await started(
+      {},
+      { headersTimeoutMs: 50, connectionsCheckingIntervalMs: 10 },
+    );
+    const socket = connect(port, "127.0.0.1");
+    socket.on("error", () => {});
+    socket.on("data", () => {});
+    socket.write("GET /healthz HTTP/1.1\r\nHost: x\r\n"); // never finishes the header block
+    await closed(socket);
+    server.close();
+  });
+
+  it("answers 503 timeout when a JSON route never answers, then keeps serving", async () => {
+    const { server, port } = await started(
+      { "GET /hang": () => new Promise<void>(() => {}) },
+      { requestTimeoutMs: 20 },
+    );
+    const res = await fetch(`http://127.0.0.1:${port}/hang`);
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("timeout");
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    server.closeAllConnections();
+    server.close();
+  });
+
+  it("destroys the socket when the route times out after headers were sent", async () => {
+    const { server, port } = await started(
+      {
+        "GET /half": (_req, res) => {
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.write("partial"); // never ends
+        },
+      },
+      { requestTimeoutMs: 20 },
+    );
+    const socket = connect(port, "127.0.0.1");
+    socket.on("error", () => {});
+    socket.on("data", () => {});
+    socket.write("GET /half HTTP/1.1\r\nHost: x\r\n\r\n");
+    await closed(socket);
+    server.close();
+  });
+
+  it("never times out a streaming route (upload, SSE), which outlives the route timeout", async () => {
+    let timedOut = false;
+    const { server, port } = await started(
+      {
+        "GET /api/documents/events": (_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.write(": open\n\n");
+        },
+        "GET /hang": () => new Promise<void>(() => {}),
+        // A request timer armed here would answer 503 before the handler ends the response.
+        "POST /api/documents": (req, res) => {
+          req.resume();
+          req.on("end", () => {
+            setTimeout(() => res.end("done"), 80);
+          });
+        },
+      },
+      { requestTimeoutMs: 20 },
+    );
+    const sse = connect(port, "127.0.0.1");
+    sse.on("error", () => {});
+    sse.on("close", () => {
+      timedOut = true;
+    });
+    sse.write("GET /api/documents/events HTTP/1.1\r\nHost: x\r\n\r\n");
+    await new Promise<void>((resolve) => sse.once("data", () => resolve()));
+    // A non-streaming route armed alongside it times out; the stream is still open after.
+    expect((await fetch(`http://127.0.0.1:${port}/hang`)).status).toBe(503);
+    const res = await fetch(`http://127.0.0.1:${port}/api/documents`, {
+      method: "POST",
+      body: "x",
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("done");
+    expect(timedOut).toBe(false);
+    sse.destroy();
+    await closed(sse);
+    server.closeAllConnections();
+    server.close();
+  });
+
+  it("refuses the connection past the cap", async () => {
+    const { server, port } = await started({}, { maxConnections: 1 });
+    const first = connect(port, "127.0.0.1");
+    first.on("error", () => {});
+    await new Promise<void>((resolve) => server.once("connection", () => resolve()));
+    const second = connect(port, "127.0.0.1");
+    second.on("error", () => {});
+    await closed(second);
+    expect(first.destroyed).toBe(false);
+    first.destroy();
+    server.closeAllConnections();
+    server.close();
   });
 });
