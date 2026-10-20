@@ -40,3 +40,15 @@ export class LlmOutputError extends Error {
     this.name = "LlmOutputError";
   }
 }
+
+/**
+ * The response stream broke after the request was accepted: a connection reset, a truncated stream,
+ * or an API `error` event that is not the request's fault (overloaded, api_error, rate limit).
+ * Transient, so it is an LlmUnavailableError (the same fixed message); no body or event text.
+ */
+export class LlmStreamError extends LlmUnavailableError {
+  constructor() {
+    super();
+    this.name = "LlmStreamError";
+  }
+}
