@@ -1,7 +1,6 @@
 # Linked retrieval: semantic seeds, then link hops
 
-**Status:** accepted direction (2026-10-18). Targets M3 (ingestion) and M4 (chat). Folded into spec
-§4.2, §5 and §6.2 when the M3 and M4 plans are written; the open questions below are settled there.
+**Status:** implemented. Ingestion in M3, retrieval in M4; the hop default waits for the eval (M7 item 46).
 
 ## Problem
 
@@ -91,6 +90,14 @@ Re-embedding or re-ingesting a document deletes its links and rebuilds them.
 The agent also gets a tool, `related(passageId, kinds?)`, to hop deliberately from a passage it found
 promising. This keeps automatic expansion shallow (1 hop) while still allowing deeper chains. Hops
 return retrieved passages, so `checkCitations` and source cards work unchanged.
+
+### As built (M4)
+
+- Defaults: 24 candidates above 0.2, 8 seeds by MMR with lambda 0.7, hop 1 with at most 4 links per seed, path score `seedSim × weight × 0.85`, final score `0.5 × path + 0.5 × own similarity`, hop 2 only from nodes at 0.45 or more, budget `k` at most 12 with a second MMR.
+- `via` is `{kind, from, entity?}`.
+- Chunks are searchable once embedded, whatever the document's status.
+- Automatic expansion is 1 hop by default, and `related` is the deliberate hop (open question 1 of the M4 plan: the eval decides the default).
+- The LLM fallback for ambiguous references moved to M7, beside the eval set.
 
 ## Evaluation
 
