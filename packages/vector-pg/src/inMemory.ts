@@ -1,8 +1,11 @@
 import {
   type ChunkVectorStore,
+  type SearchFilter,
   VectorDimensionError,
   type VectorScope,
   checkNeighbourParams,
+  checkSearchFilter,
+  checkVectorIds,
   isValidVector,
 } from "./types";
 
@@ -89,8 +92,11 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
     query: readonly number[],
     limit: number,
     minScore?: number,
+    filter?: SearchFilter,
   ): Promise<{ chunkId: string; score: number }[]> {
     this.check(query);
+    checkSearchFilter(filter);
+    const documents = filter?.documentIds ? new Set(filter.documentIds) : undefined;
     const p = prefix(scope);
     const owned = [...this.rows].filter(([key]) => key.startsWith(p));
     await this.prune(
@@ -100,12 +106,31 @@ export class InMemoryChunkVectors implements ChunkVectorStore {
     const hits: { chunkId: string; score: number }[] = [];
     for (const [key, row] of this.rows) {
       if (!key.startsWith(p) || row.model !== this.modelId) continue;
+      if (documents && !documents.has(row.documentId)) continue;
       const score = cosine(query, row.vector);
       if (score === null || (minScore !== undefined && score < minScore)) continue;
       hits.push({ chunkId: key.slice(p.length), score });
     }
     hits.sort((a, b) => b.score - a.score || (a.chunkId < b.chunkId ? -1 : 1));
     return hits.slice(0, Math.max(0, limit));
+  }
+
+  async vectors(scope: VectorScope, chunkIds: readonly string[]): Promise<Map<string, number[]>> {
+    checkVectorIds(chunkIds);
+    const out = new Map<string, number[]>();
+    if (chunkIds.length === 0) return out;
+    const p = prefix(scope);
+    await this.prune(
+      scope,
+      [...this.rows].filter(([key]) => key.startsWith(p)).map(([, row]) => row.documentId),
+    );
+    for (const chunkId of new Set(chunkIds)) {
+      const row = this.rows.get(p + chunkId);
+      if (row && row.model === this.modelId && row.vector.some((x) => x !== 0)) {
+        out.set(chunkId, [...row.vector]);
+      }
+    }
+    return out;
   }
 
   async neighbours(

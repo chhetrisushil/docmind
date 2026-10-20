@@ -134,6 +134,32 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
     expect(calls).toBe(0);
   });
 
+  it("an empty document filter, and vectors with no ids, never open a transaction", async () => {
+    let calls = 0;
+    const store = new PgChunkVectorStore({
+      tenant: (t, fn) => {
+        calls += 1;
+        return withTenant(app, t, fn);
+      },
+      modelId: "m1",
+      dimensions: 768,
+    });
+    expect(await store.search(A, basis(0), 5, undefined, { documentIds: [] })).toEqual([]);
+    expect((await store.vectors(A, [])).size).toBe(0);
+    expect(calls).toBe(0);
+  });
+
+  it("vectors treats a malformed chunk id as a miss, not an error", async () => {
+    const store = make("m1");
+    const id = randomUUID();
+    await seed(A, DOC_A, [id]);
+    await store.upsert(A, DOC_A, [{ chunkId: id, vector: basis(5) }]);
+    const got = await store.vectors(A, ["not-a-uuid", id]);
+    expect([...got.keys()]).toEqual([id]);
+    expect(got.get(id)).toHaveLength(768);
+    expect(got.get(id)?.[5]).toBe(1);
+  });
+
   it("verify() accepts the column it was built for and rejects another size", async () => {
     await expect(make("m").verify(randomUUID())).resolves.toBeUndefined();
     const err = await make("m", 8)
@@ -155,6 +181,9 @@ describe.skipIf(!PG_URL)("PgChunkVectorStore (needs DOCMIND_TEST_PG_URL and pgve
       ["ownerId", () => store.neighbours({ ...A, ownerId: bad }, DOC_A, [randomUUID()], 1, 0)],
       ["tenantId", () => store.neighbours({ ...A, tenantId: bad }, DOC_A, [randomUUID()], 1, 0)],
       ["documentId", () => store.neighbours(A, bad, [randomUUID()], 1, 0)],
+      ["documentIds", () => store.search(A, basis(0), 1, undefined, { documentIds: [bad] })],
+      ["ownerId", () => store.vectors({ ...A, ownerId: bad }, [randomUUID()])],
+      ["tenantId", () => store.vectors({ ...A, tenantId: bad }, [randomUUID()])],
     ];
     for (const [name, run] of attempts) {
       const err = await run().then(

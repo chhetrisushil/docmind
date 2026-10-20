@@ -27,13 +27,25 @@ export interface ChunkVectorStore {
   ): Promise<{ written: number; missing: string[] }>;
   /** Chunk ids of the document, in ordinal order, with no vector for this modelId; at most `limit`. */
   missing(scope: VectorScope, documentId: string, limit: number): Promise<string[]>;
-  /** Cosine similarity over the scope's vectors of this modelId, best first, ties by chunkId. */
+  /**
+   * Cosine similarity over the scope's vectors of this modelId, best first, ties by chunkId.
+   * `filter.documentIds` keeps only chunks of those documents (still only the scope's own: an id of
+   * another owner's document matches nothing); `[]` matches nothing, absent means every document.
+   * `limit` is applied after the filter.
+   */
   search(
     scope: VectorScope,
     query: readonly number[],
     limit: number,
     minScore?: number,
+    filter?: SearchFilter,
   ): Promise<{ chunkId: string; score: number }[]>;
+  /**
+   * The stored vectors of the listed chunks, for re-ranking (MMR). Owner-scoped like `search`: an
+   * unknown id, another owner's or tenant's chunk, a chunk with no vector for this modelId and a zero
+   * vector are absent from the map. At most `MAX_VECTOR_IDS` ids (RangeError otherwise).
+   */
+  vectors(scope: VectorScope, chunkIds: readonly string[]): Promise<Map<string, number[]>>;
   /**
    * For each listed chunk of `documentId` (the scope's own), its nearest chunks among the scope's OTHER
    * documents, by cosine similarity over this modelId's vectors: at most `perChunk` each, score >= minScore,
@@ -47,6 +59,27 @@ export interface ChunkVectorStore {
     perChunk: number,
     minScore: number,
   ): Promise<{ chunkId: string; neighbourId: string; score: number }[]>;
+}
+
+/** Restricts `search` to some documents. */
+export interface SearchFilter {
+  documentIds?: readonly string[];
+}
+
+export const MAX_FILTER_DOCUMENTS = 1000;
+export const MAX_VECTOR_IDS = 1000;
+
+/** Shared by both stores. The messages name the parameter, never a value. */
+export function checkSearchFilter(filter: SearchFilter | undefined): void {
+  if (filter?.documentIds && filter.documentIds.length > MAX_FILTER_DOCUMENTS) {
+    throw new RangeError(`search: filter.documentIds is limited to ${MAX_FILTER_DOCUMENTS} ids`);
+  }
+}
+
+export function checkVectorIds(chunkIds: readonly string[]): void {
+  if (chunkIds.length > MAX_VECTOR_IDS) {
+    throw new RangeError(`vectors: at most ${MAX_VECTOR_IDS} ids`);
+  }
 }
 
 /** Shared by both stores so they reject the same inputs. The message names the parameter, never a value. */

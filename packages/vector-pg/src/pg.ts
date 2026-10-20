@@ -1,10 +1,13 @@
 import type { PoolClient } from "pg";
 import {
   type ChunkVectorStore,
+  type SearchFilter,
   VectorDimensionError,
   VectorSchemaError,
   type VectorScope,
   checkNeighbourParams,
+  checkSearchFilter,
+  checkVectorIds,
   isValidVector,
 } from "./types";
 
@@ -97,21 +100,51 @@ export class PgChunkVectorStore implements ChunkVectorStore {
     query: readonly number[],
     limit: number,
     minScore?: number,
+    filter?: SearchFilter,
   ): Promise<{ chunkId: string; score: number }[]> {
     scoped(scope);
     this.check(query);
+    checkSearchFilter(filter);
+    const documentIds = filter?.documentIds;
+    for (const id of documentIds ?? []) uuid("documentIds", id);
     // Cosine distance of a zero vector is NaN, which Postgres sorts above every number.
-    if (limit <= 0 || query.every((x) => x === 0)) return [];
-    // Exact scan of the tenant's rows by design until M4 (the HNSW index is not used by this SQL).
+    if (limit <= 0 || query.every((x) => x === 0) || documentIds?.length === 0) return [];
+    // Exact scan of the tenant's rows by design until Task 137 (the HNSW index is not used by this SQL).
     return this.options.tenant(scope.tenantId, async (tx) => {
       const { rows } = await tx.query<{ id: string; score: number }>(
         `SELECT c.id, 1 - (c.embedding <=> $1::vector) AS score FROM chunks c ${JOIN_OWNER}
           WHERE d.owner_id = $2 AND c.embedding_model = $3 AND vector_norm(c.embedding) > 0
             AND 1 - (c.embedding <=> $1::vector) >= $4
+            ${documentIds ? "AND c.document_id = ANY($6::uuid[])" : ""}
           ORDER BY c.embedding <=> $1::vector, c.id LIMIT $5`,
-        [literal(query), scope.ownerId, this.modelId, minScore ?? -1, limit],
+        [
+          literal(query),
+          scope.ownerId,
+          this.modelId,
+          minScore ?? -1,
+          limit,
+          ...(documentIds ? [documentIds] : []),
+        ],
       );
       return rows.map((r) => ({ chunkId: r.id, score: Number(r.score) }));
+    });
+  }
+
+  async vectors(scope: VectorScope, chunkIds: readonly string[]): Promise<Map<string, number[]>> {
+    scoped(scope);
+    checkVectorIds(chunkIds);
+    const out = new Map<string, number[]>();
+    if (chunkIds.length === 0) return out;
+    // Ids compare as text, so a malformed id is a miss rather than a cast error.
+    return this.options.tenant(scope.tenantId, async (tx) => {
+      const { rows } = await tx.query<{ id: string; v: string }>(
+        `SELECT c.id, c.embedding::text AS v FROM chunks c ${JOIN_OWNER}
+          WHERE d.owner_id = $1 AND c.embedding_model = $2 AND c.id::text = ANY($3::text[])
+            AND vector_norm(c.embedding) > 0`,
+        [scope.ownerId, this.modelId, [...new Set(chunkIds)]],
+      );
+      for (const r of rows) out.set(r.id, JSON.parse(r.v) as number[]); // pgvector's text form is a JSON array
+      return out;
     });
   }
 
