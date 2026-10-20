@@ -88,7 +88,7 @@ export const ChatReasoningDto = z.object({
 export type ChatReasoningDto = z.infer<typeof ChatReasoningDto>;
 
 export const ChatMessageDto = z.object({
-  /** The conversation record's ordinal, in decimal: the history cursor and the stream event id. */
+  /** The conversation record's ordinal, in decimal (the record's own `ord`). The history cursor and the SSE `id:` are `cursor`. */
   id: z.string().regex(/^(0|[1-9][0-9]{0,14})$/),
   /** The turn number (1-based, global to the chat); 0 for a rejected user message, which has no turn. */
   turn: z.number().int().nonnegative(),
@@ -178,8 +178,9 @@ const Count = z.number().int().nonnegative();
 
 /**
  * What `GET /api/chats/:id/stream` sends, for the web client. On the wire the SSE `event:` is `kind` and `data:` is
- * the rest of the object as JSON. `message` is durable (its SSE id is the message's `cursor`); the others are live
- * and carry no id.
+ * the rest of the object as JSON: for `message` that is the `ChatMessageDto` itself (its fields sit beside `kind`, not
+ * under a `message` key). `message` is durable (its SSE id is the message's `cursor`); the others are live and carry
+ * no id. Parse a frame as `ChatStreamEvent.parse({ kind: <event>, ...JSON.parse(<data>) })`.
  *
  * `reasoning`, `reasoning-partial` and `reset` are loom-ui's `ChatFeed` events exactly (`{turn, text}`, `{turn}`):
  * `turn` is the hub's accepted-turn number, the same one as `answer` and `ChatMessageDto.turn`. `tool` and
@@ -193,7 +194,7 @@ export const ChatStreamEvent = z.discriminatedUnion("kind", [
     running: z.boolean(),
     turns: Count,
   }),
-  z.object({ kind: z.literal("message"), message: ChatMessageDto }),
+  ChatMessageDto.extend({ kind: z.literal("message") }),
   z.object({ kind: z.literal("reasoning"), turn: z.number().int().min(1), text: z.string() }),
   z.object({
     kind: z.literal("reasoning-partial"),

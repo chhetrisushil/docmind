@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { ChatMessageDto } from "@docmind/contracts";
+import { ChatMessageDto, ChatStreamEvent } from "@docmind/contracts";
+import { tainted } from "@loom/classify";
+import { withTurnScope } from "@loom/conversation";
+import { frame } from "@loom/plugin-conversation-sse";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, openSse } from "../documents/testHarness";
@@ -56,6 +59,64 @@ describe.skipIf(!PG_URL)(
         citations: [],
       });
       s.close();
+    });
+
+    it("every frame the stream sends parses as a ChatStreamEvent (kind is the SSE event name, the data is the rest)", async () => {
+      const parse = (raw: string) => {
+        const event = /^(?:id: .*\n)?event: (.*)\n/.exec(raw)?.[1];
+        return ChatStreamEvent.parse({ kind: event, ...(dataOf(raw) as object) });
+      };
+      const chatId = await seedChat(h, ALICE);
+      const conv = convOf(chatId);
+      const step = { name: "search_docs", label: "Searched documents", count: 3 } as const;
+      // a running turn's partials reach a late joiner as reasoning-partial and answer
+      await withTurnScope(conv, 2, new AbortController().signal, async () => {
+        h.wiring.hub.deltaSink()("Part");
+        h.wiring.hub.reasoningSink()(tainted("So far", "llm-reasoning:s"));
+        const s = await open("alice", chatId);
+        expect(await s.next()).toBe("retry: 3000");
+        const kinds: string[] = [];
+        const take = async () => {
+          const e = parse(await s.next());
+          kinds.push(e.kind);
+          return e;
+        };
+        expect(await take()).toEqual(expect.objectContaining({ kind: "status" }));
+        expect(await take()).toEqual(expect.objectContaining({ kind: "reasoning-partial" }));
+        expect(await take()).toEqual(expect.objectContaining({ kind: "answer" }));
+        h.wiring.hub.publish(conv, { type: "reasoning", conversationId: conv, turn: 2, text: "r" });
+        h.wiring.bus.publish(chatId, { kind: "tool", turnKey: 1, step });
+        h.wiring.hub.publish(conv, { type: "reset", conversationId: conv, turn: 2 });
+        h.wiring.bus.publish(chatId, { kind: "reset", turnKey: 1 });
+        for (let i = 0; i < 4; i++) await take();
+        h.fake.addTurn(conv, { question: "What is due?", answer: "Soon." });
+        const user = await take();
+        const reply = await take();
+        expect(user).toMatchObject({ kind: "message", role: "user", text: "What is due?" });
+        expect(reply).toMatchObject({ kind: "message", role: "assistant", cursor: "0.2" });
+        await h.fake.api.close(conv, {
+          principal: { tenant: ALICE.tenantId, actor: ALICE.userId },
+        });
+        await take();
+        expect([...new Set(kinds)].sort()).toEqual(
+          [
+            "answer",
+            "closed",
+            "message",
+            "reasoning",
+            "reasoning-partial",
+            "reset",
+            "status",
+            "tool",
+            "tool-reset",
+          ].sort(),
+        );
+        s.close();
+      });
+      // the error frame, written by the same helper the stream uses, parses for each code it can carry
+      for (const code of ["invalid_cursor", "not_found", "too_many_streams", "internal"]) {
+        expect(parse(frame("error", { code }).trimEnd())).toEqual({ kind: "error", code });
+      }
     });
 
     it("resumes after Last-Event-ID, or after ?cursor=, and sends only what came later", async () => {
