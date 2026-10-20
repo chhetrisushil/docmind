@@ -22,6 +22,7 @@ import { type ChatRouteDeps, type ChatTitleTrigger, chatRoutes } from "./routes"
 import { chatTitleBind, insertChat, setTitle } from "./sessions";
 import type { ChatSettings } from "./settings";
 import { StopRegistry } from "./stop";
+import { type ChatStreamDeps, chatStreamRoutes } from "./stream";
 import { FakeReplyReasoning } from "./testing";
 import { PgTurnItems } from "./turnItems";
 import type { ChatWiring } from "./wiring";
@@ -37,6 +38,7 @@ export interface ChatHarness {
   activity: ChatActivity;
   reasoning: FakeReplyReasoning;
   deps: ChatRouteDeps;
+  streams: ReturnType<typeof chatStreamRoutes>;
   /** A request as one of the harness users (alice, alice2, bob). */
   req(user: string, method: string, path: string, body?: unknown): Promise<Response>;
   close(): Promise<void>;
@@ -44,7 +46,12 @@ export interface ChatHarness {
 
 /** A migrated database, two tenants, the chat routes over the fake conversations, on 127.0.0.1. */
 export async function startChatServer(
-  o: { available?: boolean; pageCap?: number; titles?: ChatTitleTrigger } = {},
+  o: {
+    available?: boolean;
+    pageCap?: number;
+    titles?: ChatTitleTrigger;
+    stream?: Partial<ChatStreamDeps>;
+  } = {},
 ): Promise<ChatHarness> {
   const db = await createTestDb();
   await migrate(db.owner);
@@ -82,7 +89,8 @@ export async function startChatServer(
     reasoning,
     ...(o.titles && { titles: o.titles }),
   };
-  const server = createHttpServer({ ...chatRoutes(deps) });
+  const streams = chatStreamRoutes({ ...deps, ...o.stream });
+  const server = createHttpServer({ ...chatRoutes(deps), ...streams.routes });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
@@ -96,6 +104,7 @@ export async function startChatServer(
     activity,
     reasoning,
     deps,
+    streams,
     req(user, method, path, body) {
       return fetch(`${base}${path}`, {
         method,
@@ -107,6 +116,7 @@ export async function startChatServer(
       });
     },
     async close() {
+      streams.closeAll();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
         server.closeAllConnections();
