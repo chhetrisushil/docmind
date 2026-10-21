@@ -292,4 +292,27 @@ describe("dm-documents-page", () => {
     await vi.waitFor(() => expect(document.querySelector("dm-dialog")).toBeNull());
     expect(t.api.deleteDocument).not.toHaveBeenCalled();
   });
+
+  it("a chat created after the page went away does not navigate", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 1"));
+    let release: () => void = () => {};
+    t.api.createChat.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          release = () => r({ id: "c1" });
+        }) as never,
+    );
+    (
+      table(t.page).shadowRoot?.querySelector(
+        "td.row-actions button[aria-label='Ask: Title 1']",
+      ) as HTMLButtonElement
+    ).click();
+    await vi.waitFor(() => expect(t.api.createChat).toHaveBeenCalled());
+    t.page.remove();
+    release();
+    // nothing more should happen: give a wrongly late navigation the chance to run
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.services.router.route).not.toMatchObject({ name: "chat" });
+  });
 });
