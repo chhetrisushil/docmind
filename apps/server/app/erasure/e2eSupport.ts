@@ -7,6 +7,7 @@ import {
   ErasureStatusResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
+import type { EventEnvelope } from "@loom/core";
 import { isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
 import type { Pool } from "pg";
 import { expect, vi } from "vitest";
@@ -420,6 +421,10 @@ const CIPHER_ID = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$/;
 const SEAL_PATH = /^[A-Z][A-Z0-9_]{2,63}(\.[A-Za-z0-9_]{1,64}(\[\])?){0,8}$/;
 const EVENT_TYPE = /^[A-Z][A-Z0-9_]{2,63}$/;
 /** The operational keys Loom stamps on an envelope's metadata, each with the only value shape it may have. */
+/** A generous bound on the entries one seal marker may list (real markers list a handful of paths). */
+const MAX_COVERS = 256;
+/** Loom's control events carry an empty workflow id; no other event may. */
+const EMPTY_WORKFLOW_OK = new Set(["ERASURE_PENDING", "PAYLOAD_SHREDDED"]);
 const METADATA: Record<string, (v: unknown) => boolean> = {
   kernel: (v) => v === true,
   fence: (v) => Number.isSafeInteger(v) && (v as number) >= 0,
@@ -434,6 +439,7 @@ const METADATA: Record<string, (v: unknown) => boolean> = {
       typeof m.cipher === "string" &&
       CIPHER_ID.test(m.cipher) &&
       Array.isArray(m.covers) &&
+      m.covers.length <= MAX_COVERS &&
       m.covers.every((c) => typeof c === "string" && SEAL_PATH.test(c))
     );
   },
@@ -459,8 +465,8 @@ export function eventColumnProblems(e: {
     if (typeof v !== "string" || !COLUMN_TOKEN.test(v)) bad.push(name);
   };
   token("id", e.id);
-  // Loom's control events (ERASURE_PENDING, PAYLOAD_SHREDDED) carry an empty workflow id.
-  if (e.workflowId !== "") token("workflowId", e.workflowId);
+  if (e.workflowId !== "" || typeof e.eventType !== "string" || !EMPTY_WORKFLOW_OK.has(e.eventType))
+    token("workflowId", e.workflowId);
   token("executionId", e.executionId);
   if (typeof e.eventType !== "string" || !EVENT_TYPE.test(e.eventType)) bad.push("eventType");
   for (const name of ["sequence", "timestamp"] as const) {
@@ -472,9 +478,19 @@ export function eventColumnProblems(e: {
     if (typeof m !== "object" || Array.isArray(m)) bad.push("metadata");
     else
       for (const [k, v] of Object.entries(m))
-        if (METADATA[k]?.(v) !== true) bad.push(`metadata.${k}`);
+        if (!Object.hasOwn(METADATA, k) || METADATA[k]?.(v) !== true) bad.push(`metadata.${k}`);
   }
   return bad;
+}
+
+/** Loom's plaintext control stream of parked shreds (never compacted, never cleared) and this user's rows in it. */
+export async function intentRows(st: IngestStack, userId: string): Promise<EventEnvelope[]> {
+  const events = await st.durable.raw.eventStore.read("__loom_erasure__");
+  return events.filter(
+    (e) =>
+      e.eventType === "ERASURE_PENDING" &&
+      (e.payload as { subjectId?: unknown } | null)?.subjectId === userId,
+  );
 }
 
 const ALLOWED: Allowed[] = [
