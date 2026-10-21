@@ -9,6 +9,7 @@ import {
 } from "@loom/plugin-read-model";
 import { ingestExecutionId } from "../documents/ingest";
 import type { ProgressBus } from "../documents/progress";
+import { type UserExecutionLister, forgetUserRows } from "./forgetUser";
 import {
   INGEST_STATUS_MODEL,
   type IngestStatusState,
@@ -34,10 +35,10 @@ export interface IngestStatusOptions {
   sensitive: SensitiveMap;
   /** Progress events leave here, after the fold has applied. */
   bus: ProgressBus;
+  /** User erasure's narrow read of the user's remaining rows (Task 167). Absent: `forgetUser` purges by scope only. */
+  userExecutions?: UserExecutionLister;
   onError?(err: unknown): void;
 }
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Class name only: the message of a database or fold error could carry anything.
 const logClass = (err: unknown) =>
@@ -180,11 +181,18 @@ export class IngestStatus implements DocumentStatusReads {
     await this.service.purgeFolded(INGEST_STATUS_MODEL, { executionId });
   }
 
-  /** User erasure, after rows, blobs and key: the table has no foreign key to `users`, so nothing cascades. */
+  /**
+   * User erasure, after the shred and the rows: every row of the user is tombstoned, the NULL-scope rows of the user's
+   * chat and title executions too (the table has no foreign key to `users`, so nothing cascades). Idempotent.
+   */
   forgetUser(userId: string): Promise<number> {
-    const scope = userId.toLowerCase();
-    if (!UUID.test(scope)) throw new TypeError("forgetUser: userId must be a uuid");
-    return this.service.purgeFolded(INGEST_STATUS_MODEL, { scope });
+    return forgetUserRows(
+      this.service,
+      INGEST_STATUS_MODEL,
+      userId,
+      this.o.userExecutions,
+      this.o.source,
+    );
   }
 
   /** Wait for every fold scheduled so far, leaving the model open (a backfill waits for the rows of the executions it started). */
