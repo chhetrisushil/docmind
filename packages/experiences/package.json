@@ -1,0 +1,27 @@
+{
+  "name": "@docmind/experiences",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DocMind's loom-ui experiences, defined once for every surface: the semantic catalogue, the views, their data providers and the surface-neutral actions.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@docmind/contracts": "workspace:*",
+    "@loom-ui/core": "*",
+    "@loom-ui/hydration": "*",
+    "@loom/core": "*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@loom-ui/renderer-terminal": "*",
+    "@loom/projection-runtime": "*",
+    "@types/node": "^22.0.0",
+    "vitest": "^2.1.8"
+  }
+}
