@@ -4,6 +4,7 @@ import { createHttp } from "./api/http";
 import { type OpenSse, openSse } from "./api/sse";
 import { Router } from "./router";
 import { AuthStore } from "./state/auth";
+import { ReceiptStore } from "./state/receipt";
 import { ThemeStore } from "./state/theme";
 import { ToastStore } from "./state/toasts";
 
@@ -13,6 +14,7 @@ export interface Services {
   auth: AuthStore;
   theme: ThemeStore;
   toasts: ToastStore;
+  receipt: ReceiptStore;
   open: OpenSse;
 }
 
@@ -39,6 +41,7 @@ export function createServices(o: ServiceOverrides = {}): Services {
     router: o.router ?? new Router(),
     theme: o.theme ?? new ThemeStore(),
     toasts: o.toasts ?? new ToastStore(),
+    receipt: o.receipt ?? new ReceiptStore(),
     open: o.open ?? ((opts) => openSse({ ...(o.fetch && { fetch: o.fetch }), ...opts })),
   };
 }
