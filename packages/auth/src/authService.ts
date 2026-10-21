@@ -36,6 +36,21 @@ export class AuthService {
     return this.start({ tenantId: login.tenantId, userId: login.userId });
   }
 
+  /**
+   * True when `password` is the password of the account `email` AND that account is `identity`: the check
+   * behind actions that need the password again (account erasure). It does the same work for every
+   * outcome (a hash check, or the decoy for an unknown email) and never throws on a bad hash.
+   */
+  async confirmPassword(identity: Identity, email: string, password: string): Promise<boolean> {
+    const login = await this.store.findLogin(email);
+    if (!login) {
+      await verifyAgainstDecoy(password);
+      return false;
+    }
+    const matches = await verifyPassword(login.passwordHash, password);
+    return matches && login.userId === identity.userId && login.tenantId === identity.tenantId;
+  }
+
   /** Ends the session the caller authenticated with. */
   async logOut(identity: Identity, token: string): Promise<void> {
     await this.store.deleteSession(identity, hashToken(token));
