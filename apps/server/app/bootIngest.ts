@@ -63,6 +63,8 @@ export async function bootIngest(
     detachStatusFeed,
     chat,
     titles,
+    eraser,
+    erasureLocks,
   } = built;
   const cleanup = [
     () => closeIngest(ingest),
@@ -119,6 +121,10 @@ export async function bootIngest(
         leases: { store: durable.storage.leaseStore, owner: recoveryOwner },
       }),
     });
+    // Resume erasures the last process left unfinished, after recovery has started (a cancelled-by-erasure
+    // owner must not be re-driven by recovery first) and after the read models booted. Not awaited.
+    void eraser?.resumeAll();
+    eraser?.startRescan();
     if (!background) return;
     const sweep = () =>
       Promise.all([store.purgeExpiredSessions(), throttle.purge()]).catch((err: unknown) =>
@@ -162,6 +168,8 @@ export async function bootIngest(
         // The server has stopped accepting uploads; let every fired flow start settle, then close everything.
         await runAll(
           ...closeSequence({
+            ...(eraser && { stopErasure: () => eraser.stop() }),
+            ...(erasureLocks && { closeErasureLocks: () => erasureLocks.end() }),
             startsIdle: async () => {
               await starts.idle();
               await titles?.idle();
