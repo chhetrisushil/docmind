@@ -8,13 +8,15 @@ import { confirmDialog } from "./confirm";
 import { promptDialog } from "./prompt";
 import "./dm-view";
 
-type ChatsTable = { rowKeys?: unknown; rows?: unknown };
+export const SCHEDULE: unique symbol = Symbol("dm-sessions.schedule");
+
+type ChatsTable = { rowKeys?: unknown };
 
 /** The chat list of the sidebar: the `sessions` experience, and the intents it raises. One view session for as long as it is connected. */
 export class DmSessions extends LitElement {
   static styles = [baseStyles, css`:host { display: block; }`];
-  /** Test seam: how a refresh is delayed. */
-  schedule: (fn: () => void, ms: number) => void = (fn, ms) => void setTimeout(fn, ms);
+  /** Test seam (reachable only through the exported symbol): how a refresh is delayed. */
+  [SCHEDULE]: (fn: () => void, ms: number) => void = (fn, ms) => void setTimeout(fn, ms);
   private session: ViewSession | undefined;
   private readonly ctx = new ServicesController(this);
   private pending = false;
@@ -28,7 +30,7 @@ export class DmSessions extends LitElement {
     if (this.pending) return;
     this.pending = true;
     const epoch = this.epoch;
-    this.schedule(() => {
+    this[SCHEDULE](() => {
       if (epoch !== this.epoch) return;
       this.pending = false;
       this.session?.invalidate("chats");
@@ -59,13 +61,17 @@ export class DmSessions extends LitElement {
       : [];
     const intent: Intent | undefined = intentOf(session.name, a, { rowKeys: keys });
     if (!intent) return { ok: false, reason: "refused" };
-    const titleOf = (id: string): string => {
-      const i = keys.indexOf(id);
-      const row = Array.isArray(table?.rows) ? (table.rows as unknown[])[i] : undefined;
-      const title = Array.isArray(row) ? String(row[0] ?? "") : "";
-      return title === "New chat" ? "" : title;
-    };
     const { api, router, toasts } = svc;
+    // The table shows "New chat" for an untitled chat, so the title to start a rename from is the served one, asked now.
+    let served = "";
+    if (intent.type === "chat.rename") {
+      try {
+        served = (await api.getChat(intent.id)).title ?? "";
+      } catch {
+        served = ""; // the dialog then starts empty; the rename itself reports its own failure
+      }
+    }
+    const titleOf = () => served;
     const signal = this.leaving.signal;
     return {
       ok: await performIntent(intent, {

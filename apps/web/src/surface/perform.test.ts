@@ -261,6 +261,28 @@ describe("performIntent: chats", () => {
       text: "Could not rename that chat.",
     });
   });
+  it("never cuts a character in two at the 200 limit, and reports only the error class", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const t = ctx({
+      patchChat: vi.fn(async () => {
+        throw new RangeError("secret title");
+      }),
+    });
+    const title = `${"x".repeat(199)}\u{1F600}tail`; // the emoji straddles unit 200
+    const c = { ...(t.c as object), prompt: vi.fn(async () => title) } as never;
+    await performIntent({ type: "chat.rename", id: A }, c);
+    expect(t.api.patchChat).toHaveBeenCalledWith(A, { title: "x".repeat(199) });
+    expect(err).toHaveBeenCalledWith("intent RangeError");
+    const d = ctx({
+      deleteChat: vi.fn(async () => {
+        throw new TypeError("secret");
+      }),
+    });
+    await performIntent({ type: "chat.delete", id: A }, d.c);
+    expect(err).toHaveBeenCalledWith("intent TypeError");
+    expect(err.mock.calls.flat().join(" ")).not.toContain("secret");
+    err.mockRestore();
+  });
   it("deletes after a confirmation, and goes to a new chat when it was the open one", async () => {
     const t = ctx();
     await performIntent({ type: "chat.delete", id: A }, {

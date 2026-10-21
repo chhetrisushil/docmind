@@ -3,6 +3,7 @@ import { ApiError } from "../api/http";
 import { Router, parseRoute } from "../router";
 import { createServices } from "../services";
 import { AuthStore } from "../state/auth";
+import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
 import "./index";
 import { DmApp } from "./dm-app";
@@ -172,7 +173,7 @@ describe("dm-app", () => {
     let live = true;
     const fetch = (async (url: string) =>
       String(url).includes("/api/ui/")
-        ? new Promise<Response>(() => {}) // the sidebar's chat list: not what this test is about
+        ? new Promise<Response>(() => {}) // the sidebar's chat list: its own 401 is covered in "dm-app: the sidebar"
         : live && String(url).endsWith("/api/me")
           ? new Response(JSON.stringify(ME), { headers: { "content-type": "application/json" } })
           : new Response(JSON.stringify({ error: { code: "unauthorized", message: "x" } }), {
@@ -314,5 +315,84 @@ describe("dm-app: fix round 1", () => {
     svc.router.navigate(parseRoute("/nope"));
     await vi.waitFor(() => expect(root(app).querySelector("dm-not-found")).not.toBeNull());
     expect(root(app).querySelector("dm-app-shell")).toBeNull();
+  });
+});
+
+describe("dm-app: the sidebar", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+  it("a 401 on the sidebar's own view fetch ends the session once: one sign-in route, one replaceState, no further /api/ui/ requests", async () => {
+    const seen: string[] = [];
+    const fetch = (async (url: string) => {
+      seen.push(String(url));
+      return String(url).endsWith("/api/me")
+        ? json(ME)
+        : json({ error: { code: "unauthorized", message: "x" } }, 401);
+    }) as never;
+    const win = fakeWindow("/settings"); // a page that fetches nothing itself: only the sidebar asks
+    const svc = createServices({ router: new Router(win as never), fetch });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    await settle(app);
+    expect(seen.filter((u) => u.includes("/api/ui/")).length).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 50));
+    const ui = () => seen.filter((u) => u.includes("/api/ui/")).length;
+    const count = ui();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ui()).toBe(count);
+    expect(win.history.replaceState).toHaveBeenCalledTimes(1);
+    expect(svc.router.route).toEqual({ name: "sign-in" });
+    expect(root(app).querySelector("dm-app-shell")).toBeNull();
+  });
+
+  it("signing out and in as another user leaves none of the first user's chats, and fetches the view again", async () => {
+    const A = { ...ME, email: "a@example.com" };
+    const B = { ...ME, userId: "1b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10", email: "b@example.com" };
+    const who = { now: A };
+    const chat = (n: number, title: string) => ({
+      id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+      title,
+      scope: "all" as const,
+      createdAt: "2026-10-01T10:00:00.000Z",
+      lastMessageAt: "2026-10-05T10:00:00.000Z",
+      messageCount: 1,
+    });
+    const ui = fakeUi({
+      documents: async () => ({ items: [], truncated: false }),
+      document: async () => null,
+      content: async () => null,
+      chats: async () => (who.now === A ? [chat(1, "Alpha invoices")] : [chat(2, "Beta plans")]),
+    });
+    const uiView = vi.fn(ui.api.uiView);
+    const sessionsFetched = () => uiView.mock.calls.filter((c) => c[0] === "sessions").length;
+    const svc = servicesWithAuth("/chats", {
+      ...ui.api,
+      uiView,
+      me: async () => who.now,
+      login: async () => who.now,
+    });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    const text = () => {
+      const side = root(app)
+        .querySelector("dm-app-shell")
+        ?.shadowRoot?.querySelector("dm-sessions");
+      const table = side?.shadowRoot
+        ?.querySelector("dm-view")
+        ?.shadowRoot?.querySelector("lu-table");
+      return table?.shadowRoot?.textContent ?? "";
+    };
+    await vi.waitFor(() => expect(text()).toContain("Alpha invoices"));
+    expect(sessionsFetched()).toBe(1);
+    await svc.auth.logout();
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    await settle(app);
+    expect(root(app).querySelector("dm-app-shell")).toBeNull();
+    who.now = B;
+    await svc.auth.login({ email: B.email, password: "x" });
+    svc.router.navigate({ name: "chat" });
+    await vi.waitFor(() => expect(text()).toContain("Beta plans"));
+    expect(text()).not.toContain("Alpha invoices");
+    expect(sessionsFetched()).toBe(2);
   });
 });
