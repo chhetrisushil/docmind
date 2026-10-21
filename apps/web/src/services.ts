@@ -7,6 +7,7 @@ import { AuthStore } from "./state/auth";
 import { ReceiptStore } from "./state/receipt";
 import { ThemeStore } from "./state/theme";
 import { ToastStore } from "./state/toasts";
+import { UploadsStore } from "./state/uploads";
 
 export interface Services {
   api: Api;
@@ -15,6 +16,7 @@ export interface Services {
   theme: ThemeStore;
   toasts: ToastStore;
   receipt: ReceiptStore;
+  uploads: UploadsStore;
   open: OpenSse;
 }
 
@@ -35,6 +37,8 @@ export function createServices(o: ServiceOverrides = {}): Services {
   const api = o.api ?? createApi(http, { ...(o.xhr && { xhr: o.xhr }), epoch, onUnauthorized });
   const auth = o.auth ?? new AuthStore(api);
   late.auth = auth;
+  const open: OpenSse =
+    o.open ?? ((opts) => openSse({ ...(o.fetch && { fetch: o.fetch }), ...opts }));
   return {
     api,
     auth,
@@ -42,6 +46,7 @@ export function createServices(o: ServiceOverrides = {}): Services {
     theme: o.theme ?? new ThemeStore(),
     toasts: o.toasts ?? new ToastStore(),
     receipt: o.receipt ?? new ReceiptStore(),
-    open: o.open ?? ((opts) => openSse({ ...(o.fetch && { fetch: o.fetch }), ...opts })),
+    uploads: o.uploads ?? new UploadsStore(api, open, auth),
+    open,
   };
 }
