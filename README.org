@@ -8,7 +8,7 @@ A signed-in user uploads documents, gets summaries and analysis, and asks questi
 documents in a chat that cites its sources. Each user's data is isolated per tenant and encrypted
 under a per-user key, so account erasure can be made final by destroying that key.
 
-Document storage, ingestion, linked retrieval, chat and account erasure exist today (see Status); the web UI is planned.
+Document storage, ingestion, linked retrieval, chat, account erasure and the web UI exist today (see Status).
 
 * Status
 
@@ -22,11 +22,11 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | shipped  |
 | M4        | Chat and history: tools, agent, citations      | shipped                        |
 | M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | shipped                |
-| M6        | Web UI (=apps/web=)                            | planned                        |
+| M6        | Web UI (=apps/web=, =packages/experiences=)    | shipped                        |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
 The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
-document. =/api/chats= answers questions over the user's documents with cited, streamed answers, with the model's reasoning shown and stored through Loom's ADR 0133 capture (sealed per user); version 1.0.0 of the =chat-title= flow names each chat. There is no =apps/web= yet.
+document. =/api/chats= answers questions over the user's documents with cited, streamed answers, with the model's reasoning shown and stored through Loom's ADR 0133 capture (sealed per user); version 1.0.0 of the =chat-title= flow names each chat. The web UI is described under Web UI below.
 
 * Architecture
 
@@ -59,6 +59,80 @@ Security model, in brief:
 - Event paths holding sensitive fields are registered in =apps/server/app/sensitive.ts=; flow input
   carries ids only, and passwords and secrets are kept out of logs.
 
+* Web UI
+
+DocMind's screens are loom-ui experiences, not hand-built views. The design is in
+[[file:docs/design/m6-loom-ui-native.md][the M6 design note]] and spec section 7.
+
+** Architecture
+
+- The six views (library, library-empty, document detail, sessions, chat, sources) are defined once, in
+  =packages/experiences=: a semantic catalogue, the experiences, their data providers and reshapers. The
+  package knows no surface.
+- The server (=apps/server/app/ui=) composes and seals them and compiles them per surface:
+  =GET /api/ui/views/:view?surface=...= serves the blueprint and =POST /api/ui/hydrate= answers handle loads.
+  Both are authenticated. The readers behind the providers are bound to the caller's identity by the server,
+  so no parameter names a user, and every read is owner-scoped. A hydrate request may start at most 8
+  distinct reads, 4 at a time; the rest are refused.
+- =apps/web= is a thin web surface: a loom-ui Lit host (=dm-view=), the shell, the auth forms, the dialog,
+  the upload zone and the pages that host a view (=dm-*= elements, only for what loom-ui does not draw).
+  It performs actions through the surface-neutral intents of =@docmind/contracts= (=intentOf=, with the data the
+  server served held beside the action); the REST routes re-check ownership, so the intent filter is not the
+  security boundary.
+- The same experiences compile for the =terminal= surface. A test renders them with
+  =@loom-ui/renderer-terminal=; no terminal surface is shipped, and one is planned as a second thin surface over
+  the same package and routes.
+- View keys are random per server process. Run one server process (the same rule as one flow engine per
+  database, see Operations).
+
+** Build and run
+
+- Development: start the server on port 3000, then =pnpm --filter @docmind/web dev= (Vite on port 5173,
+  proxying =/api= to the server; =DOCMIND_API= overrides the target). The proxy keeps the page and the API on
+  one origin, which the origin guard and the session cookie need.
+- Production: =pnpm build=, then start the server with =DOCMIND_WEB_DIR=apps/web/dist=. Unset, the server serves
+  the API only. The server then serves the files with a strict CSP (=default-src 'self'= with no inline script or
+  style, no remote fonts, images or connections). Static files stay under the 60 s request timer. Behind a
+  reverse proxy, forward =Host= unchanged.
+- Contributors: no inline script or style (including the HTML style attribute), no remote fonts or icons.
+- loom-ui and Loom's browser runtimes are linked as built ESM (=link:../loom-ui/packages/...= and
+  =link:../loom/...=), so both repositories must be checked out next to this one and built. CI checks loom-ui
+  out at =LOOM_UI_REF= (see =.github/workflows/ci.yml=); =LOOM_TOKEN= must be able to read both
+  =chhetrisushil/loom= and =chhetrisushil/loom-ui=. Two generic additions to loom-ui carry the UI: =Table= row
+  actions and =Chat= reference markers, and a third, opt-in markdown rendering for chat text.
+
+** Answers are markdown
+
+Assistant answers render a closed, bounded subset of markdown (headings, emphasis, code, lists, quotes, tables
+and links), drawn as DOM by loom-ui, opt-in per assistant part (=ChatFold= sets it). It is a hand-written parser;
+DocMind has no markdown or sanitiser dependency. Model output is untrusted input to the renderer: it is never
+parsed into HTML, no image is ever fetched, and a link is only drawn for =http=, =https= and =mailto=, with the
+host shown and opened in a new context with =rel="noopener noreferrer nofollow"=.
+
+** What the browser stores
+
+Only the theme choice (=dm-theme=). The erasure receipt is shown once and kept in memory.
+
+** Limits and decisions
+
+- The library lists the newest 200 documents, the session sidebar the newest 50 chats; both are flat lists.
+- The chat scope is "all documents" or "the documents this chat started with"; no document picker.
+- The document Content tab shows passages in order (a page at a time), not stitched full text.
+- While a reply streams, the sources panel is in a pending state; there is no "N cited so far".
+- Not built: download, image preview (images and raw HTML in answers are refused by design), grid view, bulk
+  selection, grouped chat list, editing a sent message, forgot password, Cmd+K.
+- No browser end-to-end test: a component-level acceptance test (happy-dom) covers sign up, upload, ask, cited
+  answer, reload, rename and erase. Playwright is M7.
+- Terminal gaps, accepted as they are (the owner decided not to change loom-ui): the =A2UIView= kind draws a
+  placeholder (Summary, Content and Sources are unreadable), =SelectInput= shows no current selection,
+  =TextInput= only prompts, =Table= row actions are not drawn, and =Chat= reference markers have no list.
+
+** Known limitation: sign-up reveals whether an address exists
+
+Sign-up has no email verification (spec decision), and it answers 202 whether or not the address is taken.
+But the follow-up sign-in succeeds only for a new address, so anyone can infer that an address has an account
+by signing up and signing in by hand. The client cannot close this; email verification would.
+
 * Repository layout
 
 pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live in =infra/migrations=.
@@ -68,7 +142,9 @@ pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live
 | =apps/server=           | =@docmind/server=: Loom app, HTTP routes, migrations runner, KEK rotation tool |
 | =packages/auth=         | =@docmind/auth=: =Authenticator= interface, conformance suite, password/session implementation |
 | =packages/blob-store=   | =@docmind/blob-store=: encrypted filesystem =ContentStore=     |
-| =packages/contracts=    | =@docmind/contracts=: zod schemas and types for the HTTP API   |
+| =apps/web=              | =@docmind/web=: the web surface (Vite, Lit, loom-ui's Lit renderer) |
+| =packages/contracts=    | =@docmind/contracts=: zod schemas and types for the HTTP API, and the surface-neutral intents (=intentOf=) |
+| =packages/experiences=  | =@docmind/experiences=: the six loom-ui experiences, their data providers and reshapers (surface-neutral) |
 | =packages/keystore-pg=  | =@docmind/keystore-pg=: =PostgresKeyStore= (per-subject keys wrapped by a master key) |
 | =infra/migrations=      | Ordered SQL migrations =0001= to =0009= (roles, tenancy, auth, keys, documents) |
 
@@ -252,6 +328,8 @@ The backup and restore drill (restore into an empty database, verify, re-run era
 
 - PDFs in CJK scripts that need predefined CMaps extract as empty text and are sent to vision.
 - The word segmentation in =analyze= is synchronous.
+- The web UI's view keys are random per process, so a second server process would reject the first one's views: run one process.
+- Sign-up reveals whether an address exists (no email verification); see Web UI.
 - Chats run in one process; a turn in progress when the process dies is run again after restart.
 - A chat left on an old flow version is logged and left at recovery; a flow version bump needs the previous version registered beside the new one.
 - A title is skipped (and not retried) if the model is down or the first question is not recorded in time.
@@ -266,6 +344,7 @@ The backup and restore drill (restore into an empty database, verify, re-run era
 
 - [[file:docs/specs/2026-10-18-docmind-design.md][Design spec]] (draft): goals, data model, tenancy, crypto-shredding, ingestion, chat, roadmap.
 - [[file:docs/design/linked-retrieval.md][Linked retrieval]]: semantic seeds, then link hops (accepted direction).
+- [[file:docs/design/m6-loom-ui-native.md][Web UI design note]] (loom-ui native, surface-agnostic).
 - [[file:docs/design/ui-mocks.md][UI mocks]] and [[file:docs/design/claude-design-brief.md][design brief]].
 - Milestone plans:
   - [[file:docs/superpowers/plans/2026-10-18-m0-foundations.md][M0 foundations]]

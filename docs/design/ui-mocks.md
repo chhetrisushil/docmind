@@ -358,3 +358,14 @@ Deviations applied in `apps/web/src/styles/tokens.css` (Task 178a), each covered
 4. Added `color-scheme: dark` on `:root` and `color-scheme: light` on the light block.
 5. Added the `--lu-*` bridge in its own `:root` rule after the theme blocks, so loom-ui elements follow either theme.
 6. No colour pair needed a nudge: every pair in both themes passed at the values above.
+
+### As built (M6)
+
+Where the web UI differs from the mocks:
+1. Light-theme muted text is 70% (Task 178a, above).
+2. The table's row actions are visible buttons (loom-ui's `Table`), not a row menu.
+3. The filter and the scope are native selects (loom-ui's `SelectInput`).
+4. Document status is text (Queued, Parsing, Indexing, Ready, Failed), with no inline progress bar.
+5. Answers are markdown (a closed subset: emphasis, lists, tables, code, safe links, no images) with numbered citation buttons; the sources panel is pending while a reply streams.
+6. The chat list is flat (newest 50) and the library lists the newest 200 documents.
+7. Not built: `<mark>` on the cited span, a live "N cited so far", Download, grid view, bulk bar, sign-up name or workspace fields, "Forgot password", Cmd+K.

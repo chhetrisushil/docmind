@@ -43,3 +43,7 @@ Facts re-checked first: `src/alias.ts` line 1 imports `createHmac, randomBytes` 
 ## 4. The generic requests
 
 The text of the loom-ui pull requests is the "PR body" of Tasks 176a to 176k of the M6 plan. They name no DocMind concept.
+
+## 5. As built
+
+The decision held. Experiences are composed in `@docmind/experiences`, compiled per surface and served by `GET /api/ui/views/:view` and `POST /api/ui/hydrate` with identity-bound readers (at most 8 distinct reads per request, 4 concurrent); `apps/web` is a thin web surface over them, and the terminal compile is proven by a test, not shipped. The spike needed no custom `lu-chat` renderer: three generic loom-ui additions were made (`Table` row actions, `Chat` reference markers, opt-in markdown). The terminal renderer's gaps were accepted as they are by the owner (placeholder for `A2UIView`, `SelectInput` without its selection, `TextInput` prompts only, no `Table` row actions, `Chat` references without a list). View keys are random per process, so one server process is assumed. See README "Web UI" and spec section 7.
