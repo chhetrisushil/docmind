@@ -24,7 +24,7 @@ const toRequest = (r: Row): ErasureRequest => ({
   attempts: r.attempts,
 });
 
-/** Rows per call of `docmind_erasure_pending`; the function allows up to 1000. */
+/** Rows per call of `docmind_erasure_pending`; the function allows 1 to 1000. */
 export const ERASURE_PAGE = 500;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
@@ -38,7 +38,10 @@ export class PgErasureStore implements ErasureStore {
   constructor(
     private readonly pool: Pool,
     private readonly pageSize = ERASURE_PAGE,
-  ) {}
+  ) {
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000)
+      throw new Error("pageSize must be an integer from 1 to 1000");
+  }
 
   async insert(
     tx: Queryable,
