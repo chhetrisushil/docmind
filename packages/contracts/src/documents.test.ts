@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DocumentContentResponse,
   DocumentDto,
   DocumentProgressEvent,
   IngestStep,
@@ -113,5 +114,31 @@ describe("IngestStep", () => {
 describe("ProgressDetail", () => {
   it("accepts vision_unavailable", () => {
     expect(ProgressDetail.parse("vision_unavailable")).toBe("vision_unavailable");
+  });
+});
+
+describe("document content contract", () => {
+  const passage = {
+    passageId: ID,
+    ordinal: 0,
+    locator: { kind: "page", page: 1 },
+    headingPath: ["Terms"],
+    text: "Payment is due in 30 days.",
+  };
+  it("accepts a page of passages and a null cursor", () => {
+    expect(DocumentContentResponse.parse({ items: [passage], nextCursor: null })).toEqual({
+      items: [passage],
+      nextCursor: null,
+    });
+  });
+  it("refuses a passage with a bad id, a negative ordinal or a locator of an unknown kind", () => {
+    for (const bad of [
+      { ...passage, passageId: "x" },
+      { ...passage, ordinal: -1 },
+      { ...passage, locator: { kind: "line", n: 1 } },
+    ])
+      expect(DocumentContentResponse.safeParse({ items: [bad], nextCursor: null }).success).toBe(
+        false,
+      );
   });
 });
