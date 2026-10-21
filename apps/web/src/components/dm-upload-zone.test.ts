@@ -164,7 +164,7 @@ describe("dm-upload-zone", () => {
     await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(3));
     expect(uploads.get().uploads).toEqual([]);
   });
-  it("shows no queue when asked to, and keeps a polite status region with counts only", async () => {
+  it("shows no queue and no live region when asked to hide the queue (the other zone announces it)", async () => {
     const { el, uploads } = await mount();
     el.toggleAttribute("hide-queue", true);
     uploads.set({
@@ -175,12 +175,16 @@ describe("dm-upload-zone", () => {
     });
     await updated(el);
     expect(el.shadowRoot?.querySelectorAll("[data-upload]")).toHaveLength(0);
+    expect(el.shadowRoot?.querySelector("[data-status]")).toBeNull();
+    el.toggleAttribute("hide-queue", false);
+    await updated(el);
     const status = q<HTMLElement>(el, "[data-status]");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.textContent).toContain("1 uploading");
     expect(status.textContent).toContain("1 failed");
     expect(status.textContent).not.toContain("secret");
   });
+
   it("keeps saying Release while the drag moves over its children, and clears when it really leaves", async () => {
     const { el } = await mount();
     const zone = q<HTMLElement>(el, "[data-zone]");

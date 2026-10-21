@@ -61,6 +61,8 @@ const extensionOf = (name: string) => name.slice(name.lastIndexOf(".") + 1).toLo
  */
 export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
   private events: { close(): void } | undefined;
+  /** Identifies the stream being opened or open: a close that finds it replaced (or cleared) is not ours to report. */
+  private eventsToken: object | undefined;
   private opens = 0;
   private seq = 0;
   private readonly controllers = new Map<string, AbortController>();
@@ -97,9 +99,10 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
       this.waiting.push(() => {
         this.active++;
         void run()
-          .then(resolve)
+          .catch((err) => report("uploads-run", err))
           .finally(() => {
             this.active--;
+            resolve();
             this.pump();
           });
       });
@@ -202,10 +205,11 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
     onProgress: (e: DocumentProgressEvent | "resync") => void,
     onEnd?: (reason: SseCloseReason) => void,
   ): void {
-    if (this.events) return;
+    if (this.eventsToken) return;
     const epoch = this.auth?.epoch;
-    const ref: { handle?: { close(): void } } = {};
-    ref.handle = this.open({
+    const token = {};
+    this.eventsToken = token;
+    const handle = this.open({
       url: "/api/documents/events",
       onOpen: () => {
         if (++this.opens > 1) onProgress("resync");
@@ -220,18 +224,22 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
         }
       },
       onClose: (reason) => {
-        if (this.events !== ref.handle) return; // a close we asked for (stopEvents), or the end of a stream already replaced
+        if (this.eventsToken !== token) return; // a close we asked for (stopEvents), or the end of a stream already replaced
+        this.eventsToken = undefined;
         this.events = undefined;
         this.opens = 0;
         if (reason === "unauthorized") this.auth?.expired(epoch);
         onEnd?.(reason);
       },
     });
-    this.events = ref.handle;
+    // open() may already have reported the end (and cleared the token): then there is no handle to keep.
+    if (this.eventsToken === token) this.events = handle;
+    else handle.close();
   }
   stopEvents(): void {
     const events = this.events;
     this.events = undefined;
+    this.eventsToken = undefined;
     this.opens = 0;
     events?.close();
   }

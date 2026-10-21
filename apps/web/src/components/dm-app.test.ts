@@ -177,7 +177,7 @@ describe("dm-app", () => {
             status: 401,
             headers: { "content-type": "application/json" },
           })) as never;
-    const win = fakeWindow("/documents");
+    const win = fakeWindow("/settings"); // not /documents: that page fetches its view, and this fetch answers 401 once "live" is false
     const svc = createServices({ router: new Router(win as never), fetch });
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
     await vi.waitFor(() => expect(svc.auth.get().status).toBe("signed-in"));
