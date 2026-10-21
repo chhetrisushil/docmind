@@ -42,7 +42,12 @@
       "@loom/plugin-crypto": "link:../loom/plugins/crypto",
       "@loom/plugin-postgres": "link:../loom/plugins/postgres",
       "@loom/plugin-read-model": "link:../loom/plugins/read-model",
-      "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
+      "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime",
+      "@loom/blueprint-runtime": "link:../loom/packages/blueprint-runtime",
+      "@loom/projection-runtime": "link:../loom/packages/projection-runtime",
+      "@loom-ui/core": "link:../loom-ui/packages/core",
+      "@loom-ui/hydration": "link:../loom-ui/packages/hydration",
+      "@loom-ui/renderer-lit": "link:../loom-ui/packages/renderer-lit"
     }
   }
 }
