@@ -81,7 +81,7 @@ describe("the library shapes", () => {
     valid("StatusCard", shape("library-health", raw([doc(1)], true)));
     expect(shape("library-health", raw(items, true))).toMatchObject({
       level: "critical",
-      headline: "1 document failed",
+      headline: "at least 1 document failed",
     });
   });
   it("say how the ingest is going: failed beats processing beats ok", () => {

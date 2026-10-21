@@ -342,3 +342,94 @@ describe("findings reported by code only", () => {
     }
   });
 });
+
+describe("186c review follow-ups", () => {
+  it("M1: a library load reads documents once, whatever the defaulted keys are", async () => {
+    const r = readers();
+    const v = views();
+    await v.hydrate(
+      "library",
+      ["doc-total", "doc-ready", "ingest", "documents"].map((h) => req("library", h)),
+      r,
+      "u",
+    );
+    expect(r.documents).toHaveBeenCalledTimes(1);
+    const inv = createInvoker(readers());
+    const r2 = readers();
+    const i2 = createInvoker(r2);
+    await i2.invokeTransient(INVOKE_ID, { target: "documents.list", args: { limit: 200 } });
+    await i2.invokeTransient(INVOKE_ID, {
+      target: "documents.list",
+      args: { limit: 200, status: "all" },
+    });
+    expect(r2.documents).toHaveBeenCalledTimes(1);
+    expect(inv).toBeTruthy();
+  });
+  it("M7: an input that cannot be keyed is a rejected promise, not a throw", () => {
+    const cyc: Record<string, unknown> = {};
+    cyc.self = cyc;
+    const big = { target: "documents.list", args: { limit: 5n } };
+    for (const input of [cyc, big, { target: "documents.list", args: cyc }]) {
+      let p: Promise<unknown> | undefined;
+      expect(() => {
+        p = createInvoker(readers()).invokeTransient(INVOKE_ID, input);
+      }).not.toThrow();
+      expect(p).toBeInstanceOf(Promise);
+      p?.catch(() => undefined);
+    }
+  });
+  it("M2: onFinding names only handles the view binds, and never client text", async () => {
+    const onFinding = vi.fn();
+    const v = views(onFinding);
+    const evil = "sentinel-title-0123456789".repeat(40);
+    const r = readers({
+      documents: vi.fn(async () => {
+        throw new Error("x");
+      }),
+    });
+    await v.hydrate("library", [req("library", evil), req("library", "documents")], r, "u");
+    expect(onFinding).toHaveBeenCalled();
+    const handles = onFinding.mock.calls.map((c) => c[0]);
+    expect(handles).toContain("documents");
+    for (const h of handles)
+      expect(["documents", "doc-total", "doc-ready", "ingest", "unbound"]).toContain(h);
+    expect(JSON.stringify(onFinding.mock.calls)).not.toContain("sentinel");
+  });
+  it("M4: an unknown or prototype view name is an error per request, not a throw", async () => {
+    const r = readers();
+    for (const name of ["constructor", "__proto__", "toString", "nope"]) {
+      const out = await views().hydrate(
+        name as never,
+        [req("library", "doc-total"), req("library", "ingest")],
+        r,
+        "u",
+      );
+      expect(out.map((x) => x.state)).toEqual(["error", "error"]);
+    }
+    expect(r.documents).not.toHaveBeenCalled();
+  });
+  it("M5: createInvoker is not part of the package's public surface", async () => {
+    const pkg = await import("./index");
+    expect("createInvoker" in pkg).toBe(false);
+    expect("INVOKE_ID" in pkg).toBe(true);
+  });
+  it("M6: a capped list labels failed and processing counts as minimums", async () => {
+    const mk = (status: "failed" | "parsing") => ({ ...doc(1), status });
+    for (const [status, word] of [
+      ["failed", "failed"],
+      ["parsing", "processed"],
+    ] as const) {
+      const capped = readers({
+        documents: vi.fn(async () => ({ items: [mk(status)], truncated: true })),
+      });
+      const [a] = await views().hydrate("library", [req("library", "ingest")], capped, "u");
+      expect(JSON.stringify(a)).toMatch(/at least 1/i);
+      expect(JSON.stringify(a)).toContain(word);
+      const full = readers({
+        documents: vi.fn(async () => ({ items: [mk(status)], truncated: false })),
+      });
+      const [b] = await views().hydrate("library", [req("library", "ingest")], full, "u");
+      expect(JSON.stringify(b)).not.toMatch(/at least/i);
+    }
+  });
+});

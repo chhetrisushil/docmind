@@ -39,18 +39,19 @@ const SHAPES: Record<string, (raw: never) => unknown> = {
     ...(raw.truncated ? { label: `among the newest ${LIST_CAP}` } : {}),
   }),
   "library-health": (raw: RawDocuments) => {
+    const min = raw.truncated ? "at least " : "";
     const failed = raw.items.filter((d) => d.status === "failed").length;
     const busy = raw.items.filter((d) => PROCESSING.has(d.status)).length;
     if (failed > 0)
       return {
         level: "critical",
-        headline: `${plural(failed, "document", "documents")} failed`,
+        headline: `${min}${plural(failed, "document", "documents")} failed`,
         detail: "Open the document to retry it.",
       };
     if (busy > 0)
       return {
         level: "warning",
-        headline: `${plural(busy, "document", "documents")} being processed`,
+        headline: `${min}${plural(busy, "document", "documents")} being processed`,
         detail: "They appear as Ready when they are done.",
       };
     return {
