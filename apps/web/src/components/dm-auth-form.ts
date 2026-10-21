@@ -3,7 +3,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { ApiError } from "../api/http";
 import { authErrorText } from "../state/auth";
 import { ServicesController } from "../state/services-controller";
-import { baseStyles } from "../styles/base";
+import { ariaDisabledStyles, baseStyles } from "../styles/base";
 import "./dm-icon";
 
 export class DmAuthForm extends LitElement {
@@ -18,6 +18,7 @@ export class DmAuthForm extends LitElement {
   };
   static styles = [
     baseStyles,
+    ariaDisabledStyles,
     css`
       :host { display: grid; place-items: center; min-height: 100%; padding: 32px 16px; }
       form { width: min(400px, 100%); display: grid; gap: 16px; }
@@ -26,8 +27,6 @@ export class DmAuthForm extends LitElement {
       .reveal { position: absolute; right: 2px; top: 22px; }
       .hint { font-size: 12px; color: var(--dm-muted); margin-top: 4px; }
       .btn.primary { min-height: 40px; }
-      .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
-      .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
       p.switch { color: var(--dm-muted); }
     `,
   ];

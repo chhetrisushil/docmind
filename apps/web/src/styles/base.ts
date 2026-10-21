@@ -31,3 +31,8 @@ export const baseStyles = css`
   @keyframes dm-spin { to { transform: rotate(360deg); } }
   @keyframes dm-pulse { 50% { opacity: 0.45; } }
 `;
+
+/** A button the page keeps focusable while it is busy (aria-disabled), drawn as disabled. */
+export const ariaDisabledStyles = css`
+  .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+`;
