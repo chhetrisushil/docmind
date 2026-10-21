@@ -268,6 +268,29 @@ describe("UploadsStore lifetime and limits", () => {
     first?.onClose?.("failed");
     expect(ended).not.toHaveBeenCalled();
   });
+  it("a stream that closes while open() is still running is handled, and can be started again", () => {
+    const sse = { closes: 0 };
+    const open = vi.fn((opts: SseOptions) => {
+      opts.onClose?.("failed"); // before open() has returned
+      return { close: () => void sse.closes++ };
+    });
+    const store = new UploadsStore({ uploadDocument: vi.fn() as never }, open as never);
+    const ended = vi.fn();
+    store.startEvents(() => {}, ended);
+    expect(ended).toHaveBeenCalledWith("failed");
+    store.startEvents(() => {}, ended);
+    expect(open).toHaveBeenCalledTimes(2);
+  });
+  it("a run that throws cannot hang upload() or keep the pool slot", async () => {
+    const t = setup();
+    const patch = vi.spyOn(t.store as never, "patch" as never).mockImplementation((() => {
+      throw new Error("boom");
+    }) as never);
+    await expect(t.store.upload([file("a.pdf")])).resolves.toHaveLength(1);
+    patch.mockRestore();
+    const out = await t.store.upload([file("b.pdf"), file("c.pdf"), file("d.pdf")]);
+    expect(out.every((r) => r.document)).toBe(true);
+  });
   it("a new sign-in without a sign-out in between also cancels and clears", async () => {
     const auth = await signedIn();
     const t = setup(undefined, auth);

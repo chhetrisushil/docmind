@@ -130,7 +130,7 @@ export class DmUploadZone extends LitElement {
       )
       .join(", ");
     return html`
-      <p class="sr-only" data-status role="status" aria-live="polite" aria-atomic="true">${summary}</p>
+      ${this.hideQueue ? null : html`<p class="sr-only" data-status role="status" aria-live="polite" aria-atomic="true">${summary}</p>`}
       <div data-zone ?data-over=${this.dragging > 0} @dragenter=${this.onDrag} @dragover=${this.onDrag} @dragleave=${this.onDrag} @drop=${this.onDrop}>
         <dm-icon name="upload-simple"></dm-icon>
         <p>${this.dragging > 0 ? `Release to upload ${plural(this.dragging, "file", "files")}` : html`Drop files here or <button class="btn ghost" data-browse @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>("input[type=file]")?.click()}>browse</button>`}</p>
