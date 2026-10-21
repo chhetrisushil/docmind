@@ -10,6 +10,8 @@ const mount = async (attrs: Record<string, string>) => {
   return el;
 };
 
+const UNSAFE = /<script|\son\w+=|href=|foreignObject|javascript:/i;
+
 describe("dm-icon", () => {
   it("draws an svg, hidden from assistive tech unless it has a label", async () => {
     const decorative = await mount({ name: "check" });
@@ -34,10 +36,15 @@ describe("dm-icon", () => {
     }
   });
 
+  it("the unsafe-markup check flags an event handler attribute", () => {
+    expect(UNSAFE.test("<svg onload=x>")).toBe(true);
+    expect(UNSAFE.test('<svg viewBox="0 0 1 1"><path d="M0 0"/></svg>')).toBe(false);
+  });
+
   it("ships every icon the mocks use as an inline svg without scripts", () => {
     for (const [name, svg] of Object.entries(ICONS)) {
       expect(svg.startsWith("<svg"), name).toBe(true);
-      expect(/<script|\\son\\w+=|href=|foreignObject|javascript:/i.test(svg), name).toBe(false);
+      expect(UNSAFE.test(svg), name).toBe(false);
     }
     expect(Object.keys(ICONS).length).toBeGreaterThanOrEqual(30);
   });
