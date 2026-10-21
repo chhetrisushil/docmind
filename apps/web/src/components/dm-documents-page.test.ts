@@ -68,7 +68,11 @@ async function setup(items: DocumentDto[]) {
 }
 const view = (p: Element) =>
   p.shadowRoot?.querySelector("dm-view") as HTMLElement & {
-    session?: { statusOf(h: string): string | undefined; valueOf(h: string): unknown };
+    session?: {
+      statusOf(h: string): string | undefined;
+      valueOf(h: string): unknown;
+      invalidate(h?: string): void;
+    };
   };
 const table = (p: Element) => view(p).shadowRoot?.querySelector("lu-table") as HTMLElement;
 
@@ -197,5 +201,95 @@ describe("dm-documents-page", () => {
     );
     const zones = [...(t.page.shadowRoot?.querySelectorAll("dm-upload-zone") ?? [])];
     expect(zones.filter((z) => !z.hasAttribute("hide-queue")).length).toBe(1);
+  });
+
+  const act = (t: Awaited<ReturnType<typeof setup>>, action: string, rowKey: string) => {
+    const v = view(t.page) as unknown as {
+      session: { isFresh(): boolean; dispatch(a: unknown, h: unknown): Promise<unknown> };
+      onAct: unknown;
+    };
+    vi.spyOn(v.session, "isFresh").mockReturnValue(true);
+    return v.session.dispatch(
+      { type: "TABLE_ROW_ACTION", widgetId: "w", payload: { action, rowKey } },
+      v.onAct,
+    );
+  };
+
+  it("an action on a row key the server did not serve makes no REST call", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 1"));
+    for (const a of ["delete", "retry", "ask", "open"])
+      expect(await act(t, a, id(99))).toMatchObject({ ok: false });
+    expect(t.api.deleteDocument).not.toHaveBeenCalled();
+    expect(t.api.retryDocument).not.toHaveBeenCalled();
+    expect(t.api.createChat).not.toHaveBeenCalled();
+    expect(t.services.router.route).not.toEqual({ name: "document", id: id(99) });
+  });
+
+  it("what is held follows the served table: a key the reload dropped is refused", async () => {
+    const t = await setup([doc(1), doc(2)]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 1"));
+    t.live.items = [doc(2)];
+    view(t.page).session?.invalidate("documents");
+    await vi.waitFor(() => expect(table(t.page).shadowRoot?.textContent).not.toContain("Title 1"));
+    expect(await act(t, "retry", id(1))).toMatchObject({ ok: false });
+    expect(t.api.retryDocument).not.toHaveBeenCalled();
+    expect(await act(t, "retry", id(2))).toMatchObject({ ok: true });
+    expect(t.api.retryDocument).toHaveBeenCalledWith(id(2));
+  });
+
+  it("a double activation of one row's action sends exactly one request", async () => {
+    const t = await setup([doc(2, { status: "failed", error: "x" })]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 2"));
+    let release: () => void = () => {};
+    t.api.retryDocument.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          release = () => r(doc(2));
+        }),
+    );
+    const first = act(t, "retry", id(2));
+    const second = act(t, "retry", id(2));
+    release();
+    await Promise.all([first, second]);
+    expect(t.api.retryDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stale action calls no API and says the view changed", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 1"));
+    const v = view(t.page) as unknown as {
+      session: { isFresh(): boolean; dispatch(a: unknown, h: unknown): Promise<unknown> };
+      onAct: unknown;
+    };
+    vi.spyOn(v.session, "isFresh").mockReturnValue(false);
+    const out = await v.session.dispatch(
+      { type: "TABLE_ROW_ACTION", widgetId: "w", payload: { action: "delete", rowKey: id(1) } },
+      v.onAct,
+    );
+    expect(out).toMatchObject({ ok: false, reason: "stale" });
+    expect(t.api.deleteDocument).not.toHaveBeenCalled();
+    expect(t.services.toasts.get().length).toBe(1);
+  });
+
+  it("no 'live updates stopped' toast when the stream ends because the session did", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(t.sse.onClose).toBeDefined());
+    t.sse.onClose?.("unauthorized");
+    expect(t.services.toasts.get()).toEqual([]);
+  });
+
+  it("a confirmation left open when the page goes away answers no", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(table(t.page)?.shadowRoot?.textContent).toContain("Title 1"));
+    (
+      table(t.page).shadowRoot?.querySelector(
+        "td.row-actions button[aria-label='Delete: Title 1']",
+      ) as HTMLButtonElement
+    ).click();
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog")).not.toBeNull());
+    t.page.remove();
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog")).toBeNull());
+    expect(t.api.deleteDocument).not.toHaveBeenCalled();
   });
 });

@@ -83,3 +83,41 @@ describe("performIntent: documents", () => {
     expect(await performIntent({ type: "chat.older" }, t.c)).toBe(false);
   });
 });
+
+describe("performIntent: one request per row action at a time", () => {
+  it("ignores a repeat of an action still in flight, then allows it again", async () => {
+    let release: () => void = () => {};
+    const t = ctx({
+      retryDocument: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () => r({});
+          }),
+      ),
+    });
+    const a = performIntent({ type: "document.retry", id: A }, t.c);
+    const b = performIntent({ type: "document.retry", id: A }, t.c);
+    release();
+    await Promise.all([a, b]);
+    expect(t.api.retryDocument).toHaveBeenCalledTimes(1);
+    t.api.retryDocument.mockResolvedValueOnce({});
+    await performIntent({ type: "document.retry", id: A }, t.c);
+    expect(t.api.retryDocument).toHaveBeenCalledTimes(2);
+  });
+  it("a second delete while the confirmation is open does not open a second one", async () => {
+    let answer: (v: boolean) => void = () => {};
+    const t = ctx();
+    t.confirm.mockImplementation(
+      () =>
+        new Promise<boolean>((r) => {
+          answer = r;
+        }),
+    );
+    const a = performIntent({ type: "document.delete", id: A }, t.c);
+    await performIntent({ type: "document.delete", id: A }, t.c);
+    expect(t.confirm).toHaveBeenCalledTimes(1);
+    answer(true);
+    await a;
+    expect(t.api.deleteDocument).toHaveBeenCalledTimes(1);
+  });
+});

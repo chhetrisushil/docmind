@@ -28,4 +28,12 @@ describe("confirmDialog", () => {
     expect(await b).toBe(false);
     expect(document.querySelector("dm-dialog")).toBeNull();
   });
+  it("resolves false and goes away when its signal aborts", async () => {
+    const ac = new AbortController();
+    const p = confirmDialog("Sure?", "x", "Yes", false, ac.signal);
+    await new Promise((r) => setTimeout(r, 0));
+    ac.abort();
+    expect(await p).toBe(false);
+    expect(document.querySelector("dm-dialog")).toBeNull();
+  });
 });
