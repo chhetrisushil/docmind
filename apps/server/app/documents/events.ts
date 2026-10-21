@@ -28,6 +28,8 @@ export function openStream(
   scope: ProgressScope,
   schedule: Schedule,
   heartbeatMs: number,
+  /** Re-checks at every heartbeat that the stream's caller may still read it; `false`, or a rejection, ends it. */
+  recheck?: () => Promise<boolean>,
 ): () => void {
   let seq = 0;
   let closed = false;
@@ -65,7 +67,18 @@ export function openStream(
   // A bus that delivered synchronously during subscribe and ended the stream (a full buffer) ran
   // `end` while `off` was still the no-op: release the subscription now.
   if (closed) off();
-  cancelHeartbeat = schedule(() => send(": ping\n\n"), heartbeatMs);
+  let checking = false;
+  cancelHeartbeat = schedule(() => {
+    send(": ping\n\n");
+    if (!recheck || checking || closed) return;
+    checking = true;
+    recheck()
+      .then((ok) => ok || end(false))
+      .catch(() => end(false)) // fail closed; the client reconnects and is authenticated again
+      .finally(() => {
+        checking = false;
+      });
+  }, heartbeatMs);
   if (closed) cancelHeartbeat();
   onClose(stop);
   return stop;
@@ -95,15 +108,17 @@ export interface EventRoutesDeps {
 export function documentEventRoutes(deps: EventRoutesDeps): {
   routes: Record<string, Handler>;
   closeAll(): void;
+  closeUser(userId: string): void;
 } {
   const max = deps.maxStreamsPerUser ?? 4;
   const maxGlobal = deps.maxStreams ?? MAX_STREAMS_GLOBAL;
   const open = new Map<string, number>();
   const live = new Map<ServerResponse, () => void>(); // each open stream's `release`, for closeAll
+  const owners = new Map<ServerResponse, string>(); // each open stream's user, for closeUser
   const stops = new Map<ServerResponse, () => void>();
   let closing = false; // set by closeAll: shutdown has begun, no new stream may stay open
   const routes: Record<string, Handler> = {
-    [EVENTS_ROUTE]: requireAuth(deps.authenticator, (_req, res, identity) => {
+    [EVENTS_ROUTE]: requireAuth(deps.authenticator, (req, res, identity) => {
       const { userId } = identity;
       // A request that finished authenticating after closeAll: answer 200 and end at once (a non-200
       // would stop EventSource for good; a 200 makes it reconnect to the next process). No slot, no subscription.
@@ -126,12 +141,14 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
         released = true;
         live.delete(res);
         stops.delete(res);
+        owners.delete(res);
         const left = (open.get(userId) ?? 1) - 1;
         if (left <= 0) open.delete(userId);
         else open.set(userId, left);
         deps.onStreamEnd?.();
       };
       live.set(res, release);
+      owners.set(res, userId);
       res.once("close", release);
       try {
         res.writeHead(200, {
@@ -147,6 +164,10 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
           { userId },
           deps.schedule ?? intervalSchedule,
           deps.heartbeatMs ?? 15_000,
+          async () => {
+            const who = await deps.authenticator.authenticate(req);
+            return who !== null && who.userId === userId && who.tenantId === identity.tenantId;
+          },
         );
       } catch (err) {
         stops.get(res)?.();
@@ -163,6 +184,18 @@ export function documentEventRoutes(deps: EventRoutesDeps): {
       for (const [res, release] of [...live]) {
         stops.get(res)?.(); // first: after this no bus event writes to a response that is ending
         release();
+      }
+    },
+    /**
+     * Ends every open stream of one user and frees their slots (account erasure). Unlike `closeAll` it does not
+     * begin a shutdown: other users and this user's later requests are unaffected. A request still authenticating
+     * is caught by the heartbeat re-check instead.
+     */
+    closeUser(userId: string) {
+      for (const [res, owner] of [...owners]) {
+        if (owner !== userId) continue;
+        stops.get(res)?.(); // first: after this no bus event writes to a response that is ending
+        live.get(res)?.();
       }
     },
   };
