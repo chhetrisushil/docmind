@@ -13,11 +13,15 @@ import {
   sessionCookie,
 } from "@docmind/auth";
 import {
+  DeleteAccountRequest,
+  type DeleteAccountResponse,
   LoginRequest,
   type MeResponse,
   SignUpRequest,
   type SignUpResponse,
 } from "@docmind/contracts";
+import type { AccountErasure } from "../erasure/account";
+import { newReceipt } from "../erasure/receipt";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -31,6 +35,8 @@ export interface AuthRoutesDeps {
   secureCookies: boolean;
   /** Believe X-Forwarded-For (its last entry) for the client address. Only behind one proxy of yours. */
   trustProxy: boolean;
+  /** Absent: `DELETE /api/me` is not a route. */
+  erasure?: AccountErasure;
 }
 
 /** 429 with Retry-After. The body says nothing about whether the account exists. */
@@ -41,7 +47,7 @@ function tooMany(res: Parameters<Handler>[1], seconds: number): void {
 
 /** Sign-up, login, logout and `GET /api/me`. Every route gets its identity from the session. */
 export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
-  const { service, authenticator, store, throttle, secureCookies, trustProxy } = deps;
+  const { service, authenticator, store, throttle, secureCookies, trustProxy, erasure } = deps;
 
   return {
     // Answers the same 202 whether or not the email is registered, and never sets a cookie, so the
@@ -95,6 +101,43 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
       const email = await store.findEmail(identity);
       if (!email) return sendError(res, 401, "unauthorized", "authentication required");
       json(res, 200, { ...identity, email } satisfies MeResponse);
+    }),
+
+    // The password again (a stolen session alone must not erase an account), under the login throttle: the
+    // same account and address counters, so guesses here and at login draw from one budget. The request, the
+    // session wipe, `erasing_at` and the email scrub are one transaction; the erasure itself runs in the
+    // background, and only after that transaction has committed. The answer carries the receipt (shown once;
+    // only its hash is stored). The user is always the session's own, never anything from the body.
+    ...(erasure && {
+      "DELETE /api/me": requireAuth(authenticator, async (req, res, identity) => {
+        const body = await readJson(req, res, DeleteAccountRequest);
+        if (!body) return;
+        const email = await store.findEmail(identity);
+        if (!email) return sendError(res, 401, "unauthorized", "authentication required");
+        const ip = ipKey("login", clientIp(req, trustProxy));
+        const account = accountKey("login", email);
+        await throttle.fail(account, POLICIES.loginAccount);
+        const wait = await throttle.retryAfter([ip, account]);
+        if (wait > 0) return tooMany(res, wait);
+        if (!(await service.confirmPassword(identity, email, body.password))) {
+          await throttle.fail(ip, POLICIES.loginIp);
+          return sendError(res, 401, "invalid_credentials", "password is incorrect");
+        }
+        await throttle.clear(account);
+        // The counters are keyed by a hash of the email, which the request below replaces: clear the sign-up
+        // counter now, while the email is known (the eraser's `rows` step cannot read it any more).
+        await throttle.clear(accountKey("signup", email));
+        const receipt = newReceipt();
+        res.setHeader("cache-control", "no-store");
+        if (!(await erasure.request(identity, receipt.hash)))
+          return sendError(res, 409, "erasure_in_progress", "an erasure is already in progress");
+        res.setHeader("set-cookie", clearedSessionCookie(secureCookies));
+        json(res, 202, {
+          erasure: "accepted",
+          receipt: receipt.token,
+        } satisfies DeleteAccountResponse);
+        erasure.start(identity.userId);
+      }),
     }),
   };
 }

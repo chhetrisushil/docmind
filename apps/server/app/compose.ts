@@ -28,6 +28,7 @@ import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
+import { pgAccountErasure } from "./erasure/account";
 import type { ErasureWiring } from "./erasure/compliance";
 import { ERASURE_CONCURRENCY, Eraser, type ErasureDeps } from "./erasure/eraser";
 import { pgErasureSql } from "./erasure/pgSteps";
@@ -247,6 +248,18 @@ export function buildServer(options: ComposeOptions) {
           ),
         )
       : undefined;
+  const account =
+    eraser && erasureStore
+      ? pgAccountErasure({
+          pool,
+          store: erasureStore,
+          eraser,
+          closeStreams: (userId) => {
+            events.closeUser(userId);
+            chatStreams?.closeUser(userId);
+          },
+        })
+      : undefined;
   const server = createHttpServer(
     {
       ...authRoutes({
@@ -256,6 +269,7 @@ export function buildServer(options: ComposeOptions) {
         throttle,
         secureCookies: options.secureCookies,
         trustProxy: options.trustProxy,
+        ...(account && { erasure: account }),
       }),
       ...documentRoutes({
         pool,
