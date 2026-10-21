@@ -2,6 +2,7 @@ import { type DocumentDto, DocumentProgressEvent } from "@docmind/contracts";
 import type { Api } from "../api/client";
 import { ApiError } from "../api/http";
 import type { OpenSse, SseCloseReason } from "../api/sse";
+import { report } from "../report";
 import type { AuthStore } from "./auth";
 import { Store } from "./store";
 
@@ -63,18 +64,50 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
   private opens = 0;
   private seq = 0;
   private readonly controllers = new Map<string, AbortController>();
+  private readonly settledListeners = new Set<(results: UploadResult[]) => void>();
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
   constructor(
     private readonly api: Pick<Api, "uploadDocument">,
     private readonly open: OpenSse,
     private readonly auth?: Pick<AuthStore, "epoch" | "expired" | "subscribe" | "get">,
   ) {
     super({ uploads: [] });
-    auth?.subscribe((s) => {
-      if (s.status === "signed-in") return;
+    let lastEpoch = auth?.epoch;
+    auth?.subscribe((st) => {
+      // Another session (a sign-out, or a sign-in with none in between) ends this one's uploads, queue and stream.
+      if (st.status === "signed-in" && auth.epoch === lastEpoch) return;
+      lastEpoch = auth.epoch;
       this.cancelAll();
       this.stopEvents();
       this.set({ uploads: [] });
     });
+  }
+
+  /** Hears every batch that has settled, whichever element started it. Returns the way to stop listening. */
+  onSettled(fn: (results: UploadResult[]) => void): () => void {
+    this.settledListeners.add(fn);
+    return () => {
+      this.settledListeners.delete(fn);
+    };
+  }
+  /** One pool for the whole store: however many drops are going, at most UPLOAD_CONCURRENCY requests run. */
+  private schedule(run: () => Promise<void>): Promise<void> {
+    return new Promise((resolve) => {
+      this.waiting.push(() => {
+        this.active++;
+        void run()
+          .then(resolve)
+          .finally(() => {
+            this.active--;
+            this.pump();
+          });
+      });
+      this.pump();
+    });
+  }
+  private pump(): void {
+    while (this.active < UPLOAD_CONCURRENCY && this.waiting.length > 0) this.waiting.shift()?.();
   }
 
   dismissUpload(key: string): void {
@@ -125,9 +158,8 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
         queue.push({ file, key, at, ctl });
       }
     });
-    const worker = async () => {
-      for (let next = queue.shift(); next; next = queue.shift()) {
-        const { file, key, at, ctl } = next;
+    const work = queue.map(({ file, key, at, ctl }) =>
+      this.schedule(async () => {
         try {
           if (ctl.signal.aborted) throw new DOMException("aborted", "AbortError");
           this.patch(key, { state: "uploading" });
@@ -149,9 +181,16 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
         } finally {
           this.controllers.delete(key);
         }
+      }),
+    );
+    await Promise.all(work);
+    for (const fn of [...this.settledListeners]) {
+      try {
+        fn(results);
+      } catch (err) {
+        report("uploads-settled", err);
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, worker));
+    }
     return results;
   }
 
@@ -165,7 +204,8 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
   ): void {
     if (this.events) return;
     const epoch = this.auth?.epoch;
-    this.events = this.open({
+    const ref: { handle?: { close(): void } } = {};
+    ref.handle = this.open({
       url: "/api/documents/events",
       onOpen: () => {
         if (++this.opens > 1) onProgress("resync");
@@ -180,12 +220,14 @@ export class UploadsStore extends Store<{ uploads: UploadItem[] }> {
         }
       },
       onClose: (reason) => {
+        if (this.events !== ref.handle) return; // a close we asked for (stopEvents), or the end of a stream already replaced
         this.events = undefined;
         this.opens = 0;
         if (reason === "unauthorized") this.auth?.expired(epoch);
         onEnd?.(reason);
       },
     });
+    this.events = ref.handle;
   }
   stopEvents(): void {
     const events = this.events;

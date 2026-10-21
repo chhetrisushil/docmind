@@ -133,23 +133,83 @@ describe("dm-upload-zone", () => {
     expect(signals[0]?.aborted).toBe(true);
     await vi.waitFor(() => expect(uploads.get().uploads).toEqual([]));
   });
-  it("stops its uploads when it leaves the page", async () => {
+  it("leaving the page does not cancel: the batch finishes, and the page hears it through the store", async () => {
+    const gates: (() => void)[] = [];
     const signals: AbortSignal[] = [];
-    const { el } = await mount(
+    const { el, uploads, services } = await mount(
       (_f, o) =>
-        new Promise((_, reject) => {
+        new Promise((resolve) => {
           signals.push(o?.signal as AbortSignal);
-          o?.signal?.addEventListener("abort", () =>
-            reject(new DOMException("aborted", "AbortError")),
-          );
+          gates.push(() => resolve({ document: doc, duplicate: false }));
         }),
     );
+    const settled = vi.fn();
+    uploads.onSettled((r) => settled(r.length));
     const input = q<HTMLInputElement>(el, "input[type=file]");
-    Object.defineProperty(input, "files", { value: [file("a.pdf")], configurable: true });
+    Object.defineProperty(input, "files", {
+      value: [file("a.pdf"), file("b.pdf"), file("c.pdf")],
+      configurable: true,
+    });
     input.dispatchEvent(new Event("change"));
-    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
     el.remove();
-    expect(signals[0]?.aborted).toBe(true);
+    expect(signals.every((s) => !s.aborted)).toBe(true);
+    expect(uploads.get().uploads).toHaveLength(3);
+    const second = await mountWith<HTMLElement>(services, "dm-upload-zone", { variant: "empty" });
+    expect(second.shadowRoot?.querySelectorAll("[data-upload]")).toHaveLength(3);
+    gates[0]?.();
+    gates[1]?.();
+    await vi.waitFor(() => expect(gates).toHaveLength(3));
+    gates[2]?.();
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(3));
+    expect(uploads.get().uploads).toEqual([]);
+  });
+  it("shows no queue when asked to, and keeps a polite status region with counts only", async () => {
+    const { el, uploads } = await mount();
+    el.toggleAttribute("hide-queue", true);
+    uploads.set({
+      uploads: [
+        { key: "u1", name: "secret.pdf", size: 1, percent: 0, state: "failed", reason: "server" },
+        { key: "u2", name: "b.pdf", size: 1, percent: 40, state: "uploading" },
+      ],
+    });
+    await updated(el);
+    expect(el.shadowRoot?.querySelectorAll("[data-upload]")).toHaveLength(0);
+    const status = q<HTMLElement>(el, "[data-status]");
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toContain("1 uploading");
+    expect(status.textContent).toContain("1 failed");
+    expect(status.textContent).not.toContain("secret");
+  });
+  it("keeps saying Release while the drag moves over its children, and clears when it really leaves", async () => {
+    const { el } = await mount();
+    const zone = q<HTMLElement>(el, "[data-zone]");
+    zone.dispatchEvent(drag("dragenter", [file("a.pdf")]));
+    zone.dispatchEvent(drag("dragenter", [file("a.pdf")])); // a child
+    zone.dispatchEvent(drag("dragleave", [])); // leaving the zone for the child
+    await updated(el);
+    expect(zone.textContent).toContain("Release to upload 1 file");
+    zone.dispatchEvent(drag("dragleave", []));
+    await updated(el);
+    expect(zone.textContent).not.toContain("Release");
+  });
+  it("uploads the files of a mixed drop and says with a fixed sentence that a folder was skipped", async () => {
+    const { el, upload, services } = await mount();
+    const zone = q<HTMLElement>(el, "[data-zone]");
+    zone.dispatchEvent(
+      drag(
+        "drop",
+        [file("dir"), file("a.pdf")],
+        [
+          { kind: "file", webkitGetAsEntry: () => ({ isDirectory: true }) },
+          { kind: "file", webkitGetAsEntry: () => ({ isDirectory: false }) },
+        ],
+      ),
+    );
+    await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect(services.toasts.get().map((t) => t.text)).toContain(
+      "Folders are not supported and were skipped",
+    );
   });
   it("tells the persistent live region with a fixed sentence, never the file name, when uploads fail", async () => {
     const { el, services } = await mount(

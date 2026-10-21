@@ -24,7 +24,10 @@ const file = (name: string, size = 3) => {
   return f;
 };
 async function signedIn() {
-  const auth = new AuthStore({ me: async () => ({}) as never } as never);
+  const auth = new AuthStore({
+    me: async () => ({}) as never,
+    login: async () => ({}) as never,
+  } as never);
   await auth.bootstrap();
   return auth;
 }
@@ -216,5 +219,63 @@ describe("UploadsStore events", () => {
     expect(ended).toHaveBeenCalledWith("failed");
     t.store.startEvents(() => {}, ended);
     expect(t.open).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("UploadsStore lifetime and limits", () => {
+  it("the concurrency limit is store-wide: two drops never run more than two at once", async () => {
+    let live = 0;
+    let peak = 0;
+    const gates: (() => void)[] = [];
+    const t = setup(
+      vi.fn(async (f: File) => {
+        live++;
+        peak = Math.max(peak, live);
+        await new Promise<void>((r) => gates.push(r));
+        live--;
+        return { document: doc(f.name.length), duplicate: false };
+      }),
+    );
+    const a = t.store.upload([file("a.pdf"), file("bb.pdf")]);
+    const b = t.store.upload([file("ccc.pdf"), file("dddd.pdf")]);
+    for (let i = 0; i < 4; i++) {
+      await vi.waitFor(() => expect(gates.length).toBeGreaterThan(i));
+      gates[i]?.();
+    }
+    await Promise.all([a, b]);
+    expect(peak).toBe(2);
+    expect(t.upload).toHaveBeenCalledTimes(4);
+  });
+  it("tells onSettled listeners when a batch is done, and stops after unsubscribe", async () => {
+    const t = setup();
+    const heard = vi.fn();
+    const off = t.store.onSettled((r) => heard(r.length));
+    await t.store.upload([file("a.pdf"), file("b.pdf")]);
+    expect(heard).toHaveBeenCalledWith(2);
+    off();
+    await t.store.upload([file("c.pdf")]);
+    expect(heard).toHaveBeenCalledTimes(1);
+  });
+  it("a deliberate stopEvents does not report an end, and a late close of the old stream is ignored", () => {
+    const t = setup();
+    const ended = vi.fn();
+    t.store.startEvents(() => {}, ended);
+    const first = t.sse.opts;
+    t.store.stopEvents();
+    first?.onClose?.("closed");
+    expect(ended).not.toHaveBeenCalled();
+    t.store.startEvents(() => {}, ended);
+    first?.onClose?.("failed");
+    expect(ended).not.toHaveBeenCalled();
+  });
+  it("a new sign-in without a sign-out in between also cancels and clears", async () => {
+    const auth = await signedIn();
+    const t = setup(undefined, auth);
+    t.store.startEvents(() => {});
+    await t.store.upload([file("run.exe")]);
+    expect(t.store.get().uploads).toHaveLength(1);
+    await auth.login({ email: "a", password: "b" } as never);
+    expect(t.store.get().uploads).toEqual([]);
+    expect(t.sse.closed).toBe(1);
   });
 });
