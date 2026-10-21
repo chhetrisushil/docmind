@@ -25,6 +25,7 @@ export function authErrorText(err: unknown): string {
 export class AuthStore extends Store<AuthState> {
   /** Counts the sessions this browser has held; a request remembers the one it was sent in. */
   private session = 0;
+  private holds = 0;
   get epoch(): number {
     return this.session;
   }
@@ -61,8 +62,21 @@ export class AuthStore extends Store<AuthState> {
   }
   /** A 401 'unauthorized' came back from a call sent in session `epoch`: that session ended. A late answer for an older session is ignored. */
   expired(epoch?: number): void {
+    if (this.holds > 0) return;
     if (epoch !== undefined && epoch !== this.session) return;
     this.signedOut();
+  }
+  /**
+   * Runs `fn` with 401s from other calls not ending the session. A caller that will itself decide where a lost session goes
+   * (the receipt page after a deletion) uses it so the route guard cannot send the browser to sign-in first.
+   */
+  async withoutExpiry<T>(fn: () => Promise<T>): Promise<T> {
+    this.holds += 1;
+    try {
+      return await fn();
+    } finally {
+      this.holds -= 1;
+    }
   }
   signedOut(): void {
     if (this.get().status === "anonymous") return;

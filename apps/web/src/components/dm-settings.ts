@@ -102,14 +102,18 @@ export class DmSettings extends LitElement {
       this.busy = false;
     }
   }
-  /** After a lost answer: a session that still works means nothing was deleted; one that ended means it was accepted. */
+  /**
+   * After a lost answer: a session that still works means the account is still active; one that ended means the deletion was
+   * accepted. A 401 from me() would end the session and send the route guard to sign-in before this method could go to the
+   * receipt page, so me() runs where that expiry is held back and the destination is chosen here.
+   */
   private async checkStatus() {
     const svc = this.ctx.services;
     if (!svc || this.busy) return;
     this.busy = true;
     try {
-      await svc.api.me();
-      this.problem = "Your account is still active, so nothing was deleted. Try again.";
+      await svc.auth.withoutExpiry(() => svc.api.me());
+      this.problem = "Your account is still active. Try again.";
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         this.password = "";
