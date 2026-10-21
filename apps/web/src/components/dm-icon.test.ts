@@ -46,6 +46,6 @@ describe("dm-icon", () => {
       expect(svg.startsWith("<svg"), name).toBe(true);
       expect(UNSAFE.test(svg), name).toBe(false);
     }
-    expect(Object.keys(ICONS).length).toBeGreaterThanOrEqual(30);
+    expect(Object.keys(ICONS).length).toBeGreaterThanOrEqual(37);
   });
 });

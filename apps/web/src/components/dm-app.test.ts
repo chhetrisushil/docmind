@@ -1,26 +1,46 @@
 import { describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/http";
 import { Router, parseRoute } from "../router";
 import { createServices } from "../services";
+import { AuthStore } from "../state/auth";
 import { mountWith } from "../testing/mount";
 import "./index";
 
-function services(path: string) {
+const ME = {
+  userId: "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10",
+  tenantId: "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11",
+  email: "a@example.com",
+};
+function fakeWindow(path: string) {
   const win = {
     location: { pathname: path, search: "" },
     history: {
       pushState: vi.fn((_s: unknown, _t: string, u: string) => {
         win.location.pathname = u;
       }),
-      replaceState: vi.fn(),
+      replaceState: vi.fn((_s: unknown, _t: string, u: string) => {
+        win.location.pathname = u;
+      }),
     },
     addEventListener: () => {},
     removeEventListener: () => {},
   };
-  return createServices({
-    router: new Router(win as never),
-    fetch: (async () => new Response("{}", { status: 404 })) as never,
-  });
+  return win;
 }
+function servicesWithAuth(path: string, over: Record<string, unknown> = {}) {
+  const win = fakeWindow(path);
+  const api = {
+    me: async () => ME,
+    login: async () => ME,
+    logout: async () => {},
+    signUp: async () => {},
+    ...over,
+  } as never;
+  const svc = createServices({ router: new Router(win as never), api, auth: new AuthStore(api) });
+  return Object.assign(svc, { win });
+}
+/** A signed-in session, so the views are reachable. */
+const services = (path: string) => servicesWithAuth(path);
 const root = (el: Element) => el.shadowRoot as ShadowRoot;
 const settle = async (el: Element) => {
   await (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
@@ -30,13 +50,14 @@ describe("dm-app", () => {
   it("draws the view of the current route, and not-found for a route with no view", async () => {
     const svc = services("/nope");
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
-    expect(root(app).querySelector("dm-not-found")).not.toBeNull();
+    await vi.waitFor(() => expect(root(app).querySelector("dm-not-found")).not.toBeNull());
     expect(svc.router.route).toEqual({ name: "not-found" });
   });
 
   it("follows the router", async () => {
     const svc = services("/nope");
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(root(app).querySelector("dm-not-found")).not.toBeNull());
     svc.router.navigate(parseRoute("/nope"));
     await settle(app);
     expect(root(app).querySelector("dm-not-found")).not.toBeNull(); // a route that never has a view
@@ -45,6 +66,7 @@ describe("dm-app", () => {
   it("turns a click on a same-origin link into a navigation, and leaves modified and external links alone", async () => {
     const svc = services("/nope");
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(root(app).querySelector("dm-not-found")).not.toBeNull());
     const a = document.createElement("a");
     a.href = "/settings";
     root(app).append(a);
@@ -65,28 +87,123 @@ describe("dm-app", () => {
     expect(svc.router.route).toEqual({ name: "settings" });
   });
 
-  it("shows toasts as status or alert and lets the user dismiss them", async () => {
+  it("keeps one live region per urgency from the first render and puts toasts inside it", async () => {
     const svc = services("/nope");
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
-    svc.toasts.push({ kind: "ok", text: "Saved" });
-    svc.toasts.push({ kind: "err", text: "Failed" });
-    await settle(app);
+    await vi.waitFor(() => expect(root(app).querySelector("dm-toasts")).not.toBeNull());
     const toasts = root(app).querySelector("dm-toasts") as HTMLElement;
     await settle(toasts);
-    const items = [...root(toasts).querySelectorAll("[data-toast]")];
+    const status = root(toasts).querySelector("[role=status]") as HTMLElement;
+    const alert = root(toasts).querySelector("[role=alert]") as HTMLElement;
+    expect(status).not.toBeNull();
+    expect(alert).not.toBeNull();
+    expect(root(toasts).querySelectorAll("[data-toast]").length).toBe(0);
+    svc.toasts.push({ kind: "ok", text: "Saved" });
+    svc.toasts.push({ kind: "err", text: "Failed" });
+    await settle(toasts);
+    expect(root(toasts).querySelector("[role=status]")).toBe(status); // the same node: announcements are not lost on re-render
+    expect(root(toasts).querySelector("[role=alert]")).toBe(alert);
     expect(
-      items.map((i) => [
-        i.getAttribute("role"),
-        i.textContent?.includes("Saved") || i.textContent?.includes("Failed"),
-      ]),
-    ).toEqual([
-      ["status", true],
-      ["alert", true],
-    ]);
-    (
-      root(toasts).querySelector("[data-toast] button[aria-label='Dismiss']") as HTMLButtonElement
-    ).click();
+      [...status.querySelectorAll("[data-toast]")].map((i) => i.textContent?.includes("Saved")),
+    ).toEqual([true]);
+    expect(
+      [...alert.querySelectorAll("[data-toast]")].map((i) => i.textContent?.includes("Failed")),
+    ).toEqual([true]);
+    (alert.querySelector("[data-toast] button[aria-label='Dismiss']") as HTMLButtonElement).click();
     await settle(toasts);
     expect(root(toasts).querySelectorAll("[data-toast]").length).toBe(1);
+  });
+
+  it("leaves a link to an unknown path, an api path, a hash and a download to the browser", async () => {
+    const svc = services("/settings");
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await settle(app);
+    const click = (href: string, download = false) => {
+      const a = document.createElement("a");
+      a.href = href;
+      if (download) a.setAttribute("download", "");
+      root(app).append(a);
+      const ev = new MouseEvent("click", { bubbles: true, composed: true, cancelable: true });
+      a.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    };
+    expect(click("/no-such-page")).toBe(false);
+    expect(click("/api/documents/x/file")).toBe(false);
+    expect(click("/documents#top")).toBe(false);
+    expect(click("/documents", true)).toBe(false);
+    expect(svc.router.route).toEqual({ name: "settings" });
+    expect(click("/documents")).toBe(true);
+    expect(svc.router.route).toEqual({ name: "documents" });
+  });
+
+  it("sends an anonymous visitor to sign-in and a signed-in one away from it", async () => {
+    const anon = servicesWithAuth("/documents", {
+      me: async () => {
+        throw new ApiError(401, "unauthorized");
+      },
+    });
+    await mountWith<HTMLElement>(anon, "dm-app", { services: anon });
+    await vi.waitFor(() => expect(anon.router.route).toEqual({ name: "sign-in" }));
+    expect(anon.win.history.replaceState).toHaveBeenCalledTimes(1);
+    const signedIn = servicesWithAuth("/sign-in", { me: async () => ME });
+    await mountWith<HTMLElement>(signedIn, "dm-app", { services: signedIn });
+    await vi.waitFor(() => expect(signedIn.router.route).toEqual({ name: "chat" }));
+    const erased = servicesWithAuth("/account-deleted", {
+      me: async () => {
+        throw new ApiError(401, "unauthorized");
+      },
+    });
+    await mountWith<HTMLElement>(erased, "dm-app", { services: erased });
+    await vi.waitFor(() => expect(erased.auth.get().status).toBe("anonymous"));
+    expect(erased.router.route).toEqual({ name: "account-deleted" });
+  });
+
+  it("draws nothing but a busy marker until the session is known", async () => {
+    const pending = servicesWithAuth("/chats", { me: () => new Promise(() => {}) });
+    const app = await mountWith<HTMLElement>(pending, "dm-app", { services: pending });
+    expect(root(app).querySelector("[aria-busy='true']")).not.toBeNull();
+    expect(root(app).querySelector("dm-not-found")).toBeNull();
+  });
+
+  it("a 401 'unauthorized' from any call ends the session and routes to sign-in once, with no loop", async () => {
+    let live = true;
+    const fetch = (async (url: string) =>
+      live && String(url).endsWith("/api/me")
+        ? new Response(JSON.stringify(ME), { headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify({ error: { code: "unauthorized", message: "x" } }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          })) as never;
+    const win = fakeWindow("/documents");
+    const svc = createServices({ router: new Router(win as never), fetch });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(svc.auth.get().status).toBe("signed-in"));
+    await settle(app);
+    expect(win.history.replaceState).not.toHaveBeenCalled();
+    live = false;
+    await svc.api.me().catch(() => {});
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    await svc.api.me().catch(() => {});
+    await svc.api.me().catch(() => {});
+    await settle(app);
+    expect(win.history.replaceState).toHaveBeenCalledTimes(1);
+    expect(svc.router.route).toEqual({ name: "sign-in" });
+  });
+
+  it("does not navigate when the session ends on sign-in or sign-up", async () => {
+    for (const path of ["/sign-in", "/sign-up"]) {
+      const svc = servicesWithAuth(path, {
+        me: async () => {
+          throw new ApiError(401, "unauthorized");
+        },
+      });
+      const nav = vi.spyOn(svc.router, "navigate");
+      const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+      await vi.waitFor(() => expect(svc.auth.get().status).toBe("anonymous"));
+      svc.auth.expired();
+      await settle(app);
+      expect(nav).not.toHaveBeenCalled();
+      expect(svc.win.history.replaceState).not.toHaveBeenCalled();
+    }
   });
 });
