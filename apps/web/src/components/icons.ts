@@ -13,6 +13,8 @@ import circleNotch from "@phosphor-icons/core/assets/regular/circle-notch.svg?ra
 import cloudX from "@phosphor-icons/core/assets/regular/cloud-x.svg?raw";
 import copy from "@phosphor-icons/core/assets/regular/copy.svg?raw";
 import dotsThree from "@phosphor-icons/core/assets/regular/dots-three.svg?raw";
+import eyeSlash from "@phosphor-icons/core/assets/regular/eye-slash.svg?raw";
+import eye from "@phosphor-icons/core/assets/regular/eye.svg?raw";
 import fileDashed from "@phosphor-icons/core/assets/regular/file-dashed.svg?raw";
 import fileText from "@phosphor-icons/core/assets/regular/file-text.svg?raw";
 import files from "@phosphor-icons/core/assets/regular/files.svg?raw";
@@ -50,6 +52,8 @@ export const ICONS = Object.freeze({
   "cloud-x": cloudX,
   copy: copy,
   "dots-three": dotsThree,
+  eye: eye,
+  "eye-slash": eyeSlash,
   "file-dashed": fileDashed,
   "file-text": fileText,
   files: files,

@@ -1,8 +1,9 @@
 import { ContextProvider } from "@lit/context";
 import { LitElement, css } from "lit";
 import { html, unsafeStatic } from "lit/static-html.js";
-import { parseRoute } from "../router";
+import { type Route, parseRoute } from "../router";
 import { type Services, createServices, servicesContext } from "../services";
+import type { AuthState } from "../state/auth";
 import { StoreController } from "../state/store";
 import { baseStyles } from "../styles/base";
 import { VIEWS } from "../views";
@@ -16,6 +17,7 @@ export class DmApp extends LitElement {
   declare services: Services;
   private stopWatching: (() => void) | undefined;
   private provider: ContextProvider<typeof servicesContext> | undefined;
+  private authState: StoreController<AuthState> | undefined;
   private route: StoreController<ReturnType<Services["router"]["get"]>> | undefined;
 
   connectedCallback() {
@@ -26,10 +28,12 @@ export class DmApp extends LitElement {
       initialValue: this.services,
     });
     this.route ??= new StoreController(this, this.services.router);
+    this.authState ??= new StoreController(this, this.services.auth);
     super.connectedCallback();
     this.services.router.start();
     this.stopWatching = this.services.theme.watchSystem();
     this.addEventListener("click", this.onClick);
+    if (this.services.auth.get().status === "unknown") void this.services.auth.bootstrap(); // never rejects
   }
   disconnectedCallback() {
     this.removeEventListener("click", this.onClick);
@@ -45,14 +49,36 @@ export class DmApp extends LitElement {
     const a = e.composedPath().find((n): n is HTMLAnchorElement => n instanceof HTMLAnchorElement);
     if (!a || a.target !== "" || a.hasAttribute("download")) return;
     const url = new URL(a.href, location.href);
-    if (url.origin !== location.origin) return;
+    if (url.origin !== location.origin || url.hash !== "") return;
+    const route = parseRoute(url.pathname, url.search);
+    if (route.name === "not-found") return; // unknown paths and /api/* are the browser's
     e.preventDefault();
-    this.services.router.navigate(parseRoute(url.pathname, url.search));
+    this.services.router.navigate(route);
   };
+  /** What to draw and where to go, from the session and the route alone. */
+  private decide(): { wait: boolean; to?: Route } {
+    const state = this.services.auth.get();
+    if (state.status === "unknown") return { wait: true };
+    const name = this.services.router.get().name;
+    const open = name === "sign-in" || name === "sign-up" || name === "account-deleted";
+    if (state.status === "anonymous" && !open) return { wait: false, to: { name: "sign-in" } };
+    if (state.status === "signed-in" && (name === "sign-in" || name === "sign-up"))
+      return { wait: false, to: { name: "chat" } };
+    return { wait: false };
+  }
+  updated() {
+    const { to } = this.decide();
+    if (to) this.services.router.navigate(to, { replace: true });
+  }
   render() {
+    const { wait, to } = this.decide();
+    // Until the session is known, and for the one render before a redirect, nothing of any view is drawn.
+    if (wait || to) return html`<div class="boot" aria-busy="true"></div><dm-toasts></dm-toasts>`;
     const route = this.route?.value ?? this.services.router.get();
     const tag = unsafeStatic(VIEWS[route.name] ?? "dm-not-found"); // the tag comes from our own table, never from the URL
-    return html`<${tag}></${tag}><dm-toasts></dm-toasts>`;
+    return route.name === "sign-in" || route.name === "sign-up"
+      ? html`<${tag} mode=${route.name}></${tag}><dm-toasts></dm-toasts>`
+      : html`<${tag}></${tag}><dm-toasts></dm-toasts>`;
   }
 }
 customElements.define("dm-app", DmApp);
