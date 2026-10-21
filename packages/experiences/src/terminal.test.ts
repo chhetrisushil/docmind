@@ -35,12 +35,15 @@ const doc = (n: number, over: Partial<DocumentDto> = {}): DocumentDto => ({
   updatedAt: "2026-10-01T10:00:00.000Z",
   ...over,
 });
-const readers: UiReaders = {
+const readersFor = (titles: [string, string]): UiReaders => ({
   documents: async () => ({
-    items: [doc(1), doc(2, { status: "failed", error: "Could not read this file." })],
+    items: [
+      doc(1, { title: titles[0] }),
+      doc(2, { title: titles[1], status: "failed", error: "Could not read this file." }),
+    ],
     truncated: false,
   }),
-  document: async (a) => (a.id === id(1) ? doc(1) : null),
+  document: async (a) => (a.id === id(1) ? doc(1, { title: titles[0] }) : null),
   content: async () => ({
     items: [
       {
@@ -63,20 +66,28 @@ const readers: UiReaders = {
       messageCount: 0,
     },
   ],
-};
+});
+const readers = readersFor(["Contract 1", "Contract 2"]);
 const views = createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
 type View = "library" | "library-empty" | "detail" | "sessions" | "chat" | "sources";
 
-/** A terminal surface in miniature: fetch the compiled view, hydrate it through the same server function, bind it. */
-function open(view: View, params: Record<string, string> = {}) {
+/**
+ * A terminal surface in miniature: fetch the compiled view, hydrate it through the same server function, bind it.
+ * `hydrate` runs with outputKinds for the web because it is the one shared server function: values do not depend on the surface.
+ */
+function open(
+  view: View,
+  params: Record<string, string> = {},
+  rd: UiReaders = readers,
+  who = "user-1",
+) {
   const p = views.payload(view, "terminal");
   const store = new HydrationStore(new InMemoryProjectionRuntime(), {
     experienceId: p.experienceId,
   });
   const loader = {
-    load: async (r: never, _s: AbortSignal) =>
-      (await views.hydrate(view, [r], readers, "user-1"))[0],
-    loadMany: async (rs: readonly never[]) => views.hydrate(view, rs, readers, "user-1"),
+    load: async (r: never, _s: AbortSignal) => (await views.hydrate(view, [r], rd, who))[0],
+    loadMany: async (rs: readonly never[]) => views.hydrate(view, rs, rd, who),
   };
   const split = new SplitHydrationController({ loader: loader as never, store, batchWindowMs: 0 });
   split.setParams(params);
@@ -85,11 +96,18 @@ function open(view: View, params: Record<string, string> = {}) {
 }
 const draw = (h: ReturnType<typeof open>) => renderExperience(h.p.blueprint, h.store);
 
-async function frame(view: View, params: Record<string, string> = {}): Promise<string> {
-  const h = open(view, params);
-  await vi.waitFor(() =>
+const settled = (h: ReturnType<typeof open>) =>
+  vi.waitFor(() =>
     expect(Object.values(h.store.state().status).every((s) => s.state !== "pending")).toBe(true),
   );
+async function frame(
+  view: View,
+  params: Record<string, string> = {},
+  rd: UiReaders = readers,
+  who = "user-1",
+): Promise<string> {
+  const h = open(view, params, rd, who);
+  await settled(h);
   return draw(h);
 }
 const A2UI_PLACEHOLDER = "A2UIView: [A2UI view — rendered on the web]";
@@ -98,7 +116,9 @@ describe("the terminal surface", () => {
   it("draws the library: counts, health and the table, from the very data the web is given", async () => {
     const out = await frame("library");
     expect(out).toContain("Contract 1");
-    expect(out).toContain("Failed");
+    expect(out.split("\n").some((l) => l.includes("Contract 2") && l.includes("Failed"))).toBe(
+      true,
+    );
     expect(out.split("\n").some((l) => /\b2\b/.test(l) && l.includes("in your library"))).toBe(
       true,
     );
@@ -113,13 +133,17 @@ describe("the terminal surface", () => {
     expect(out).not.toContain("Payment is due in 30 days.");
   });
   it("draws the chat list", async () => expect(await frame("sessions")).toContain("Invoices"));
-  it("a document that is not the caller's is an error row on the terminal too, with no content", async () => {
+  it("a document the reader does not return (null) is an error row on the terminal, with no content", async () => {
     const out = await frame("detail", { id: id(9) });
     expect(out).not.toContain("Contract");
     expect(out).toContain('✗ Status: handle "doc-status": could not be loaded');
   });
-  it("draws a published markdown reply as readable lines, with the cited ref numbered and no control characters", async () => {
+  it("draws a published markdown reply as readable lines and lets no hostile code point through", async () => {
     const h = open("chat");
+    await settled(h);
+    const c = String.fromCharCode;
+    const hostile = `${c(27)}[2J${c(27)}]52;c;cGF5${c(7)} ${c(0x202e)}${c(0x9b)}31m${c(0)}`;
+    const forbidden = [c(27), c(7), c(0), c(0x202e), c(0x9b)];
     const r = h.split.publishValue(
       "transcript",
       {
@@ -129,7 +153,7 @@ describe("the terminal surface", () => {
             turn: 1,
             role: "user",
             status: "complete",
-            parts: [{ type: "text", text: "When is it due?" }],
+            parts: [{ type: "text", text: `When${hostile} is it due?` }],
           },
           {
             id: "t1.assistant",
@@ -139,7 +163,7 @@ describe("the terminal surface", () => {
             parts: [
               {
                 type: "text",
-                text: "# Terms\n\nDue **30 days** [[a1]]\n\n- Net 30",
+                text: `# Terms\n\nDue${hostile} **30 days** [[a1]]\n\n- Net 30 ${hostile}paid`,
                 format: "markdown",
               },
             ],
@@ -153,9 +177,23 @@ describe("the terminal surface", () => {
     );
     expect(r).toEqual({ ok: true });
     const out = draw(h);
-    expect(out).toContain("Due **30 days** [1]");
-    expect(out).toContain("- Net 30");
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
-    expect(out).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/);
+    for (const ch of forbidden)
+      expect(out.includes(ch), `U+${ch.charCodeAt(0).toString(16)}`).toBe(false);
+    for (const word of ["When", "is it due?", "# Terms", "Due", "- Net 30", "paid"])
+      expect(out).toContain(word);
+    // Intentional: the loom-ui terminal leaves emphasis as typed; only the [[ref]] marker is rewritten to a number.
+    expect(out).toContain("**30 days** [1]");
+  });
+  it("two users, two reader sets: user B's views never show user A's titles", async () => {
+    const a = readersFor(["Alpha-A-title", "Alpha-A-second"]);
+    const b = readersFor(["Beta-B-title", "Beta-B-second"]);
+    const libA = await frame("library", {}, a, "user-a");
+    const libB = await frame("library", {}, b, "user-b");
+    expect(libA).toContain("Alpha-A-title");
+    expect(libB).toContain("Beta-B-title");
+    expect(libB).not.toContain("Alpha-A");
+    const detB = await frame("detail", { id: id(1) }, b, "user-b");
+    expect(detB).toContain("Ready");
+    expect(detB).not.toContain("Alpha-A");
   });
 });
