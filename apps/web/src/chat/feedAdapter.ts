@@ -138,6 +138,14 @@ export class ChatFold {
     this.liveSteps = [];
   }
 
+  /** A reply is pending when one is streaming, or the newest turn is a user question nobody has answered or refused yet. */
+  replyPending(): boolean {
+    const entries = this.feed.value().entries;
+    if (entries.some((e) => e.status === "streaming")) return true;
+    const last = entries.at(-1);
+    return last?.role === "user" && last.status !== "rejected";
+  }
+
   value(): ChatValue {
     return this.feed.value();
   }

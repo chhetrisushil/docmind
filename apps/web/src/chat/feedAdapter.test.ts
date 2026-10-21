@@ -260,3 +260,18 @@ describe("ChatFold stream", () => {
     expect(fold.resumeCursor()).toBe("1.20");
   });
 });
+
+describe("ChatFold.replyPending", () => {
+  it("is true while a reply streams or the newest question is unanswered, false once answered or refused", () => {
+    const fold = new ChatFold();
+    expect(fold.replyPending()).toBe(false);
+    fold.applyHistory(page([msg(1, "user", 1)]));
+    expect(fold.replyPending()).toBe(true);
+    fold.applyStream(ev({ kind: "answer", turn: 1, text: "Hi" }));
+    expect(fold.replyPending()).toBe(true);
+    fold.applyStream(ev({ kind: "message", ...msg(2, "assistant", 1) }));
+    expect(fold.replyPending()).toBe(false);
+    fold.applyStream(ev({ kind: "message", ...msg(3, "user", 0, { status: "rejected" }) }));
+    expect(fold.replyPending()).toBe(false);
+  });
+});
