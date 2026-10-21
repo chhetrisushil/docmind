@@ -49,6 +49,10 @@ export class DmDialog extends LitElement {
       h2 { font-size: 20px; }
       .body { font-size: 14px; display: grid; gap: 12px; }
       .actions { display: flex; justify-content: flex-end; gap: 8px; }
+      /* buttons a caller slots in from the light DOM (confirmDialog) do not see the shadow-scoped base styles */
+      ::slotted(.btn) { font: inherit; min-height: 32px; padding: 5.6px 10px; border-radius: var(--dm-radius-md); border: 1px solid var(--dm-divider); background: transparent; color: var(--dm-text); cursor: pointer; }
+      ::slotted(.btn.primary) { color: var(--dm-accent); border-color: var(--dm-accent); }
+      ::slotted(.btn.danger) { color: var(--dm-err); border-color: var(--dm-err); }
     `,
   ];
   declare heading: string;
