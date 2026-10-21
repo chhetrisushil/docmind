@@ -115,7 +115,7 @@ describe("the dependency and security rules of apps/web", () => {
 });
 
 // Allowlisted files that a later task creates; every other allowlisted path must exist now, so a typo is caught.
-const CREATED_BY_LATER_TASK = new Set(["src/components/dm-app.ts"]); // Task 181
+const CREATED_BY_LATER_TASK = new Set<string>();
 describe("the allowlists", () => {
   it("name files that exist, or are listed as created by a later task", () => {
     const paths = new Set(app.map((a) => a.path));
