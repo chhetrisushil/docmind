@@ -346,15 +346,35 @@ describe("openSse reconnect policy", () => {
 });
 
 describe("openSse liveness and ids", () => {
-  it("a connection that only receives heartbeats then drops is healthy: no dead-open count, no escalation", async () => {
+  /** A clock that moves `step` ms on every read; openSse reads it twice per connection, so `step` is how long each lives. */
+  const clock = (step: number) => {
+    let t = 0;
+    return () => {
+      const v = t;
+      t += step;
+      return v;
+    };
+  };
+
+  it("a heartbeat-only connection that lives past minLiveMs is healthy: no dead-open count, no escalation", async () => {
     const beat = () => body([": hb\n\n"]);
     const h = harness([beat(), beat(), beat(), beat(), body([], { hang: true })], {
       maxDeadOpens: 2,
+      now: clock(20_000),
     });
     await vi.waitFor(() => expect(h.seen.length).toBe(5));
     expect(h.closes).toEqual([]);
     expect(h.sleeps).toEqual([1000, 1000, 1000, 1000]);
     h.handle.close();
+  });
+
+  it("a connection that gets only the retry: preamble and drops at once escalates and ends 'failed'", async () => {
+    const pre = () => body(["retry: 5000\n\n"]);
+    const h = harness([pre(), pre(), pre(), pre()], { maxDeadOpens: 3, now: clock(0) });
+    await h.done;
+    expect(h.closes).toEqual(["failed"]);
+    expect(h.seen.length).toBe(3);
+    expect(h.sleeps).toEqual([5000, 5000]); // the server's retry: is the floor for every wait
   });
 
   it("an id with no data still becomes the resume point", async () => {

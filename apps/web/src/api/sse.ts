@@ -101,6 +101,10 @@ export interface SseOptions {
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
   /** Random source in [0, 1) for jitter; injectable for tests. */
   random?(): number;
+  /** Clock in ms; injectable for tests. */
+  now?(): number;
+  /** How long a connection that only got heartbeats must have lived to count as healthy (default max(2*base, 10 s)). */
+  minLiveMs?: number;
   baseDelayMs?: number;
   /** Cap for every delay, the server's `retry:` and `Retry-After` included. */
   maxDelayMs?: number;
@@ -136,6 +140,8 @@ export function openSse(o: SseOptions): { close(): void } {
   const random = o.random ?? Math.random;
   const base = o.baseDelayMs ?? 1000;
   const max = o.maxDelayMs ?? 30_000;
+  const now = o.now ?? Date.now;
+  const minLive = o.minLiveMs ?? Math.max(base * 2, 10_000);
   const floor = Math.min(base / 4, max);
   const maxDead = o.maxDeadOpens ?? 8;
   const maxOverflows = o.maxOverflows ?? 3;
@@ -157,6 +163,7 @@ export function openSse(o: SseOptions): { close(): void } {
     let serverRetry: number | undefined;
     let lastId = o.lastEventId?.();
     while (!closed) {
+      const t0 = now();
       let frames = 0;
       let alive = false; // any bytes at all, heartbeat comments included
       let opened = false;
@@ -232,7 +239,7 @@ export function openSse(o: SseOptions): { close(): void } {
       if (overflowed) {
         failures++;
         if (++overflows >= maxOverflows) return stop("failed");
-      } else if (frames > 0 || alive) {
+      } else if (frames > 0 || (alive && now() - t0 >= minLive)) {
         failures = 0;
         dead = 0;
         overflows = 0;
