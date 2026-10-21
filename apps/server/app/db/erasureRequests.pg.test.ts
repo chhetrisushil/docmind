@@ -308,7 +308,9 @@ describe.skipIf(!PG_URL)(
             "SELECT * FROM docmind_erasure_pending('pending', '00000000-0000-0000-0000-000000000000', 1001)",
           ),
         ).rejects.toMatchObject({ code: "22023" });
-        await expect(app.query("SELECT * FROM docmind_erasure_pending('teleport')")).rejects.toMatchObject({
+        await expect(
+          app.query("SELECT * FROM docmind_erasure_pending('teleport')"),
+        ).rejects.toMatchObject({
           code: "22023",
         });
         expect(

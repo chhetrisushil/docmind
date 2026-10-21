@@ -115,4 +115,36 @@ describe.skipIf(!PG_URL)("PgErasureStore (needs DOCMIND_TEST_PG_URL)", () => {
     );
     expect(listed).toEqual([...ERASURE_STEPS]);
   });
+
+  it("lists every request across pages: a page size that divides the count, one that does not, and one larger than it", async () => {
+    const ids: string[] = [];
+    for (let n = 0; n < 8; n++) {
+      const id = randomUUID();
+      await db.owner.query(
+        "INSERT INTO users (id, tenant_id, email, password_hash) VALUES ($1, $2, $3, 'x')",
+        [id, T1, `page-${n}@example.com`],
+      );
+      expect(await withTenant(app, T1, (tx) => store.insert(tx, id, T1, hash(`page-${n}`)))).toBe(
+        true,
+      );
+      ids.push(id);
+    }
+    for (const pageSize of [4, 3, 1000]) {
+      const paged = new PgErasureStore(app, pageSize);
+      const found = (await paged.pending()).map((r) => r.userId).filter((id) => ids.includes(id));
+      expect(found).toEqual([...ids].sort());
+    }
+    const paged = new PgErasureStore(app, 3);
+    for (const id of ids) expect((await paged.get(id))?.userId).toBe(id);
+    expect(await paged.get(randomUUID())).toBeNull();
+    for (const id of ids.slice(0, 5)) await finish(paged, id);
+    expect((await paged.erased()).filter((id) => ids.includes(id))).toEqual(
+      [...ids.slice(0, 5)].sort(),
+    );
+    expect((await paged.pending()).map((r) => r.userId).filter((id) => ids.includes(id))).toEqual(
+      [...ids.slice(5)].sort(),
+    );
+    await db.owner.query("DELETE FROM erasure_requests WHERE user_id = ANY($1::uuid[])", [ids]);
+    await db.owner.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [ids]);
+  });
 });

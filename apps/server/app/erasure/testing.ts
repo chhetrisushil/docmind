@@ -20,7 +20,6 @@ export const noSnapshots = {
 /** The request store without a database, with the same answers as `PgErasureStore` (Task 169's unit tests use it). */
 export class MemoryErasureStore implements ErasureStore {
   private readonly requests = new Map<string, ErasureRequest>();
-  private readonly completed = new Map<string, number>(); // user id -> completion sequence
   private readonly receipts = new Map<string, string>(); // receipt hash (hex) -> user id
 
   async insert(
@@ -43,6 +42,7 @@ export class MemoryErasureStore implements ErasureStore {
   async pending(): Promise<ErasureRequest[]> {
     return [...this.requests.values()]
       .filter((r) => r.state === "pending")
+      .sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0))
       .map((r) => ({ ...r, steps: [...r.steps] }));
   }
 
@@ -50,13 +50,12 @@ export class MemoryErasureStore implements ErasureStore {
     return (await this.pending()).find((r) => r.userId === userId) ?? null;
   }
 
-  /** Done requests, most recently completed first, at most 1000, like the definer function. */
+  /** Done requests' user ids, ordered by user id, like the definer function. */
   async erased(): Promise<string[]> {
     return [...this.requests.values()]
       .filter((r) => r.state === "done")
-      .sort((a, b) => (this.completed.get(b.userId) ?? 0) - (this.completed.get(a.userId) ?? 0))
       .map((r) => r.userId)
-      .slice(0, 1000);
+      .sort();
   }
 
   async mark(userId: string, step: ErasureStep): Promise<void> {
@@ -65,10 +64,7 @@ export class MemoryErasureStore implements ErasureStore {
     if (request.state === "done" || request.steps.includes(step)) return; // a no-op, as in the definer function
     if (ERASURE_STEPS[request.steps.length] !== step) throw new Error("erasure step out of order");
     request.steps.push(step);
-    if (step === "done") {
-      request.state = "done";
-      this.completed.set(userId, this.completed.size + 1);
-    }
+    if (step === "done") request.state = "done";
   }
 
   async retried(userId: string): Promise<void> {

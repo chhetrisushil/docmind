@@ -45,15 +45,20 @@ describe("MemoryErasureStore", () => {
     expect(await store.status(hash(9))).toBeNull();
   });
 
-  it("erased() lists the done requests, newest first, and never a pending one", async () => {
+  it("erased() lists the done requests by user id, and never a pending one", async () => {
     const store = new MemoryErasureStore();
-    const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()];
-    for (const [i, u] of [a, b, c].entries()) await store.insert(tx, u, T, hash(i + 1));
+    const u1 = "00000000-0000-4000-8000-000000000001";
+    const u2 = "00000000-0000-4000-8000-000000000002";
+    const u3 = "00000000-0000-4000-8000-000000000003";
+    const u4 = "00000000-0000-4000-8000-000000000004";
+    for (const [i, u] of [u3, u1, u4, u2].entries()) await store.insert(tx, u, T, hash(i + 1));
     expect(await store.erased()).toEqual([]);
-    await finish(store, b);
-    await finish(store, a);
-    expect(await store.erased()).toEqual([a, b]);
-    expect((await store.pending()).map((r) => r.userId)).toEqual([c]);
+    expect((await store.pending()).map((r) => r.userId)).toEqual([u1, u2, u3, u4]);
+    await finish(store, u3);
+    await finish(store, u1);
+    await finish(store, u2);
+    expect(await store.erased()).toEqual([u1, u2, u3]);
+    expect((await store.pending()).map((r) => r.userId)).toEqual([u4]);
   });
 
   it("refuses to mark a request that does not exist", async () => {

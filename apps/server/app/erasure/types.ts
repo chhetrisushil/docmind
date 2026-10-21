@@ -39,7 +39,7 @@ export interface ErasureStore {
   insert(tx: Queryable, userId: string, tenantId: string, receiptHash: Buffer): Promise<boolean>;
   /** The state of the request a receipt hash belongs to (`docmind_erasure_status`), or `null` for none. Done stays answerable. */
   status(receiptHash: Buffer): Promise<ErasureState | null>;
-  /** Every pending request across tenants (the boot resume). At most 1000 (the cap of `docmind_erasure_pending`). */
+  /** Every pending request across tenants, ordered by user id (the boot resume and the rescan). */
   pending(): Promise<ErasureRequest[]>;
   /** Records a finished step once; `done` also finishes the request. Throws when there is no such request. */
   mark(userId: string, step: ErasureStep): Promise<void>;
@@ -47,6 +47,6 @@ export interface ErasureStore {
   retried(userId: string): Promise<void>;
   /** The user's PENDING request, or `null` (none, or already done: a re-run is a no-op). */
   get(userId: string): Promise<ErasureRequest | null>;
-  /** The user ids of the requests that are done, newest first, at most 1000 (the post-boot `forgetUser` re-run). Required. */
+  /** The user ids of the requests that are done, ordered by user id (the post-boot `forgetUser` re-run). Required. */
   erased(): Promise<string[]>;
 }
