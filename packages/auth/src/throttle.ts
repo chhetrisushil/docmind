@@ -37,9 +37,11 @@ export const POLICIES = {
   loginAccount: { free: 5, baseSeconds: 2, capSeconds: 900, decaySeconds: 3600 },
   signUpIp: { free: 5, baseSeconds: 60, capSeconds: 3600, decaySeconds: 7200 },
   signUpAccount: { free: 3, baseSeconds: 60, capSeconds: 3600, decaySeconds: 7200 },
+  /** The unauthenticated erasure-status route, per client IP. Every request counts; the free allowance is a polling client's. */
+  erasureStatusIp: { free: 60, baseSeconds: 5, capSeconds: 300, decaySeconds: 600 },
 } as const satisfies Record<string, ThrottlePolicy>;
 
-export type Scope = "login" | "signup";
+export type Scope = "login" | "signup" | "erasure";
 
 export const ipKey = (scope: Scope, ip: string): string => `${scope}-ip:${throttleAddress(ip)}`;
 

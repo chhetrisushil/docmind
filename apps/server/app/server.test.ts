@@ -61,6 +61,9 @@ describe("handler failures", () => {
     "GET /marked": () => {
       throw marked;
     },
+    "GET /things/:id": () => {
+      throw new Error("boom");
+    },
     "GET /rejects-after-headers": async (_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.write("partial");
@@ -105,6 +108,14 @@ describe("handler failures", () => {
     const logged = JSON.stringify(consoleError.mock.calls);
     expect(logged).not.toContain("secret detail");
     for (const call of consoleError.mock.calls) expect(call).not.toContain(marked);
+  });
+
+  it("logs the route pattern of a parameterised route, never the raw path with its parameter", async () => {
+    const secret = "tok-SECRET-1234567890";
+    const res = await fetch(`${url}/things/${secret}`);
+    expect(res.status).toBe(500);
+    expect(consoleError).toHaveBeenCalledWith("handler failed", "GET", "/things/:id", "Error");
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain(secret);
   });
 
   it("ends a response that already started instead of hanging or crashing", async () => {

@@ -15,13 +15,15 @@ import {
 import {
   DeleteAccountRequest,
   type DeleteAccountResponse,
+  ErasureReceipt,
+  type ErasureStatusResponse,
   LoginRequest,
   type MeResponse,
   SignUpRequest,
   type SignUpResponse,
 } from "@docmind/contracts";
 import type { AccountErasure } from "../erasure/account";
-import { newReceipt } from "../erasure/receipt";
+import { hashReceipt, newReceipt } from "../erasure/receipt";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -138,6 +140,22 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
         } satisfies DeleteAccountResponse);
         erasure.start(identity.userId);
       }),
+
+      // No session: the receipt is the credential (256 random bits), and the answer is a state and nothing else.
+      // Every request is counted per client address first (the sign-up pattern: count, then check), so a flood
+      // is slowed whether it sends real tokens, unknown ones or garbage. A malformed token never reaches the
+      // database, and looks exactly like an unknown one. Nothing about the answer is cacheable.
+      "GET /api/erasure/:receipt": async (req, res, { params }) => {
+        res.setHeader("cache-control", "no-store");
+        const ip = ipKey("erasure", clientIp(req, trustProxy));
+        await throttle.fail(ip, POLICIES.erasureStatusIp);
+        const wait = await throttle.retryAfter([ip]);
+        if (wait > 0) return tooMany(res, wait);
+        const receipt = ErasureReceipt.safeParse(params.receipt);
+        const state = receipt.success ? await erasure.status(hashReceipt(receipt.data)) : null;
+        if (!state) return sendError(res, 404, "not_found", "no such erasure");
+        json(res, 200, { state } satisfies ErasureStatusResponse);
+      },
     }),
   };
 }

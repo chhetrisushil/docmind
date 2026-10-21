@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { POLICIES, accountKey, ipKey, lockSeconds, throttleAddress } from "./throttle";
 
 describe("throttle policy", () => {
+  it("has an erasure-status scope of its own, per IP, generous enough to poll", () => {
+    expect(ipKey("erasure", "203.0.113.9")).toBe("erasure-ip:203.0.113.9");
+    expect(ipKey("erasure", "203.0.113.9")).not.toBe(ipKey("login", "203.0.113.9"));
+    expect(POLICIES.erasureStatusIp.free).toBeGreaterThanOrEqual(60); // a client polling every second for a minute
+    expect(lockSeconds(POLICIES.erasureStatusIp, POLICIES.erasureStatusIp.free)).toBe(0);
+    expect(
+      lockSeconds(POLICIES.erasureStatusIp, POLICIES.erasureStatusIp.free + 1),
+    ).toBeGreaterThan(0);
+  });
+
   it("is free up to the allowance, then doubles up to the cap", () => {
     const p = POLICIES.loginAccount;
     const locks = [5, 6, 7, 8, 9, 20].map((n) => lockSeconds(p, n));
