@@ -43,6 +43,16 @@ describe("createHttp", () => {
     expect(JSON.stringify(err)).not.toContain("sentinel");
   });
 
+  it("treats an empty or blank Retry-After as absent, not 0", async () => {
+    for (const value of ["", "  "]) {
+      const http = createHttp({
+        fetch: (async () => json(429, { error: { code: "x", message: "m" } }, { "retry-after": value })) as never,
+      });
+      const err = await http.request("GET", "/api/x").catch((e: unknown) => e);
+      expect((err as ApiError).retryAfter).toBeUndefined();
+    }
+  });
+
   it("an error body that is not ours, or a code that is not a plain word, becomes 'unknown'", async () => {
     const odd = createHttp({
       fetch: (async () => new Response("<html>", { status: 502 })) as never,

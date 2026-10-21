@@ -30,7 +30,7 @@ export function apiErrorFrom(
   } catch {
     // not JSON: "unknown"
   }
-  const seconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+  const seconds = retryAfter === null || retryAfter.trim() === "" ? Number.NaN : Number(retryAfter);
   return new ApiError(
     status,
     code,
