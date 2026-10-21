@@ -63,50 +63,69 @@ const stable = (v: unknown): string =>
       : x,
   );
 
+type Call = { key: unknown; exec: () => Promise<unknown> };
+
 /**
  * An invoker over one request's readers. Arguments are parsed again here: a parameter is untrusted input, whatever the controller let through.
- * Identical calls (same tool id and input) share one read for the life of this invoker, which is one request: build a new one per hydrate call, never keep one.
+ * Identical calls (same tool id and PARSED input, so defaults and key order do not matter) share one read for the life of this invoker, which is one request: build a new one per hydrate call, never keep one.
  * A reader's answer is also clipped to the cap its call asked for, so a reader that over-returns cannot widen a view.
  */
 export function createInvoker(readers: UiReaders): TransientInvoker {
   const memo = new Map<string, Promise<unknown>>();
-  const run = async (toolId: string, input: unknown): Promise<unknown> => {
+  /** Validates synchronously and returns what to key and run; throws a TypedFailure on a refusal. */
+  const plan = (toolId: string, input: unknown): Call => {
     if (toolId !== INVOKE_ID) return fail("unknownTool");
     const { target, args } = (input ?? {}) as { target?: unknown; args?: unknown };
     switch (target) {
       case "documents.list": {
         const a = ARGS["documents.list"].safeParse(args);
         if (!a.success) return fail("invalidArgs");
-        const raw = await readers.documents(a.data);
         return {
-          items: raw.items.slice(0, a.data.limit),
-          truncated: raw.truncated || raw.items.length > a.data.limit,
+          key: [target, a.data],
+          exec: async () => {
+            const raw = await readers.documents(a.data);
+            return {
+              items: raw.items.slice(0, a.data.limit),
+              truncated: raw.truncated || raw.items.length > a.data.limit,
+            };
+          },
         };
       }
       case "document.get": {
         const a = ARGS["document.get"].safeParse(args);
         if (!a.success) return fail("invalidArgs");
-        return (await readers.document({ id: a.data.id })) ?? fail("notFound");
+        return {
+          key: [target, a.data],
+          exec: async () => (await readers.document({ id: a.data.id })) ?? fail("notFound"),
+        };
       }
       case "document.content": {
         const a = ARGS["document.content"].safeParse(args);
         if (!a.success) return fail("invalidArgs");
-        const raw =
-          (await readers.content({
-            id: a.data.id,
-            upto: a.data.upto,
-            ...(a.data.passage !== "" && { passage: a.data.passage }),
-          })) ?? fail("notFound");
-        const content: RawContent = {
-          items: raw.items.slice(0, a.data.upto),
-          more: raw.more || raw.items.length > a.data.upto,
+        return {
+          key: [target, a.data],
+          exec: async () => {
+            const raw =
+              (await readers.content({
+                id: a.data.id,
+                upto: a.data.upto,
+                ...(a.data.passage !== "" && { passage: a.data.passage }),
+              })) ?? fail("notFound");
+            const content: RawContent = {
+              items: raw.items.slice(0, a.data.upto),
+              more: raw.more || raw.items.length > a.data.upto,
+            };
+            return { content, cited: a.data.passage === "" ? undefined : a.data.passage };
+          },
         };
-        return { content, cited: a.data.passage === "" ? undefined : a.data.passage };
       }
       case "chats.list": {
         const a = ARGS["chats.list"].safeParse(args);
         if (!a.success) return fail("invalidArgs");
-        return (await readers.chats({ q: a.data.q })).slice(0, CHAT_LIST_CAP);
+        return {
+          key: [target, a.data],
+          exec: async () => (await readers.chats({ q: a.data.q })).slice(0, CHAT_LIST_CAP),
+        };
       }
       default:
         return fail("unknownTool");
@@ -114,15 +133,20 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
   };
   return {
     invokeTransient<TIn, TOut>(toolId: string, input: TIn): Promise<TOut> {
-      const key = stable([toolId, input]);
-      let p = memo.get(key);
-      if (p === undefined) {
-        p = run(toolId, input);
-        memo.set(key, p);
-        // A failure is not remembered: only the calls already waiting on it share it.
-        p.catch(() => memo.delete(key));
+      try {
+        const { key: k, exec } = plan(toolId, input);
+        const key = stable(k);
+        let p = memo.get(key);
+        if (p === undefined) {
+          p = exec();
+          memo.set(key, p);
+          // A failure is not remembered: only the calls already waiting on it share it.
+          p.catch(() => memo.delete(key));
+        }
+        return p as Promise<TOut>;
+      } catch (e) {
+        return Promise.reject(e);
       }
-      return p as Promise<TOut>;
     },
   };
 }

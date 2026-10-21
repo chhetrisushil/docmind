@@ -15,6 +15,8 @@ import { reshapers } from "./reshapers";
 import { EXPERIENCES } from "./views";
 
 const MAX_BATCH = 32;
+/** What a finding reports for a handle the view does not bind: the client chose that text, so it is never logged. */
+const UNBOUND = "unbound";
 
 const providers = defineDataProviders([
   {
@@ -49,6 +51,15 @@ export function createViews(o: ViewsOptions): Views {
     surfaces: base.surfaces,
     payload: base.payload,
     async hydrate(name, requests, readers, principalId) {
+      if (!Object.hasOwn(EXPERIENCES, name)) {
+        // An unknown view is a refusal of each request, never a throw and never an echo of the name.
+        const finding = publicFinding(undefined, {
+          code: "unknown-handle",
+          severity: "error",
+          message: "",
+        });
+        return requests.map(() => ({ state: "error" as const, finding }));
+      }
       const experience = EXPERIENCES[name];
       return [
         ...(await serveHandles(experience, requests, {
@@ -61,7 +72,10 @@ export function createViews(o: ViewsOptions): Views {
           now: Date.now(),
           maxBatch: MAX_BATCH,
           onFinding: (handle, finding) =>
-            o.onFinding?.(handle, publicFinding(undefined, finding).code),
+            o.onFinding?.(
+              Object.hasOwn(experience.providers, handle) ? handle : UNBOUND,
+              publicFinding(undefined, finding).code,
+            ),
         })),
       ];
     },
