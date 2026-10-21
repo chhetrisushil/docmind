@@ -92,15 +92,86 @@ describe("AuthStore", () => {
 });
 
 describe("AuthStore.withoutExpiry", () => {
-  it("holds back expired() while fn runs, and only then", async () => {
+  const signedIn = async () => {
     const store = new AuthStore(api());
     await store.login({ email: "a@example.com", password: "x" });
+    return store;
+  };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  it("holds back expired() while fn runs, then replays a real one on release", async () => {
+    const store = await signedIn();
     await store.withoutExpiry(async () => {
-      store.expired();
+      store.expired(store.epoch);
+      expect(store.get().status).toBe("signed-in");
     });
+    expect(store.get().status).toBe("signed-in"); // replayed after the caller's own continuation
+    await tick();
+    expect(store.get().status).toBe("anonymous");
+  });
+  it("a hold with no 401 leaves the session alone, and expired() works again after", async () => {
+    const store = await signedIn();
+    await store.withoutExpiry(async () => {});
     expect(store.get().status).toBe("signed-in");
     store.expired();
     expect(store.get().status).toBe("anonymous");
+  });
+  it("does not replay a 401 from an older session, nor one when signedOut was called or the session changed", async () => {
+    const store = await signedIn();
+    await store.withoutExpiry(async () => store.expired(store.epoch - 1));
+    expect(store.get().status).toBe("signed-in");
+    await store.withoutExpiry(async () => {
+      store.expired(store.epoch);
+      store.signedOut();
+    });
+    await tick();
+    expect(store.get().status).toBe("anonymous");
+    await store.login({ email: "a@example.com", password: "x" });
+    await store.withoutExpiry(async () => {
+      store.expired(store.epoch);
+      await store.login({ email: "a@example.com", password: "x" });
+    });
+    await tick();
+    expect(store.get().status).toBe("signed-in");
+  });
+  it("releases on a throw, and still replays", async () => {
+    const store = await signedIn();
+    await expect(
+      store.withoutExpiry(async () => {
+        store.expired(store.epoch);
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await tick();
+    expect(store.get().status).toBe("anonymous");
+    await store.login({ email: "a@example.com", password: "x" });
+    store.expired();
+    expect(store.get().status).toBe("anonymous");
+  });
+  it("nested holds release only on the last one", async () => {
+    const store = await signedIn();
+    await store.withoutExpiry(async () => {
+      await store.withoutExpiry(async () => {
+        store.expired(store.epoch);
+      });
+      expect(store.get().status).toBe("signed-in");
+    });
+    await tick();
+    expect(store.get().status).toBe("anonymous");
+  });
+  it("lets the caller handle the 401 of its own call first: its signedOut makes the replay a no-op", async () => {
+    const store = await signedIn();
+    const seen = vi.fn();
+    store.subscribe(seen);
+    try {
+      await store.withoutExpiry(async () => {
+        store.expired(store.epoch);
+        throw new ApiError(401, "unauthorized");
+      });
+    } catch {
+      store.signedOut();
+    }
+    await tick();
+    expect(seen).toHaveBeenCalledTimes(1);
   });
 });
 

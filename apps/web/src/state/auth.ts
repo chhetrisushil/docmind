@@ -26,6 +26,8 @@ export class AuthStore extends Store<AuthState> {
   /** Counts the sessions this browser has held; a request remembers the one it was sent in. */
   private session = 0;
   private holds = 0;
+  /** The session a real 401 arrived for while expiry was held; replayed on the last release if that session is still the current one. */
+  private deferred: number | undefined;
   get epoch(): number {
     return this.session;
   }
@@ -62,13 +64,18 @@ export class AuthStore extends Store<AuthState> {
   }
   /** A 401 'unauthorized' came back from a call sent in session `epoch`: that session ended. A late answer for an older session is ignored. */
   expired(epoch?: number): void {
-    if (this.holds > 0) return;
     if (epoch !== undefined && epoch !== this.session) return;
+    if (this.holds > 0) {
+      this.deferred = this.session;
+      return;
+    }
     this.signedOut();
   }
   /**
    * Runs `fn` with 401s from other calls not ending the session. A caller that will itself decide where a lost session goes
    * (the receipt page after a deletion) uses it so the route guard cannot send the browser to sign-in first.
+   * Wrap only the single call whose 401 you handle: every other 401 that arrives meanwhile is held back too (and replayed on
+   * the last release if the session is unchanged and signedOut was not called), so a wider wrap delays a real sign-out.
    */
   async withoutExpiry<T>(fn: () => Promise<T>): Promise<T> {
     this.holds += 1;
@@ -76,6 +83,15 @@ export class AuthStore extends Store<AuthState> {
       return await fn();
     } finally {
       this.holds -= 1;
+      if (this.holds === 0 && this.deferred !== undefined) {
+        // A macrotask later: the caller's own handling of the 401 it saw (a navigation, signedOut) runs first, and a signedOut
+        // changes the session, so the replay then finds nothing to do.
+        setTimeout(() => {
+          const epoch = this.deferred;
+          this.deferred = undefined;
+          if (this.holds === 0 && epoch !== undefined) this.expired(epoch);
+        }, 0);
+      }
     }
   }
   signedOut(): void {

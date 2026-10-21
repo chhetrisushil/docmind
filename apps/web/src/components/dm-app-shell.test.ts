@@ -82,6 +82,49 @@ describe("dm-app-shell", () => {
     expect(el.shadowRoot?.activeElement).toBe(menu);
   });
 
+  it("Escape works from the Menu button itself", async () => {
+    const { el } = await setup();
+    const menu = q<HTMLButtonElement>(el, "button[data-menu]");
+    menu.click();
+    await settle(el);
+    menu.focus();
+    menu.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
+    );
+    await settle(el);
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    expect(el.shadowRoot?.activeElement).toBe(menu);
+  });
+
+  it("opening the menu moves focus into the sidebar, and main is inert behind it until it closes", async () => {
+    const { el } = await setup();
+    const menu = q<HTMLButtonElement>(el, "button[data-menu]");
+    expect(q<HTMLElement>(el, "main").inert).toBe(false);
+    menu.click();
+    await settle(el);
+    await settle(el);
+    expect(q<HTMLElement>(el, "aside").contains(el.shadowRoot?.activeElement ?? null)).toBe(true);
+    expect(q<HTMLElement>(el, "main").inert).toBe(true);
+    menu.click();
+    await settle(el);
+    expect(q<HTMLElement>(el, "main").inert).toBe(false);
+  });
+
+  it("the menu closes on any route change, not only on New chat", async () => {
+    const { services, el } = await setup();
+    q<HTMLButtonElement>(el, "button[data-menu]").click();
+    await settle(el);
+    services.router.navigate({ name: "settings" });
+    await settle(el);
+    expect(q(el, "aside").hasAttribute("data-open")).toBe(false);
+    expect(q<HTMLElement>(el, "main").inert).toBe(false);
+    q<HTMLButtonElement>(el, "button[data-menu]").click();
+    await settle(el);
+    services.router.navigate({ name: "documents" });
+    await settle(el);
+    expect(q(el, "aside").hasAttribute("data-open")).toBe(false);
+  });
+
   it("starts with a skip link to the main region, and following it focuses main without a navigation", async () => {
     const { services, el } = await setup();
     const skip = q<HTMLAnchorElement>(el, "a[data-skip]");
