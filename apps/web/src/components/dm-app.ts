@@ -7,6 +7,7 @@ import type { AuthState } from "../state/auth";
 import { StoreController } from "../state/store";
 import { baseStyles } from "../styles/base";
 import { VIEWS } from "../views";
+import "./dm-app-shell";
 import "./dm-not-found";
 import "./dm-toasts";
 
@@ -88,9 +89,16 @@ export class DmApp extends LitElement {
   private view() {
     const route = this.route?.value ?? this.services.router.get();
     const tag = unsafeStatic(VIEWS[route.name] ?? "dm-not-found"); // the tag comes from our own table, never from the URL
-    return route.name === "sign-in" || route.name === "sign-up"
-      ? html`<${tag} mode=${route.name}></${tag}>`
-      : html`<${tag}></${tag}>`;
+    const view =
+      route.name === "sign-in" || route.name === "sign-up"
+        ? html`<${tag} mode=${route.name}></${tag}>`
+        : html`<${tag}></${tag}>`;
+    const bare =
+      route.name === "sign-in" ||
+      route.name === "sign-up" ||
+      route.name === "account-deleted" ||
+      route.name === "not-found";
+    return bare ? view : html`<dm-app-shell>${view}</dm-app-shell>`;
   }
 }
 customElements.define("dm-app", DmApp);
