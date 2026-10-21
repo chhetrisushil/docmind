@@ -1,3 +1,4 @@
+import { Uuid } from "@docmind/contracts";
 import { Store } from "./state/store";
 
 export type Route =
@@ -10,7 +11,7 @@ export type Route =
   | { name: "settings" }
   | { name: "not-found" };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (s: string) => Uuid.safeParse(s).success;
 
 export function parseRoute(path: string, search = ""): Route {
   const p = path.replace(/\/+$/, "") || "/";
@@ -30,15 +31,15 @@ export function parseRoute(path: string, search = ""): Route {
       return { name: "settings" };
   }
   const chat = /^\/chats\/([^/]+)$/.exec(p);
-  if (chat && UUID.test(chat[1] as string))
+  if (chat && isUuid(chat[1] as string))
     return { name: "chat", chatId: (chat[1] as string).toLowerCase() };
   const doc = /^\/documents\/([^/]+)$/.exec(p);
-  if (doc && UUID.test(doc[1] as string)) {
+  if (doc && isUuid(doc[1] as string)) {
     const passage = new URLSearchParams(search).get("passage");
     return {
       name: "document",
       id: (doc[1] as string).toLowerCase(),
-      ...(passage !== null && UUID.test(passage) && { passage: passage.toLowerCase() }),
+      ...(passage !== null && isUuid(passage) && { passage: passage.toLowerCase() }),
     };
   }
   return { name: "not-found" };
