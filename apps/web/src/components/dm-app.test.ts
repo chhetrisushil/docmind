@@ -171,12 +171,14 @@ describe("dm-app", () => {
   it("a 401 'unauthorized' from any call ends the session and routes to sign-in once, with no loop", async () => {
     let live = true;
     const fetch = (async (url: string) =>
-      live && String(url).endsWith("/api/me")
-        ? new Response(JSON.stringify(ME), { headers: { "content-type": "application/json" } })
-        : new Response(JSON.stringify({ error: { code: "unauthorized", message: "x" } }), {
-            status: 401,
-            headers: { "content-type": "application/json" },
-          })) as never;
+      String(url).includes("/api/ui/")
+        ? new Promise<Response>(() => {}) // the sidebar's chat list: not what this test is about
+        : live && String(url).endsWith("/api/me")
+          ? new Response(JSON.stringify(ME), { headers: { "content-type": "application/json" } })
+          : new Response(JSON.stringify({ error: { code: "unauthorized", message: "x" } }), {
+              status: 401,
+              headers: { "content-type": "application/json" },
+            })) as never;
     const win = fakeWindow("/settings"); // not /documents: that page fetches its view, and this fetch answers 401 once "live" is false
     const svc = createServices({ router: new Router(win as never), fetch });
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });

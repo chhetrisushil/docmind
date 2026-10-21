@@ -23,6 +23,17 @@ export interface PerformContext {
   /** The page leaves the deleted document itself: called instead of refreshing the view. */
   onDeleted?(): void;
   confirm(heading: string, body: string, confirmLabel: string, danger?: boolean): Promise<boolean>;
+  /** A text prompt (the sidebar's rename): undefined for cancel, empty or unchanged. */
+  prompt?(
+    heading: string,
+    label: string,
+    initial: string,
+    confirmLabel: string,
+  ): Promise<string | undefined>;
+  /** The title the served table holds for a chat ("" when untitled). */
+  titleOf?(id: string): string;
+  /** The chat the route has open, read when needed. */
+  readonly openChatId?: string | undefined;
 }
 
 const err = (toasts: ToastStore, text: string) => toasts.push({ kind: "err", text });
@@ -114,6 +125,45 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
       return true;
     case "content.more":
       c.session.setParams({ upto: Math.min(200, (c.upto?.() ?? 20) + 20) }, "doc-content");
+      return true;
+    case "chat.open":
+      c.router.navigate({ name: "chat", chatId: intent.id });
+      return true;
+    case "chat.rename": {
+      const title = await c.prompt?.("Rename chat", "Title", c.titleOf?.(intent.id) ?? "", "Save");
+      if (title === undefined || c.active?.() === false) return true;
+      try {
+        await c.api.patchChat(intent.id, { title: title.slice(0, 200) });
+        c.session.invalidate("chats");
+      } catch {
+        err(c.toasts, "Could not rename that chat.");
+      }
+      return true;
+    }
+    case "chat.delete": {
+      if (
+        !(await c.confirm(
+          "Delete this chat?",
+          "Its messages are removed for good.",
+          "Delete",
+          true,
+        ))
+      )
+        return true;
+      try {
+        await c.api.deleteChat(intent.id);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404)) {
+          err(c.toasts, "Could not delete that chat.");
+          return true;
+        }
+      }
+      c.session.invalidate("chats");
+      if (c.openChatId === intent.id && c.active?.() !== false) c.router.navigate({ name: "chat" });
+      return true;
+    }
+    case "chats.search":
+      c.session.setParams({ q: intent.q }, "chats");
       return true;
     case "documents.filter":
       c.session.setParams({ status: intent.status }, "documents");

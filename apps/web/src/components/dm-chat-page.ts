@@ -378,6 +378,7 @@ export class DmChatPage extends LitElement {
       this.creating = true;
       try {
         const chat = await svc.api.createChat({ scope: "all" });
+        document.dispatchEvent(new CustomEvent("dm-chats-changed")); // the sidebar lists the new chat
         const route = svc.router.get();
         // The user left before the chat existed: the text is discarded, never sent into a chat they are not in.
         if (!this.isConnected || route.name !== "chat" || route.chatId !== undefined)
