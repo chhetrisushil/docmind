@@ -34,6 +34,8 @@ export class DmDocumentsPage extends LitElement {
   private pending = false;
   /** Bumped when the page leaves, so a refresh scheduled before that does nothing. */
   private epoch = 0;
+  /** Aborted when the page leaves: a confirmation still open then answers no. */
+  private leaving = new AbortController();
   constructor() {
     super();
     this.empty = false;
@@ -50,10 +52,13 @@ export class DmDocumentsPage extends LitElement {
     const services = this.ctx.services;
     if (this.started || !services || !this.isConnected) return;
     this.started = true;
+    if (this.leaving.signal.aborted) this.leaving = new AbortController();
     const epoch = this.epoch;
     services.uploads.startEvents(
       (e) => this.onProgress(e),
-      () => services.toasts.push({ kind: "err", text: STREAM_ENDED }),
+      (reason) => {
+        if (reason !== "unauthorized") services.toasts.push({ kind: "err", text: STREAM_ENDED }); // the sign-in redirect says the rest
+      },
     );
     this.unsettled = services.uploads.onSettled((results) => {
       if (epoch === this.epoch && results.some((r) => r.document)) this.refresh();
@@ -61,6 +66,7 @@ export class DmDocumentsPage extends LitElement {
   }
   disconnectedCallback(): void {
     this.epoch++;
+    this.leaving.abort();
     this.pending = false;
     this.started = false;
     this.ctx.services?.uploads.stopEvents();
@@ -89,6 +95,9 @@ export class DmDocumentsPage extends LitElement {
   }
   private refresh(): void {
     if (this.empty) {
+      this.session = undefined; // the view is swapped: the old session is disposed
+      this.unwatch?.();
+      this.unwatch = undefined;
       this.empty = false; // a document arrived while the empty state was showing: back to the library
       return;
     }
@@ -112,17 +121,29 @@ export class DmDocumentsPage extends LitElement {
   private act: ActionHandler = async (a) => {
     const session = this.session;
     const services = this.ctx.services;
-    if (!session || !services) return { ok: false };
+    if (!session || !services) {
+      this.ctx.services?.toasts.push({
+        kind: "err",
+        text: "This view is not ready yet. Try again.",
+      });
+      return { ok: false };
+    }
     // What this surface holds is what the server served in the table's value, read now: never the action's own claim.
     const keys = (session.valueOf("documents") as { rowKeys?: unknown } | undefined)?.rowKeys;
     const held = Array.isArray(keys)
       ? { rowKeys: keys.filter((k): k is string => typeof k === "string") }
       : {};
-    const intent: Intent | undefined = intentOf("library", a, held);
+    const intent: Intent | undefined = intentOf(session.name, a, held);
     if (!intent) return { ok: false, reason: "refused" };
     const { api, router, toasts } = services;
     return {
-      ok: await performIntent(intent, { api, router, toasts, session, confirm: confirmDialog }),
+      ok: await performIntent(intent, {
+        api,
+        router,
+        toasts,
+        session,
+        confirm: (h, b, l, d) => confirmDialog(h, b, l, d, this.leaving.signal),
+      }),
     };
   };
 

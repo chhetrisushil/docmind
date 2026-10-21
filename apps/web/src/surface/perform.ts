@@ -15,8 +15,23 @@ export interface PerformContext {
 
 const err = (toasts: ToastStore, text: string) => toasts.push({ kind: "err", text });
 
+/** Row actions in flight, by action and id: a repeat is ignored until the first one is done (loom-ui's disabled buttons are not the only guard). */
+const busy = new Set<string>();
+
 /** The web's execution of the surface-neutral intents. Returns false for an intent another page handles. Texts are fixed sentences. */
 export async function performIntent(intent: Intent, c: PerformContext): Promise<boolean> {
+  const key = "id" in intent ? `${intent.type}:${intent.id}` : undefined;
+  if (key === undefined) return perform(intent, c);
+  if (busy.has(key)) return true;
+  busy.add(key);
+  try {
+    return await perform(intent, c);
+  } finally {
+    busy.delete(key);
+  }
+}
+
+async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
   switch (intent.type) {
     case "document.open":
       c.router.navigate({ name: "document", id: intent.id });

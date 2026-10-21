@@ -193,6 +193,30 @@ describe("dm-app", () => {
     expect(svc.router.route).toEqual({ name: "sign-in" });
   });
 
+  it("a page that fetches on load and gets a 401 ends the session once: one sign-in route, no refetch loop", async () => {
+    const seen: string[] = [];
+    const fetch = (async (url: string) => {
+      seen.push(String(url));
+      return String(url).endsWith("/api/me")
+        ? new Response(JSON.stringify(ME), { headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify({ error: { code: "unauthorized", message: "x" } }), {
+            status: 401,
+            headers: { "content-type": "application/json" },
+          });
+    }) as never;
+    const win = fakeWindow("/documents");
+    const svc = createServices({ router: new Router(win as never), fetch });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    await settle(app);
+    await new Promise((r) => setTimeout(r, 50));
+    const count = seen.length;
+    await new Promise((r) => setTimeout(r, 100));
+    expect(seen.length).toBe(count);
+    expect(win.history.replaceState).toHaveBeenCalledTimes(1);
+    expect(svc.router.route).toEqual({ name: "sign-in" });
+  });
+
   it("does not navigate when the session ends on sign-in or sign-up", async () => {
     for (const path of ["/sign-in", "/sign-up"]) {
       const svc = servicesWithAuth(path, {
