@@ -176,7 +176,7 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
    1. Loom's recovery scan (it resumes executions of every tenant after a restart).
    2. The read-model writer (`docmind_loom`): it folds and tombstones rows of every tenant, and the policy lets only that role do it.
    3. The upload sweep's two `SECURITY DEFINER` functions (stale uploads and orphaned status rows, ids only).
-   4. Erasure: `docmind_erasure_pending(p_state)` (lists the durable requests that are `pending` or `done`, at most 1000), `docmind_erasure_mark` (records one step; it enforces the step order), `docmind_erasure_status(p_receipt_hash)` (takes the hash of an erasure receipt and returns only a state, `pending`, `done` or NULL, for the unauthenticated receipt route) and `docmind_delete_empty_tenant` (deletes a tenant only when no user is left). Each pins `search_path`, is revoked from PUBLIC and granted to `docmind_app` alone.
+   4. Erasure: `docmind_erasure_pending(p_state, p_after, p_limit)` (lists the durable requests that are `pending` or `done` by keyset on the user id, at most `p_limit` (up to the function's page limit) per call; callers repeat until a short page), `docmind_erasure_mark` (records one step; it enforces the step order), `docmind_erasure_status(p_receipt_hash)` (takes the hash of an erasure receipt and returns only a state, `pending`, `done` or NULL, for the unauthenticated receipt route) and `docmind_delete_empty_tenant` (deletes a tenant only when no user is left). Each pins `search_path`, is revoked from PUBLIC and granted to `docmind_app` alone.
    Counted by name, paths 3 and 4 are six `docmind_` definer functions. The older definer functions are a separate class and are not counted above: the login, session and sign-up functions of 0005 (they run before a tenant is known and return one row), the throttle functions (0006), the key-store functions `key_get`, `key_put`, `key_destroy` and `key_was_destroyed` (0007) and `migrations_read` (0017).
 
 **Quotas** (per tenant, configurable):
@@ -290,12 +290,11 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
      is the only way to see where it stands; whoever holds the token can read `pending` or `done` and
      nothing else. A request that was committed but whose answer was lost (a 500 after commit) has no
      receipt the user knows of; the erasure still runs (see the README runbook).
-  10. `pending()` and `erased()` list at most 1000 requests, and `get()` reads through `pending()`. With
-     more than 1000 pending requests some would not be found; no fifth definer function is wanted for
-     that, and the cap is far beyond v1 scale. The same cap bounds the post-boot re-tombstoning: after a
-     read-model rebuild or version bump (Loom's reset drops the tombstones), only the newest 1000 erased
-     users are tombstoned again. The rows of an older erased user come back content-free (`{}`), but with
-     the user id in `execution_id`, which is weaker than the "tombstoned rows" of trade-off 7.
+  10. `pending()`, `erased()` and `get()` page through the requests by user id (`docmind_erasure_pending` is a keyset
+     listing, 500 rows per call), so no request is skipped however many exist: the boot resume and the rescan see
+     every pending request, and after a read-model rebuild or version bump (Loom's reset drops the tombstones) the
+     post-boot pass re-tombstones every erased user. The cost is one read of all request rows at boot, which is
+     small (ids, step names and a counter).
 
 ## 5. Ingestion
 
