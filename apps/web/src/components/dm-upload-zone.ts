@@ -16,10 +16,14 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /**
  * DocMind's own drop zone: many files, a drop target, a per-file queue. The size and type checks are UX only; the server
- * checks again. File names are shown as text only and never logged or put in a toast. Its uploads stop when it leaves the page.
+ * checks again. File names are shown as text only and never logged or put in a toast. Uploads belong to the store, not to this element: they go on when it leaves the page and stop on sign-out or Cancel.
  */
 export class DmUploadZone extends LitElement {
-  static properties = { variant: { type: String }, dragging: { state: true } };
+  static properties = {
+    variant: { type: String },
+    hideQueue: { type: Boolean, attribute: "hide-queue" },
+    dragging: { state: true },
+  };
   static styles = [
     baseStyles,
     css`
@@ -36,16 +40,16 @@ export class DmUploadZone extends LitElement {
     `,
   ];
   declare variant: "compact" | "empty";
+  /** Set on all but one zone of a page so a queue is listed (and read out) once. */
+  declare hideQueue: boolean;
   declare dragging: number;
+  private depth = 0;
   private readonly ctx = new ServicesController(this, (s) => [s.uploads]);
   constructor() {
     super();
     this.variant = "compact";
     this.dragging = 0;
-  }
-  disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.ctx.services?.uploads.cancelAll();
+    this.hideQueue = false;
   }
   private async send(files: File[]): Promise<void> {
     const services = this.ctx.services;
@@ -70,16 +74,35 @@ export class DmUploadZone extends LitElement {
     e.preventDefault();
     const dt = (e as DragEvent).dataTransfer;
     if (e.type === "dragover" && dt) dt.dropEffect = "copy";
-    this.dragging = e.type === "dragleave" ? 0 : (dt?.items?.length ?? 0);
+    // enter and leave fire for every child the pointer crosses: only the last leave ends the drag
+    if (e.type === "dragenter") this.depth++;
+    else if (e.type === "dragleave") this.depth = Math.max(0, this.depth - 1);
+    if (e.type === "dragleave") this.dragging = this.depth === 0 ? 0 : this.dragging;
+    else this.dragging = dt?.items?.length ?? this.dragging;
   };
   private onDrop = (e: Event) => {
     e.preventDefault();
+    this.depth = 0;
     this.dragging = 0;
     const dt = (e as DragEvent).dataTransfer;
-    const items = [...(dt?.items ?? [])] as DataTransferItem[];
-    const folder = items.some((i) => i.kind === "file" && i.webkitGetAsEntry?.()?.isDirectory);
-    if (folder || !dt) return; // a dropped folder is ignored
-    void this.send([...dt.files]);
+    if (!dt) return;
+    const files = [...dt.files];
+    const items = [...(dt.items ?? [])] as DataTransferItem[];
+    const isDir = (i: DataTransferItem | undefined) =>
+      i?.kind === "file" && i.webkitGetAsEntry?.()?.isDirectory === true;
+    // Items and files line up one to one; a folder is skipped, the rest go on.
+    const keep =
+      items.length === files.length
+        ? files.filter((_, at) => !isDir(items[at]))
+        : items.some(isDir)
+          ? []
+          : files;
+    if (keep.length < files.length || (files.length === 0 && items.some(isDir)))
+      this.ctx.services?.toasts.push({
+        kind: "err",
+        text: "Folders are not supported and were skipped",
+      });
+    void this.send(keep);
   };
   private onPick = (e: Event) => {
     const input = e.target as HTMLInputElement;
@@ -94,7 +117,20 @@ export class DmUploadZone extends LitElement {
   render() {
     const uploads = this.ctx.services?.uploads;
     const items = uploads?.get().uploads ?? [];
+    const count = (state: string) => items.filter((u) => u.state === state).length;
+    const summary = [
+      ["waiting", "queued"],
+      ["uploading", "uploading"],
+      ["failed", "failed"],
+    ]
+      .flatMap(([word, state]) =>
+        count(state as string) > 0
+          ? [`${count(state as string)} ${word === "waiting" ? "waiting" : word}`]
+          : [],
+      )
+      .join(", ");
     return html`
+      <p class="sr-only" data-status role="status" aria-live="polite" aria-atomic="true">${summary}</p>
       <div data-zone ?data-over=${this.dragging > 0} @dragenter=${this.onDrag} @dragover=${this.onDrag} @dragleave=${this.onDrag} @drop=${this.onDrop}>
         <dm-icon name="upload-simple"></dm-icon>
         <p>${this.dragging > 0 ? `Release to upload ${plural(this.dragging, "file", "files")}` : html`Drop files here or <button class="btn ghost" data-browse @click=${() => this.shadowRoot?.querySelector<HTMLInputElement>("input[type=file]")?.click()}>browse</button>`}</p>
@@ -102,7 +138,7 @@ export class DmUploadZone extends LitElement {
         <input type="file" multiple hidden accept=${UPLOAD_EXTENSIONS.map((x) => `.${x}`).join(",")} @change=${this.onPick} />
       </div>
       ${
-        items.length === 0
+        items.length === 0 || this.hideQueue
           ? null
           : html`<ul>${items.map(
               (u) => html`
