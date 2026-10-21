@@ -15,7 +15,7 @@ import { baseStyles } from "../styles/base";
 import { performIntent } from "../surface/perform";
 import type { ActionHandler, ViewSession } from "../ui/session";
 import { confirmDialog } from "./confirm";
-import { deepActiveElement, flatParent } from "./dm-dialog";
+import { DIALOG_CLOSED, deepActiveElement, dialogOpen, flatParent } from "./dm-dialog";
 import "./dm-icon";
 import "./dm-view";
 
@@ -96,12 +96,29 @@ export class DmChatPage extends LitElement {
     return this.narrow && (this.controller?.state.get().sourcesOpen ?? false);
   }
   private onDocKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && this.modal) void this.closePanel();
+    // An open dialog answers Escape itself; its listener may run after this one, so it is checked, not assumed.
+    if (e.key === "Escape" && this.modal && !e.defaultPrevented && !dialogOpen())
+      void this.closePanel();
+  };
+  private wide: MediaQueryList | undefined;
+  /** The viewport crossed 1100px: re-evaluate. Narrowing closes the panel (an overlay is never open by itself). */
+  private onResize = () => {
+    if (this.narrow && this.controller?.state.get().sourcesOpen)
+      this.controller.toggleSources(false);
+    this.requestUpdate();
+  };
+  private onDialogClosed = () => {
+    if (!this.modal) this.releaseModal();
   };
 
   connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("keydown", this.onDocKey);
+    document.addEventListener(DIALOG_CLOSED, this.onDialogClosed);
+    if (typeof matchMedia === "function") {
+      this.wide = matchMedia("(min-width: 1100px)");
+      this.wide.addEventListener("change", this.onResize);
+    }
     if (this.hasUpdated) this.requestUpdate(); // a reconnect binds the chat again
   }
   protected updated(): void {
@@ -112,6 +129,9 @@ export class DmChatPage extends LitElement {
   }
   disconnectedCallback(): void {
     document.removeEventListener("keydown", this.onDocKey);
+    document.removeEventListener(DIALOG_CLOSED, this.onDialogClosed);
+    this.wide?.removeEventListener("change", this.onResize);
+    this.wide = undefined;
     this.releaseModal();
     // A message nobody consumed does not wait for a later visit.
     const svc = this.ctx.services;
@@ -142,7 +162,9 @@ export class DmChatPage extends LitElement {
       node = parent instanceof ShadowRoot ? parent.host : parent;
     }
   }
+  /** Nodes the panel made inert stay so while a dialog is open (the dialog skipped them); they are released when it closes. */
   private releaseModal(): void {
+    if (dialogOpen()) return;
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
   }
