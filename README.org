@@ -8,7 +8,7 @@ A signed-in user uploads documents, gets summaries and analysis, and asks questi
 documents in a chat that cites its sources. Each user's data is isolated per tenant and encrypted
 under a per-user key, so account erasure can be made final by destroying that key.
 
-Document storage, ingestion, linked retrieval and chat exist today (see Status); the web UI is planned.
+Document storage, ingestion, linked retrieval, chat and account erasure exist today (see Status); the web UI is planned.
 
 * Status
 
@@ -19,9 +19,9 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M0        | Foundations: workspace, CI, contracts, tenancy | shipped                        |
 | M1        | Identity and keys: password auth, KeyStore, sealed Postgres event store | shipped |
 | M2        | Document storage: encrypted blobs, upload/list/get/delete API | shipped         |
-| M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | complete |
-| M4        | Chat and history: tools, agent, citations      | complete                       |
-| M5        | Erasure: =DELETE /api/me=                      | planned                        |
+| M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | shipped  |
+| M4        | Chat and history: tools, agent, citations      | shipped                        |
+| M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | shipped                |
 | M6        | Web UI (=apps/web=)                            | planned                        |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
@@ -44,13 +44,18 @@ Data flow as built:
    complete the API; =POST /api/documents/:id/retry= re-runs a failed document. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
 
 5. =/api/chats= (create, list, messages, send, stream, reasoning, stop, patch, delete) runs a =doc-assistant= agent over Claude with five read-only tools; answers cite =[[chunk id]]= markers that are validated on read. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
+6. =DELETE /api/me= (body =password=) erases the account: it records a durable request, logs the user out
+   everywhere, frees the email, answers 202 with a receipt, and a background =Eraser= stops the user's work,
+   destroys the user's key (which makes every event, snapshot, sealed column and blob unreadable),
+   tombstones the read models, deletes the rows, deletes the blobs and finishes. An interrupted erasure
+   resumes at boot. See Operations.
 
 Security model, in brief:
 - Per-tenant isolation through Postgres row-level security. The server connects as =docmind_app=,
   which owns nothing and cannot bypass RLS; migrations run as the owner role.
 - A per-user data key (DEK) is stored wrapped by a master key (KEK). Loom's event log and snapshots
   are sealed per user through =PostgresKeyStore=; blobs are enveloped per user.
-- Destroying a user's key makes their events, snapshots and blobs unreadable (crypto-shredding).
+- Destroying a user's key makes their events, snapshots, sealed columns and blobs unreadable (crypto-shredding); =DELETE /api/me= does that and then deletes their rows and files.
 - Event paths holding sensitive fields are registered in =apps/server/app/sensitive.ts=; flow input
   carries ids only, and passwords and secrets are kept out of logs.
 
@@ -172,6 +177,39 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
   (=ingest-flow-mismatch=); the user can retry them.
 - Chat: without =ANTHROPIC_API_KEY= creating a chat and sending a message answer 503 =chat_unavailable=; the rest works. Rotating the envelope key: set the old one as =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS=, the new one as =DOCMIND_CHAT_ENVELOPE_KEY=, restart, and remove the previous key after an hour. The first boot after this release re-folds the ingest-status read model once, because sealing the chat and reasoning event paths changes its fold version. pgvector 0.8.0 or later is required (the server refuses to start below it). If the chat-activity model cannot start, the server logs it and lists chats by creation time.
 - Chat cost: one chat turn is a few model calls (one per tool round); titles use the small model once per chat. The chat flow has no turn deadline: the provider's 180 s request timeout bounds each attempt, and a tool times out after 30 s.
+- Erasure: =DELETE /api/me= with ={"password": "..."}= answers 202 and erases in the background (409
+  =erasure_in_progress= if one is already recorded). Watch it with =SELECT state, steps, attempts FROM
+  erasure_requests= (as the owner role): =steps= lists the steps done, in order (=stop=, =shred=,
+  =readModels=, =rows=, =blobs=, =key=, =done=), and =state= is =done= at the end. A failing step is retried
+  without limit, with a backoff of 1 s to 60 s; the log shows only the step name, the error class and the
+  attempt. A shred that waits on a running chat turn logs =ErasureParkedError= until the turn ends (a stop
+  has been sent; normally seconds). Erasure resumes by itself at the next boot, and the server rescans every
+  5 minutes. What stays afterwards is listed in the spec (§4.4, trade-off 7): ids, event types, tombstones
+  and the audit row, none of it content.
+- Erasure receipt: the 202 body carries a =receipt=; =GET /api/erasure/<receipt>= (no login) answers 200
+  ={"state": "pending"}= or ={"state": "done"}=, and 404 for anything else. Only the receipt's sha256 is
+  stored. The account's email is released at the 202, so the same address can sign up again at once.
+- Erasure runbook:
+  - A step that keeps failing logs =erasure stuck <step> <ErrorClass> attempts=<n>= after 10 attempts and
+    again every 10 (no ids); search the log for =erasure stuck=. Read the class: a database that is down or a
+    migration that narrowed a grant shows up on =rows= or =key=; =ErasureParkedError= on =shred= is a chat
+    turn that will not park. Fix the cause; the next retry (at most 60 s later) continues from that step.
+  - A =DELETE /api/me= that answers 500 may have committed: the erasure can be accepted with no receipt
+    reaching the user. Check =erasure_requests= by user id. If the row exists, the erasure runs; the user
+    cannot log in (the email was replaced).
+  - The eraser runs at most two erasures at a time. An erasure that is waiting out a retry delay holds neither
+    a slot nor its lock, so stuck erasures do not hold up the others; the stuck lines tell which are stuck.
+  - =pending()= and =erased()= (the lists behind the boot resume and the post-boot re-tombstoning) return at most
+    1000 requests. With more than 1000 pending requests some would not be found until others finish; this
+    is far beyond v1 scale. The same cap bounds the re-tombstoning after a read-model rebuild or version bump:
+    erased users beyond the newest 1000 are not tombstoned again. Their rows come back content-free, but with
+    the user id in the execution id.
+- Backups: keep database backups (Postgres dumps, WAL archives, the key-store rows) for at most 30 days.
+  An erasure cannot reach a copy that already exists, so the copy's life is the erasure's last step. After
+  restoring a backup, re-run erasures made since it was taken: insert their ids into =erasure_requests=
+  as =pending= (the audit rows of the live database are the list) and start the server. A backup of the
+  key store that outlives the 30 days defeats erasure for everyone in it; delete it on the same schedule.
+  The blob directory is encrypted per user and needs the same schedule.
 - Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters:
   at least about 17 map requests, up to about twice that when sections are just over 12,000
   characters, since whole sections are packed) plus one reduce request. Vision reads at most 12 text-less pages per PDF, 4 per request
@@ -180,7 +218,7 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
 - A backlog of interrupted summaries is re-driven one step at a time on recovery (up to 10 minutes
   each), which can delay recovery of other executions after a restart.
 
-Backup and erasure runbooks are listed in the spec as M7 work and do not exist yet.
+The backup and restore drill (restore into an empty database, verify, re-run erasures) is M7 work; the rules above are the ones that hold today.
 
 ** Deployment notes (v1)
 
