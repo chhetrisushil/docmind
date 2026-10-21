@@ -14,6 +14,7 @@ import { buildServer } from "../compose";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, type TestDb, createTestDb } from "../db/testSupport";
+import { type Eraser, type ErasureDeps, abortableSleep } from "../erasure/eraser";
 import { createTitleLlm } from "../flows/chat-title/llm";
 import { closeIngest, createIngestWiring } from "../flows/ingest-document/limits";
 import { runAll } from "../shutdown";
@@ -21,6 +22,9 @@ import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "../status/p
 import { type DurableStorage, openDurableStorage } from "../storage";
 import { loadBlobRoot, loadLimits } from "./limits";
 import { openSse } from "./testHarness";
+
+/** Pinned far above any test wait: an SSE stream ends in a test only because the server closed it, never at a heartbeat re-check. */
+export const HEARTBEAT_MS = 10 * 60_000;
 
 const PASSWORD = "correct horse battery";
 
@@ -31,6 +35,8 @@ export interface IngestStackOptions {
   chat?: boolean;
   /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
   resume?: { db: TestDb; kek: KeyObject; root?: string };
+  /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
+  wrapErasure?: (deps: ErasureDeps) => ErasureDeps;
 }
 
 export interface IngestEvent {
@@ -52,6 +58,8 @@ export interface IngestStack {
   /** Present with the `chat` option. */
   claude?: FakeAnthropic;
   composed: ReturnType<typeof buildServer>;
+  /** The composed eraser (always present on this stack). */
+  eraser: Eraser;
   root: string;
   signUpAndLogIn(email: string): Promise<{ cookie: string; userId: string; tenantId: string }>;
   upload(cookie: string, name: string, data: Uint8Array): Promise<Response>;
@@ -133,6 +141,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
           return port.start(identity, documentId, generation);
         },
       }),
+      heartbeatMs: HEARTBEAT_MS,
       pool: app,
       keys,
       storage: durable.storage,
@@ -148,6 +157,13 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
         source: durable.storage.eventStore,
         userExecutions: pgUserExecutions(durable.pool),
       },
+      erasure: {
+        raw: durable.raw,
+        loomPool: durable.pool,
+        // The backoff is capped at 50 ms: a shred that waits on a running turn is retried quickly, never slept on.
+        sleep: (ms, signal) => abortableSleep(Math.min(ms, 50), signal),
+        ...(options.wrapErasure && { wrap: options.wrapErasure }),
+      },
       chat: {
         settings,
         ...(llm && { llm }),
@@ -157,6 +173,8 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       // no `vectors`: the production PgChunkVectorStore over the real chunks table
     });
     const { server } = composed;
+    const erasing = composed.eraser;
+    if (!erasing) throw new Error("the stack composed no eraser");
     cleanups.unshift(() => composed.app.close());
 
     // The same boot function main uses; the stack binds an ephemeral port.
@@ -181,8 +199,9 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
     async function signUpAndLogIn(email: string) {
-      // The acceptance suite signs up more users from one address than the sign-up throttle allows.
-      await db.owner.query("DELETE FROM auth_throttle");
+      // The acceptance suite signs up more users from one address than the per-IP throttles allow. Only those are
+      // cleared: the per-email counters stay as the routes keep them (the erasure proof reads them).
+      await db.owner.query("DELETE FROM auth_throttle WHERE key LIKE '%-ip:%'");
       const post = (path: string) =>
         fetch(`${base}${path}`, {
           method: "POST",
@@ -243,6 +262,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       kek,
       ...(claude && { claude }),
       composed,
+      eraser: erasing,
       root,
       signUpAndLogIn,
       upload,
