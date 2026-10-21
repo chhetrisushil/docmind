@@ -90,6 +90,35 @@ describe("createApi", () => {
     await api.deleteChat("../x?y");
     expect(calls[0]?.url).toBe("/api/chats/..%2Fx%3Fy");
   });
+
+  it("reads a view for a surface and hydrates handles, returning the results in order", async () => {
+    const view = {
+      view: "library",
+      surface: "web",
+      experienceId: "e",
+      versionHash: "v",
+      blueprint: {},
+      inventory: { experienceId: "e", versionHash: "v", handles: [] },
+      fingerprint: { restrictedHandles: [], restrictedProjectionNodes: [], placeholderNodes: [] },
+    };
+    const { api, calls } = apiWith((url) =>
+      url.startsWith("/api/ui/views") ? ok(view) : ok({ results: [{ state: "ready", value: 1 }] }),
+    );
+    expect((await api.uiView("library")).view).toBe("library");
+    expect(
+      await api.uiHydrate("library", [
+        { experienceId: "e", versionHash: "v", handle: "h", params: {} },
+      ]),
+    ).toEqual([{ state: "ready", value: 1 }]);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      "GET /api/ui/views/library?surface=web",
+      "POST /api/ui/hydrate",
+    ]);
+    expect(calls[1]?.body).toEqual({
+      view: "library",
+      requests: [{ experienceId: "e", versionHash: "v", handle: "h", params: {} }],
+    });
+  });
 });
 
 class FakeXhr {
