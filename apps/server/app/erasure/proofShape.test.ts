@@ -201,6 +201,34 @@ describe("the shape of a raw event's plaintext columns", () => {
         metadata: { seal: { v: 1, cipher: "loom/aes-256-gcm", covers: [], note: content } },
       }),
     ).toEqual(["metadata.seal"]);
+    expect(eventColumnProblems({ ...event, workflowId: "" })).toEqual(["workflowId"]);
+    expect(eventColumnProblems({ ...event, workflowId: "", eventType: "ERASURE_PENDING" })).toEqual(
+      [],
+    );
+    const metadata = JSON.parse('{"__proto__": true}');
+    expect(eventColumnProblems({ ...event, metadata })).toEqual(["metadata.__proto__"]);
+    const cipher = "loom/aes-256-gcm";
+    const seals: unknown[] = [
+      { v: 2, cipher, covers: [] },
+      { v: 1, cipher },
+      { v: 1, cipher, covers: "EXECUTION_STARTED.input" },
+      { v: 1, cipher, covers: ["EXECUTION_STARTED.input documentId"] },
+      { v: 1, cipher, covers: Array.from({ length: 257 }, () => "EXECUTION_STARTED.input") },
+    ];
+    for (const seal of seals)
+      expect(eventColumnProblems({ ...event, metadata: { seal } })).toEqual(["metadata.seal"]);
+    expect(
+      eventColumnProblems({
+        ...event,
+        metadata: {
+          seal: {
+            v: 1,
+            cipher,
+            covers: Array.from({ length: 256 }, () => "EXECUTION_STARTED.input"),
+          },
+        },
+      }),
+    ).toEqual([]);
     expect(
       JSON.stringify(eventColumnProblems({ ...event, metadata: { note: content } })),
     ).not.toContain(content);

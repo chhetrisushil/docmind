@@ -9,6 +9,8 @@ import {
   assertErased,
   captureConsole,
   eraseMe,
+  eventColumnProblems,
+  intentRows,
   loginAs,
   seedUser,
   waitErased,
@@ -155,7 +157,26 @@ describe.skipIf(!PG_URL)(
       async () => {
         const logs = captureConsole();
         try {
-          const st = track(await startIngestStack({ chat: true }));
+          const outcomes: string[] = [];
+          // Make the park deterministic: the first stop signal is swallowed, so the held turn is still running when the
+          // eraser first asks Loom to shred (outcome "parked"); the stop it sends after that park is the real one.
+          let swallowed = false;
+          const wrap = (deps: ErasureDeps): ErasureDeps => ({
+            ...deps,
+            stopChat: async (identity, chatId) => {
+              if (!swallowed) {
+                swallowed = true;
+                return;
+              }
+              await deps.stopChat(identity, chatId);
+            },
+            eraseSubject: async (userId) => {
+              const r = await deps.eraseSubject(userId);
+              outcomes.push(r.outcome);
+              return r;
+            },
+          });
+          const st = track(await startIngestStack({ chat: true, wrapErasure: wrap }));
           const claude = st.claude;
           if (!claude) throw new Error("no fake Claude");
           const login = await st.signUpAndLogIn("fay@example.com");
@@ -193,6 +214,17 @@ describe.skipIf(!PG_URL)(
             },
             [asked, answered],
           );
+          // F26: the shred parked behind the running turn, so Loom wrote its plaintext intent. It names the user and
+          // nothing else, and the scan's allowance for it was exercised.
+          const intents = await intentRows(st, fay.userId);
+          expect(outcomes).toContain("parked");
+          expect(intents.length).toBeGreaterThanOrEqual(1);
+          for (const intent of intents) {
+            expect(intent.workflowId).toBe("__loom_erasure__");
+            expect(intent.executionId).toBe("__loom_erasure__");
+            expect(Object.keys(intent.payload as object)).toEqual(["subjectId"]);
+            expect(eventColumnProblems(intent)).toEqual([]);
+          }
           logs.assertClean([fay.email, asked, answered, ...fay.sentinels, ...SECRETS]);
         } finally {
           logs.restore();
