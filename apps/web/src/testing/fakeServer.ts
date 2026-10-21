@@ -1,8 +1,10 @@
 import {
   type ChatMessageDto,
   type ChatSessionDto,
+  ChatStreamEvent,
   type DocumentDto,
   type DocumentPassage,
+  DocumentProgressEvent,
   UiHydrateRequest,
   ViewName,
 } from "@docmind/contracts";
@@ -47,6 +49,12 @@ export class FakeServer {
   private account: Account | undefined;
   private passages = new Map<string, DocumentPassage[]>();
   private streams: { path: string; send(chunk: string): void }[] = [];
+  // Frames pushed while no stream was open on their path wait here, and go out when one opens: a live frame is never dropped.
+  private buffered = new Map<string, string[]>();
+  private waiters = new Map<string, (() => void)[]>();
+  private holds = new Map<string, Promise<void>>();
+  /** When set, a turn ends with a `closed` frame (the chat is over). */
+  closeAfterTurn = false;
   private checks = 0;
   private ord = 0;
   // The real compiled views and the real `hydrate` (shared with the component tests), over this fake's own state.
@@ -57,9 +65,43 @@ export class FakeServer {
     return { userId: a.userId, tenantId: a.tenantId, email: a.email };
   }
 
-  /** A frame to every open stream on `path`. */
+  /** A frame to every open stream on `path`, or held until one opens. Every frame must be valid on the wire contract. */
   push(path: string, event: string, data: unknown, id?: string): void {
-    for (const s of this.streams) if (s.path === path) s.send(frame(event, data, id));
+    if (path === "/api/documents/events") DocumentProgressEvent.parse(data);
+    else if (path.endsWith("/stream"))
+      ChatStreamEvent.parse({ ...(data as Record<string, unknown>), kind: event });
+    const open = this.streams.filter((s) => s.path === path);
+    const chunk = frame(event, data, id);
+    if (open.length === 0) this.buffered.set(path, [...(this.buffered.get(path) ?? []), chunk]);
+    for (const s of open) s.send(chunk);
+  }
+  /** How many streams are open on `path` right now. */
+  openStreams(path: string): number {
+    return this.streams.filter((s) => s.path === path).length;
+  }
+  private streamOpen(path: string): Promise<void> {
+    if (this.openStreams(path) > 0) return Promise.resolve();
+    return new Promise((resolve) =>
+      this.waiters.set(path, [...(this.waiters.get(path) ?? []), resolve]),
+    );
+  }
+  /** Pauses the scripted work at `point` ("ready": before a document finishes; "message": before the durable reply) until the returned function is called. */
+  hold(point: "ready" | "message"): () => void {
+    let release = () => {};
+    this.holds.set(
+      point,
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    return release;
+  }
+  private async held(point: string): Promise<void> {
+    await this.holds.get(point);
+  }
+  /** The id of the first passage the fake served for a document. */
+  passageIdOf(documentId: string): string | undefined {
+    return this.passages.get(documentId)?.[0]?.passageId;
   }
   private open(path: string, first?: string): Response {
     const enc = new TextEncoder();
@@ -79,6 +121,10 @@ export class FakeServer {
         this.streams.push(entry);
         entry.send("retry: 3000\n\n");
         if (first) entry.send(first);
+        for (const chunk of this.buffered.get(path) ?? []) entry.send(chunk);
+        this.buffered.delete(path);
+        for (const wake of this.waiters.get(path) ?? []) wake();
+        this.waiters.delete(path);
       },
       cancel: () => {
         this.streams = this.streams.filter((s) => s !== entry);
@@ -283,6 +329,7 @@ export class FakeServer {
     const stream = `/api/chats/${chat.id}/stream`;
     const doc = this.docs[0];
     const passage = doc ? this.passages.get(doc.id)?.[0] : undefined;
+    await this.streamOpen(stream);
     await tick();
     this.push(stream, "reasoning-partial", { turn, text: "Looking through the documents" });
     await tick();
@@ -300,6 +347,7 @@ export class FakeServer {
     this.push(stream, "answer", { turn, text: body.slice(0, 21) });
     this.push(stream, "answer", { turn, text: body.slice(21) });
     await tick();
+    await this.held("message");
     const citations =
       doc && passage
         ? [
@@ -318,6 +366,7 @@ export class FakeServer {
       reasoning: { text: "Looking through the documents", kind: "summary" },
     });
     this.push(stream, "message", { ...reply }, reply.cursor);
+    if (this.closeAfterTurn) this.push(stream, "closed", {});
   }
 
   /** A fake XMLHttpRequest for `uploadDocument`: stores the file as a document and walks it to ready on the progress stream. */
@@ -379,6 +428,7 @@ export class FakeServer {
   }
   private async process(id: string): Promise<void> {
     const at = () => this.docs.find((d) => d.id === id);
+    await this.streamOpen("/api/documents/events");
     for (const [status, step] of [
       ["parsing", "parse"],
       ["embedding", "embed"],
@@ -390,6 +440,7 @@ export class FakeServer {
       this.push("/api/documents/events", "progress", { documentId: id, step, status });
     }
     await tick();
+    await this.held("ready");
     const d = at();
     if (!d) return;
     this.passages.set(id, [
