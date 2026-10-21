@@ -235,3 +235,24 @@ describe("chat transport: terminal ends, auth, send and stop", () => {
     expect(newMessageKey()).not.toBe(k);
   });
 });
+
+describe("chat transport fix round 1", () => {
+  it("a retry with the caller's key reuses it; without one each send gets a fresh key", async () => {
+    const t = setup();
+    await t.transport.start();
+    await t.transport.send("Q", undefined, "retry-key-0123456789");
+    await t.transport.send("Q", undefined, "retry-key-0123456789");
+    const keys = t.sendMessage.mock.calls.map(
+      (c) => (c as unknown as [string, { messageId: string }])[1].messageId,
+    );
+    expect(keys).toEqual(["retry-key-0123456789", "retry-key-0123456789"]);
+  });
+  it("the SSE event name is authoritative over a kind in the data", async () => {
+    const t = setup();
+    await t.transport.start();
+    t.onChange.mockClear();
+    t.frame("status", { kind: "closed", state: "open", running: true, turns: 1 });
+    expect(t.sse.closed).toBe(false);
+    expect(t.fold.value().running).toBe(true);
+  });
+});
