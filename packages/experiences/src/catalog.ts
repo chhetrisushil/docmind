@@ -18,10 +18,10 @@ export const KINDS = {
   },
   SelectInput: { kind: "SelectInput", props: ["label", "options", "placeholder"], binding: "none" },
 } as const satisfies Record<string, KindContract>;
-type KindName = keyof typeof KINDS;
+export type KindName = keyof typeof KINDS;
 
 /** Entry name to kind: DocMind's whole vocabulary. */
-export const ENTRY_KINDS: Record<string, KindName> = {
+export const ENTRY_KINDS = {
   LibraryKpi: "Kpi",
   IngestHealth: "StatusCard",
   DocumentTable: "Table",
@@ -38,7 +38,8 @@ export const ENTRY_KINDS: Record<string, KindName> = {
   ChatSearch: "TextInput",
   ChatTable: "Table",
   SourcesPanel: "A2UIView",
-};
+} as const satisfies Record<string, KindName>;
+export type EntryName = keyof typeof ENTRY_KINDS;
 
 export const DOCMIND_CATALOG: SemanticCatalog = defineSemanticCatalog({
   id: "docmind.v1",

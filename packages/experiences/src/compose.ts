@@ -7,6 +7,7 @@ import {
   genesis,
 } from "@loom-ui/core";
 import { seal } from "@loom-ui/core/log";
+import type { EntryName } from "./catalog";
 
 export type Child = SemanticNode | ContainerNode;
 
@@ -15,7 +16,7 @@ export const label = (key: string, fallback: string) => ({ key, fallback });
 
 export function widget(o: {
   id: string;
-  type: string;
+  type: EntryName;
   span?: number;
   handle?: string;
   priority?: Priority;

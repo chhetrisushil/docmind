@@ -46,6 +46,7 @@ function specifiers(text: string): string[] {
 
 const BROWSER_LOOM = ["@loom/projection-runtime", "@loom/blueprint-runtime"];
 const isServerOnly = (s: string) =>
+  /^(?:\.{1,2}\/)+(?:[\w.-]+\/)*packages\/(experiences|auth)(\/|$)/.test(s) ||
   /^@docmind\/(experiences|auth)(\/|$)/.test(s) ||
   /^@loom-ui\/core\/log(\/|$)/.test(s) ||
   s === "@loom-ui/core" ||
@@ -150,6 +151,12 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
     ["dynamic", `const m = await import("@loom-ui/core");`],
     ["export-from", `export * from "@loom-ui/renderer-terminal";`],
     ["renderer-terminal subpath", `import x from "@loom-ui/renderer-terminal/dist/x.js";`],
+    [
+      "relative path to experiences",
+      `import { a } from "../../../../packages/experiences/src/views";`,
+    ],
+    ["relative path to auth", `import "../../../packages/auth";`],
+    ["relative path, dynamic", `await import("../../packages/auth/src/x");`],
     ["multi-line", `import {\n  a,\n} from\n  "@docmind/auth";`],
   ])("server-only specifier, %s", (_n, src) => {
     expect(violations(MISC, src)).toContain("server-only");
@@ -162,6 +169,11 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
     ["lookalike of an allowed runtime", `import x from "@loom/projection-runtime-server";`],
   ])("a Loom package that is not a browser runtime, %s", (_n, src) => {
     expect(violations(MISC, src)).toContain("loom-package");
+  });
+
+  it("does not refuse relative imports that merely resemble the server packages", () => {
+    expect(violations(MISC, `import x from "./packages-experiences";`)).toEqual([]);
+    expect(violations(MISC, `import x from "../auth/session";`)).toEqual([]);
   });
 
   it("does not mistake a string that merely mentions a package for an import", () => {
