@@ -1,11 +1,20 @@
-import { type ChatScope, intentOf } from "@docmind/contracts";
+import { type ChatScope, intentOf, sourcesValue } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
-import { ChatController, type ChatProblem, LIMITED_TEXT, type SendOutcome } from "../state/chat";
+import {
+  ChatController,
+  type ChatProblem,
+  type ChatViewState,
+  LIMITED_TEXT,
+  type SendOutcome,
+  sourcesOf,
+} from "../state/chat";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
+import { performIntent } from "../surface/perform";
 import type { ActionHandler, ViewSession } from "../ui/session";
+import { confirmDialog } from "./confirm";
 import "./dm-icon";
 import "./dm-view";
 
@@ -34,6 +43,17 @@ export class DmChatPage extends LitElement {
       h1 { font-size: 18px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       [data-problem] { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--dm-muted); }
       dm-view { min-height: 0; height: 100%; }
+      .layout { display: grid; grid-template-columns: 1fr; min-height: 0; }
+      .layout > .main { min-height: 0; }
+      aside h2 { font-size: 15px; margin: 0; }
+      aside header { padding: 0 0 8px; }
+      @media (min-width: 1100px) {
+        :host { max-width: 1280px; }
+        .layout { grid-template-columns: 1fr 340px; gap: 16px; }
+      }
+      @media (max-width: 1099px) {
+        aside { position: fixed; inset: 0 0 0 auto; width: min(380px, 100%); background: var(--dm-surface); box-shadow: var(--dm-shadow-lg); z-index: 4; padding: 12px; overflow: auto; }
+      }
     `,
   ];
   /** The served title; undefined until the chat has one (plain text only: never logged, toasted or put in a URL). */
@@ -42,6 +62,9 @@ export class DmChatPage extends LitElement {
   declare queued: boolean;
   controller: ChatController | undefined;
   private session: ViewSession | undefined;
+  private panel: ViewSession | undefined;
+  /** The control that opened the panel from a citation: Escape or Close gives focus back to it. */
+  private opener: HTMLElement | undefined;
   private bound: string | undefined | null = null;
   private off: (() => void) | undefined;
   private watch: MutationObserver | undefined;
@@ -85,6 +108,8 @@ export class DmChatPage extends LitElement {
     this.controller?.close();
     this.controller = undefined;
     this.session = undefined;
+    this.panel = undefined;
+    this.opener = undefined;
   }
 
   private bind(id: string | undefined): void {
@@ -171,8 +196,57 @@ export class DmChatPage extends LitElement {
       this.session.publish("transcript", { entries: [] }, "Chat");
     else if (st)
       this.session?.publish("transcript", st.transcript, "Chat", { streaming: st.running });
+    this.syncPanel(st);
     this.guardComposer();
     this.requestUpdate();
+  }
+
+  /** The sources of the selected (else newest cited) reply only, from what was served. A reply still streaming has none yet. */
+  private sourcesNow(st: ChatViewState) {
+    const { entry, passageId } = sourcesOf(st);
+    const waiting = st.running && st.focus === undefined;
+    return { waiting, value: sourcesValue(waiting ? [] : (entry?.citations ?? []), passageId) };
+  }
+  private syncPanel(st: ChatViewState | undefined): void {
+    if (!st?.sourcesOpen) this.panel = undefined;
+    if (!st || !this.panel) return;
+    const { waiting, value } = this.sourcesNow(st);
+    this.panel.publish("sources", value, "A2UIView", { streaming: waiting });
+  }
+  private onPanelReady = (e: Event) => {
+    this.panel = (e as CustomEvent<{ session: ViewSession }>).detail.session;
+    this.syncPanel(this.controller?.state.get());
+  };
+  private actPanel: ActionHandler = async (a) => {
+    const svc = this.ctx.services;
+    const st = this.controller?.state.get();
+    if (!svc || !st || !this.panel) return { ok: false };
+    // What the panel may open is the list as published now, never what the action says.
+    const intent = intentOf("sources", a, { list: this.sourcesNow(st).value.sources });
+    if (!intent) return { ok: false, reason: "refused" };
+    return {
+      ok: await performIntent(intent, {
+        api: svc.api,
+        router: svc.router,
+        toasts: svc.toasts,
+        session: this.panel,
+        confirm: confirmDialog,
+      }),
+    };
+  };
+  private closePanel(): void {
+    this.controller?.toggleSources(false);
+    const back = this.opener?.isConnected
+      ? this.opener
+      : (this.renderRoot.querySelector("button[data-sources]") as HTMLElement | null);
+    this.opener = undefined;
+    back?.focus();
+  }
+  private onPanelKey(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      this.closePanel();
+    }
   }
   private onReady = (e: Event) => {
     this.session = (e as CustomEvent<{ session: ViewSession }>).detail.session;
@@ -262,7 +336,15 @@ export class DmChatPage extends LitElement {
       }
       case "chat.scope":
         return this.scope(intent.scope);
-      case "chat.cite":
+      case "chat.cite": {
+        let active: Element | null = document.activeElement;
+        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        this.opener = active instanceof HTMLElement ? active : undefined;
+        await this.controller?.perform(intent);
+        await this.updateComplete;
+        (this.renderRoot.querySelector("aside h2") as HTMLElement | null)?.focus();
+        return { ok: true };
+      }
       case "chat.older":
         await this.controller?.perform(intent);
         return { ok: true };
@@ -290,6 +372,7 @@ export class DmChatPage extends LitElement {
       <header>
         <h1 title=${ifDefined(this.chatTitle)}>${this.chatId && this.chatTitle ? this.chatTitle : "New chat"}</h1>
         <span class="grow"></span>
+        <button class="btn secondary" data-sources aria-expanded=${String(st?.sourcesOpen ?? true)} aria-controls="sources" @click=${() => (st?.sourcesOpen === false ? this.controller?.toggleSources(true) : this.closePanel())}>Sources</button>
         ${st?.running ? html`<button class="btn secondary" data-stop @click=${() => void this.controller?.stop()}><dm-icon name="stop"></dm-icon>Stop</button>` : null}
         ${canRegenerate && last ? html`<button class="btn secondary" data-regenerate @click=${() => void this.regenerate(last.id)}><dm-icon name="arrow-clockwise"></dm-icon>Regenerate</button>` : null}
       </header>
@@ -304,7 +387,17 @@ export class DmChatPage extends LitElement {
         }
         ${st?.olderFailed ? html`<div data-older-failed role="alert" class="muted">Could not load earlier messages.<button class="btn ghost" data-older-retry @click=${() => void this.controller?.loadOlder()}>Try again</button></div>` : null}
       </div>
-      ${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}`;
+      <div class="layout">
+        <div class="main">${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
+        ${
+          st?.sourcesOpen
+            ? html`<aside id="sources" aria-label="Sources" @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>
+                <header><h2 tabindex="-1">Sources</h2><span class="grow"></span><button class="btn ghost" data-sources-close @click=${() => this.closePanel()}>Close</button></header>
+                ${keyed(this.chatId ?? "new", html`<dm-view name="sources" .onAct=${this.actPanel} @view-ready=${this.onPanelReady}></dm-view>`)}
+              </aside>`
+            : null
+        }
+      </div>`;
   }
 }
 customElements.define("dm-chat-page", DmChatPage);

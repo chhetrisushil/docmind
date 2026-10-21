@@ -645,3 +645,129 @@ describe("dm-chat-page: switching chats", () => {
     expect(h1(page)).toBe("New chat");
   });
 });
+
+const panel = (p: Element) =>
+  p.shadowRoot?.querySelectorAll("dm-view")[1] as
+    | (HTMLElement & { session?: Session; onAct?: unknown })
+    | undefined;
+const panelView = (p: Element) =>
+  panel(p)?.shadowRoot?.querySelector("lu-a2ui-widget")?.shadowRoot?.querySelector("lu-a2ui-view")
+    ?.shadowRoot;
+const panelText = (p: Element) => panelView(p)?.textContent?.replace(/\s+/g, " ") ?? "";
+const panelRaise = (p: Element, payload: Record<string, unknown>) => {
+  const v = panel(p) as NonNullable<ReturnType<typeof panel>>;
+  vi.spyOn(v.session as Session, "isFresh").mockReturnValue(true); // the staleness check is the session's own, tested there
+  return (v.session as Session).dispatch({ type: "A2UI_ACTION", widgetId: "w", payload }, v.onAct);
+};
+const OTHER = "c0ffee00-0000-4000-8000-000000000002";
+const OTHER_DOC = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d12";
+
+describe("dm-chat-page: sources", () => {
+  it("shows the sources of the newest cited reply beside the chat, and follows a clicked marker", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    expect(panelText(page)).toContain("Page 2");
+    expect(panelText(page)).toContain("Net 30");
+    (chatRoot(page)?.querySelector("button.ref") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Selected - Page 2"));
+  });
+  it("says sources appear when the answer is complete while a reply streams", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(async () => ({ items: [msg(1, "user", 1)], nextCursor: null })),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() =>
+      expect(panelText(page)).toContain("Sources appear when the answer is complete."),
+    );
+  });
+  it("opens the cited passage in its document", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    const open = panelView(page)?.querySelector("button") as HTMLButtonElement;
+    expect(open.textContent).toContain("Open in document");
+    open.click();
+    await vi.waitFor(() =>
+      expect(t.services.router.get()).toEqual({ name: "document", id: DOC, passage: PASSAGE }),
+    );
+  });
+  it("navigates with the held ids only, whatever the action says", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    const out = await panelRaise(page, {
+      action: "open-source",
+      context: { index: 0, passageId: OTHER, documentId: OTHER_DOC },
+    });
+    expect(out).toMatchObject({ ok: true });
+    expect(t.services.router.get()).toEqual({ name: "document", id: DOC, passage: PASSAGE });
+  });
+  it("refuses a forged or missing index, and goes nowhere", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    for (const context of [{ index: 7 }, { index: -1 }, { index: 0.5 }, { index: "0" }, {}]) {
+      expect(await panelRaise(page, { action: "open-source", context })).toMatchObject({
+        ok: false,
+      });
+    }
+    expect(await panelRaise(page, { action: "other", context: { index: 0 } })).toMatchObject({
+      ok: false,
+    });
+    expect(t.services.router.get().name).toBe("chat");
+  });
+  it("shows only the selected reply's citations; a citation from another entry is refused", async () => {
+    const second = { ...cited, passageId: OTHER, documentId: OTHER_DOC, docTitle: "Lease" };
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(async () => ({
+        items: [
+          msg(1, "user", 1),
+          msg(2, "assistant", 1, { text: `One [[${PASSAGE}]].`, citations: [cited] }),
+          msg(3, "user", 2),
+          msg(4, "assistant", 2, { text: `Two [[${OTHER}]].`, citations: [second] }),
+        ],
+        nextCursor: null,
+      })),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Lease"));
+    expect(panelText(page)).not.toContain("Contract");
+    const v = viewOf(page) as NonNullable<ReturnType<typeof viewOf>>;
+    vi.spyOn(v.session as Session, "isFresh").mockReturnValue(true);
+    const entryB = page.controller?.state.get().entries.at(-1)?.id as string;
+    const cross = await raise(page, "CHAT_REF_OPEN", { entryId: entryB, refId: PASSAGE });
+    expect(cross).toMatchObject({ ok: false });
+    expect(page.controller?.state.get().focus).toBeUndefined();
+    expect(panelText(page)).not.toContain("Contract");
+  });
+  it("hides and shows the panel with the Sources button, and says whether it is open", async () => {
+    const t = setup();
+    const page = await t.mount();
+    const toggle = button(page, "button[data-sources]") as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    toggle.click();
+    await vi.waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("false"));
+    expect(panel(page)).toBeUndefined();
+    toggle.click();
+    await vi.waitFor(() => expect(panel(page)).toBeDefined());
+  });
+  it("is a labelled complementary landmark; a citation moves focus to its heading, Escape returns it", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    const aside = page.shadowRoot?.querySelector("aside") as HTMLElement;
+    expect(aside.getAttribute("aria-label")).toBe("Sources");
+    const ref = chatRoot(page)?.querySelector("button.ref") as HTMLButtonElement;
+    ref.focus();
+    ref.click();
+    const heading = page.shadowRoot?.querySelector("aside h2") as HTMLElement;
+    await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(heading));
+    aside.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    await vi.waitFor(() => {
+      const back = chatRoot(page)?.activeElement ?? page.shadowRoot?.activeElement;
+      expect(back).toBeTruthy();
+    });
+  });
+});
