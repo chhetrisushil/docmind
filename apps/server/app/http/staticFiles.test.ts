@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ writeFileSync(join(dir, "index.html"), "<!doctype html><dm-app></dm-app>");
 writeFileSync(join(dir, "assets", "app-abc123.js"), "console.log(1)");
 writeFileSync(join(dir, "assets", "app-abc123.js.map"), "sentinel-map-0123456789");
 writeFileSync(join(dir, "assets", "inter.woff2"), "font");
+writeFileSync(join(dir, "assets", "big.js"), Buffer.alloc(48 * 1024 * 1024, 97));
 writeFileSync(join(dir, ".env"), "sentinel-dotfile-0123456789");
 symlinkSync(join(outside, "secret.txt"), join(dir, "assets", "leak.txt"));
 symlinkSync(outside, join(dir, "assets", "leakdir"));
@@ -70,6 +72,9 @@ describe("loadWebDir", () => {
       );
     }
     expect(() => loadWebDir(join(dir, "missing"))).toThrow(StartupConfigError);
+    const odd = mkdtempSync(join(tmpdir(), "dm-odd-"));
+    mkdirSync(join(odd, "index.html")); // a directory, not a file
+    expect(() => loadWebDir(odd)).toThrow(StartupConfigError);
   });
 });
 
@@ -149,16 +154,74 @@ describe("the static fallback", () => {
     expect(((await post.json()) as { error: { code: string } }).error.code).toBe("not_found"); // JSON, not the page: the fallback answers GET and HEAD only
   });
 
-  it("keeps /api paths JSON whatever the case or encoding of the prefix", async () => {
-    const res = await raw("/api");
-    expect(res.status).toBe(200); // "/api" itself is a client route, not an API path
-    const nested = await raw("/api/x/y");
-    expect(nested.status).toBe(404);
-    expect(nested.body).toContain("not_found");
+  it("keeps /api paths JSON whatever the case or encoding", async () => {
+    expect((await raw("/api")).status).toBe(200); // "/api" itself is a client route
+    for (const path of [
+      "/api/x/y",
+      "/API/x",
+      "/Api/x/y",
+      "//api/x",
+      "///api/x",
+      "/api%2fx",
+      "/API%2Fx",
+      "/%61pi/x",
+    ]) {
+      const res = await raw(path);
+      expect(res.status, path).toBe(404);
+      expect(res.body, path).toContain("not_found");
+      expect(res.body, path).not.toContain("<dm-app>");
+    }
   });
 
-  it("exempts the static fallback from the request timer, so a slow download is not cut", () => {
-    expect(DEFAULT_HTTP_LIMITS.streamingRoutes.has("GET (web)")).toBe(true);
-    expect(DEFAULT_HTTP_LIMITS.streamingRoutes.has("HEAD (web)")).toBe(true);
+  it("refuses an absolute-form request target", async () => {
+    const res = await raw(`http://127.0.0.1:${port}/assets/app-abc123.js`);
+    expect(res.status).toBe(400);
+  });
+
+  it("refuses a source map or dotfile whatever the case", async () => {
+    for (const path of ["/assets/app-abc123.js.MAP", "/assets/app-abc123.js.Map", "/.ENV"]) {
+      const res = await raw(path);
+      expect([400, 404], path).toContain(res.status);
+      expect(res.body, path).not.toContain("sentinel-");
+    }
+  });
+
+  it("serves an uppercase extension with its type", async () => {
+    writeFileSync(join(dir, "assets", "LOGO.PNG"), "png");
+    expect((await fetch(`${base}/assets/LOGO.PNG`)).headers.get("content-type")).toBe("image/png");
+  });
+
+  it("does not exempt the static fallback from the request timer", () => {
+    expect(DEFAULT_HTTP_LIMITS.streamingRoutes.has("GET (web)")).toBe(false);
+    expect(DEFAULT_HTTP_LIMITS.streamingRoutes.has("HEAD (web)")).toBe(false);
+  });
+
+  it("destroys a static response whose client stops reading", async () => {
+    const slow = createHttpServer(
+      {},
+      { secure: false },
+      { requestTimeoutMs: 100 },
+      staticHandler(dir),
+    );
+    await new Promise<void>((r) => slow.listen(0, "127.0.0.1", r));
+    const closed = new Promise<void>((r) =>
+      slow.on("connection", (sock) => sock.on("close", () => r())),
+    );
+    const sock = connect((slow.address() as AddressInfo).port, "127.0.0.1");
+    sock.write("GET /assets/big.js HTTP/1.1\r\nhost: x\r\n\r\n");
+    sock.pause(); // never read
+    await Promise.race([
+      closed,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("socket was not destroyed")), 5000)),
+    ]);
+    sock.destroy();
+    await new Promise<void>((r) => slow.close(() => r()));
+  });
+
+  it("refuses an in-root symlink that points at a source map", async () => {
+    symlinkSync(join(dir, "assets", "app-abc123.js.map"), join(dir, "assets", "alias.js"));
+    const res = await raw("/assets/alias.js");
+    expect(res.status).toBe(404);
+    expect(res.body).not.toContain("sentinel-");
   });
 });
