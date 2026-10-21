@@ -9,8 +9,12 @@ import type { ChatFold } from "./feedAdapter";
 export interface ChatTransport {
   start(): Promise<void>;
   loadOlder(): Promise<void>;
-  /** Sends a question (or, with `editOf`, an edit of the user message with that ordinal). Rejects with the API's error. */
-  send(text: string, editOf?: number): Promise<void>;
+  /**
+   * Sends a question (or, with `editOf`, an edit of the user message with that ordinal). Rejects with the API's error.
+   * `key` defaults to a fresh `newMessageKey()`; a caller retrying a send that timed out or failed on the network
+   * passes the SAME key so the retry is idempotent.
+   */
+  send(text: string, editOf?: number, key?: string): Promise<void>;
   /** Asks the server to stop the reply in flight. */
   stop(): Promise<boolean>;
   close(): void;
@@ -28,7 +32,7 @@ export function newMessageKey(): string {
 export interface TransportDeps {
   api: Pick<Api, "listMessages" | "sendMessage" | "stopChat">;
   /** Signs the user out on a 401 from the stream, for the session the stream was opened in. */
-  auth?: Pick<AuthStore, "epoch" | "expired">;
+  auth: Pick<AuthStore, "epoch" | "expired">;
   chatId: string;
   fold: ChatFold;
   open: OpenSse;
@@ -53,8 +57,8 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
       return; // not JSON: not ours
     }
     const parsed = ChatStreamEvent.safeParse({
-      kind: frame.event,
       ...(typeof data === "object" && data !== null ? data : {}),
+      kind: frame.event,
     });
     if (!parsed.success) return;
     d.fold.applyStream(parsed.data);
@@ -74,7 +78,7 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
       }
       if (closed) return;
       d.onChange();
-      const epoch = d.auth?.epoch;
+      const epoch = d.auth.epoch;
       stream = d.open({
         url: () => `/api/chats/${encodeURIComponent(d.chatId)}/stream`,
         lastEventId: () => d.fold.resumeCursor(),
@@ -86,7 +90,7 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
         onFrame,
         onClose: (reason) => {
           if (closed || reason === "closed") return;
-          if (reason === "unauthorized") d.auth?.expired(epoch);
+          if (reason === "unauthorized") d.auth.expired(epoch);
           else if (reason === "not_found") d.onProblem("gone");
           else d.onProblem("stream"); // "rejected", or "failed": it kept opening and never made progress
         },
@@ -106,10 +110,10 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
         loadingOlder = false;
       }
     },
-    async send(text, editOf) {
+    async send(text, editOf, key = newMessageKey()) {
       await d.api.sendMessage(d.chatId, {
         text,
-        messageId: newMessageKey(),
+        messageId: key,
         ...(editOf !== undefined && { editOf }),
       });
     },

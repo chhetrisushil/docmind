@@ -133,13 +133,19 @@ export class ChatFold {
 
   /** Called when the stream (re)opens: it starts with a snapshot of the reply so far, which must land on an empty live reply. */
   resetLive(): void {
+    this.error = false;
     const live = this.feed.value().entries.find((e) => e.status === "streaming");
     if (live) this.feed.applyEvent("reset", { turn: live.turn });
     this.liveSteps = [];
   }
 
-  /** A reply is pending when one is streaming, or the newest turn is a user question nobody has answered or refused yet. */
+  /**
+   * A reply is pending when one is streaming, or the newest turn is a user question nobody has answered or refused yet;
+   * never once the chat is closed. It does not clear on a stop or a transport problem: the controller must not rely on
+   * it for those paths and settles its own busy state.
+   */
   replyPending(): boolean {
+    if (this.feed.value().state === "closed") return false;
     const entries = this.feed.value().entries;
     if (entries.some((e) => e.status === "streaming")) return true;
     const last = entries.at(-1);

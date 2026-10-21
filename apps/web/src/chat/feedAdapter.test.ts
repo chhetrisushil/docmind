@@ -275,3 +275,20 @@ describe("ChatFold.replyPending", () => {
     expect(fold.replyPending()).toBe(false);
   });
 });
+
+describe("ChatFold fix round 1", () => {
+  it("replyPending is false once the chat is closed, even with an unanswered question", () => {
+    const fold = new ChatFold();
+    fold.applyHistory(page([msg(1, "user", 1)]));
+    expect(fold.replyPending()).toBe(true);
+    fold.applyStream(ev({ kind: "closed" }));
+    expect(fold.replyPending()).toBe(false);
+  });
+  it("a reopened stream clears the remembered error", () => {
+    const fold = new ChatFold();
+    fold.applyStream(ev({ kind: "error", code: "internal" }));
+    expect(fold.error).toBe(true);
+    fold.resetLive();
+    expect(fold.error).toBe(false);
+  });
+});
