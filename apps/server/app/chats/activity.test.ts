@@ -171,6 +171,35 @@ describe("ChatActivity", () => {
     expect((await rows())[0]?.state).toMatchObject({ n: 2, o: 2 });
   });
 
+  it("folds the erasure tombstone to the neutral state, and does not count a shredded record", async () => {
+    const { feed, activity, rows, errors } = await setup();
+    feed(record(CONV, 0, 1, "user"), record(CONV, 1, 1, "reply"));
+    await activity.drain();
+    expect((await rows())[0]?.state).toMatchObject({ n: 2 });
+    // Loom writes ERASURE_PENDING to the `__loom_erasure__` control stream, not to this log.
+    feed(evt(CONV, 2, "PAYLOAD_SHREDDED", { subjectId: U }));
+    await activity.drain();
+    expect(await rows()).toEqual([{ executionId: CONV, state: {} }]);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps the tombstone state absorbing: a later record is not counted", async () => {
+    const { feed, activity, rows, errors } = await setup();
+    feed(record(CONV, 0, 1, "user"), evt(CONV, 1, "PAYLOAD_SHREDDED", { subjectId: U }));
+    feed(record(CONV, 2, 2, "user"));
+    await activity.drain();
+    expect(await rows()).toEqual([{ executionId: CONV, state: {} }]);
+    expect(errors).toEqual([]);
+  });
+
+  it("leaves the counts alone for a record whose whole payload was shredded", async () => {
+    const { feed, activity, rows } = await setup();
+    feed(record(CONV, 0, 1, "user"));
+    feed(evt(CONV, 1, "DECISION_RECORDED", { $shredded: true }));
+    await activity.drain();
+    expect((await rows())[0]?.state).toMatchObject({ n: 1 });
+  });
+
   it("keeps one row per generation of a rotated conversation, all under the same chat key", async () => {
     const { feed, activity, rows } = await setup();
     feed(record(CONV, 0, 1, "user"), record(CONV, 1, 1, "reply"));

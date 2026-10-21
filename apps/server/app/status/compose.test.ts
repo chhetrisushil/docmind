@@ -95,7 +95,7 @@ describe("buildServer and the ingest-status model", () => {
     await composed.status.boot();
     // `effectiveFoldVersion` appends a digest of the sensitive map; "3" alone means the map was empty.
     expect(store.registeredVersions).toHaveLength(1);
-    expect(store.registeredVersions[0]).toMatch(/^3\+sens\.[0-9a-f]{8}$/);
+    expect(store.registeredVersions[0]).toMatch(/^4\+sens\.[0-9a-f]{8}$/);
     await composed.status.close();
     await composed.app.close();
   });
