@@ -95,6 +95,10 @@ DocMind's screens are loom-ui experiences, not hand-built views. The design is i
   style, no remote fonts, images or connections). Static files stay under the 60 s request timer. Behind a
   reverse proxy, forward =Host= unchanged.
 - Contributors: no inline script or style (including the HTML style attribute), no remote fonts or icons.
+- loom-ui's =Table= stays non-virtualized. Virtualizing it makes the table set a row height through an HTML =style=
+  attribute, which the strict CSP above (=style-src 'self'=, no =unsafe-inline=) refuses. That is why the lists are
+  capped (library 200 rows, sidebar 50) instead of windowed. Do not turn =virtualize= on, or raise those caps
+  without a plan for the rendering cost.
 - loom-ui and Loom's browser runtimes are linked as built ESM (=link:../loom-ui/packages/...= and
   =link:../loom/...=), so both repositories must be checked out next to this one and built. CI checks loom-ui
   out at =LOOM_UI_REF= (see =.github/workflows/ci.yml=); =LOOM_TOKEN= must be able to read both
