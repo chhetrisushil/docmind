@@ -109,12 +109,13 @@ function resumeOf(req: IncomingMessage): string | undefined {
 export function chatStreamRoutes(deps: ChatStreamDeps): {
   routes: Record<string, Handler>;
   closeAll(): void;
+  closeUser(userId: string): void;
 } {
   const maxPerUser = deps.maxStreamsPerUser ?? 4;
   const maxGlobal = deps.maxStreams ?? MAX_CHAT_STREAMS_GLOBAL;
   const schedule = deps.schedule ?? intervalSchedule;
   const open = new Map<string, number>();
-  const live = new Map<ServerResponse, () => void>(); // each stream's `end`, for closeAll
+  const live = new Map<ServerResponse, { userId: string; end: () => void }>(); // each stream's owner and `end`, for closeAll and closeUser
   let closing = false;
 
   const routes: Record<string, Handler> = {
@@ -166,7 +167,14 @@ export function chatStreamRoutes(deps: ChatStreamDeps): {
     /** Ends every open stream and frees its slot, so `server.close()` can finish. */
     closeAll() {
       closing = true;
-      for (const end of [...live.values()]) end();
+      for (const { end } of [...live.values()]) end();
+    },
+    /**
+     * Ends every open chat stream of one user (account erasure). Unlike `closeAll` it is not a shutdown. A stream
+     * that was still authorizing is caught by its own heartbeat, which re-checks the session and the chat.
+     */
+    closeUser(userId: string) {
+      for (const entry of [...live.values()]) if (entry.userId === userId) entry.end();
     },
   };
 }
@@ -180,7 +188,7 @@ interface StreamCall {
   cursor: string | undefined;
   status: { state: string; running: boolean; turns: number };
   open: Map<string, number>;
-  live: Map<ServerResponse, () => void>;
+  live: Map<ServerResponse, { userId: string; end: () => void }>;
   schedule: Schedule;
 }
 
@@ -223,7 +231,7 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
     }
     release();
   }
-  c.live.set(res, () => end(false));
+  c.live.set(res, { userId: identity.userId, end: () => end(false) });
   res.once("close", () => end(true));
   res.on("error", () => end(true));
 
