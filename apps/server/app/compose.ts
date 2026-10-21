@@ -38,6 +38,7 @@ import { erasureDeps, requireKeyDestroyedProof } from "./erasure/wire";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { staticHandler } from "./http/staticFiles";
 import { createHttpServer } from "./server";
 import type { UserExecutionLister } from "./status/forgetUser";
 import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
@@ -79,6 +80,8 @@ export interface ComposeOptions {
   trustProxy: boolean;
   /** `DOCMIND_PUBLIC_ORIGIN`, already validated; the origin guard compares `Origin` against it. */
   publicOrigin?: string;
+  /** `DOCMIND_WEB_DIR`, already validated. */
+  webDir?: string;
   /** `DOCMIND_MAX_CONNECTIONS`, already validated. */
   maxConnections?: number;
   /** Parser registry, runner and progress bus; the runner and registry reach the parse ports through pgIngestDeps. */
@@ -304,6 +307,7 @@ export function buildServer(options: ComposeOptions) {
     },
     { secure: options.secureCookies, publicOrigin: options.publicOrigin },
     options.maxConnections === undefined ? {} : { maxConnections: options.maxConnections },
+    options.webDir ? staticHandler(options.webDir) : undefined,
   );
   return {
     app,

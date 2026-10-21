@@ -351,6 +351,8 @@ describe("server limits", () => {
       ...Object.keys(documentEventRoutes({} as any).routes),
       // biome-ignore lint/suspicious/noExplicitAny: only the route keys are read
       ...Object.keys(chatStreamRoutes({} as any).routes),
+      "GET (web)", // the static fallback's route label
+      "HEAD (web)",
     ]);
     expect([...DEFAULT_HTTP_LIMITS.streamingRoutes].filter((k) => !registered.has(k))).toEqual([]);
   });
