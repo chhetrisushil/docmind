@@ -259,6 +259,63 @@ describe.skipIf(!PG_URL)(
         expect((await app.query("SELECT * FROM docmind_erasure_pending(NULL)")).rowCount).toBe(0);
       });
 
+      it("pages by user id: strictly after the cursor, ascending, at most the limit, nothing skipped or repeated", async () => {
+        const users: string[] = [];
+        for (let n = 0; n < 6; n++) {
+          const id = randomUUID();
+          await owner.query(
+            "INSERT INTO users (id, tenant_id, email, password_hash) VALUES ($1, $2, $3, 'x')",
+            [id, T1, `keyset-${n}@example.com`],
+          );
+          await request(T1, id);
+          users.push(id);
+        }
+        const NIL = "00000000-0000-0000-0000-000000000000";
+        const page = async (after: string, limit: number) =>
+          (
+            await app.query("SELECT user_id FROM docmind_erasure_pending('pending', $1, $2)", [
+              after,
+              limit,
+            ])
+          ).rows.map((r) => r.user_id as string);
+        const all = (await page(NIL, 1000)).filter((id) => users.includes(id));
+        expect(all).toEqual([...users].sort());
+        const seen: string[] = [];
+        let after = NIL;
+        for (;;) {
+          const rows = await page(after, 4);
+          if (rows.length === 0) break;
+          expect(rows.length).toBeLessThanOrEqual(4);
+          seen.push(...rows);
+          after = rows[rows.length - 1] as string;
+        }
+        expect(seen.filter((id) => users.includes(id))).toEqual([...users].sort());
+        expect(new Set(seen).size).toBe(seen.length); // no repeats
+        expect(await page(seen[seen.length - 1] as string, 4)).toEqual([]);
+        // Later tests in this file count the pending requests: leave none of these behind.
+        await owner.query("DELETE FROM erasure_requests WHERE user_id = ANY($1::uuid[])", [users]);
+        await owner.query("DELETE FROM users WHERE id = ANY($1::uuid[])", [users]);
+      });
+
+      it("rejects a limit outside 1 to 1000 and an unknown state, and answers nothing for NULL", async () => {
+        await expect(
+          app.query(
+            "SELECT * FROM docmind_erasure_pending('pending', '00000000-0000-0000-0000-000000000000', 0)",
+          ),
+        ).rejects.toMatchObject({ code: "22023" });
+        await expect(
+          app.query(
+            "SELECT * FROM docmind_erasure_pending('pending', '00000000-0000-0000-0000-000000000000', 1001)",
+          ),
+        ).rejects.toMatchObject({ code: "22023" });
+        await expect(app.query("SELECT * FROM docmind_erasure_pending('teleport')")).rejects.toMatchObject({
+          code: "22023",
+        });
+        expect(
+          (await app.query("SELECT * FROM docmind_erasure_pending('pending', NULL, 10)")).rowCount,
+        ).toBe(0);
+      });
+
       it("answers false for a request that does not exist, rejects an unknown step, and is STRICT", async () => {
         expect(
           (await app.query("SELECT docmind_erasure_mark($1, 'stop', false) AS f", [randomUUID()]))
