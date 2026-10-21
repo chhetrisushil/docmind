@@ -6,6 +6,7 @@ export const VIEWS: Partial<Record<Route["name"], string>> = {
   "sign-up": "dm-auth-form",
   documents: "dm-documents-page",
   document: "dm-doc-detail",
+  chat: "dm-chat-page",
   settings: "dm-settings",
   "account-deleted": "dm-account-deleted",
 };

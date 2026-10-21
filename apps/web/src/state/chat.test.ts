@@ -76,6 +76,25 @@ const bodyOf = (t: ReturnType<typeof setup>, n = 0): SendMessageRequest => {
 };
 
 describe("ChatController: loading", () => {
+  it("is ready once the history is in and the chat is not closed", async () => {
+    const t = setup();
+    expect(t.state().ready).toBe(false);
+    await t.ctl.start();
+    expect(t.state().ready).toBe(true);
+    t.frame("closed", {});
+    expect(t.state()).toMatchObject({ closed: true, ready: false });
+  });
+
+  it("is not ready when the history could not be loaded", async () => {
+    const t = setup({
+      listMessages: async () => {
+        throw new ApiError(0, "network");
+      },
+    });
+    await t.ctl.start();
+    expect(t.state()).toMatchObject({ problem: "load", ready: false });
+  });
+
   it("starts loading, then shows the history with citations, steps and reasoning beside each reply", async () => {
     const t = setup();
     expect(t.state()).toMatchObject({ loading: true, entries: [] });
