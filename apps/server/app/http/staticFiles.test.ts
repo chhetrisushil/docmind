@@ -1,10 +1,33 @@
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { createServer } from "node:http";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// Every handle the handler opens is recorded, with a delay before open returns when `openDelayMs` is set.
+const opened: { closes: number }[] = [];
+let openDelayMs = 0;
+vi.mock("node:fs/promises", async (orig) => {
+  const real = await orig<typeof import("node:fs/promises")>();
+  return {
+    ...real,
+    open: async (...args: Parameters<typeof real.open>) => {
+      if (openDelayMs) await new Promise((r) => setTimeout(r, openDelayMs));
+      const handle = await real.open(...args);
+      const rec = { closes: 0 };
+      opened.push(rec);
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        rec.closes++;
+        return close();
+      };
+      return handle;
+    },
+  };
+});
 import { DEFAULT_HTTP_LIMITS, createHttpServer } from "../server";
 import { StartupConfigError } from "../startupError";
 import { WEB_CSP, loadWebDir, staticHandler } from "./staticFiles";
@@ -223,5 +246,29 @@ describe("the static fallback", () => {
     const res = await raw("/assets/alias.js");
     expect(res.status).toBe(404);
     expect(res.body).not.toContain("sentinel-");
+  });
+
+  it("closes the file once and settles when the client aborts during open", async () => {
+    const handler = staticHandler(dir);
+    let settled: Promise<unknown> = Promise.resolve();
+    const srv = createServer((req, res) => {
+      settled = (async () => handler(req, res, { params: {} }))();
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
+    opened.length = 0;
+    openDelayMs = 150;
+    const sock = connect((srv.address() as AddressInfo).port, "127.0.0.1");
+    sock.on("error", () => undefined);
+    sock.write("GET /assets/big.js HTTP/1.1\r\nhost: x\r\n\r\n");
+    await new Promise((r) => setTimeout(r, 50));
+    sock.destroy(); // the response closes while open() is still pending
+    await Promise.race([
+      settled,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("handler never settled")), 3000)),
+    ]);
+    openDelayMs = 0;
+    expect(opened.length).toBe(1);
+    expect(opened.map((o) => o.closes)).toEqual([1]);
+    srv.close();
   });
 });
