@@ -318,6 +318,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
     }),
 
     "GET /api/documents/:id": requireAuth(deps.authenticator, async (_req, res, identity, ctx) => {
+      res.setHeader("cache-control", "no-store"); // the answer carries a decrypted filename and summary
       const parsed = Uuid.safeParse(ctx.params.id);
       // A malformed id answers exactly like a missing or foreign one.
       const id = parsed.success ? parsed.data.toLowerCase() : null;

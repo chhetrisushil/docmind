@@ -18,6 +18,7 @@
     "@docmind/blob-store": "workspace:*",
     "@docmind/contracts": "workspace:*",
     "@docmind/embeddings": "workspace:*",
+    "@docmind/experiences": "workspace:*",
     "@docmind/keystore-pg": "workspace:*",
     "@docmind/llm-anthropic": "workspace:*",
     "@docmind/parsers": "workspace:*",

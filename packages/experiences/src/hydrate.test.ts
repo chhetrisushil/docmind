@@ -213,6 +213,19 @@ describe("the invoker refuses what it did not declare", () => {
       }),
     ).rejects.toBeTruthy();
   });
+  it("clips a reader's over-return to upto, but keeps a cited passage past it with what precedes it, within the cap", async () => {
+    const items = Array.from({ length: 30 }, (_, i) => ({ passageId: id(100 + i) }) as never);
+    const r = readers({ content: vi.fn(async () => ({ items, more: false })) });
+    const out = async (passage: string) =>
+      (await call(r, "document.content", { id: id(1), upto: 10, passage })) as {
+        content: { items: unknown[]; more: boolean };
+      };
+    expect((await out("")).content.items).toHaveLength(10);
+    const cited = await out(id(120));
+    expect(cited.content.items).toHaveLength(21);
+    expect(cited.content.more).toBe(true);
+    expect((await out(id(5000))).content.items).toHaveLength(10); // a passage the reader did not return is not found
+  });
   it("accepts the boundary values", async () => {
     const r = readers();
     await call(r, "documents.list", { limit: LIST_CAP, status: "all" });

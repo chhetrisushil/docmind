@@ -134,6 +134,15 @@ describe.skipIf(!PG_URL)("document content (needs DOCMIND_TEST_PG_URL)", () => {
       expect((await get(path)).headers.get("cache-control")).toBe("no-store");
   });
 
+  it("sends Cache-Control: no-store on GET /api/documents/:id (decrypted filename and summary), found or not", async () => {
+    for (const path of [
+      `/api/documents/${mine}`,
+      `/api/documents/${randomUUID()}`,
+      "/api/documents/not-a-uuid",
+    ])
+      expect((await get(path)).headers.get("cache-control"), path).toBe("no-store");
+  });
+
   it("reads nothing, not even a sealed row, once the user is erasing", async () => {
     const eve = { tenantId: ALICE.tenantId, userId: "e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0" };
     await h.owner.query(
