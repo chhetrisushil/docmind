@@ -65,4 +65,30 @@ describe("dm-account-deleted", () => {
     expect(el.shadowRoot?.textContent).toContain("no longer on this page");
     expect(q<HTMLAnchorElement>(el, "a[href='/sign-up']")).not.toBeNull();
   });
+
+  it("puts focus on the heading on arrival", async () => {
+    const { services } = setup(RECEIPT, async () => ({ state: "pending" }));
+    const el = await mountWith<HTMLElement>(services, "dm-account-deleted");
+    await vi.waitFor(() => expect(el.shadowRoot?.activeElement).toBe(q(el, "h1")));
+  });
+
+  it("stops offering Check status once the erasure is done", async () => {
+    const { services, api } = setup(RECEIPT, async () => ({ state: "done" }));
+    const el = await mountWith<HTMLElement>(services, "dm-account-deleted");
+    q<HTMLButtonElement>(el, "button[data-check]").click();
+    await vi.waitFor(() => expect(q(el, "[data-state]").textContent).toContain("Done"));
+    expect(q(el, "button[data-check]").getAttribute("aria-disabled")).toBe("true");
+    q<HTMLButtonElement>(el, "button[data-check]").click();
+    expect(
+      (api as never as { erasureStatus: ReturnType<typeof vi.fn> }).erasureStatus,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it("forgets the receipt when the page is left", async () => {
+    const { services } = setup(RECEIPT, async () => ({ state: "pending" }));
+    const el = await mountWith<HTMLElement>(services, "dm-account-deleted");
+    expect(services.receipt.get()).toBe(RECEIPT);
+    el.remove();
+    expect(services.receipt.get()).toBeUndefined();
+  });
 });
