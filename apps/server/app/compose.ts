@@ -54,6 +54,8 @@ export interface StatusStores {
 }
 
 export interface ComposeOptions {
+  /** SSE heartbeat (which also re-checks the session). Tests pin it so a stream can only end because the server closed it. */
+  heartbeatMs?: number;
   /**
    * M5: the raw (unwrapped) stores erasure shreds on. With it the app is built with `compliance`,
    * `bootIngest` hydrates the subject index, and the `Eraser` is composed. `loomPool` is the Loom pool (the eraser
@@ -196,7 +198,11 @@ export function buildServer(options: ComposeOptions) {
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
-  const events = documentEventRoutes({ authenticator, bus: options.ingest.bus });
+  const events = documentEventRoutes({
+    authenticator,
+    bus: options.ingest.bus,
+    ...(options.heartbeatMs && { heartbeatMs: options.heartbeatMs }),
+  });
   const reasoning = chat && replyReasoning({ log: options.status.source, store: chat.reasoning });
   const chatStreams =
     chat &&
@@ -208,6 +214,7 @@ export function buildServer(options: ComposeOptions) {
       chat,
       eventStore: options.status.source,
       reasoning,
+      ...(options.heartbeatMs && { heartbeatMs: options.heartbeatMs }),
     });
   // After the streams exist: the eraser closes them per user.
   const erasure = options.erasure;
