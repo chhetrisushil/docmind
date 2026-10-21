@@ -59,8 +59,9 @@ apps/
     app/flows/ingest-document/        durable ingestion flow
     app/agents/doc-assistant.ts       agentLoop$ + retrieval tools
     app/chats/                        chat_sessions table + chat-activity folded model
-  web/         Vite + loom-ui Lit renderer + app-local dm-* components
+  web/         Vite + loom-ui Lit renderer: the web surface (shell, auth, dialogs, upload, view host)
 packages/
+  experiences/ loom-ui experiences (the six views, providers, reshapers), surface-neutral
   contracts/   zod schemas + types for the HTTP API (server ⇄ web)
   auth/        Authenticator interface + password/session implementation
   keystore-pg/ PostgresKeyStore (implements @loom/plugin-crypto KeyStore)
@@ -363,6 +364,9 @@ Scanned PDF pages with no text layer are routed through the image path. Known li
 
 | Endpoint | Behavior |
 |---|---|
+| `GET /api/documents/:id/content?cursor` | The document's passages in order, paged, decrypted for the owner only (404 otherwise). |
+| `GET /api/ui/views/:view?surface=` | The sealed, compiled experience of a view for a surface, with its handle inventory. Authenticated; never carries user data. |
+| `POST /api/ui/hydrate` | Answers handle loads for a view with identity-bound, owner-scoped readers; at most 8 distinct reads per request, 4 at a time. |
 | `POST /api/chats {scope?}` | Create a chat (503 `chat_unavailable` without an Anthropic key). The only place a conversation starts. |
 | `GET /api/chats?cursor&q` | List sessions, newest activity first, 50 per page. `q` filters by title after decryption (the newest 2,000 are scanned). |
 | `GET /api/chats/:id/messages?cursor` | Paged history, 30 per page, oldest first within a page, merged with the sealed turn items (citations, tool steps) and reasoning. `ChatMessageDto` carries `reasoning` (folded, bounded) and `cursor`. |
@@ -439,29 +443,30 @@ The chat shows the model's reasoning.
 
 ## 7. Web UI (`apps/web`)
 
-**Stack.** Vite, Lit and the loom-ui Lit renderer. `@loom/*` and `@loom-ui/*` are aliased to their
-TypeScript sources (Loom ships CJS only; this follows the AetherOS console precedent), and only
-browser-safe entry points are imported.
+**Stack.** Vite, Lit and loom-ui. DocMind's views are loom-ui experiences, composed once on the server in
+`packages/experiences` (a semantic catalogue, sealed and compiled per surface, hydrated across the trust boundary
+with identity-bound readers) and run by `apps/server/app/ui`. `apps/web` is a thin web surface that draws them with
+the loom-ui Lit renderer and performs the surface-neutral intents of `@docmind/contracts` (`intentOf`). `@loom-ui/*`
+and Loom's two browser runtimes are linked as built ESM through `link:` (CI checks loom-ui out at `LOOM_UI_REF`);
+`@docmind/contracts` is aliased to its source. Only browser-safe entry points are imported. The design is surface-agnostic: the same experiences compile for a
+terminal surface (proven by a test, not shipped; a terminal surface is planned).
 
 ```
 apps/web/src/
-  main.ts  router.ts  api/  state/  components/  styles/tokens.css
+  main.ts  router.ts  views.ts  api/  state/  ui/  surface/  chat/  components/  styles/tokens.css
+packages/experiences/src/
+  catalog.ts  views.ts  providers.ts  reshapers.ts  compose.ts  views-api.ts
 ```
 
 | Need | Source |
 |---|---|
-| Transcript state, resumable stream fold | loom-ui `ChatFeed`, `chatSource` |
-| Message list | `lu-chat`, wrapped by `dm-chat-view` |
-| Composer | `lu-inputs` / `chatForm`, plus an attach button |
-| Image preview | `lu-media` |
-| Document table | `lu-data-table`, wrapped by `dm-doc-table` |
-| Empty states | `lu-note` |
-| App shell, session sidebar | `dm-app-shell`, `dm-session-list` |
-| Upload | `dm-upload-zone` |
-| Document detail (Summary / Analysis / Content tabs) | `dm-doc-detail` |
-| Citations and sources panel | `dm-citation`, `dm-source-panel` |
-| Thinking and tool-activity block (§6.5) | `dm-thinking` |
-| Scope picker, auth forms | `dm-scope-picker`, `dm-auth-form` |
+| Library, empty states, document detail, sessions, transcript, composer, scope select, sources | loom-ui kinds (`Table`, `Note`, `StatusCard`, `Kpi`, `tabs`, `A2UIView`, `Chat`, `TextInput`, `SelectInput`), composed in `@docmind/experiences` |
+| Transcript state, resumable stream fold | loom-ui `ChatFeed`, folded by `ChatFold` |
+| App shell, sign-in and sign-up, dialog, upload zone, toasts | `dm-*` elements |
+| Pages that host a view | `dm-documents-page`, `dm-doc-detail`, `dm-chat-page`, `dm-sessions`, around `dm-view` |
+
+Two generic additions to loom-ui carry this (`Table` row actions, `Chat` reference markers), plus opt-in markdown in
+chat text. Image preview is not built.
 
 **State.** Small reactive stores (Lit `ReactiveController`s plus `@lit/context`), one per concern:
 auth, sessions, chat, documents. Stores never touch the DOM.
@@ -473,8 +478,13 @@ auth, sessions, chat, documents. Stores never touch the DOM.
   absent). This guard sits in the HTTP router, in front of every route, as SameSite=Lax does not stop
   same-site, cross-origin pages. Behind a reverse proxy, forward `Host` unchanged (nginx:
   `proxy_set_header Host $host`), or browser writes without Fetch Metadata are refused with 403.
-- Assistant answers and extracted document text are untrusted. Markdown is rendered, then sanitized
-  with DOMPurify.
+- Assistant answers and extracted document text are untrusted. Markdown is a closed, bounded subset parsed by
+  loom-ui's own hand-written parser and drawn as DOM, opt-in per assistant part; it is never parsed into HTML and
+  fetches no image. Links are `http`, `https` and `mailto` only, with the host shown. There is no sanitiser
+  dependency.
+- Actions are surface-neutral (`intentOf`, with the served data held beside them); the server re-checks ownership.
+  View keys are random per process: run one server process.
+- Sign-up has no email verification, so an address's existence can be inferred (sign up, then sign in); a known limitation.
 - The streaming answer region is `aria-live="polite"`.
 - Every view is keyboard-navigable with visible focus.
 - Colors meet WCAG AA in light and dark themes.
@@ -485,9 +495,18 @@ reference: screens, tokens ("Nocturne" design system, Inter, Phosphor icons, dar
 components. Its tokens feed `styles/tokens.css`. The mocks don't draw account settings or confirmation
 dialogs; those follow the component sheet's existing styles.
 
-**Risk.** It is unverified whether `lu-chat` can render custom inline citation markers. PR 35 is a
-throwaway spike that settles this before UI work. If it can't, `dm-chat-view` renders assistant
-bodies itself and still uses `ChatFeed` for state.
+**Risk (settled).** The M6 spike found `lu-chat` had no inline citation hook, so two generic additions
+were made to loom-ui instead of a custom renderer (`Table` row actions, `Chat` reference markers), and markdown was
+added as a third, opt-in feature.
+
+**As built (M6).** `GET /api/ui/views/:view` and `POST /api/ui/hydrate` (see 6.1). The server sends a strict CSP with the
+app (`DOCMIND_WEB_DIR`, off by default; static files stay under the 60 s request timer). Library: newest 200 documents;
+sidebar: newest 50 chats; both flat; scope is "all" or "started"; the Content tab shows passages, not stitched text;
+the sources panel is pending while a reply streams. Accepted terminal gaps (owner decision, no loom-ui change): the
+`A2UIView` placeholder, `SelectInput` without its current selection, `TextInput` that only prompts, `Table` row actions
+not drawn, `Chat` references without a list. Not built: download, image preview, images and raw HTML in answers,
+grid view, bulk selection, grouped chat list, editing a sent message, forgot password, Cmd+K. Component-level
+acceptance test with happy-dom; Playwright is M7 item 45.
 
 ## 8. Testing and quality gates
 
@@ -589,16 +608,16 @@ Each milestone ends with something runnable.
 
 **M6 — Web UI** (runnable: the full app in a browser)
 
-35. Spike (throwaway): citation markers in `lu-chat`.
-36. Web scaffold: aliases, router, tokens, API client, SSE helper.
-37. Sign-in, sign-up and account settings (including "Delete my account"). Split if over the limit.
-38. App shell and session sidebar.
-39. Chat view, history paging, streaming, and the `dm-thinking` block.
-40. Citation markers and sources panel.
-41. Composer, scope picker, stop and regenerate.
-42. Upload zone.
-43. Document library table.
-44. Document detail tabs.
+35. Spike (throwaway): citation markers in `lu-chat`. *(done, M6)*
+36. Web scaffold: aliases, router, tokens, API client, SSE helper. *(done, M6)*
+37. Sign-in, sign-up and account settings (including "Delete my account"). Split if over the limit. *(done, M6)*
+38. App shell and session sidebar. *(done, M6)*
+39. Chat view, history paging, streaming and reasoning (loom-ui `Chat`). *(done, M6)*
+40. Citation markers and sources panel. *(done, M6)*
+41. Composer, scope picker, stop and regenerate. *(done, M6)*
+42. Upload zone. *(done, M6)*
+43. Document library table. *(done, M6)*
+44. Document detail tabs. *(done, M6)*
 
 **M7 — Hardening**
 
@@ -616,7 +635,7 @@ Each milestone ends with something runnable.
 
 | Risk | Mitigation |
 |---|---|
-| `lu-chat` may lack an inline-citation hook | PR 35 spike; fallback is a custom renderer over `ChatFeed` |
+| `lu-chat` may lack an inline-citation hook | Settled by the M6 spike: generic loom-ui additions instead |
 | Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out the private `chhetrisushil/loom` at a pinned `LOOM_REF` using a read-only `LOOM_TOKEN` secret (as loom-ui does). Publishing `@loom/*` is tracked as platform work. |
 | conversation-sse runs its own HTTP server (no mountable handler) | Retired: DocMind serves its own chat SSE; only `frame` and `SseSink` come from the plugin |
 | pgvector below 0.8.0 has no iterative index scans | `verify` fails the boot as a `StartupConfigError` |
@@ -625,7 +644,9 @@ Each milestone ends with something runnable.
 | A lost `DOCMIND_CHAT_ENVELOPE_KEY` makes queued messages unreadable | Configure the previous key until they are consumed |
 | Loom's Anthropic reasoning mapping and DocMind's FakeAnthropic rest on recorded wire shapes, not on a live API (ADR 0133); the opt-in real-API suite is the check | Run it before relying on continuation in production |
 | Event log growth: Loom re-sends every earlier signature in each model frame's `STEP_STARTED.input.messages` (about 36 part copies for a loop of 8 iterations), sealed | Accepted |
-| Loom is CJS-only in the browser | Vite source aliases (AetherOS precedent) |
+| Loom is CJS-only in the browser | Not applicable: the browser imports Loom's ESM runtimes and no Loom package of the server |
+| Sign-up without email verification reveals whether an address has an account | Known limitation; email verification would close it |
+| The web UI's view keys are random per process | One server process |
 | Embedding residue in backups | Bounded backup retention, documented in the runbook |
 | Parsing untrusted files | Sandbox, magic-byte sniffing, size and decompression caps |
 | Prompt injection via documents | Untrusted tagging, read-only tools, capability ring, citation validation |
