@@ -24,14 +24,21 @@ const toRequest = (r: Row): ErasureRequest => ({
   attempts: r.attempts,
 });
 
+/** Rows per call of `docmind_erasure_pending`; the function allows up to 1000. */
+export const ERASURE_PAGE = 500;
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
 /**
  * The erasure requests on Postgres (migration 0024), connected as docmind_app. The table is reachable only through the
- * insert policy (inside a tenant transaction) and the definer functions (`docmind_erasure_pending(state)` serves both `pending()` and `erased()`,
+ * insert policy (inside a tenant transaction) and the definer functions (`docmind_erasure_pending(state, after, limit)` pages by user id and serves `pending()` and `erased()`,
  * `docmind_erasure_status(hash)` serves `status()`); nothing here reads or writes it directly but the insert. Every
  * statement carries ids, step names and a receipt hash only.
  */
 export class PgErasureStore implements ErasureStore {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly pageSize = ERASURE_PAGE,
+  ) {}
 
   async insert(
     tx: Queryable,
@@ -56,27 +63,41 @@ export class PgErasureStore implements ErasureStore {
     return state === "pending" || state === "done" ? state : null;
   }
 
-  // pending() and erased() are capped at 1000 rows by docmind_erasure_pending (no fifth definer function is wanted), and
-  // get() scans pending(); so with more than 1000 pending requests get() can answer null for a request that exists.
-  // Far beyond v1 scale.
+  /** Every request in `state`, one page at a time, ordered by user id; a page shorter than `pageSize` is the last. */
+  private async *pages(state: ErasureState): AsyncGenerator<Row[]> {
+    let after = NIL_UUID;
+    for (;;) {
+      const { rows } = await this.pool.query<Row>(
+        "SELECT user_id, tenant_id, state, steps, attempts FROM public.docmind_erasure_pending($1, $2, $3)",
+        [state, after, this.pageSize],
+      );
+      if (rows.length === 0) return;
+      yield rows;
+      if (rows.length < this.pageSize) return;
+      after = (rows[rows.length - 1] as Row).user_id;
+    }
+  }
+
   async pending(): Promise<ErasureRequest[]> {
-    const { rows } = await this.pool.query<Row>(
-      "SELECT user_id, tenant_id, state, steps, attempts FROM public.docmind_erasure_pending($1)",
-      ["pending"],
-    );
-    return rows.map(toRequest);
+    const out: ErasureRequest[] = [];
+    for await (const rows of this.pages("pending")) out.push(...rows.map(toRequest));
+    return out;
   }
 
   async erased(): Promise<string[]> {
-    const { rows } = await this.pool.query<Pick<Row, "user_id">>(
-      "SELECT user_id FROM public.docmind_erasure_pending($1)",
-      ["done"],
-    );
-    return rows.map((r) => r.user_id);
+    const out: string[] = [];
+    for await (const rows of this.pages("done")) out.push(...rows.map((r) => r.user_id));
+    return out;
   }
 
   async get(userId: string): Promise<ErasureRequest | null> {
-    return (await this.pending()).find((r) => r.userId === userId) ?? null;
+    for await (const rows of this.pages("pending")) {
+      const hit = rows.find((r) => r.user_id === userId);
+      if (hit) return toRequest(hit);
+      // Pages ascend by user id (uuid order is the byte order of its lowercase hex text), so once a page passes the id it is absent.
+      if (rows.some((r) => r.user_id > userId)) return null;
+    }
+    return null;
   }
 
   async mark(userId: string, step: ErasureStep): Promise<void> {
