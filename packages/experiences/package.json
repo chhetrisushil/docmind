@@ -15,6 +15,7 @@
     "@docmind/contracts": "workspace:*",
     "@loom-ui/core": "*",
     "@loom-ui/hydration": "*",
+    "@loom/blueprint-runtime": "*",
     "@loom/core": "*",
     "zod": "^3.23.8"
   },
