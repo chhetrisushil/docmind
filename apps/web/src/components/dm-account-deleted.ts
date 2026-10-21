@@ -5,7 +5,11 @@ import { baseStyles } from "../styles/base";
 import "./dm-icon";
 
 export class DmAccountDeleted extends LitElement {
-  static properties = { stateText: { state: true }, checking: { state: true } };
+  static properties = {
+    stateText: { state: true },
+    checking: { state: true },
+    done: { state: true },
+  };
   static styles = [
     baseStyles,
     css`
@@ -13,15 +17,21 @@ export class DmAccountDeleted extends LitElement {
       main { width: min(520px, 100%); display: grid; gap: 14px; }
       h1 { font-size: 26px; }
       code { display: block; padding: 12px; border-radius: var(--dm-radius-md); background: var(--dm-surface); box-shadow: var(--dm-shadow-sm); overflow-wrap: anywhere; user-select: all; }
+      .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
       .row { display: flex; gap: 8px; flex-wrap: wrap; }
     `,
   ];
   declare stateText: string | undefined;
   declare checking: boolean;
+  declare done: boolean;
   private readonly ctx = new ServicesController(this, (s) => [s.receipt]);
   constructor() {
     super();
     this.checking = false;
+    this.done = false;
+  }
+  protected firstUpdated() {
+    this.renderRoot.querySelector<HTMLElement>("h1")?.focus(); // a route change moves no focus by itself
   }
   disconnectedCallback() {
     this.ctx.services?.receipt.set(undefined); // "gone when you leave this page"
@@ -40,10 +50,11 @@ export class DmAccountDeleted extends LitElement {
   }
   private async check(receipt: string) {
     const api = this.ctx.services?.api;
-    if (!api || this.checking) return;
+    if (!api || this.checking || this.done) return;
     this.checking = true;
     try {
       const { state } = await api.erasureStatus(receipt);
+      this.done = state === "done";
       this.stateText =
         state === "done"
           ? "Done. Your account and its data have been erased."
@@ -62,14 +73,14 @@ export class DmAccountDeleted extends LitElement {
   render() {
     const receipt = this.ctx.services?.receipt.get();
     return html`<main>
-      <h1>Your account is being deleted</h1>
+      <h1 tabindex="-1">Your account is being deleted</h1>
       ${
         receipt
           ? html`<p>Keep this receipt. It is the only way to check that the deletion has finished. It is shown once: it is not stored anywhere, and it is gone when you leave this page.</p>
           <code data-receipt>${receipt}</code>
           <div class="row">
             <button class="btn secondary" data-copy @click=${() => this.copy(receipt)}><dm-icon name="copy"></dm-icon>Copy receipt</button>
-            <button class="btn primary" data-check ?disabled=${this.checking} @click=${() => this.check(receipt)}>Check status</button>
+            <button class="btn primary" data-check aria-disabled=${this.checking || this.done} @click=${() => this.check(receipt)}>Check status</button>
           </div>
           <p data-state aria-live="polite">${this.stateText ?? ""}</p>`
           : html`<p>The receipt is no longer on this page, so it cannot be shown again. If you deleted your account, it is already unusable.</p>`

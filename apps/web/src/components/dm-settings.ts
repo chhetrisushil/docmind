@@ -7,13 +7,20 @@ import { baseStyles } from "../styles/base";
 import "./dm-dialog";
 import "./dm-icon";
 
+const MAYBE = "The deletion may have been accepted. Use Check status to find out.";
+
+/** Whether the request may have reached the server and been accepted although no answer came back. */
+function uncertain(err: unknown): boolean {
+  return !(err instanceof ApiError) || !(err.status === 401 || err.status === 429);
+}
+
 function deleteErrorText(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "The password is not right.";
-    if (err.status === 409) return "Your account is already being deleted.";
-    if (err.status === 429 || err.status === 0) return authErrorText(err);
+    if (err.status === 429) return authErrorText(err);
+    if (err.status === 0) return `Could not reach the server. ${MAYBE}`;
   }
-  return "Something went wrong. Nothing was deleted. Try again.";
+  return `Something went wrong. ${MAYBE}`;
 }
 
 export class DmSettings extends LitElement {
@@ -23,6 +30,7 @@ export class DmSettings extends LitElement {
     busy: { state: true },
     problem: { state: true },
     wrongPassword: { state: true },
+    unsure: { state: true },
   };
   static styles = [
     baseStyles,
@@ -42,6 +50,8 @@ export class DmSettings extends LitElement {
   declare problem: string | undefined;
   /** True only when the server said the password is wrong: the one case where the field is the thing at fault. */
   declare wrongPassword: boolean;
+  /** The answer to the delete request was lost or unclear: it may have been accepted. */
+  declare unsure: boolean;
   private readonly ctx = new ServicesController(this, (s) => [s.auth, s.theme]);
   constructor() {
     super();
@@ -49,6 +59,7 @@ export class DmSettings extends LitElement {
     this.password = "";
     this.busy = false;
     this.wrongPassword = false;
+    this.unsure = false;
   }
   private async signOut() {
     const svc = this.ctx.services;
@@ -63,6 +74,7 @@ export class DmSettings extends LitElement {
     this.busy = true;
     this.problem = undefined;
     this.wrongPassword = false;
+    this.unsure = false;
     try {
       const done = await svc.api.deleteAccount({ password: this.password });
       this.password = "";
@@ -72,11 +84,41 @@ export class DmSettings extends LitElement {
       svc.router.navigate({ name: "account-deleted" }, { replace: true });
       svc.auth.signedOut();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Already being deleted: this browser is done, and the receipt of that request is not ours to show.
+        this.password = "";
+        this.confirming = false;
+        svc.router.navigate({ name: "account-deleted" }, { replace: true });
+        svc.auth.signedOut();
+        return;
+      }
+      this.unsure = uncertain(err);
       this.wrongPassword = err instanceof ApiError && err.status === 401;
       this.problem = deleteErrorText(err);
       this.password = "";
       await this.updateComplete;
       this.renderRoot.querySelector<HTMLElement>("dm-dialog input[type=password]")?.focus();
+    } finally {
+      this.busy = false;
+    }
+  }
+  /** After a lost answer: a session that still works means nothing was deleted; one that ended means it was accepted. */
+  private async checkStatus() {
+    const svc = this.ctx.services;
+    if (!svc || this.busy) return;
+    this.busy = true;
+    try {
+      await svc.api.me();
+      this.problem = "Your account is still active, so nothing was deleted. Try again.";
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        this.password = "";
+        this.confirming = false;
+        svc.router.navigate({ name: "account-deleted" }, { replace: true });
+        svc.auth.signedOut();
+        return;
+      }
+      this.problem = "Could not check right now. Try again.";
     } finally {
       this.busy = false;
     }
@@ -90,6 +132,7 @@ export class DmSettings extends LitElement {
     this.password = "";
     this.problem = undefined;
     this.wrongPassword = false;
+    this.unsure = false;
   }
   private onPassword(e: Event) {
     this.password = (e.target as HTMLInputElement).value;
@@ -126,8 +169,9 @@ export class DmSettings extends LitElement {
           <input class="input" id="del-pw" name="password" type="password" autocomplete="current-password" autofocus aria-invalid=${this.wrongPassword} aria-describedby=${this.problem ? "del-problem" : nothing} .value=${this.password} @input=${this.onPassword} />
           ${this.problem ? html`<div class="error" id="del-problem" role="alert"><dm-icon name="warning-circle"></dm-icon><span>${this.problem}</span></div>` : null}
         </form>
-        <button slot="actions" class="btn secondary" data-cancel @click=${this.closeDialog}>Cancel</button>
-        <button slot="actions" class="btn danger" data-confirm aria-disabled=${this.busy || this.password === ""} aria-busy=${this.busy} @click=${this.confirmDelete}>${this.busy ? "Deleting..." : "Delete my account"}</button>
+        ${this.unsure ? html`<button slot="actions" type="button" class="btn secondary" data-status aria-disabled=${this.busy} @click=${this.checkStatus}>Check status</button>` : nothing}
+        <button slot="actions" type="button" class="btn secondary" data-cancel aria-disabled=${this.busy} @click=${this.closeDialog}>Cancel</button>
+        <button slot="actions" type="submit" form="delete-form" class="btn danger" data-confirm aria-disabled=${this.busy || this.password === ""} aria-busy=${this.busy} @click=${this.confirmDelete}>${this.busy ? "Deleting..." : "Delete my account"}</button>
       </dm-dialog>`;
   }
 }

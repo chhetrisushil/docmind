@@ -77,7 +77,7 @@ export class DmApp extends LitElement {
   render() {
     const { wait, to } = this.decide();
     // The view is a nested part and dm-toasts sits outside it, so the live regions survive every view change.
-    return html`${wait || to ? this.busy() : this.view()}<dm-toasts></dm-toasts>`;
+    return html`${wait || to ? this.busy() : this.view()}<dm-toasts data-dialog-live></dm-toasts>`;
   }
   /** Until the session is known (or for a render that should not happen after a redirect), nothing of any view is drawn. */
   private busy() {

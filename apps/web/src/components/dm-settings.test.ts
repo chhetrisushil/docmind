@@ -83,9 +83,15 @@ describe("dm-settings", () => {
 
   it.each([
     [new ApiError(401, "invalid_credentials"), "The password is not right."],
-    [new ApiError(409, "erasure_in_progress"), "Your account is already being deleted."],
     [new ApiError(429, "too_many_requests", 5), "Too many attempts. Try again in 5 seconds."],
-    [new ApiError(500, "internal"), "Something went wrong. Nothing was deleted. Try again."],
+    [
+      new ApiError(500, "internal"),
+      "Something went wrong. The deletion may have been accepted. Use Check status to find out.",
+    ],
+    [
+      new ApiError(0, "network"),
+      "Could not reach the server. The deletion may have been accepted. Use Check status to find out.",
+    ],
   ])(
     "a refusal (%o) stays in the dialog with a fixed sentence, and the account stays signed in",
     async (err, text) => {
@@ -114,4 +120,90 @@ describe("dm-settings", () => {
       );
     },
   );
+
+  async function ask(over: Record<string, unknown>) {
+    const ctx = await setup(over);
+    q<HTMLButtonElement>(ctx.el, "button[data-delete]").click();
+    await settle(ctx.el);
+    const dlg = q<HTMLElement>(ctx.el, "dm-dialog");
+    const input = dlg.querySelector("input[type=password]") as HTMLInputElement;
+    input.value = "pw";
+    input.dispatchEvent(new Event("input"));
+    await settle(ctx.el);
+    return { ...ctx, dlg };
+  }
+
+  it("a 409 means the deletion is already under way: signs out locally and goes to the receipt page, which has no receipt", async () => {
+    const { services, dlg } = await ask({
+      deleteAccount: vi.fn(async () => {
+        throw new ApiError(409, "erasure_in_progress");
+      }),
+    });
+    (dlg.querySelector("button[data-confirm]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(services.router.route).toEqual({ name: "account-deleted" }));
+    expect(services.auth.get()).toEqual({ status: "anonymous" });
+    expect(services.receipt.get()).toBeUndefined();
+  });
+
+  it("after a lost answer, Check status tells a signed-in user nothing was deleted, and a signed-out one that it was accepted", async () => {
+    let calls = 0;
+    const me = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return ME;
+      throw new ApiError(401, "unauthorized");
+    });
+    const { services, dlg, el } = await ask({
+      me,
+      deleteAccount: vi.fn(async () => {
+        throw new ApiError(0, "network");
+      }),
+    });
+    expect(dlg.querySelector("button[data-status]")).toBeNull();
+    (dlg.querySelector("button[data-confirm]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(dlg.querySelector("button[data-status]")).not.toBeNull());
+    (dlg.querySelector("button[data-status]") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(dlg.querySelector("[role=alert]")?.textContent).toContain("still active"),
+    );
+    expect(services.auth.get().status).toBe("signed-in");
+    await settle(el);
+    (dlg.querySelector("button[data-status]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(services.router.route).toEqual({ name: "account-deleted" }));
+    expect(services.auth.get().status).toBe("anonymous");
+  });
+
+  it("ignores a second confirm while one is in flight, and shows Cancel as unavailable", async () => {
+    let release: (v: unknown) => void = () => {};
+    const deleteAccount = vi.fn(
+      () =>
+        new Promise((r) => {
+          release = r;
+        }),
+    );
+    const { dlg, el } = await ask({ deleteAccount });
+    const confirm = dlg.querySelector("button[data-confirm]") as HTMLButtonElement;
+    confirm.click();
+    confirm.click();
+    await settle(el);
+    expect(deleteAccount).toHaveBeenCalledTimes(1);
+    expect(dlg.querySelector("button[data-cancel]")?.getAttribute("aria-disabled")).toBe("true");
+    (dlg.querySelector("button[data-cancel]") as HTMLButtonElement).click();
+    await settle(el);
+    expect((dlg as HTMLElement & { open: boolean }).open).toBe(true);
+    release({ erasure: "accepted", receipt: RECEIPT });
+  });
+
+  it("submits from the form (Enter) through the same single path as the button", async () => {
+    const { dlg, api } = await ask({});
+    const form = dlg.querySelector("form") as HTMLFormElement;
+    expect((dlg.querySelector("button[data-confirm]") as HTMLElement).getAttribute("form")).toBe(
+      form.id,
+    );
+    form.dispatchEvent(new Event("submit", { cancelable: true }));
+    await vi.waitFor(() =>
+      expect(
+        (api as never as { deleteAccount: ReturnType<typeof vi.fn> }).deleteAccount,
+      ).toHaveBeenCalledTimes(1),
+    );
+  });
 });
