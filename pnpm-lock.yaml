@@ -30,6 +30,7 @@ overrides:
   '@loom-ui/core': link:../loom-ui/packages/core
   '@loom-ui/hydration': link:../loom-ui/packages/hydration
   '@loom-ui/renderer-lit': link:../loom-ui/packages/renderer-lit
+  '@loom-ui/renderer-terminal': link:../loom-ui/packages/renderer-terminal
 
 importers:
 
@@ -190,6 +191,12 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@docmind/experiences':
+        specifier: workspace:*
+        version: link:../../packages/experiences
+      '@loom-ui/renderer-terminal':
+        specifier: link:../../../loom-ui/packages/renderer-terminal
+        version: link:../../../loom-ui/packages/renderer-terminal
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -260,6 +267,37 @@ importers:
       '@loom/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)
+
+  packages/experiences:
+    dependencies:
+      '@docmind/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@loom-ui/core':
+        specifier: link:../../../loom-ui/packages/core
+        version: link:../../../loom-ui/packages/core
+      '@loom-ui/hydration':
+        specifier: link:../../../loom-ui/packages/hydration
+        version: link:../../../loom-ui/packages/hydration
+      '@loom/core':
+        specifier: link:../../../loom/packages/core
+        version: link:../../../loom/packages/core
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      '@loom-ui/renderer-terminal':
+        specifier: link:../../../loom-ui/packages/renderer-terminal
+        version: link:../../../loom-ui/packages/renderer-terminal
+      '@loom/projection-runtime':
+        specifier: link:../../../loom/packages/projection-runtime
+        version: link:../../../loom/packages/projection-runtime
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5

@@ -47,7 +47,8 @@
       "@loom/projection-runtime": "link:../loom/packages/projection-runtime",
       "@loom-ui/core": "link:../loom-ui/packages/core",
       "@loom-ui/hydration": "link:../loom-ui/packages/hydration",
-      "@loom-ui/renderer-lit": "link:../loom-ui/packages/renderer-lit"
+      "@loom-ui/renderer-lit": "link:../loom-ui/packages/renderer-lit",
+      "@loom-ui/renderer-terminal": "link:../loom-ui/packages/renderer-terminal"
     }
   }
 }

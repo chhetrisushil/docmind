@@ -26,6 +26,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@docmind/experiences": "workspace:*",
+    "@loom-ui/renderer-terminal": "*",
     "@types/node": "^22.0.0",
     "happy-dom": "^20.11.12",
     "typescript": "^5.6.3",
