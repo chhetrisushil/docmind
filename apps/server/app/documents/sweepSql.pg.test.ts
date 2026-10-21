@@ -8,7 +8,14 @@ import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSuppo
 import { ingestExecutionId } from "./ingest";
 import { ALICE, BOB, T1, T2, U1, U2, seedDoc, seedRow, seedUsers } from "./testHarness";
 
-const DEFINERS = ["docmind_orphan_statuses", "docmind_stale_uploads_v2"];
+const DEFINERS = [
+  "docmind_delete_empty_tenant",
+  "docmind_erasure_mark",
+  "docmind_erasure_pending",
+  "docmind_erasure_status",
+  "docmind_orphan_statuses",
+  "docmind_stale_uploads_v2",
+];
 const fn = (max = 10) =>
   `docmind_stale_uploads_v2(make_interval(secs => 120), make_interval(secs => 604800), ${max})`;
 
@@ -48,6 +55,25 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     expect(all.map((r) => r.id)).toEqual([aliceOld, stubOnly, bobOlder]);
     expect(all[2]).toEqual({ tenant_id: T2, owner_id: U2, id: bobOlder, generation: 2 });
     expect((await app.query(`SELECT * FROM ${fn(1)}`)).rows.map((r) => r.id)).toEqual([aliceOld]);
+  });
+
+  it("skips the documents of a user who is being erased, and lists them again only for the others", async () => {
+    await owner.query("DELETE FROM documents");
+    const mine = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+    const theirs = await seedDoc(owner, app, fields, BOB, fp(), 700);
+    expect((await app.query(`SELECT id FROM ${fn()}`)).rows.map((r) => r.id)).toEqual([
+      mine,
+      theirs,
+    ]);
+    // erasing_at is one-way (a trigger), so lift the trigger around the reset and put it back.
+    await owner.query("ALTER TABLE users DISABLE TRIGGER erasure_users_guard");
+    await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U1]);
+    try {
+      expect((await app.query(`SELECT id FROM ${fn()}`)).rows.map((r) => r.id)).toEqual([theirs]);
+    } finally {
+      await owner.query("UPDATE users SET erasing_at = NULL WHERE id = $1", [U1]);
+      await owner.query("ALTER TABLE users ENABLE TRIGGER erasure_users_guard");
+    }
   });
 
   it("returns each stray's current generation, and finds a retried document whose new generation never started", async () => {
