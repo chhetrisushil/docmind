@@ -2,6 +2,7 @@ import { type PgConfig, PostgresReadModelStore } from "@loom/plugin-postgres";
 import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
+import type { UserExecutionLister } from "./forgetUser";
 
 // The tables are DocMind's own (migration 0012): no DDL runs here, and the schema is explicit
 // because the Loom pool's search_path is `loom`.
@@ -43,3 +44,25 @@ export function pgStatusReaderFor(
     return new PostgresReadModelStore(asLoomPool(tenantPool), PLACEMENT);
   };
 }
+
+const LIST_BATCH = 500;
+
+/**
+ * The Loom role's narrow read for user erasure: the execution ids (never the state) of one user's rows in a model
+ * that are not tombstoned yet, by id prefix. The prefix is matched with `starts_with` and exact equality, never
+ * `LIKE`, because `_` is a wildcard and a user id is bound text. The Loom pool's search_path is `loom`, so the
+ * table is schema-qualified. `docmind_loom` may read every tenant's rows (policy `ingest_all`, migration 0012).
+ */
+export const pgUserExecutions =
+  (loomPool: Pick<Pool, "query">): UserExecutionLister =>
+  async (modelId, userId) => {
+    const { rows } = await loomPool.query<{ execution_id: string }>(
+      `SELECT execution_id FROM public.read_model_state
+        WHERE model_id = $1 AND NOT erased
+          AND (execution_id = $2 OR starts_with(execution_id, $3) OR starts_with(execution_id, $4))
+        ORDER BY execution_id
+        LIMIT ${LIST_BATCH}`,
+      [modelId, `u_${userId}`, `u_${userId}:`, `u_${userId}.c-`],
+    );
+    return rows.map((r) => r.execution_id);
+  };

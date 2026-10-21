@@ -12,7 +12,7 @@ import { createIngestWiring, insecureBaseUrlWarning } from "./flows/ingest-docum
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadMaxConnections } from "./server";
 import { StartupConfigError } from "./startupError";
-import { pgStatusReaderFor, pgStatusWriter } from "./status/pgStores";
+import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -130,6 +130,7 @@ export async function setupServer() {
       writer: pgStatusWriter(durable.pool),
       readerFor: pgStatusReaderFor(pool),
       source: durable.storage.eventStore,
+      userExecutions: pgUserExecutions(durable.pool),
     },
   });
   return { built, ingest, durable, pool, port, host };
