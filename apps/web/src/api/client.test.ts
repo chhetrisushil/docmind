@@ -180,6 +180,16 @@ describe("uploadDocument", () => {
     await expect(lost).rejects.toMatchObject({ status: 0, code: "network" });
   });
 
+  it("rejects with an AbortError without sending when the signal is already aborted", async () => {
+    const before = FakeXhr.last;
+    const ctl = new AbortController();
+    ctl.abort();
+    await expect(
+      make().uploadDocument(new File(["a"], "f.txt"), { signal: ctl.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(FakeXhr.last).toBe(before); // no request was even opened
+  });
+
   it("aborts through the signal, and signs out on an expired session", async () => {
     const ctl = new AbortController();
     const aborted = make().uploadDocument(new File(["a"], "f.txt"), { signal: ctl.signal });

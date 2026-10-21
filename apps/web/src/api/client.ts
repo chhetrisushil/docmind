@@ -73,6 +73,7 @@ export function createApi(
       ).document,
     uploadDocument: (file, o = {}) =>
       new Promise((resolve, reject) => {
+        if (o.signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
         const xhr = newXhr();
         xhr.open("POST", "/api/documents");
         xhr.withCredentials = true;
