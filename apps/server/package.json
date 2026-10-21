@@ -27,6 +27,7 @@
     "@loom/conversation": "*",
     "@loom/core": "*",
     "@loom/classify": "*",
+    "@loom/compliance": "*",
     "@loom/effect-runtime": "*",
     "@loom/fair-scheduler": "*",
     "@loom/knowledge": "*",

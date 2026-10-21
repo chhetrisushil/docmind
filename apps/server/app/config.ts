@@ -4,6 +4,7 @@ import type { Effect } from "@loom/effect-runtime";
 import type { TimerStore } from "@loom/event-runtime";
 import type { RegisteredFlow } from "@loom/workflow-runtime";
 import { isChatExecution } from "./chats/activity";
+import { type ErasureWiring, complianceConfig, warningFor } from "./erasure/compliance";
 import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import {
@@ -43,7 +44,15 @@ export interface FlowDeps {
   chatTitle?: ChatTitleDeps;
   /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
   onEvent?: (event: EventEnvelope) => void;
+  /**
+   * Erasure (M5): with it, `defineConfig` gets `security.compliance` and the app has `eraseSubject` and `subjectIndex`.
+   * Absent (the CLI, in-memory tests): no erasure.
+   */
+  erasure?: ErasureWiring;
 }
+
+/** Loom's `onWarn` for every app, erasure wired or not: ids are redacted before anything is printed. */
+export const loomWarn = (message: string): void => console.warn("[loom]", warningFor(message));
 
 export function buildApp(
   storage: StorageConfig,
@@ -59,6 +68,9 @@ export function buildApp(
       }
     : {};
   return defineConfig({
+    // With erasure, the timers and the parked-erasure folds wait for `app.start()`: `bootIngest` fills the
+    // subject index first, so a parked erasure can never complete against a partly filled index.
+    ...(deps.erasure && { autostart: false }),
     storage,
     flowModules,
     agentModules,
@@ -66,7 +78,10 @@ export function buildApp(
     skillModules,
     projectionModules,
     ...chat,
-    observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
+    observability: {
+      ...(deps.onEvent && { onEvent: deps.onEvent }),
+      onWarn: loomWarn,
+    },
     // The status and activity models fold each ingest and chat execution's log from its first event, so compaction
     // must never remove such an execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
     // Eager heartbeat leases: an ingest runs for seconds, so Loom's default lazy lease (taken only after a
@@ -95,6 +110,7 @@ export function buildApp(
       executionAuthorizer,
       resumeAuthenticator,
       ...(crypto ? { crypto } : { principalCodec }),
+      ...(deps.erasure && { compliance: complianceConfig(deps.erasure) }),
     },
   });
 }
