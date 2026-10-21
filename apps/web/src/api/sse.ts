@@ -158,6 +158,7 @@ export function openSse(o: SseOptions): { close(): void } {
     let lastId = o.lastEventId?.();
     while (!closed) {
       let frames = 0;
+      let alive = false; // any bytes at all, heartbeat comments included
       let opened = false;
       let overflowed = false;
       let retryAfterMs: number | undefined;
@@ -197,6 +198,7 @@ export function openSse(o: SseOptions): { close(): void } {
         for (;;) {
           const { value, done } = await reader.read();
           if (done || closed) break;
+          if (value.length > 0) alive = true;
           let batch: SseFrame[];
           try {
             batch = parser.push(text.decode(value, { stream: true }));
@@ -215,6 +217,8 @@ export function openSse(o: SseOptions): { close(): void } {
             }
             if (frame.id !== undefined) lastId = frame.id;
           }
+          // An id with no data still moves the resume point (the spec); an oversized event's id does not, so it is not skipped.
+          if (!overflowed && parser.lastEventId !== undefined) lastId = parser.lastEventId;
           if (parser.retryMs !== undefined) serverRetry = parser.retryMs;
           if (overflowed) break; // drop the connection; resume from the last id
         }
@@ -228,7 +232,7 @@ export function openSse(o: SseOptions): { close(): void } {
       if (overflowed) {
         failures++;
         if (++overflows >= maxOverflows) return stop("failed");
-      } else if (frames > 0) {
+      } else if (frames > 0 || alive) {
         failures = 0;
         dead = 0;
         overflows = 0;

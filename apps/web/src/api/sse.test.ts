@@ -344,3 +344,24 @@ describe("openSse reconnect policy", () => {
     h.handle.close();
   });
 });
+
+describe("openSse liveness and ids", () => {
+  it("a connection that only receives heartbeats then drops is healthy: no dead-open count, no escalation", async () => {
+    const beat = () => body([": hb\n\n"]);
+    const h = harness([beat(), beat(), beat(), beat(), body([], { hang: true })], {
+      maxDeadOpens: 2,
+    });
+    await vi.waitFor(() => expect(h.seen.length).toBe(5));
+    expect(h.closes).toEqual([]);
+    expect(h.sleeps).toEqual([1000, 1000, 1000, 1000]);
+    h.handle.close();
+  });
+
+  it("an id with no data still becomes the resume point", async () => {
+    const h = harness([body(["id: 5.5\n\n"]), body([], { hang: true })]);
+    await vi.waitFor(() => expect(h.seen.length).toBe(2));
+    expect(h.seen.map((s) => s.lastEventId)).toEqual([null, "5.5"]);
+    expect(h.frames).toEqual([]);
+    h.handle.close();
+  });
+});
