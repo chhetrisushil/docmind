@@ -1,4 +1,4 @@
-import { type Intent, intentOf } from "@docmind/contracts";
+import { type DocumentProgressEvent, type Intent, intentOf } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
@@ -45,6 +45,7 @@ export class DmDocDetail extends LitElement {
   private tabTries = 0;
   /** Aborted when the page leaves: a confirmation still open then answers no. */
   private leaving = new AbortController();
+  private started = false;
   constructor() {
     super();
     this.missing = false;
@@ -60,9 +61,26 @@ export class DmDocDetail extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     if (this.leaving.signal.aborted) this.leaving = new AbortController();
+    this.start();
+  }
+  updated(): void {
+    this.start(); // the services arrive through the context after the first connect
+  }
+  /** Opens the documents progress stream (the library's source): a processing document turns Ready here without a reopen. */
+  private start(): void {
+    const services = this.ctx.services;
+    if (this.started || !services || !this.isConnected) return;
+    this.started = true;
+    services.uploads.startEvents((e) => this.onProgress(e));
+  }
+  private onProgress(e: DocumentProgressEvent | "resync"): void {
+    if (e !== "resync" && e.documentId !== this.route?.id) return;
+    this.session?.invalidate();
   }
   disconnectedCallback(): void {
     this.leaving.abort();
+    this.started = false;
+    this.ctx.services?.uploads.stopEvents();
     this.unwatch?.();
     this.unwatch = undefined;
     this.session = undefined;

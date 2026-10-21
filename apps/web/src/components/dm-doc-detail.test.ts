@@ -2,6 +2,7 @@ import type { DocumentDto, DocumentPassage } from "@docmind/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { Router } from "../router";
 import { createServices } from "../services";
+import { UploadsStore } from "../state/uploads";
 import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
 import "./dm-doc-detail";
@@ -101,8 +102,25 @@ function setup(
     deleteDocument: vi.fn(async () => {}),
     retryDocument: vi.fn(async () => ({})),
   };
-  const services = createServices({ api: api as never, router });
+  const sse: {
+    onFrame?: (f: { event: string; data: string; id: undefined }) => void;
+    close: ReturnType<typeof vi.fn>;
+  } = { close: vi.fn() };
+  const open = vi.fn((o: { onFrame: never }) => {
+    sse.onFrame = o.onFrame;
+    return { close: sse.close };
+  });
+  const uploads = new UploadsStore(api as never, open as never);
+  const services = createServices({ api: api as never, router, uploads, open: open as never });
+  const progress = (documentId: string, status: string) =>
+    sse.onFrame?.({
+      event: "progress",
+      data: JSON.stringify({ documentId, step: "finalize", status }),
+      id: undefined,
+    });
   return {
+    sse,
+    progress,
     services,
     api,
     content,
@@ -396,5 +414,17 @@ describe("dm-doc-detail", () => {
     release();
     await new Promise((r) => setTimeout(r, 20));
     expect(t.services.router.route).toEqual({ name: "settings" });
+  });
+
+  it("a processing document turns Ready when the progress stream says so, and the stream stops when the page leaves", async () => {
+    const t = setup({ name: "document", id: id(1) }, { ...mine, status: "parsing" });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(deepText(view(page))).toContain("Parsing"));
+    t.live.doc = mine;
+    t.progress(id(2), "ready"); // another document: no refresh
+    t.progress(id(1), "ready");
+    await vi.waitFor(() => expect(deepText(view(page))).toContain("Ready"));
+    page.remove();
+    expect(t.sse.close).toHaveBeenCalled();
   });
 });
