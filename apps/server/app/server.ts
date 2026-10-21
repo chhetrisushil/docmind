@@ -82,14 +82,8 @@ export const DEFAULT_HTTP_LIMITS: HttpLimits = {
   maxConnections: DEFAULT_MAX_CONNECTIONS,
   maxHeadersCount: 100,
   // The upload streams a multipart body; the event stream is open-ended by design, and the chat stream is open-ended too.
-  // The static fallback streams files, and a slow client must not be cut after the headers.
-  streamingRoutes: new Set([
-    UPLOAD_ROUTE,
-    EVENTS_ROUTE,
-    CHAT_STREAM_ROUTE,
-    "GET (web)",
-    "HEAD (web)",
-  ]),
+  // Not the static fallback: it is unauthenticated, so a client that stops reading must still be cut by the timer.
+  streamingRoutes: new Set([UPLOAD_ROUTE, EVENTS_ROUTE, CHAT_STREAM_ROUTE]),
 };
 
 /** `DOCMIND_MAX_CONNECTIONS` (default 2000, at most 65535); a bad value fails the boot. */
