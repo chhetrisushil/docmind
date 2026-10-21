@@ -6,6 +6,7 @@ import {
   type ReadModelStore,
   type SensitiveMap,
 } from "@loom/plugin-read-model";
+import { type UserExecutionLister, forgetUserRows } from "../status/forgetUser";
 import { chatIdOfConversation } from "./ids";
 import { CHAT_ACTIVITY_MODEL } from "./sessions";
 
@@ -119,6 +120,8 @@ export interface ChatActivityOptions {
   source: ReadModelEventSource;
   /** The same map the ingest status computes after `defineConfig` (`statusSensitive`). */
   sensitive: SensitiveMap;
+  /** User erasure's narrow read of the user's remaining rows (Task 167). Absent: `forgetUser` purges by scope only. */
+  userExecutions?: UserExecutionLister;
   onError?(err: unknown): void;
 }
 
@@ -155,6 +158,17 @@ export class ChatActivity {
   };
 
   /** Wait for every fold scheduled so far. */
+  /** User erasure: tombstones every chat-activity row of the user, the neutral rows of their ingest and title executions included. */
+  forgetUser(userId: string): Promise<number> {
+    return forgetUserRows(
+      this.service,
+      CHAT_ACTIVITY_MODEL,
+      userId,
+      this.o.userExecutions,
+      this.o.source,
+    );
+  }
+
   async drain(): Promise<void> {
     await this.service.drain();
   }
