@@ -14,6 +14,7 @@ type Params = Record<string, string | number>;
 export class DmDocDetail extends LitElement {
   static properties = {
     missing: { state: true },
+    broken: { state: true },
     served: { state: true },
     failed: { state: true },
   };
@@ -23,10 +24,13 @@ export class DmDocDetail extends LitElement {
       :host { display: block; padding: 24px; max-width: 1000px; margin: 0 auto; }
       header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
       header .grow { flex: 1; }
-      [data-not-found] { display: grid; gap: 8px; padding: 32px 0; justify-items: start; }
+      [data-not-found], [data-load-failed] { display: grid; gap: 8px; padding: 32px 0; justify-items: start; }
     `,
   ];
+  /** The first read of this route's document failed (the server answers a missing and a foreign one alike, so this may also be a transient failure). */
   declare missing: boolean;
+  /** A read failed after the document had been served: a load problem, never "not found". */
+  declare broken: boolean;
   /** The server answered for this route's document: only then does the page hold its id. */
   declare served: boolean;
   declare failed: boolean;
@@ -37,12 +41,14 @@ export class DmDocDetail extends LitElement {
   private tabDone = false;
   private params: Params | undefined;
   private paramsKey = "";
-  private seenKey = "";
+  private everServed = false;
+  private tabTries = 0;
   /** Aborted when the page leaves: a confirmation still open then answers no. */
   private leaving = new AbortController();
   constructor() {
     super();
     this.missing = false;
+    this.broken = false;
     this.served = false;
     this.failed = false;
   }
@@ -67,7 +73,15 @@ export class DmDocDetail extends LitElement {
   private heldId(): string | undefined {
     const route = this.route;
     const s = this.session;
-    if (!route || !s || this.missing || s.statusOf("doc-status") !== "ready") return undefined;
+    if (
+      !route ||
+      !s ||
+      !this.served ||
+      this.missing ||
+      this.broken ||
+      s.statusOf("doc-status") !== "ready"
+    )
+      return undefined;
     return route.id;
   }
 
@@ -76,12 +90,14 @@ export class DmDocDetail extends LitElement {
     this.session = session; // a new view session: nothing held from the old one outlives it
     this.upto = 20;
     this.tabDone = false;
+    this.tabTries = 0;
     this.unwatch?.();
     const check = () => {
       if (this.session !== session) return;
       const state = session.statusOf("doc-status");
       if (state === "error") {
-        this.missing = true;
+        if (this.everServed) this.broken = true;
+        else this.missing = true;
         this.served = false;
         this.session = undefined;
         this.unwatch?.();
@@ -89,6 +105,7 @@ export class DmDocDetail extends LitElement {
         return;
       }
       this.served = state === "ready";
+      if (this.served) this.everServed = true;
       const status = session.valueOf("doc-status") as { level?: unknown } | undefined;
       this.failed = this.served && status?.level === "critical";
       this.selectContentTab();
@@ -99,7 +116,8 @@ export class DmDocDetail extends LitElement {
 
   /** A deep link to a passage opens the Content tab, once; the server marks the passage it served. */
   private selectContentTab(): void {
-    if (this.tabDone || !this.route?.passage) return;
+    if (this.tabDone || this.tabTries >= 20 || !this.route?.passage) return;
+    this.tabTries++;
     const tabs = this.renderRoot
       .querySelector("dm-view")
       ?.shadowRoot?.querySelectorAll("[role=tab]");
@@ -122,6 +140,7 @@ export class DmDocDetail extends LitElement {
       session,
       documentId,
       upto: () => this.upto,
+      active: () => this.isConnected && this.route?.id === documentId,
       confirm: (h, b, l, d) => confirmDialog(h, b, l, d, this.leaving.signal),
       ...extra,
     });
@@ -154,34 +173,46 @@ export class DmDocDetail extends LitElement {
     if (id === undefined || !router) return;
     void this.run(
       { type: "document.delete", id },
-      { onDeleted: () => router.navigate({ name: "documents" }) },
+      {
+        onDeleted: () => {
+          if (this.isConnected && this.route?.id === id) router.navigate({ name: "documents" });
+        },
+      },
     );
+  }
+
+  protected willUpdate(): void {
+    const route = this.route;
+    if (!route) return;
+    const key = `${route.id}|${route.passage ?? ""}`;
+    if (key === this.paramsKey) return;
+    this.paramsKey = key; // one params object per route, so a re-render never resets the page size
+    this.params = { id: route.id, upto: 20, ...(route.passage && { passage: route.passage }) };
+    this.missing = false;
+    this.broken = false;
+    this.served = false;
+    this.failed = false;
+    this.everServed = false;
+    this.upto = 20;
+    this.tabDone = false;
+    this.tabTries = 0;
+  }
+
+  /** Mounts the view again: the sticky problem state is cleared and the experience is fetched anew. */
+  private tryAgain(): void {
+    this.missing = false;
+    this.broken = false;
   }
 
   render() {
     const route = this.route;
     if (!route) return html``;
-    const key = `${route.id}|${route.passage ?? ""}`;
-    if (key !== this.paramsKey) {
-      this.paramsKey = key; // one params object per route, so a re-render never resets the page size
-      this.params = { id: route.id, upto: 20, ...(route.passage && { passage: route.passage }) };
-    }
-    if (key !== this.seenKey) {
-      if (this.seenKey !== "") {
-        this.missing = false;
-        this.served = false;
-        this.failed = false;
-        this.upto = 20;
-        this.tabDone = false;
-      }
-      this.seenKey = key;
-    }
     return html`
       <header>
         <a href="/documents" class="btn ghost" data-back><dm-icon name="caret-left"></dm-icon>Documents</a>
         <span class="grow"></span>
         ${
-          this.missing
+          this.missing || this.broken
             ? null
             : html`
           ${this.failed ? html`<button class="btn secondary" data-retry @click=${() => this.retry()}>Retry</button>` : null}
@@ -191,8 +222,10 @@ export class DmDocDetail extends LitElement {
       </header>
       ${
         this.missing
-          ? html`<div data-not-found><h1>Document not found.</h1><p class="muted">It may have been deleted.</p><a href="/documents">Back to documents</a></div>`
-          : html`<dm-view name="detail" .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
+          ? html`<div data-not-found><h1>Document not found.</h1><p class="muted">It may have been deleted, or the read failed.</p><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
+          : this.broken
+            ? html`<div data-load-failed><h1>Couldn't load this document.</h1><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
+            : html`<dm-view name="detail" .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
       }`;
   }
 }

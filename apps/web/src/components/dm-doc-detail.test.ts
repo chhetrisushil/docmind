@@ -77,9 +77,13 @@ function setup(
   const content = vi.fn(async (a: { id: string; upto: number }) =>
     doc ? { items: passages.slice(0, a.upto), more: a.upto < passages.length } : null,
   );
+  const live = { doc, fail: false };
   const ui = fakeUi({
     documents: async () => ({ items: [], truncated: false }),
-    document: async (a) => (doc && a.id === doc.id ? doc : null),
+    document: async (a) => {
+      if (live.fail) throw new Error("down");
+      return live.doc && a.id === live.doc.id ? live.doc : null;
+    },
     content,
     chats: async () => [],
   });
@@ -103,6 +107,7 @@ function setup(
     api,
     content,
     ui,
+    live,
     mount: () => mountWith<HTMLElement>(services, "dm-doc-detail"),
   };
 }
@@ -314,5 +319,82 @@ describe("dm-doc-detail", () => {
     expect(out).toMatchObject({ ok: false, reason: "stale" });
     expect(t.api.createChat).not.toHaveBeenCalled();
     expect(t.services.toasts.get().length).toBe(1);
+  });
+
+  it("a missing document says not found and offers Try again, which mounts the view again", async () => {
+    const t = setup({ name: "document", id: id(1) }, null);
+    const page = await t.mount();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.querySelector("[data-not-found]")).not.toBeNull(),
+    );
+    t.live.doc = mine;
+    (page.shadowRoot?.querySelector("button[data-try-again]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(tabs(page).length).toBe(3));
+    expect(page.shadowRoot?.querySelector("[data-not-found]")).toBeNull();
+  });
+
+  it("a read that fails after the page was served is a load problem with Try again, never not found", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(view(page).session?.statusOf("doc-status")).toBe("ready"));
+    t.live.fail = true;
+    (view(page).session as unknown as { invalidate(h?: string): void }).invalidate();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.querySelector("[data-load-failed]")?.textContent).toContain(
+        "Couldn't load this document.",
+      ),
+    );
+    expect(page.shadowRoot?.textContent).not.toContain("Document not found.");
+    t.live.fail = false;
+    (page.shadowRoot?.querySelector("button[data-try-again]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(tabs(page).length).toBe(3));
+  });
+
+  it("Retry is absent for a ready document, and the header buttons wait until the document is served", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    const ask = () => page.shadowRoot?.querySelector("button[data-ask]") as HTMLButtonElement;
+    expect(ask().disabled).toBe(true);
+    expect(
+      (page.shadowRoot?.querySelector("button[data-delete]") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await vi.waitFor(() => expect(ask().disabled).toBe(false));
+    expect(page.shadowRoot?.querySelector("button[data-retry]")).toBeNull();
+  });
+
+  it("a passage the served content does not hold is harmless: the Content tab opens, nothing fails", async () => {
+    const t = setup({ name: "document", id: id(1), passage: id(999) });
+    const page = await t.mount();
+    await vi.waitFor(() =>
+      expect(
+        view(page).shadowRoot?.querySelector("[role=tab][aria-selected=true]")?.textContent?.trim(),
+      ).toBe("Content"),
+    );
+    expect(t.services.toasts.get()).toEqual([]);
+  });
+
+  it("a delete that finishes after the user went elsewhere does not move the route", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(view(page).session?.statusOf("doc-status")).toBe("ready"));
+    let release: () => void = () => {};
+    t.api.deleteDocument.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          release = () => r();
+        }),
+    );
+    (page.shadowRoot?.querySelector("button[data-delete]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog")).not.toBeNull());
+    (
+      [...document.querySelectorAll("dm-dialog button")].find(
+        (b) => b.textContent === "Delete",
+      ) as HTMLButtonElement
+    ).click();
+    await vi.waitFor(() => expect(t.api.deleteDocument).toHaveBeenCalled());
+    t.services.router.navigate({ name: "settings" });
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.services.router.route).toEqual({ name: "settings" });
   });
 });
