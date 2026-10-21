@@ -89,7 +89,7 @@ export class AuthStore extends Store<AuthState> {
         setTimeout(() => {
           const epoch = this.deferred;
           this.deferred = undefined;
-          if (this.holds === 0 && epoch !== undefined) this.expired(epoch);
+          if (epoch !== undefined) this.expired(epoch); // re-defers itself if a new hold began meanwhile; a newer session ignores it
         }, 0);
       }
     }

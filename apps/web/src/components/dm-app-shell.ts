@@ -50,10 +50,23 @@ export class DmAppShell extends LitElement {
   private route: unknown;
   protected willUpdate(): void {
     const route = this.ctx.services?.router.get();
-    if (this.route !== undefined && route !== this.route) this.menuOpen = false; // any route change closes the overlay
+    if (this.route !== undefined && route !== this.route && this.menuOpen) {
+      // any route change closes the overlay; focus that was inside it would fall to the body, so it goes to the Menu button
+      const inside = this.renderRoot.querySelector("aside");
+      const active = document.activeElement;
+      this.refocus =
+        inside?.contains(this.shadowRoot?.activeElement ?? null) === true ||
+        (active !== null && this.contains(active) && active.closest("[slot=sidebar]") !== null);
+      this.menuOpen = false;
+    }
     this.route = route;
   }
+  private refocus = false;
   protected updated(changed: Map<string, unknown>): void {
+    if (this.refocus) {
+      this.refocus = false;
+      this.renderRoot.querySelector<HTMLElement>("[data-menu]")?.focus();
+    }
     if (changed.get("menuOpen") === false && this.menuOpen)
       this.renderRoot.querySelector<HTMLElement>("#sidebar [data-new-chat]")?.focus();
   }

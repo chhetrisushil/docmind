@@ -35,44 +35,81 @@ export class DmView extends LitElement {
       this.session.setParams(this.params);
   }
 
+  /** Bumped by every open and every disconnect: an await that finds it moved belongs to a view nobody wants any more. */
+  private generation = 0;
+  private fetching: AbortController | undefined;
+
   private async open(): Promise<void> {
     const svc = this.ctx.services;
     const name = this.name;
     if (!svc || name === undefined) return;
+    const mine = ++this.generation;
+    const current = () => mine === this.generation && this.isConnected;
+    this.fetching?.abort();
+    const ac = new AbortController();
+    this.fetching = ac;
     this.opened = name;
     this.session?.dispose();
     this.session = undefined;
     this.phase = "loading";
+    let session: ViewSession | undefined;
     try {
-      const session = await ViewSession.open(svc.api, name, {
+      session = await ViewSession.open(svc.api, name, {
+        signal: ac.signal,
         onStale: () =>
           svc.toasts.push({
             kind: "err",
             text: "This view changed. It has been refreshed; try again.",
           }),
+        onFailed: () => {
+          if (this.session !== session) return;
+          this.phase = "failed";
+          this.dispatchEvent(new CustomEvent("view-problem", { bubbles: true, composed: true }));
+        },
       });
-      if (this.name !== name || !this.isConnected) return session.dispose();
+      if (!current()) return session.dispose();
       this.session = session;
       session.start(this.params);
       await this.updateComplete;
+      if (!current()) return this.drop(session);
       session.mount(this.renderRoot.querySelector("#host") as HTMLElement, (a) => this.onAct?.(a));
       this.phase = "ready";
       this.dispatchEvent(
         new CustomEvent("view-ready", { detail: { session }, bubbles: true, composed: true }),
       );
     } catch (err) {
+      this.drop(session);
+      if (!current()) return; // nobody is waiting for this answer
       report("view", err);
       this.phase = "failed"; // `opened` stays set: only "Try again" asks again, so a failing fetch cannot loop
-
       this.dispatchEvent(new CustomEvent("view-problem", { bubbles: true, composed: true }));
     }
   }
 
+  private drop(session: ViewSession | undefined): void {
+    if (this.session === session) this.session = undefined;
+    session?.dispose();
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    if (this.hasUpdated) this.requestUpdate(); // a reconnect opens the view again
+  }
+
   disconnectedCallback(): void {
-    this.session?.dispose();
+    this.generation += 1;
+    this.fetching?.abort();
+    this.fetching = undefined;
+    const session = this.session;
     this.session = undefined;
     this.opened = undefined;
-    super.disconnectedCallback();
+    try {
+      session?.dispose();
+    } catch (err) {
+      report("view", err);
+    } finally {
+      super.disconnectedCallback();
+    }
   }
 
   render() {

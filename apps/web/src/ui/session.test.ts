@@ -191,3 +191,160 @@ describe("ViewSession", () => {
     expect(t.ui.calls.views).toEqual(["chat"]);
   });
 });
+
+describe("ViewSession: bounds and teardown", () => {
+  const mismatch = (requests: readonly unknown[]) =>
+    requests.map(() => ({
+      state: "error",
+      finding: { code: "version-mismatch", severity: "error", message: "m" },
+    }));
+
+  it("stops reloading when the server keeps answering version-mismatch, and says the view failed", async () => {
+    const t = await open("library");
+    const api = {
+      ...t.ui.api,
+      uiHydrate: vi.fn(async (_view: unknown, requests: readonly unknown[]) => mismatch(requests)),
+    };
+    const onFailed = vi.fn();
+    const s = await ViewSession.open(api as never, "library", { onFailed });
+    s.start();
+    s.mount(t.host, () => undefined);
+    await vi.waitFor(() => expect(onFailed).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(t.ui.calls.views.length).toBe(4); // the helper's own open, this session's open and two reloads
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    s.dispose();
+  });
+
+  it("a clean hydrate round gives the reload budget back", async () => {
+    const t = await open("library");
+    const real = t.ui.api.uiHydrate;
+    let bad = 2;
+    const api = {
+      ...t.ui.api,
+      uiHydrate: vi.fn(async (view: never, requests: never[], signal: never) => {
+        if (bad > 0) {
+          bad -= 1;
+          return mismatch(requests);
+        }
+        return real(view, requests, signal);
+      }),
+    };
+    const onFailed = vi.fn();
+    const s = await ViewSession.open(api as never, "library", { onFailed });
+    s.start();
+    s.mount(t.host, () => undefined);
+    await vi.waitFor(() => expect(s.statusOf("documents")).toBe("ready"));
+    bad = 2;
+    s.invalidate();
+    await vi.waitFor(() => expect(bad).toBe(0));
+    await vi.waitFor(() => expect(s.statusOf("documents")).toBe("ready"));
+    expect(onFailed).not.toHaveBeenCalled();
+    s.dispose();
+  });
+
+  it("a reload recomposes with one batch, not one request per handle", async () => {
+    const t = await open("library");
+    t.session.start();
+    t.mount();
+    await vi.waitFor(() => expect(t.session.statusOf("documents")).toBe("ready"));
+    const before = t.ui.calls.hydrate.length;
+    await t.session.reload();
+    await vi.waitFor(() => expect(t.session.statusOf("documents")).toBe("ready"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.ui.calls.hydrate.length - before).toBeLessThanOrEqual(1);
+  });
+
+  it("dispose still stops the controller when a widget will not dispose, and does not throw", async () => {
+    const t = await open("library");
+    t.session.start();
+    t.mount();
+    const spy = vi.spyOn(t.session.split, "dispose");
+    (t.session as unknown as { handle: unknown }).handle = {
+      dispose() {
+        throw new Error("widget");
+      },
+      head: () => ({}),
+    };
+    expect(() => t.session.dispose()).not.toThrow();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the view fetch of a reload on dispose", async () => {
+    const t = await open("library");
+    let seen: AbortSignal | undefined;
+    const api = {
+      ...t.ui.api,
+      uiView: vi.fn(async (_n: unknown, signal?: AbortSignal) => {
+        seen = signal;
+        return new Promise<never>(() => {});
+      }),
+    };
+    const s = await ViewSession.open(
+      { ...t.ui.api, uiView: t.ui.api.uiView } as never,
+      "library",
+      {},
+    );
+    (s as unknown as { api: unknown }).api = api;
+    void s.reload();
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    s.dispose();
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it("mount on a disposed session draws nothing", async () => {
+    const t = await open("library");
+    t.session.dispose();
+    t.mount();
+    expect(t.host.children.length).toBe(0);
+  });
+});
+
+describe("ViewSession: freshness of moving reads", () => {
+  async function mounted() {
+    const t = await open("library");
+    t.session.start();
+    t.mount();
+    await vi.waitFor(() => expect(t.session.statusOf("documents")).toBe("ready"));
+    const head = (
+      t.session as unknown as {
+        handle: { head(): { experienceId: string; versionHash: string; compile?: string } };
+      }
+    ).handle.head();
+    const stamp = (extra: object = {}) => ({
+      experienceId: head.experienceId,
+      versionHash: head.versionHash,
+      ...(head.compile !== undefined && { compile: head.compile }),
+      ...extra,
+    });
+    return { t, stamp };
+  }
+  it("a moving read is fresh when only the data moved; an ordinary action is not", async () => {
+    const { t, stamp } = await mounted();
+    const moved = stamp({ binding: { seq: 99999 } });
+    expect(t.session.isFresh({ type: "LOAD_OLDER", widgetId: "chat", viewedVersion: moved })).toBe(
+      true,
+    );
+    expect(t.session.isFresh({ type: "SELECT", widgetId: "filter", viewedVersion: moved })).toBe(
+      false,
+    );
+  });
+  it("a moving read is refused when the composition changed or the stamp is missing", async () => {
+    const { t, stamp } = await mounted();
+    expect(
+      t.session.isFresh({
+        type: "LOAD_OLDER",
+        widgetId: "chat",
+        viewedVersion: stamp({ versionHash: "sha256:old" }),
+      }),
+    ).toBe(false);
+    expect(t.session.isFresh({ type: "LOAD_OLDER", widgetId: "chat" })).toBe(false);
+    expect(
+      t.session.isFresh({
+        type: "EDIT_TURN",
+        widgetId: "chat",
+        viewedVersion: stamp({ compile: "x" }),
+      }),
+    ).toBe(false);
+  });
+});

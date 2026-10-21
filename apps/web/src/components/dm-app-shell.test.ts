@@ -125,6 +125,27 @@ describe("dm-app-shell", () => {
     expect(q(el, "aside").hasAttribute("data-open")).toBe(false);
   });
 
+  it("navigation closing the menu returns focus to the Menu button only if focus was inside the menu", async () => {
+    const { services, el } = await setup();
+    const menu = q<HTMLButtonElement>(el, "button[data-menu]");
+    menu.click();
+    await settle(el);
+    expect(q<HTMLElement>(el, "aside").contains(el.shadowRoot?.activeElement ?? null)).toBe(true);
+    services.router.navigate({ name: "settings" });
+    await settle(el);
+    expect(el.shadowRoot?.activeElement).toBe(menu);
+    menu.click();
+    await settle(el);
+    (el.shadowRoot?.activeElement as HTMLElement).blur();
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    services.router.navigate({ name: "documents" });
+    await settle(el);
+    expect(q(el, "aside").hasAttribute("data-open")).toBe(false);
+    expect(document.activeElement).toBe(outside);
+  });
+
   it("starts with a skip link to the main region, and following it focuses main without a navigation", async () => {
     const { services, el } = await setup();
     const skip = q<HTMLAnchorElement>(el, "a[data-skip]");

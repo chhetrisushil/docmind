@@ -158,6 +158,23 @@ describe("AuthStore.withoutExpiry", () => {
     await tick();
     expect(store.get().status).toBe("anonymous");
   });
+  it("does not lose the replay when a new hold starts inside the timer window", async () => {
+    const store = await signedIn();
+    await store.withoutExpiry(async () => store.expired(store.epoch));
+    let release!: () => void;
+    const second = store.withoutExpiry(
+      () =>
+        new Promise<void>((r) => {
+          release = r;
+        }),
+    );
+    await tick();
+    expect(store.get().status).toBe("signed-in"); // held again
+    release();
+    await second;
+    await tick();
+    expect(store.get().status).toBe("anonymous");
+  });
   it("lets the caller handle the 401 of its own call first: its signedOut makes the replay a no-op", async () => {
     const store = await signedIn();
     const seen = vi.fn();
