@@ -47,6 +47,16 @@ export class DmAppShell extends LitElement {
     await svc.auth.logout();
     svc.router.navigate({ name: "sign-in" }, { replace: true });
   }
+  private route: unknown;
+  protected willUpdate(): void {
+    const route = this.ctx.services?.router.get();
+    if (this.route !== undefined && route !== this.route) this.menuOpen = false; // any route change closes the overlay
+    this.route = route;
+  }
+  protected updated(changed: Map<string, unknown>): void {
+    if (changed.get("menuOpen") === false && this.menuOpen)
+      this.renderRoot.querySelector<HTMLElement>("#sidebar [data-new-chat]")?.focus();
+  }
   private toggleMenu() {
     this.menuOpen = !this.menuOpen;
   }
@@ -54,7 +64,7 @@ export class DmAppShell extends LitElement {
     this.ctx.services?.router.navigate({ name: "chat" });
     this.menuOpen = false;
   }
-  private onAsideKey(e: KeyboardEvent) {
+  private onMenuKey(e: KeyboardEvent) {
     if (e.key !== "Escape" || !this.menuOpen) return;
     this.menuOpen = false;
     this.renderRoot.querySelector<HTMLElement>("[data-menu]")?.focus();
@@ -76,8 +86,8 @@ export class DmAppShell extends LitElement {
     const here = route?.name === "documents" || route?.name === "document";
     return html`
       <a class="skip" data-skip href="#main" @click=${this.skip}>Skip to main content</a>
-      <button class="btn secondary menu" data-menu aria-expanded=${this.menuOpen} aria-controls="sidebar" @click=${this.toggleMenu}><dm-icon name="sidebar-simple"></dm-icon>Menu</button>
-      <aside id="sidebar" ?data-open=${this.menuOpen} @keydown=${this.onAsideKey}>
+      <button class="btn secondary menu" data-menu aria-expanded=${this.menuOpen} aria-controls="sidebar" @click=${this.toggleMenu} @keydown=${this.onMenuKey}><dm-icon name="sidebar-simple"></dm-icon>Menu</button>
+      <aside id="sidebar" ?data-open=${this.menuOpen} @keydown=${this.onMenuKey}>
         <header><span class="logo"><dm-icon name="book-open-text"></dm-icon></span><span class="brand">DocMind</span></header>
         <nav aria-label="Primary" class="block">
           <button class="btn primary" data-new-chat @click=${this.newChat}><dm-icon name="plus"></dm-icon>New chat</button>
@@ -91,7 +101,7 @@ export class DmAppShell extends LitElement {
           <button class="btn icon" data-sign-out aria-label="Sign out" @click=${this.signOut}><dm-icon name="sign-out"></dm-icon></button>
         </footer>
       </aside>
-      <main id="main" tabindex="-1"><slot></slot></main>`;
+      <main id="main" tabindex="-1" ?inert=${this.menuOpen}><slot></slot></main>`;
   }
 }
 customElements.define("dm-app-shell", DmAppShell);
