@@ -199,11 +199,9 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
     cannot log in (the email was replaced).
   - The eraser runs at most two erasures at a time. An erasure that is waiting out a retry delay holds neither
     a slot nor its lock, so stuck erasures do not hold up the others; the stuck lines tell which are stuck.
-  - =pending()= and =erased()= (the lists behind the boot resume and the post-boot re-tombstoning) return at most
-    1000 requests. With more than 1000 pending requests some would not be found until others finish; this
-    is far beyond v1 scale. The same cap bounds the re-tombstoning after a read-model rebuild or version bump:
-    erased users beyond the newest 1000 are not tombstoned again. Their rows come back content-free, but with
-    the user id in the execution id.
+  - The lists behind the boot resume, the rescan and the post-boot re-tombstoning (=pending()=, =erased()=) page
+    through =erasure_requests= by user id, 500 rows per call, so no request is skipped. Boot reads every request
+    row once.
 - Backups: keep database backups (Postgres dumps, WAL archives, the key-store rows) for at most 30 days.
   An erasure cannot reach a copy that already exists, so the copy's life is the erasure's last step. After
   restoring a backup, re-run erasures made since it was taken: insert their ids into =erasure_requests=
