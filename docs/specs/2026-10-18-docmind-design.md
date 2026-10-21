@@ -171,6 +171,13 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
 3. **Event log.** Loom streams are tenant-scoped (Loom tenancy). DocMind's chat stream route is owner-scoped (404 otherwise, so 404 across tenants).
 4. **Blobs.** Paths are tenant- and user-prefixed, and the resolver authorizes the tenant (Loom
    media-gallery pattern).
+5. **Cross-tenant paths: four among the `docmind_` functions and the Loom roles.** Everything that is not
+   listed here or in the older class below runs inside `withTenant`.
+   1. Loom's recovery scan (it resumes executions of every tenant after a restart).
+   2. The read-model writer (`docmind_loom`): it folds and tombstones rows of every tenant, and the policy lets only that role do it.
+   3. The upload sweep's two `SECURITY DEFINER` functions (stale uploads and orphaned status rows, ids only).
+   4. Erasure: `docmind_erasure_pending(p_state)` (lists the durable requests that are `pending` or `done`, at most 1000), `docmind_erasure_mark` (records one step; it enforces the step order), `docmind_erasure_status(p_receipt_hash)` (takes the hash of an erasure receipt and returns only a state, `pending`, `done` or NULL, for the unauthenticated receipt route) and `docmind_delete_empty_tenant` (deletes a tenant only when no user is left). Each pins `search_path`, is revoked from PUBLIC and granted to `docmind_app` alone.
+   Counted by name, paths 3 and 4 are six `docmind_` definer functions. The older definer functions are a separate class and are not counted above: the login, session and sign-up functions of 0005 (they run before a tenant is known and return one row), the throttle functions (0006), the key-store functions `key_get`, `key_put`, `key_destroy` and `key_was_destroyed` (0007) and `migrations_read` (0017).
 
 **Quotas** (per tenant, configurable):
 
@@ -183,27 +190,68 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
   tenant erases all of its users.
 - **Key store.** `PostgresKeyStore` stores each DEK wrapped by a master key-encryption key (KEK). In
   v1 the KEK comes from an env var or file, identified by `kek_id`; a cloud KMS can replace it later.
-  `destroy(subject)` deletes the row, which is irreversible.
+  `destroy(subject)` deletes the wrapped key and leaves a tombstone row (the subject id and the time of destruction, no key material), so a destroyed subject can never be given a new key. It is irreversible.
 - **What is encrypted under the user's DEK:**
 
 | Store | Mechanism | After erasure |
 |---|---|---|
 | Loom event log | `EncryptingEventStore` | Reads yield `{ $shredded }` |
 | Loom snapshots | `EncryptingSnapshotStore` with `sealState: true`, same KeyStore | Unreadable |
-| Blobs | Envelope-encrypted before writing to `ContentStore` | Ciphertext only |
-| `*_enc` columns | App-level AEAD with the user's DEK: `chat_sessions.title_enc` (`chat:<id>:title`), `chat_turn_items.body_enc` (`chatitem:<id>`), `chat_reasoning_texts.text_enc` (`chatreasoning:<chatId>:<address>`) and the document columns | Rows also hard-deleted |
+| Blobs | Envelope-encrypted before writing to `ContentStore` | Ciphertext only; the files are deleted at step 5 (`blobs`) |
+| `*_enc` columns | App-level AEAD with the user's DEK: `chat_sessions.title_enc` (`chat:<id>:title`), `chat_turn_items.body_enc` (`chatitem:<id>`), `chat_reasoning_texts.text_enc` (`chatreasoning:<chatId>:<address>`) and the document columns | Unreadable at step 2 (`shred`); rows hard-deleted at step 4 (`rows`) |
 | Chat event paths | Every conversation event path that can hold content is sealed, including `STEP_COMPLETED` `output.reasoning` and `output.layout` and `LLM_REASONING_CAPTURED` `parts` (signatures, text references, digests, sizes) | Reads yield `{ $shredded }` |
 | `chunks.embedding` | **Plaintext** (pgvector must compare raw vectors) | Hard-deleted |
 | `chunk_links`, `entities.name_key`, `chunk_entities` | **Plaintext** metadata (link existence and weight; an HMAC; ids) | Hard-deleted with their rows |
 
-- **Erasure flow.** `DELETE /api/me` runs these steps in order:
-  1. `app.eraseSubject(userId)`. This is liveness-gated: shredding is deferred while any of the
-     user's executions is still live.
-  2. Hard-delete the user's rows. M5 must also cover `chat_sessions`, `chat_turn_items`, `chat_reasoning_texts` and the `chat-activity` read-model rows.
-  3. Delete the user's blobs.
-  4. `KeyStore.destroy(userId)`.
+- **Erasure flow.** `DELETE /api/me` (body `{password}`) is behind the session and the origin guard. It
+  checks the password with the login hasher under the login throttle (a wrong password is 401
+  `invalid_credentials`). Just before the transaction, through the pool, it clears the email's login and
+  sign-up throttle counters (they stay cleared on the 409 and 500 paths, which is harmless). In one
+  transaction it then inserts a durable `erasure_requests` row (holding the sha256 of a receipt token, never the
+  token), deletes every session of the user, sets `users.erasing_at` and replaces `users.email` with
+  `erased:<user id>`. A scrub that changes no row rolls the whole transaction back. A one-way trigger keeps
+  `erasing_at` and the scrubbed email final. If an erasure is already recorded for the user the route
+  answers 409 `erasure_in_progress`. Otherwise it answers **202** `{erasure: "accepted", receipt}` (the
+  receipt is 32 random bytes, base64url, shown once) and clears the cookie. It then closes the user's event
+  streams at once and starts the `Eraser` in the background. From then on login cannot match the old email,
+  the old email is in no table, and **signing up with the same email works at once**, as a new account,
+  even while the erasure is pending. `GET /api/erasure/:receipt` (no session, throttled per client
+  address, `Cache-Control: no-store`) answers 200 `{state: "pending" | "done"}`, or 404 for an unknown or
+  malformed receipt. The eraser runs these steps in order. The order is enforced in SQL
+  (`docmind_erasure_mark` accepts only the next step), each step is idempotent and recorded on the request,
+  so a crash resumes at the first unrecorded step:
+  1. `stop`: close the user's event streams, cancel the ingest generations of each document (the recent
+     ones; older generations are terminal by the retry rule), stop and close each chat, cancel each
+     chat-title execution.
+  2. `shred`: `app.eraseSubject(userId, undefined, {parked: "shred"})`. The tenant is deliberately
+     undefined: DocMind has one subject partition, and with a tenant id Loom's index answers `unknown` and
+     writes no tombstones. Loom cancels the user's parked conversations, appends the shred tombstones and
+     **destroys the key** (`shredSubject` calls `KeyStore.destroy` itself): the user's sealed columns and
+     blobs are unreadable from this point. A conversation that is mid-turn still defers the shred; the
+     eraser stops it again and retries. Loom is pinned at a revision that includes the fixes found by the
+     erasure proof: the cancel race (Loom #689) and the fenced shred (Loom #690).
+  3. `readModels`: `forgetUser` refreshes, then tombstones, the user's rows in both read models
+     (`ingest-status` and `chat-activity`).
+  4. `rows`: delete the `users` row (the foreign keys cascade to sessions, documents, chunks, parsed text,
+     links, entities, chats, turn items and reasoning texts), delete the user's leftover Loom timers and
+     leases, and delete the personal tenant if no user is left in it.
+  5. `blobs`: delete the user's blob directory (and the tenant's, once the tenant is gone).
+  6. `key`: destroy the key again (idempotent, and it covers a user the shred never saw), assert it is
+     destroyed, and sweep the blobs once more (an upload that was already streaming when the erase began).
+  7. `done`.
 
-  Each step is idempotent, so a failed erasure can be re-run.
+  **Running it.** One process runs one erasure per user (a map) and at most `ERASURE_CONCURRENCY` = 2 at a
+  time; across processes a Postgres advisory lock `erasure:<user>`, held on a dedicated lock pool, keeps
+  one runner (a lost lock is re-acquired). A failing step is retried with a backoff from 1 s to 60 s,
+  without a limit. The eraser logs only the step name, the error class and the attempt (attempts 1 to 3,
+  then every 10th), never an id, email, receipt or content. After 10 attempts at one step it also logs
+  `erasure stuck <step> <ErrorClass> attempts=<n>`, and again every 10 attempts. It rescans the pending
+  requests every 5 minutes. At boot, after the read models have started, it resumes every pending request
+  and runs `forgetUser` again for every `done` one (a read-model refold could have re-created a row of an
+  erased execution). Every warning Loom emits is redacted before it is logged (ids become `<id>`, emails
+  become `<email>`). Loom's subject index is rebuilt at boot from the execution ids (`u_<uuid>`), and the
+  read models read the log through a tolerant source and skip shredded events, so a restart, a version
+  bump or a rebuild never trips over an erased user.
 - **Known trade-offs:**
   1. Embeddings in Postgres backups survive until those backups expire. Backups must be kept for a
      limited time (default 30 days), and this is documented in the operations runbook.
@@ -216,6 +264,38 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
   5. Copies retained by the LLM provider are outside the app's control. Requests carry only the
      content they need.
   6. Chats: `ord`, `kind` and `step_key` of a turn item and the capture event's `stepId`, `attempt`, `provider` and `model` are plaintext. The live reasoning, partial answer and stop registry live in process memory only. `DOCMIND_CHAT_ENVELOPE_KEY` signs inbox envelopes and is never logged. Crypto-shredding the owner's key leaves the references in the log dangling, which Loom reports as erased and treats as a hole in continuation.
+  7. What stays after an erasure, by design (decision D7), none of it readable content:
+     - Loom's `PAYLOAD_SHREDDED` tombstones, and in the log the execution ids (`u_<user>:...`, so the user
+       id in plaintext), event types, timestamps and the `EXECUTION_CANCELLED` reason `erased`. The payloads
+       are ciphertext under a destroyed key.
+     - The user id in the plaintext of the user's own flow-input and inbox-sender events.
+     - The app-constant system prompt and tool texts in plaintext events (they are the same for every user).
+     - The `data_keys` tombstone row (the subject id and the time of destruction, no key material), so a
+       destroyed subject can never be given a new key.
+     - The `__loom_erasure__` control stream: when a shred parks, Loom appends an `ERASURE_PENDING` event
+       there with the subject id in plaintext, and never removes it.
+     - `read_model_state` tombstoned rows (ids, no state), which stop a later catch-up from resurrecting a row.
+     - The `erasure_requests` row: user and tenant id, the sha256 of the receipt token, state, step names
+       and times.
+     - Backups, for up to 30 days (item 8).
+     Loom's events are not deleted outright, because its own consistency (continuations, tombstone
+     sequence numbers) depends on the log being whole.
+  8. Backups made before an erasure hold the user's rows, embeddings and ciphertext until they expire, and
+     a restored key-store backup holds the key. Backups are kept for at most 30 days (the operations
+     section of the README), and after any restore the erasure requests are re-run from `erasure_requests`
+     (`pending` ones resume by themselves; for a `done` one, insert it again as pending).
+  9. The erasure is asynchronous (202). Between the 202 and `done` the account is already unusable and its
+     email is already free (it is replaced in the request transaction), but some of its other rows may still
+     exist, for as long as a running chat turn keeps the shred waiting or a step keeps failing. The receipt
+     is the only way to see where it stands; whoever holds the token can read `pending` or `done` and
+     nothing else. A request that was committed but whose answer was lost (a 500 after commit) has no
+     receipt the user knows of; the erasure still runs (see the README runbook).
+  10. `pending()` and `erased()` list at most 1000 requests, and `get()` reads through `pending()`. With
+     more than 1000 pending requests some would not be found; no fifth definer function is wanted for
+     that, and the cap is far beyond v1 scale. The same cap bounds the post-boot re-tombstoning: after a
+     read-model rebuild or version bump (Loom's reset drops the tombstones), only the newest 1000 erased
+     users are tombstoned again. The rows of an older erased user come back content-free (`{}`), but with
+     the user id in `execution_id`, which is weaker than the "tombstoned rows" of trade-off 7.
 
 ## 5. Ingestion
 
@@ -506,7 +586,7 @@ Each milestone ends with something runnable.
 
 **M5 — Erasure**
 
-34. `DELETE /api/me` with an end-to-end non-recoverability integration test.
+34. `DELETE /api/me` with an end-to-end non-recoverability integration test. *(done, M5, Tasks 164 to 172)*
 
 **M6 — Web UI** (runnable: the full app in a browser)
 
