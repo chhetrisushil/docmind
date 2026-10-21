@@ -148,6 +148,22 @@ describe("dm-app-shell", () => {
     expect(document.activeElement).toBe(outside);
   });
 
+  it("a route change closes the menu and gives focus to the Menu button when focus was in the chat list", async () => {
+    const { services, el } = await setup();
+    const menu = q<HTMLButtonElement>(el, "button[data-menu]");
+    menu.click();
+    await settle(el);
+    const list = q<HTMLElement>(el, "dm-sessions");
+    const inner = document.createElement("button");
+    list.shadowRoot?.append(inner);
+    inner.focus();
+    expect(el.shadowRoot?.activeElement).toBe(list);
+    services.router.navigate({ name: "settings" });
+    await settle(el);
+    expect(q(el, "aside").hasAttribute("data-open")).toBe(false);
+    expect(el.shadowRoot?.activeElement).toBe(menu);
+  });
+
   it("starts with a skip link to the main region, and following it focuses main without a navigation", async () => {
     const { services, el } = await setup();
     const skip = q<HTMLAnchorElement>(el, "a[data-skip]");

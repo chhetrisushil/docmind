@@ -4,7 +4,7 @@ import { Router } from "../router";
 import { createServices } from "../services";
 import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
-import "./dm-sessions";
+import { SCHEDULE } from "./dm-sessions";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const chat = (n: number, title: string | null): ChatSessionDto => ({
@@ -29,6 +29,7 @@ function setup(path = "/chats") {
   });
   const api = {
     ...ui.api,
+    getChat: vi.fn(async (cid: string) => live.chats.find((c) => c.id === cid)),
     deleteChat: vi.fn(async (cid: string) => {
       live.chats = live.chats.filter((c) => c.id !== cid);
     }),
@@ -85,6 +86,15 @@ describe("dm-sessions", () => {
         .slice(0, 3),
     ).toEqual(["Open: Invoices", "Rename: Invoices", "Delete: Invoices"]);
   });
+  it("caps the search box at 100 characters, the most a search may be", async () => {
+    const t = setup();
+    const p = await t.mount();
+    await vi.waitFor(() => expect(rows(p)).toHaveLength(2));
+    const input = view(p)
+      ?.shadowRoot?.querySelector("lu-text-input")
+      ?.shadowRoot?.querySelector("input") as HTMLInputElement;
+    expect(input.maxLength).toBe(100);
+  });
   it("opens a chat", async () => {
     const t = setup();
     const p = await t.mount();
@@ -122,6 +132,26 @@ describe("dm-sessions", () => {
     await vi.waitFor(() => expect(rows(p)).toHaveLength(1));
     expect(t.services.router.route).toEqual({ name: "chat" });
   });
+  it("a chat actually titled New chat starts the rename dialog from that title; an untitled one starts empty", async () => {
+    const t = setup();
+    t.live.chats = [chat(1, "New chat"), chat(2, null)];
+    const p = await t.mount();
+    await vi.waitFor(() => expect(rows(p)).toHaveLength(2));
+    act(p, "Rename: New chat");
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog input")).not.toBeNull());
+    expect((document.querySelector("dm-dialog input") as HTMLInputElement).value).toBe("New chat");
+    (document.querySelector("dm-dialog button") as HTMLButtonElement).click(); // Cancel
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog")).toBeNull());
+    const a = view(p).onAct({
+      type: "TABLE_ROW_ACTION",
+      widgetId: "chats",
+      payload: { action: "rename", rowKey: id(2) },
+    });
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog input")).not.toBeNull());
+    expect((document.querySelector("dm-dialog input") as HTMLInputElement).value).toBe("");
+    (document.querySelector("dm-dialog button") as HTMLButtonElement).click();
+    await a;
+  });
   it("deleting another chat leaves the open one where it is", async () => {
     const t = setup(`/chats/${id(2)}`);
     const p = await t.mount();
@@ -153,7 +183,7 @@ describe("dm-sessions", () => {
     const p = await t.mount();
     await vi.waitFor(() => expect(rows(p)).toHaveLength(2));
     const queued: (() => void)[] = [];
-    (p as unknown as { schedule: (fn: () => void) => void }).schedule = (fn) => queued.push(fn);
+    (p as unknown as Record<symbol, unknown>)[SCHEDULE] = (fn: () => void) => queued.push(fn);
     const before = t.chatsReader.mock.calls.length;
     for (let i = 0; i < 20; i++) document.dispatchEvent(new CustomEvent("dm-chats-changed"));
     expect(queued).toHaveLength(1);

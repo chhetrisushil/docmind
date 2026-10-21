@@ -1,6 +1,7 @@
 import type { Intent } from "@docmind/contracts";
 import type { Api } from "../api/client";
 import { ApiError } from "../api/http";
+import { report } from "../report";
 import type { Router } from "../router";
 import type { Outbox } from "../state/outbox";
 import type { Store } from "../state/store";
@@ -35,6 +36,13 @@ export interface PerformContext {
   /** The chat the route has open, read when needed. */
   readonly openChatId?: string | undefined;
 }
+
+/** At most 200 UTF-16 units (the contract's limit), never ending in half a surrogate pair. */
+const clip = (title: string): string => {
+  const cut = title.slice(0, 200);
+  const last = cut.charCodeAt(cut.length - 1);
+  return cut.length === 200 && last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+};
 
 const err = (toasts: ToastStore, text: string) => toasts.push({ kind: "err", text });
 
@@ -133,9 +141,10 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
       const title = await c.prompt?.("Rename chat", "Title", c.titleOf?.(intent.id) ?? "", "Save");
       if (title === undefined || c.active?.() === false) return true;
       try {
-        await c.api.patchChat(intent.id, { title: title.slice(0, 200) });
+        await c.api.patchChat(intent.id, { title: clip(title) });
         c.session.invalidate("chats");
-      } catch {
+      } catch (e) {
+        report("intent", e);
         err(c.toasts, "Could not rename that chat.");
       }
       return true;
@@ -154,6 +163,7 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
         await c.api.deleteChat(intent.id);
       } catch (e) {
         if (!(e instanceof ApiError && e.status === 404)) {
+          report("intent", e);
           err(c.toasts, "Could not delete that chat.");
           return true;
         }
