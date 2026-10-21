@@ -10,6 +10,7 @@ import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring, insecureBaseUrlWarning } from "./flows/ingest-document/limits";
 import { parsePublicOrigin } from "./http/originGuard";
+import { loadWebDir } from "./http/staticFiles";
 import { loadMaxConnections } from "./server";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
@@ -41,6 +42,7 @@ export async function setupServer() {
   const limits = loadLimits();
   const blobRoot = loadBlobRoot();
   const publicOrigin = parsePublicOrigin(process.env.DOCMIND_PUBLIC_ORIGIN);
+  const webDir = loadWebDir(process.env.DOCMIND_WEB_DIR); // before anything opens
   const maxConnections = loadMaxConnections(); // before anything opens
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   if (!ingest.llm.summary)
@@ -117,6 +119,7 @@ export async function setupServer() {
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
     trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
     publicOrigin,
+    ...(webDir && { webDir }),
     maxConnections,
     ingest,
     chat: {

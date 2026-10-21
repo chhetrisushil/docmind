@@ -82,7 +82,14 @@ export const DEFAULT_HTTP_LIMITS: HttpLimits = {
   maxConnections: DEFAULT_MAX_CONNECTIONS,
   maxHeadersCount: 100,
   // The upload streams a multipart body; the event stream is open-ended by design, and the chat stream is open-ended too.
-  streamingRoutes: new Set([UPLOAD_ROUTE, EVENTS_ROUTE, CHAT_STREAM_ROUTE]),
+  // The static fallback streams files, and a slow client must not be cut after the headers.
+  streamingRoutes: new Set([
+    UPLOAD_ROUTE,
+    EVENTS_ROUTE,
+    CHAT_STREAM_ROUTE,
+    "GET (web)",
+    "HEAD (web)",
+  ]),
 };
 
 /** `DOCMIND_MAX_CONNECTIONS` (default 2000, at most 65535); a bad value fails the boot. */
@@ -95,6 +102,8 @@ export function createHttpServer(
   extraRoutes: Record<string, Handler> = {},
   guard: OriginGuardOptions = { secure: false },
   limitOverrides: Partial<HttpLimits> = {},
+  /** Answers GET and HEAD requests that match no route and are not under /api/ (the built web app). */
+  fallback?: Handler,
 ): Server {
   const limits = { ...DEFAULT_HTTP_LIMITS, ...limitOverrides };
   const routes = { ...baseRoutes, ...extraRoutes };
@@ -119,9 +128,15 @@ export function createHttpServer(
     const method = req.method ?? "GET";
     const key = `${method} ${path}`;
     const exact = Object.hasOwn(exactRoutes, key) ? exactRoutes[key] : undefined;
-    const found = exact
+    const matched = exact
       ? { handler: exact, ctx: { params: {} } satisfies RouteContext, route: path }
       : match(patterns, method, path);
+    const isPage = (method === "GET" || method === "HEAD") && !path.startsWith("/api/");
+    const found =
+      matched ??
+      (fallback && isPage
+        ? { handler: fallback, ctx: { params: {} } satisfies RouteContext, route: "(web)" }
+        : undefined);
     // The one place a state-changing request is checked, before routing, so no route can skip it.
     if (!isSameOriginRequest(req, guard)) {
       // The matched route pattern, never the raw path: an attacker-driven path can carry anything.
