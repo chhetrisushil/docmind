@@ -1,5 +1,6 @@
 import { type ChatScope, intentOf } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ChatController, type ChatProblem, LIMITED_TEXT, type SendOutcome } from "../state/chat";
 import { ServicesController } from "../state/services-controller";
@@ -23,19 +24,22 @@ const PROBLEM_TEXT: Record<ChatProblem, string> = {
 };
 
 export class DmChatPage extends LitElement {
-  static properties = { tick: { state: true } };
+  static properties = { chatTitle: { state: true }, queued: { state: true } };
   static styles = [
     baseStyles,
     css`
       :host { display: grid; grid-template-rows: auto auto 1fr; height: 100%; min-height: 0; padding: 16px 24px; max-width: 900px; margin: 0 auto; }
       header { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; }
       header .grow { flex: 1; }
-      h1 { font-size: 18px; }
+      h1 { font-size: 18px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       [data-problem] { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--dm-muted); }
       dm-view { min-height: 0; height: 100%; }
     `,
   ];
-  declare tick: number;
+  /** The served title; undefined until the chat has one (plain text only: never logged, toasted or put in a URL). */
+  declare chatTitle: string | undefined;
+  /** The first message is waiting after a failed send: Retry or Discard. */
+  declare queued: boolean;
   controller: ChatController | undefined;
   private session: ViewSession | undefined;
   private bound: string | undefined | null = null;
@@ -45,9 +49,11 @@ export class DmChatPage extends LitElement {
   /** A first send is creating its chat: a second activation waits for nothing and starts nothing. */
   private creating = false;
   private readonly ctx = new ServicesController(this, (s) => [s.router]);
+  private flushing = false;
   constructor() {
     super();
-    this.tick = 0;
+    this.chatTitle = undefined;
+    this.queued = false;
   }
   private get chatId(): string | undefined {
     const r = this.ctx.services?.router.get();
@@ -63,6 +69,9 @@ export class DmChatPage extends LitElement {
     if (this.ctx.services && this.bound !== id) this.bind(id);
   }
   disconnectedCallback(): void {
+    // A message nobody consumed does not wait for a later visit.
+    const svc = this.ctx.services;
+    if (svc && svc.outbox.get()?.chatId !== this.chatId) svc.outbox.set(undefined);
     this.release();
     this.bound = null;
     super.disconnectedCallback();
@@ -84,26 +93,38 @@ export class DmChatPage extends LitElement {
     this.release();
     this.bound = id;
     this.startedIds = undefined;
+    this.chatTitle = undefined;
+    this.queued = false;
     this.creating = false;
+    if (svc.outbox.get()?.chatId !== id) svc.outbox.set(undefined); // never sent into a chat other than its own
     if (id === undefined) return void this.requestUpdate();
     const controller = new ChatController({
       api: svc.api,
       auth: svc.auth,
       chatId: id,
       open: svc.open,
-      onActivity: () => document.dispatchEvent(new CustomEvent("dm-chats-changed")),
+      onActivity: () => {
+        document.dispatchEvent(new CustomEvent("dm-chats-changed"));
+        if (this.controller === controller) this.readMeta(controller, id); // the server may have titled the chat
+      },
     });
     this.controller = controller;
     this.off = controller.state.subscribe(() => this.sync());
     void this.begin(controller, id);
-    void svc.api.getChat(id).then(
+    this.readMeta(controller, id);
+    this.requestUpdate();
+  }
+
+  /** The chat's title and the documents it started with, as served. */
+  private readMeta(controller: ChatController, id: string): void {
+    void this.ctx.services?.api.getChat(id).then(
       (c) => {
-        if (this.controller === controller && typeof c.scope === "object")
-          this.startedIds = [...c.scope.documentIds];
+        if (this.controller !== controller) return;
+        this.chatTitle = c.title ?? undefined;
+        if (typeof c.scope === "object") this.startedIds = [...c.scope.documentIds];
       },
       () => {},
     );
-    this.requestUpdate();
   }
 
   private async begin(controller: ChatController, id: string): Promise<void> {
@@ -111,16 +132,36 @@ export class DmChatPage extends LitElement {
     await this.flushOutbox(controller, id);
   }
 
-  /** A message left for this chat is sent once, when the chat is ready for it (again after "Try again"). */
+  /** A message left for this chat is sent once, when the chat is ready for it. It stays queued until the send succeeds. */
   private async flushOutbox(controller: ChatController, id: string): Promise<void> {
     const svc = this.ctx.services;
-    if (!svc || this.controller !== controller || !controller.state.get().ready) return;
+    if (!svc || this.flushing || this.controller !== controller || !controller.state.get().ready)
+      return;
     const waiting = svc.outbox.get();
     if (waiting?.chatId !== id) return;
-    svc.outbox.set(undefined);
-    const out = await controller.send(waiting.text);
-    if (out !== "sent" && out !== "busy" && this.controller === controller)
-      this.toast(SEND_TEXT[out]);
+    this.flushing = true;
+    try {
+      const out = await controller.send(waiting.text);
+      if (this.controller !== controller) return;
+      if (out === "sent") {
+        if (svc.outbox.get() === waiting) svc.outbox.set(undefined);
+        this.queued = false;
+      } else if (out !== "busy") {
+        this.queued = true;
+        this.toast(SEND_TEXT[out]);
+      }
+    } finally {
+      this.flushing = false;
+    }
+  }
+  private retryQueued(): void {
+    const controller = this.controller;
+    const id = this.chatId;
+    if (controller && id) void this.flushOutbox(controller, id);
+  }
+  private discardQueued(): void {
+    this.ctx.services?.outbox.set(undefined);
+    this.queued = false;
   }
 
   /** The page folds the transcript itself, so it publishes it into the experience's store. */
@@ -168,7 +209,10 @@ export class DmChatPage extends LitElement {
       this.creating = true;
       try {
         const chat = await svc.api.createChat({ scope: "all" });
-        if (!this.isConnected || this.chatId !== undefined) return { ok: false };
+        const route = svc.router.get();
+        // The user left before the chat existed: the text is discarded, never sent into a chat they are not in.
+        if (!this.isConnected || route.name !== "chat" || route.chatId !== undefined)
+          return { ok: false };
         svc.outbox.set({ chatId: chat.id, text });
         svc.router.navigate({ name: "chat", chatId: chat.id }, { replace: true });
         return { ok: true };
@@ -244,12 +288,15 @@ export class DmChatPage extends LitElement {
       st?.ready && !st.running && last?.role === "assistant" && last.status !== "streaming";
     return html`
       <header>
-        <h1>${this.chatId ? "Chat" : "New chat"}</h1>
+        <h1 title=${ifDefined(this.chatTitle)}>${this.chatId && this.chatTitle ? this.chatTitle : "New chat"}</h1>
         <span class="grow"></span>
         ${st?.running ? html`<button class="btn secondary" data-stop @click=${() => void this.controller?.stop()}><dm-icon name="stop"></dm-icon>Stop</button>` : null}
         ${canRegenerate && last ? html`<button class="btn secondary" data-regenerate @click=${() => void this.regenerate(last.id)}><dm-icon name="arrow-clockwise"></dm-icon>Regenerate</button>` : null}
       </header>
       <div>
+        ${st && !st.ready && !st.problem && !st.closed ? html`<p data-loading role="status" aria-live="polite" class="muted">Loading conversation…</p>` : null}
+        ${st?.closed ? html`<p data-closed role="status" class="muted">This chat has ended. <a href="/chats">Start a new chat</a></p>` : null}
+        ${this.queued ? html`<div data-queued role="alert">Your first message was not sent.<button class="btn ghost" data-queued-retry @click=${() => this.retryQueued()}>Retry</button><button class="btn ghost" data-queued-discard @click=${() => this.discardQueued()}>Discard</button></div>` : null}
         ${
           st?.problem
             ? html`<div data-problem role=${st.problem === "stream" ? "status" : "alert"}>${PROBLEM_TEXT[st.problem]}${st.problem === "load" ? html`<button class="btn ghost" data-try-again @click=${() => this.tryAgain()}>Try again</button>` : st.problem === "gone" ? html`<a href="/chats">Start a new chat</a>` : null}</div>`

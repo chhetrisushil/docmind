@@ -42,7 +42,7 @@ const cited = {
 };
 
 type Page = HTMLElement & {
-  controller?: { state: Store<ChatViewState>; close(): void };
+  controller?: { state: Store<ChatViewState>; close(): void; loadOlder(): Promise<void> };
 };
 type Session = {
   isFresh(a?: unknown): boolean;
@@ -416,5 +416,232 @@ describe("dm-chat-page: a new chat", () => {
     release();
     await a;
     expect(t.api.createChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+const CHAT_B = "1c5e8e63-7d64-4d7f-8e5a-3c1f8b4a0b21";
+const h1 = (p: Element) => p.shadowRoot?.querySelector("h1")?.textContent?.trim();
+
+describe("dm-chat-page: the header, the loading and closed states", () => {
+  it("shows the served title as text, New chat before one exists, and follows an auto-title", async () => {
+    let title: string | null = null;
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title,
+        scope: "all",
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+    });
+    const page = await t.mount();
+    await loaded(page);
+    await vi.waitFor(() => expect(t.api.getChat).toHaveBeenCalled());
+    expect(h1(page)).toBe("New chat");
+    title = "Lease review";
+    typeAndSend(page, "next");
+    await vi.waitFor(() => expect(h1(page)).toBe("Lease review"));
+    expect(page.shadowRoot?.querySelector("h1")?.getAttribute("title")).toBe("Lease review");
+  });
+
+  it("says Loading conversation (announced) until the history is in, and keeps the composer inert across a re-render", async () => {
+    let release: () => void = () => {};
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () =>
+              r({
+                items: [msg(1, "user", 1), msg(2, "assistant", 1, { text: "Due in 30 days" })],
+                nextCursor: null,
+              });
+          }),
+      ),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(composerHost(page)).toBeTruthy());
+    const hint = page.shadowRoot?.querySelector("[data-loading]");
+    expect(hint?.textContent).toContain("Loading conversation");
+    expect(hint?.getAttribute("aria-live")).toBe("polite");
+    composerHost(page)?.removeAttribute("inert");
+    const c = page.controller as NonNullable<Page["controller"]>;
+    c.state.set({ ...c.state.get() });
+    expect(composerHost(page)?.hasAttribute("inert")).toBe(true);
+    release();
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("[data-loading]")).toBeNull());
+  });
+
+  it("a closed chat says so instead of leaving a silent composer", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await loaded(page);
+    t.frame("closed", {});
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.querySelector("[data-closed]")?.textContent).toContain(
+        "This chat has ended.",
+      ),
+    );
+  });
+
+  it("shows the older-failed line and retries loading earlier messages", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [msg(3, "user", 2), msg(4, "assistant", 2, { text: "Newest" })],
+        nextCursor: "1.5",
+      })
+      .mockRejectedValueOnce(new ApiError(0, "network"))
+      .mockResolvedValueOnce({ items: [msg(1, "user", 1)], nextCursor: null });
+    const t = setup(`/chats/${CHAT}`, { listMessages: list });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Newest"));
+    await page.controller?.loadOlder();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.querySelector("[data-older-failed]")).not.toBeNull(),
+    );
+    (page.shadowRoot?.querySelector("[data-older-retry]") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.querySelector("[data-older-failed]")).toBeNull(),
+    );
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("dm-chat-page: the queued first message", () => {
+  it("is kept when the send fails, says so, and Retry sends it and clears it", async () => {
+    const t = setup("/chats", {
+      sendMessage: vi
+        .fn()
+        .mockRejectedValueOnce(new ApiError(429, "too_many_requests"))
+        .mockResolvedValue({ messageId: "m" }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(composer(page)).toBeTruthy());
+    typeAndSend(page, "First question");
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("[data-queued]")).not.toBeNull());
+    expect(t.services.outbox.get()).toEqual({ chatId: CHAT, text: "First question" });
+    expect(t.services.toasts.get().map((x) => x.text)).toContain(LIMITED_TEXT);
+    (page.shadowRoot?.querySelector("[data-queued-retry]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(t.api.sendMessage).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(t.services.outbox.get()).toBeUndefined());
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("[data-queued]")).toBeNull());
+  });
+
+  it("can be discarded", async () => {
+    const t = setup("/chats", { sendMessage: vi.fn().mockRejectedValue(new ApiError(500, "x")) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(composer(page)).toBeTruthy());
+    typeAndSend(page, "Q");
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("[data-queued]")).not.toBeNull());
+    (page.shadowRoot?.querySelector("[data-queued-discard]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(t.services.outbox.get()).toBeUndefined());
+  });
+
+  it("is discarded, never sent, when the user left before the chat was created", async () => {
+    let release: () => void = () => {};
+    const t = setup("/chats", {
+      createChat: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () => r({ id: CHAT });
+          }),
+      ),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(composer(page)).toBeTruthy());
+    typeAndSend(page, "Q");
+    await vi.waitFor(() => expect(t.api.createChat).toHaveBeenCalled());
+    t.services.router.navigate({ name: "documents" });
+    release();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(t.services.outbox.get()).toBeUndefined();
+    expect(t.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("an entry for another chat is cleared, not sent later", async () => {
+    const t = setup();
+    t.services.outbox.set({ chatId: CHAT_B, text: "stray" });
+    const page = await t.mount();
+    await loaded(page);
+    expect(t.services.outbox.get()).toBeUndefined();
+    expect(t.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("an entry nobody consumed is cleared when the page goes away", async () => {
+    let release: () => void = () => {};
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () => r({ items: [], nextCursor: null });
+          }),
+      ),
+    });
+    t.services.outbox.set({ chatId: CHAT, text: "waiting" });
+    const page = await t.mount();
+    t.services.router.navigate({ name: "documents" });
+    page.remove();
+    release();
+    expect(t.services.outbox.get()).toBeUndefined();
+  });
+});
+
+describe("dm-chat-page: switching chats", () => {
+  const byId = () =>
+    vi.fn(async (id: string) => ({
+      items: [
+        msg(1, "user", 1),
+        msg(2, "assistant", 1, {
+          text: id === CHAT ? `Alpha answer [[${PASSAGE}]]` : "Beta answer",
+          citations: id === CHAT ? [cited] : [],
+        }),
+      ],
+      nextCursor: null,
+    }));
+
+  it("chat A to chat B: the old stream is closed, nothing of A is shown, and an action from A's view is refused", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: byId() });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Alpha answer"));
+    await vi.waitFor(() =>
+      expect(chatRoot(page)?.querySelector("button.ref")).toBeInstanceOf(HTMLButtonElement),
+    );
+    const old = viewOf(page) as NonNullable<ReturnType<typeof viewOf>>;
+    const oldSession = old.session as Session;
+    const oldAct = old.onAct;
+    t.services.router.navigate({ name: "chat", chatId: CHAT_B });
+    await vi.waitFor(() => expect(chatText(page)).toContain("Beta answer"));
+    expect(t.close).toHaveBeenCalled();
+    expect(chatText(page)).not.toContain("Alpha");
+    expect(chatRoot(page)?.querySelector("button.ref")).toBeNull();
+    const stale = await oldSession.dispatch(
+      { type: "SUBMIT_TEXT", widgetId: "w", payload: { text: "x", key: KEY } },
+      oldAct,
+    );
+    expect(stale).toMatchObject({ ok: false });
+    const cite = await oldSession.dispatch(
+      {
+        type: "CHAT_REF_OPEN",
+        widgetId: "w",
+        payload: { entryId: "t1.assistant", refId: PASSAGE },
+      },
+      oldAct,
+    );
+    expect(cite).toMatchObject({ ok: false });
+    expect(t.api.sendMessage).not.toHaveBeenCalled();
+    expect(page.controller?.state.get().focus).toBeUndefined();
+  });
+
+  it("chat A to /chats: the stream is closed, no controller, an empty composer", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: byId() });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Alpha answer"));
+    t.services.router.navigate({ name: "chat" });
+    await vi.waitFor(() => expect(page.controller).toBeUndefined());
+    expect(t.close).toHaveBeenCalled();
+    await vi.waitFor(() => expect(composer(page)).toBeTruthy());
+    expect(chatText(page)).not.toContain("Alpha");
+    expect(h1(page)).toBe("New chat");
   });
 });
