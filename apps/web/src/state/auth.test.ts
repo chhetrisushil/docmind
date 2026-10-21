@@ -91,6 +91,19 @@ describe("AuthStore", () => {
   });
 });
 
+describe("AuthStore.withoutExpiry", () => {
+  it("holds back expired() while fn runs, and only then", async () => {
+    const store = new AuthStore(api());
+    await store.login({ email: "a@example.com", password: "x" });
+    await store.withoutExpiry(async () => {
+      store.expired();
+    });
+    expect(store.get().status).toBe("signed-in");
+    store.expired();
+    expect(store.get().status).toBe("anonymous");
+  });
+});
+
 describe("AuthStore signed-out transitions", () => {
   it("does not notify again when it is already anonymous", async () => {
     const store = new AuthStore(

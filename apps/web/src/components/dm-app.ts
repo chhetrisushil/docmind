@@ -76,6 +76,8 @@ export class DmApp extends LitElement {
   }
   render() {
     const { wait, to } = this.decide();
+    // data-dialog-live: an open dialog makes everything outside it inert except this region. The trade-off is that a toast
+    // raised while a modal is open is still announced, but it is not reachable by keyboard until the dialog closes.
     // The view is a nested part and dm-toasts sits outside it, so the live regions survive every view change.
     return html`${wait || to ? this.busy() : this.view()}<dm-toasts data-dialog-live></dm-toasts>`;
   }

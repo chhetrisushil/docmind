@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
+import { Router } from "../router";
 import { createServices } from "../services";
 import { AuthStore } from "../state/auth";
 import { mountWith } from "../testing/mount";
+import "./dm-app";
 import "./dm-settings";
 import "./dm-dialog";
 
@@ -163,13 +165,16 @@ describe("dm-settings", () => {
     await vi.waitFor(() => expect(dlg.querySelector("button[data-status]")).not.toBeNull());
     (dlg.querySelector("button[data-status]") as HTMLButtonElement).click();
     await vi.waitFor(() =>
-      expect(dlg.querySelector("[role=alert]")?.textContent).toContain("still active"),
+      expect(dlg.querySelector("[role=alert]")?.textContent).toBe(
+        "Your account is still active. Try again.",
+      ),
     );
+    expect(dlg.querySelector("[role=alert]")?.textContent).not.toContain("nothing was deleted");
     expect(services.auth.get().status).toBe("signed-in");
     await settle(el);
     (dlg.querySelector("button[data-status]") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(services.router.route).toEqual({ name: "account-deleted" }));
-    expect(services.auth.get().status).toBe("anonymous");
+    await vi.waitFor(() => expect(services.auth.get().status).toBe("anonymous"));
+    expect(services.router.route).toEqual({ name: "account-deleted" });
   });
 
   it("ignores a second confirm while one is in flight, and shows Cancel as unavailable", async () => {
@@ -205,5 +210,54 @@ describe("dm-settings", () => {
         (api as never as { deleteAccount: ReturnType<typeof vi.fn> }).deleteAccount,
       ).toHaveBeenCalledTimes(1),
     );
+  });
+
+  it("Check status through the real http client: a 401 'unauthorized' from me() goes to the receipt page and never through sign-in", async () => {
+    const win = {
+      location: { pathname: "/settings", search: "" },
+      history: {
+        pushState: (_s: unknown, _t: string, u: string) => {
+          win.location.pathname = u;
+        },
+        replaceState: (_s: unknown, _t: string, u: string) => {
+          win.location.pathname = u;
+        },
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const json = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    const fetchFake = (async (path: string, init: RequestInit) => {
+      if (path === "/api/auth/login") return json(200, ME);
+      if (init.method === "DELETE") throw new TypeError("offline");
+      return json(401, { error: { code: "unauthorized", message: "no" } });
+    }) as never;
+    const services = createServices({ router: new Router(win as never), fetch: fetchFake });
+    await services.auth.login({ email: ME.email, password: "x" });
+    const seen: string[] = [];
+    services.router.subscribe((r) => seen.push(r.name));
+    const app = await mountWith<HTMLElement>(services, "dm-app", { services });
+    await vi.waitFor(() => expect(app.shadowRoot?.querySelector("dm-settings")).not.toBeNull());
+    const el = app.shadowRoot?.querySelector("dm-settings") as HTMLElement;
+    await settle(el);
+    q<HTMLButtonElement>(el, "button[data-delete]").click();
+    await settle(el);
+    const dlg = q<HTMLElement>(el, "dm-dialog");
+    const input = dlg.querySelector("input[type=password]") as HTMLInputElement;
+    input.value = "pw";
+    input.dispatchEvent(new Event("input"));
+    await settle(el);
+    (dlg.querySelector("button[data-confirm]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(dlg.querySelector("button[data-status]")).not.toBeNull());
+    (dlg.querySelector("button[data-status]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(services.router.route).toEqual({ name: "account-deleted" }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen).not.toContain("sign-in");
+    expect(services.router.route).toEqual({ name: "account-deleted" });
+    expect(services.auth.get().status).toBe("anonymous");
   });
 });
