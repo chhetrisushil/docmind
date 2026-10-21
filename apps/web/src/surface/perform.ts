@@ -10,6 +10,12 @@ export interface PerformContext {
   router: Router;
   toasts: ToastStore;
   session: Pick<ViewSession, "invalidate" | "setParams">;
+  /** The document the page has open and was served (set by the document page only). */
+  documentId?: string;
+  /** The page size the content handle has now. */
+  upto?(): number;
+  /** The page leaves the deleted document itself: called instead of refreshing the view. */
+  onDeleted?(): void;
   confirm(heading: string, body: string, confirmLabel: string, danger?: boolean): Promise<boolean>;
 }
 
@@ -20,7 +26,12 @@ const busy = new Set<string>();
 
 /** The web's execution of the surface-neutral intents. Returns false for an intent another page handles. Texts are fixed sentences. */
 export async function performIntent(intent: Intent, c: PerformContext): Promise<boolean> {
-  const key = "id" in intent ? `${intent.type}:${intent.id}` : undefined;
+  const key =
+    "id" in intent
+      ? `${intent.type}:${intent.id}`
+      : intent.type === "document.ask-question" && c.documentId !== undefined
+        ? `${intent.type}:${c.documentId}`
+        : undefined;
   if (key === undefined) return perform(intent, c);
   if (busy.has(key)) return true;
   busy.add(key);
@@ -76,10 +87,24 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
           return true;
         }
       }
-      c.session.invalidate();
       c.toasts.push({ kind: "ok", text: "Document deleted." });
+      if (c.onDeleted) c.onDeleted();
+      else c.session.invalidate();
       return true;
     }
+    case "document.ask-question": {
+      if (c.documentId === undefined) return false;
+      try {
+        const chat = await c.api.createChat({ scope: { documentIds: [c.documentId] } });
+        c.router.navigate({ name: "chat", chatId: chat.id });
+      } catch {
+        err(c.toasts, "Could not start a chat about that document.");
+      }
+      return true;
+    }
+    case "content.more":
+      c.session.setParams({ upto: Math.min(200, (c.upto?.() ?? 20) + 20) }, "doc-content");
+      return true;
     case "documents.filter":
       c.session.setParams({ status: intent.status }, "documents");
       return true;

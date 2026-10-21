@@ -121,3 +121,57 @@ describe("performIntent: one request per row action at a time", () => {
     expect(t.api.deleteDocument).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("performIntent: the document", () => {
+  it("shows more passages by raising the page size of the content handle, up to the cap", async () => {
+    const t = ctx();
+    const upto = { n: 20 };
+    const c = { ...(t.c as object), upto: () => upto.n } as never;
+    await performIntent({ type: "content.more" }, c);
+    expect(t.session.setParams).toHaveBeenCalledWith({ upto: 40 }, "doc-content");
+    upto.n = 200;
+    await performIntent({ type: "content.more" }, c);
+    expect(t.session.setParams).toHaveBeenLastCalledWith({ upto: 200 }, "doc-content");
+  });
+  it("opens a chat scoped to the open document for a suggested question", async () => {
+    const t = ctx();
+    const c = { ...(t.c as object), documentId: A } as never;
+    await performIntent({ type: "document.ask-question", question: "When is it due?" }, c);
+    expect(t.api.createChat).toHaveBeenCalledWith({ scope: { documentIds: [A] } });
+    expect(t.router.navigate).toHaveBeenCalledWith({ name: "chat", chatId: "c1" });
+    expect(JSON.stringify(t.router.navigate.mock.calls)).not.toContain("due");
+    expect(t.toasts.push).not.toHaveBeenCalled();
+  });
+  it("refuses a question when no document is open", async () => {
+    const t = ctx();
+    expect(await performIntent({ type: "document.ask-question", question: "Q?" }, t.c)).toBe(false);
+    expect(t.api.createChat).not.toHaveBeenCalled();
+  });
+  it("a double activation of a question starts one chat", async () => {
+    let release: () => void = () => {};
+    const t = ctx({
+      createChat: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () => r({ id: "c1" });
+          }),
+      ),
+    });
+    const c = { ...(t.c as object), documentId: A } as never;
+    const a = performIntent({ type: "document.ask-question", question: "Q?" }, c);
+    const b = performIntent({ type: "document.ask-question", question: "Q?" }, c);
+    release();
+    await Promise.all([a, b]);
+    expect(t.api.createChat).toHaveBeenCalledTimes(1);
+  });
+  it("after a delete, hands over to onDeleted instead of refreshing the view", async () => {
+    const t = ctx();
+    const onDeleted = vi.fn();
+    await performIntent({ type: "document.delete", id: A }, {
+      ...(t.c as object),
+      onDeleted,
+    } as never);
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+    expect(t.session.invalidate).not.toHaveBeenCalled();
+  });
+});
