@@ -42,7 +42,12 @@ const cited = {
 };
 
 type Page = HTMLElement & {
-  controller?: { state: Store<ChatViewState>; close(): void; loadOlder(): Promise<void> };
+  controller?: {
+    state: Store<ChatViewState>;
+    close(): void;
+    loadOlder(): Promise<void>;
+    toggleSources(open?: boolean): void;
+  };
 };
 type Session = {
   isFresh(a?: unknown): boolean;
@@ -666,13 +671,23 @@ const deepActive = () => {
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
   return el;
 };
-const media = (wide: boolean) =>
+const mq: { wide: boolean; fns: Set<() => void> } = { wide: true, fns: new Set() };
+const media = (wide: boolean) => {
+  mq.wide = wide;
+  mq.fns.clear();
   vi.stubGlobal("matchMedia", (q: string) => ({
-    matches: q.includes("1100px") ? wide : false,
+    get matches() {
+      return q.includes("1100px") ? mq.wide : false;
+    },
     media: q,
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener: (_: string, f: () => void) => mq.fns.add(f),
+    removeEventListener: (_: string, f: () => void) => mq.fns.delete(f),
   }));
+};
+const resize = (wide: boolean) => {
+  mq.wide = wide;
+  for (const f of [...mq.fns]) f();
+};
 const narrow = () => media(false);
 beforeEach(() => media(true));
 afterEach(() => {
@@ -891,5 +906,72 @@ describe("dm-chat-page: sources below 1100px", () => {
     (page.shadowRoot?.querySelector("[data-backdrop]") as HTMLElement).click();
     await vi.waitFor(() => expect(panel(page)).toBeUndefined());
     await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(toggle));
+  });
+});
+
+describe("dm-chat-page: sources, resize and dialogs", () => {
+  it("widening past 1100px while open docks the panel: no backdrop, nothing inert", async () => {
+    narrow();
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Due in 30 days"));
+    (button(page, "button[data-sources]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(panel(page)).toBeDefined());
+    resize(true);
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("[data-backdrop]")).toBeNull());
+    expect((page.shadowRoot?.querySelector(".main") as HTMLElement).inert).toBe(false);
+    expect((page.shadowRoot?.querySelector("header") as HTMLElement).inert).toBe(false);
+    expect(panel(page)).toBeDefined();
+    expect(page.shadowRoot?.querySelector("aside")?.hasAttribute("aria-modal")).toBe(false);
+  });
+  it("narrowing below 1100px while docked-open closes the panel (the narrow default) and leaves nothing inert", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    resize(false);
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    expect((page.shadowRoot?.querySelector(".main") as HTMLElement).inert).toBe(false);
+    expect(button(page, "button[data-sources]")?.getAttribute("aria-expanded")).toBe("false");
+  });
+  it("Escape with a dialog open closes only the dialog; the panel keeps its isolation until it closes", async () => {
+    narrow();
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Due in 30 days"));
+    (button(page, "button[data-sources]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(panel(page)).toBeDefined());
+    const sib = document.createElement("div");
+    page.parentNode?.append(sib);
+    page.controller?.toggleSources(false);
+    page.controller?.toggleSources(true);
+    await vi.waitFor(() => expect(sib.inert).toBe(true));
+    const d = document.createElement("dm-dialog") as HTMLElement & {
+      open: boolean;
+      heading: string;
+    };
+    d.heading = "Confirm";
+    d.open = true;
+    d.addEventListener("dm-close", () => d.remove());
+    document.body.append(d);
+    await vi.waitFor(() => expect(d.isConnected).toBe(true));
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await vi.waitFor(() => expect(d.isConnected).toBe(false));
+    expect(panel(page)).toBeDefined();
+    expect(sib.inert).toBe(true);
+    // Closing the panel while a dialog is open must not release what the dialog relies on.
+    const d2 = document.createElement("dm-dialog") as HTMLElement & {
+      open: boolean;
+      heading: string;
+    };
+    d2.heading = "Again";
+    d2.open = true;
+    document.body.append(d2);
+    await new Promise((r) => setTimeout(r, 0));
+    page.controller?.toggleSources(false);
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    expect(sib.inert).toBe(true);
+    d2.remove();
+    await vi.waitFor(() => expect(sib.inert).toBe(false));
+    expect((page.shadowRoot?.querySelector("header") as HTMLElement).inert).toBe(false);
   });
 });

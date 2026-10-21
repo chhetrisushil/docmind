@@ -14,6 +14,10 @@ export function deepActiveElement(): Element | null {
 let ids = 0;
 /** Open dialogs, oldest first: only the last one (the topmost) answers keys. */
 const stack: DmDialog[] = [];
+/** True while any dialog is open: other overlays leave keys and isolation to it. */
+export const dialogOpen = (): boolean => stack.length > 0;
+/** Fired on the document after a dialog has closed and released its isolation. */
+export const DIALOG_CLOSED = "dm-dialog-closed";
 /** Key events a dialog has already answered: the panel and the document both see a composed event. */
 const answered = new WeakSet<Event>();
 
@@ -98,6 +102,7 @@ export class DmDialog extends LitElement {
     const at = stack.indexOf(this);
     if (at >= 0) stack.splice(at, 1);
     document.removeEventListener("keydown", this.onKey);
+    queueMicrotask(() => document.dispatchEvent(new CustomEvent(DIALOG_CLOSED)));
     this.release();
     const opener = this.opener as HTMLElement | null;
     this.opener = null;
