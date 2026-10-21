@@ -6,6 +6,7 @@ import { closeSequence } from "./closeSequence";
 import type { buildServer } from "./compose";
 import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
 import { startSweeper } from "./documents/sweeper";
+import { hydrateSubjectIndex } from "./erasure/compliance";
 import { type IngestWiring, closeIngest } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
@@ -81,6 +82,27 @@ export async function bootIngest(
       err instanceof Error ? err.constructor.name : typeof err,
     );
   });
+  // Loom's subject index is fed live only, so after a restart it knows none of the users' executions and an
+  // erasure would answer "unknown" and shred nothing. Rebuild it from the log before anything is served. A failure
+  // here is fatal: a server that cannot erase must not take requests (the error is the fixed label, never an id).
+  const subjectIndex = app.subjectIndex;
+  if (subjectIndex)
+    await bootStatus(
+      {
+        boot: async () => {
+          const executions = await hydrateSubjectIndex(durable.raw.eventStore, subjectIndex);
+          // Counts only, so a slow boot on a large history is explained (the index is in memory).
+          console.info("subject index hydrated", {
+            subjects: subjectIndex.subjects().length,
+            executions,
+          });
+        },
+      },
+      cleanup,
+      "subject index",
+    );
+  // Only now may the timers run (the app was built with `autostart: false`; see `buildApp`).
+  if (subjectIndex) app.start();
   // Hash the decoy now so the first unknown-email login is not measurably slower.
   await primeDecoy();
 
