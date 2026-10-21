@@ -184,16 +184,5 @@ describe("the terminal surface", () => {
     // Intentional: the loom-ui terminal leaves emphasis as typed; only the [[ref]] marker is rewritten to a number.
     expect(out).toContain("**30 days** [1]");
   });
-  it("two users, two reader sets: user B's views never show user A's titles", async () => {
-    const a = readersFor(["Alpha-A-title", "Alpha-A-second"]);
-    const b = readersFor(["Beta-B-title", "Beta-B-second"]);
-    const libA = await frame("library", {}, a, "user-a");
-    const libB = await frame("library", {}, b, "user-b");
-    expect(libA).toContain("Alpha-A-title");
-    expect(libB).toContain("Beta-B-title");
-    expect(libB).not.toContain("Alpha-A");
-    const detB = await frame("detail", { id: id(1) }, b, "user-b");
-    expect(detB).toContain("Ready");
-    expect(detB).not.toContain("Alpha-A");
-  });
+  // Cross-user isolation is not provable here: the server binds readers to an identity. It is tested in Task 188's UI-plane pg test.
 });
