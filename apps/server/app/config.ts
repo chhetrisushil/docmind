@@ -54,6 +54,15 @@ export interface FlowDeps {
 /** Loom's `onWarn` for every app, erasure wired or not: ids are redacted before anything is printed. */
 export const loomWarn = (message: string): void => console.warn("[loom]", warningFor(message));
 
+/**
+ * The executions whose log Loom must never compact: the read models fold each ingest and chat execution from its first
+ * event (ADR 0132), and a chat conversation parks on its inbox. The latter also keeps the erasure coordinator's one known
+ * residual unreachable: a log compacted through its tip behind a whole-state sealed checkpoint reads as terminal on the
+ * erase intent alone. Anything suspendable must stay in this list. `chat-title` is one step that always ends terminal.
+ */
+export const compactionExempt = (executionId: string): boolean =>
+  isIngestExecution(executionId) || isChatExecution(executionId);
+
 export function buildApp(
   storage: StorageConfig,
   crypto?: PrincipalCryptoOptions,
@@ -83,11 +92,11 @@ export function buildApp(
       onWarn: loomWarn,
     },
     // The status and activity models fold each ingest and chat execution's log from its first event, so compaction
-    // must never remove such an execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no retention yet.
+    // must never remove such an execution's prefix (ADR 0132; plugins.md note 8). DocMind configures no compaction.
     // Eager heartbeat leases: an ingest runs for seconds, so Loom's default lazy lease (taken only after a
     // run has gone TTL/3 unleased) would leave a fresh execution unvetoed against recovery on another node.
     durability: {
-      retention: { compactionExempt: (id: string) => isIngestExecution(id) || isChatExecution(id) },
+      retention: { compactionExempt },
       heartbeat: { acquire: "eager" },
     },
     execution: {
