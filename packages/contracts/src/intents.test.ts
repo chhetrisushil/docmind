@@ -117,10 +117,14 @@ describe("intentOf: chats", () => {
       intentOf("chat", { type: "SELECT", payload: { value: "everything", key: "k" } }),
     ).toBeUndefined();
     expect(
-      intentOf("chat", {
-        type: "CHAT_REF_OPEN",
-        payload: { entryId: "t1.assistant", refId: A, n: 1 },
-      }),
+      intentOf(
+        "chat",
+        {
+          type: "CHAT_REF_OPEN",
+          payload: { entryId: "t1.assistant", refId: A, n: 1 },
+        },
+        { refs: new Map([["t1.assistant", [A]]]) },
+      ),
     ).toEqual({ type: "chat.cite", entryId: "t1.assistant", refId: A });
     expect(
       intentOf("chat", { type: "CHAT_REF_OPEN", payload: { entryId: "bad id", refId: A, n: 1 } }),
@@ -234,13 +238,17 @@ describe("intentOf: hostile payloads (actions are untrusted)", () => {
     ).toBeUndefined();
     expect(intentOf("chat", { type: "SUBMIT_TEXT", payload: { text: "hi" } })).toBeUndefined();
     expect(
-      intentOf("chat", { type: "SUBMIT_TEXT", payload: { text: "hi", key: "k".repeat(201) } }),
+      intentOf("chat", { type: "SUBMIT_TEXT", payload: { text: "hi", key: "k".repeat(129) } }),
     ).toBeUndefined();
     expect(
       intentOf("chat", { type: "CHAT_REF_OPEN", payload: { entryId: "t1", refId: "a b", n: 1 } }),
     ).toBeUndefined();
     expect(
-      intentOf("chat", { type: "CHAT_REF_OPEN", payload: { entryId: "t1", refId: A } }),
+      intentOf(
+        "chat",
+        { type: "CHAT_REF_OPEN", payload: { entryId: "t1", refId: A } },
+        { refs: new Map([["t1", [A]]]) },
+      ),
     ).toEqual({ type: "chat.cite", entryId: "t1", refId: A });
     expect(
       intentOf("sessions", { type: "SUBMIT_TEXT", payload: { text: 5, key: "k" } }),
@@ -266,5 +274,57 @@ describe("intentOf: hostile payloads (actions are untrusted)", () => {
       expect(intentOf("library", a as never, held)).toBeUndefined();
     expect(intentOf("library", row("open", A), { rowKeys: 5 as never })).toBeUndefined();
     expect(intentOf("library", row("open", A), null as never)).toBeUndefined();
+  });
+});
+
+describe("intentOf: fix round 1", () => {
+  const cite = (entryId: string, refId: string) => ({
+    type: "CHAT_REF_OPEN",
+    payload: { entryId, refId, n: 1 },
+  });
+  const refs = new Map([["t1.assistant", [A]]]);
+  it("chat.cite resolves entry and ref only against the refs the server served", () => {
+    expect(intentOf("chat", cite("t1.assistant", A), { refs })).toEqual({
+      type: "chat.cite",
+      entryId: "t1.assistant",
+      refId: A,
+    });
+    expect(intentOf("chat", cite("t9.assistant", A), { refs })).toBeUndefined();
+    expect(intentOf("chat", cite("t1.assistant", B), { refs })).toBeUndefined();
+    expect(intentOf("chat", cite("t1.assistant", A))).toBeUndefined();
+    expect(intentOf("chat", cite("__proto__", A), { refs })).toBeUndefined();
+    expect(intentOf("chat", cite("constructor", A), { refs: {} as never })).toBeUndefined();
+  });
+  it("chat.cite returns the held spelling of the ref", () => {
+    const up = A.toUpperCase();
+    expect(
+      intentOf("chat", cite("t1.assistant", A), { refs: new Map([["t1.assistant", [up]]]) }),
+    ).toEqual({ type: "chat.cite", entryId: "t1.assistant", refId: up });
+  });
+  it("chat.send needs loom-ui's key shape", () => {
+    const send = (key: string) =>
+      intentOf("chat", { type: "SUBMIT_TEXT", payload: { text: "hi", key } });
+    expect(send("k".repeat(15))).toBeUndefined();
+    expect(send(`${"k".repeat(15)}/`)).toBeUndefined();
+    expect(send(`${"k".repeat(15)} `)).toBeUndefined();
+    expect(send("k".repeat(129))).toBeUndefined();
+    expect(send("a_b-".repeat(4))).toEqual({
+      type: "chat.send",
+      text: "hi",
+      key: "a_b-".repeat(4),
+    });
+  });
+  it("held uppercase, payload lowercase: the held spelling is returned", () => {
+    const up = A.toUpperCase();
+    expect(intentOf("library", row("open", A), { rowKeys: [up] })).toEqual({
+      type: "document.open",
+      id: up,
+    });
+  });
+  it("a suggested question is capped at 4000 characters", () => {
+    const a = { type: "A2UI_ACTION", payload: { action: "ask-question", context: { index: 0 } } };
+    expect(intentOf("detail", a, { list: ["x".repeat(4001)] })).toBeUndefined();
+    expect(intentOf("detail", a, { list: [""] })).toBeUndefined();
+    expect(intentOf("detail", a, { list: ["x".repeat(4000)] })).toBeTruthy();
   });
 });
