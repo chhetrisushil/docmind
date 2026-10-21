@@ -1,49 +1,224 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // import.meta.dirname, not new URL(..., import.meta.url): happy-dom's global URL mangles file: URLs.
 const SRC = import.meta.dirname;
+const ROOT = join(SRC, ".."); // apps/web
+const rel = (p: string) => relative(ROOT, p).split("\\").join("/");
+
 function files(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {
     const p = join(dir, n);
     if (statSync(p).isDirectory()) return n === "testing" ? [] : files(p);
-    return /\.(ts|css)$/.test(n) && !n.endsWith(".test.ts") ? [p] : [];
+    return /\.(ts|css|html)$/.test(n) && !n.endsWith(".test.ts") ? [p] : [];
   });
 }
-const app = files(SRC);
-const text = (p: string) => readFileSync(p, "utf8");
-const rel = (p: string) => relative(SRC, p);
+// Everything shipped to the browser: src/** plus the page itself.
+const app = [...files(SRC), join(ROOT, "index.html")].map((p) => ({
+  path: rel(p),
+  text: readFileSync(p, "utf8"),
+}));
 
-// The only files that may mint markup: dm-icon draws build-time SVG constants, dm-app picks a tag from a fixed table.
-const MARKUP_ALLOWED = new Set(["dm-icon.ts", "dm-app.ts"]);
-// The only file that may name a browser storage API: the theme store (it persists "dm-theme" and nothing else).
-const STORAGE_ALLOWED = new Set(["state/theme.ts"]);
+// Allowlists are exact relative paths, never basenames.
+// dm-icon draws build-time SVG constants; dm-app picks a tag from a fixed table.
+const MARKUP_ALLOWED = new Set(["src/components/dm-icon.ts", "src/components/dm-app.ts"]);
+// The theme store persists the "dm-theme" key and nothing else.
+const STORAGE_ALLOWED = new Set(["src/state/theme.ts"]);
+const THEME_KEY = "dm-theme";
+
+/** Every module specifier a source imports: `from "x"`, bare `import "x"`, dynamic `import("x")`. */
+function specifiers(text: string): string[] {
+  const out: string[] = [];
+  const patterns = [
+    /\bfrom\s*(["'])([^"'\n]+)\1/g,
+    /\bimport\s*(["'])([^"'\n]+)\1/g,
+    /\bimport\s*\(\s*(["'`])([^"'`\n]+)\1\s*\)/g,
+  ];
+  for (const re of patterns) for (const m of text.matchAll(re)) out.push(m[2] as string);
+  return out;
+}
+
+const BROWSER_LOOM = ["@loom/projection-runtime", "@loom/blueprint-runtime"];
+const isServerOnly = (s: string) =>
+  /^@docmind\/(experiences|auth)(\/|$)/.test(s) ||
+  /^@loom-ui\/core\/log(\/|$)/.test(s) ||
+  s === "@loom-ui/core" ||
+  s === "@loom-ui/hydration" ||
+  /^@loom-ui\/renderer-terminal(\/|$)/.test(s);
+const isForbiddenLoom = (s: string) => {
+  if (!s.startsWith("@loom/")) return false;
+  return !BROWSER_LOOM.some((ok) => s === ok || s.startsWith(`${ok}/`));
+};
+
+const MARKUP = /unsafeHTML|unsafeSVG|unsafeStatic|innerHTML|outerHTML|insertAdjacentHTML/;
+// Never allowed anywhere: other ways to turn a string into markup or code.
+const INJECTION =
+  /\bsrcdoc\b|createContextualFragment|\bDOMParser\b|\beval\s*\(|\bnew\s+Function\s*\(|(?<![\w$.])Function\s*\(/;
+const THIN = /defineSemanticCatalog|defineReshapers|genesis\(|@docmind\/experiences|@docmind\/auth/;
+const STORAGE = /localStorage|sessionStorage|indexedDB/;
+// window["local" + "Storage"] hides the name from STORAGE, so bracket access on a global is refused outright.
+const GLOBAL_BRACKET = /\b(?:window|globalThis|self|top|parent|frames)\s*\??\.?\s*\[/;
+
+/** Rule names an app file breaks; empty when it is clean. */
+function violations(path: string, text: string): string[] {
+  const bad: string[] = [];
+  const specs = specifiers(text);
+  if (specs.some(isServerOnly) || THIN.test(text)) bad.push("server-only");
+  if (specs.some(isForbiddenLoom)) bad.push("loom-package");
+  if (!MARKUP_ALLOWED.has(path) && MARKUP.test(text)) bad.push("markup");
+  if (INJECTION.test(text)) bad.push("injection");
+  if (GLOBAL_BRACKET.test(text)) bad.push("global-bracket");
+  if (!STORAGE_ALLOWED.has(path) && STORAGE.test(text)) bad.push("storage");
+  if (STORAGE_ALLOWED.has(path)) bad.push(...themeStorageViolations(text));
+  return bad;
+}
+
+/** In the theme store: only `dm-theme` may be read or written, nothing may be enumerated or cleared. */
+function themeStorageViolations(text: string): string[] {
+  const bad: string[] = [];
+  if (/sessionStorage|indexedDB|\.clear\s*\(|\.key\s*\(|\.removeItem\s*\(/.test(text))
+    bad.push("theme-storage-api");
+  if (!new RegExp(`const KEY = "${THEME_KEY}";`).test(text)) bad.push("theme-key-const");
+  for (const m of text.matchAll(/\b(?:getItem|setItem)\s*\(\s*([^,)]*)/g)) {
+    const arg = (m[1] as string).trim();
+    // Property signatures like `getItem(key: string)` are types, not calls.
+    if (/^[\w$]+\s*:/.test(arg)) continue;
+    if (arg !== "KEY") bad.push("theme-key-arg");
+  }
+  return bad;
+}
 
 describe("the dependency and security rules of apps/web", () => {
-  it("draws nothing as markup (D6): no unsafe* directive, innerHTML, outerHTML or insertAdjacentHTML", () => {
-    for (const p of app) {
-      if (MARKUP_ALLOWED.has(basename(p))) continue;
-      expect(text(p), p).not.toMatch(
-        /unsafeHTML|unsafeSVG|unsafeStatic|innerHTML|outerHTML|insertAdjacentHTML/,
-      );
-    }
+  it("scans the page and the sources (a self-check that the walk found them)", () => {
+    const paths = app.map((a) => a.path);
+    expect(paths).toContain("index.html");
+    expect(paths).toContain("src/main.ts");
+    expect(paths).toContain("src/state/theme.ts");
   });
-  it("is a thin surface (D14): no catalogue, no experience composition, no reshaper, no server package", () => {
-    for (const p of app)
-      expect(text(p), p).not.toMatch(
-        /@docmind\/experiences|@docmind\/auth|@loom-ui\/core\/log|from "@loom-ui\/core"|from "@loom-ui\/hydration"|defineSemanticCatalog|defineReshapers|genesis\(/,
-      );
+  it("breaks none of the rules: no server package, only the two Loom browser runtimes, no markup minting, no injection, no storage but dm-theme", () => {
+    for (const a of app) expect(violations(a.path, a.text), a.path).toEqual([]);
   });
-  it("imports no Loom package but the two browser runtimes", () => {
-    for (const p of app)
-      for (const m of text(p).matchAll(/from "(@loom\/[\w-]+)/g))
-        expect(["@loom/projection-runtime", "@loom/blueprint-runtime"], p).toContain(m[1]);
+});
+
+describe("the guards catch what they claim to (fixture strings, not real files)", () => {
+  const MISC = "src/components/dm-x.ts";
+  const THEME = "src/state/theme.ts";
+  const GOOD_THEME = [
+    `const KEY = "${THEME_KEY}";`,
+    "env.localStorage?.getItem(KEY);",
+    "env.localStorage?.setItem(KEY, choice);",
+  ].join("\n");
+
+  it("accepts clean sources and the real theme shape", () => {
+    expect(violations(MISC, `import { html } from "lit";\nimport "./dm-icon";`)).toEqual([]);
+    expect(violations(MISC, `import "@loom/projection-runtime";`)).toEqual([]);
+    expect(violations(MISC, `const m = await import("@loom/blueprint-runtime");`)).toEqual([]);
+    expect(violations(THEME, GOOD_THEME)).toEqual([]);
   });
-  it("stores nothing in the browser but the theme (D6)", () => {
-    for (const p of app) {
-      if (STORAGE_ALLOWED.has(rel(p))) continue;
-      expect(text(p), p).not.toMatch(/localStorage|sessionStorage|indexedDB/);
-    }
+
+  it.each([
+    ["static double-quoted", `import { a } from "@docmind/experiences";`],
+    ["static single-quoted", `import { a } from '@docmind/auth';`],
+    ["bare", `import "@loom-ui/core/log";`],
+    ["bare single", `import '@loom-ui/hydration';`],
+    ["dynamic", `const m = await import("@loom-ui/core");`],
+    ["export-from", `export * from "@loom-ui/renderer-terminal";`],
+    ["renderer-terminal subpath", `import x from "@loom-ui/renderer-terminal/dist/x.js";`],
+    ["multi-line", `import {\n  a,\n} from\n  "@docmind/auth";`],
+  ])("server-only specifier, %s", (_n, src) => {
+    expect(violations(MISC, src)).toContain("server-only");
+  });
+
+  it.each([
+    ["static", `import { a } from "@loom/pg-store";`],
+    ["bare", `import "@loom/kernel";`],
+    ["dynamic", `await import('@loom/blueprint-engine');`],
+    ["lookalike of an allowed runtime", `import x from "@loom/projection-runtime-server";`],
+  ])("a Loom package that is not a browser runtime, %s", (_n, src) => {
+    expect(violations(MISC, src)).toContain("loom-package");
+  });
+
+  it("does not mistake a string that merely mentions a package for an import", () => {
+    expect(violations(MISC, `const doc = "see @loom/kernel for details";`)).toEqual([]);
+  });
+
+  it.each([
+    "unsafeHTML(x)",
+    "el.innerHTML = x",
+    "el.outerHTML = x",
+    "el.insertAdjacentHTML('beforeend', x)",
+    `import { unsafeSVG } from "lit/directives/unsafe-svg.js"; unsafeSVG(x)`,
+  ])("markup minting outside the allowlist: %s", (src) => {
+    expect(violations(MISC, src)).toContain("markup");
+    expect(violations("src/components/dm-icon.ts", src)).not.toContain("markup");
+  });
+
+  it("allowlists are exact paths, not basenames", () => {
+    expect(violations("src/other/dm-icon.ts", "el.innerHTML = x")).toContain("markup");
+    expect(violations("src/other/theme.ts", "localStorage.getItem('dm-theme')")).toContain(
+      "storage",
+    );
+  });
+
+  it.each([
+    ["srcdoc", "iframe.srcdoc = x;"],
+    ["srcdoc in markup", `<iframe srcdoc="x"></iframe>`],
+    ["createContextualFragment", "range.createContextualFragment(x)"],
+    ["DOMParser", `new DOMParser().parseFromString(x, "text/html")`],
+    ["eval", "eval(x)"],
+    ["eval with space", "eval (x)"],
+    ["new Function", `new Function("return 1")`],
+    ["Function call", `Function("return 1")()`],
+  ])("injection sink, %s, is refused even in an allowlisted file", (_n, src) => {
+    expect(violations(MISC, src)).toContain("injection");
+    expect(violations("src/components/dm-icon.ts", src)).toContain("injection");
+    expect(violations(THEME, `${GOOD_THEME}\n${src}`)).toContain("injection");
+  });
+
+  it("does not flag words that merely contain a sink name", () => {
+    expect(violations(MISC, "const retrieval = 1; medieval(x);")).toEqual([]);
+  });
+
+  it.each([
+    `localStorage.setItem("a", "b")`,
+    `window["localStorage"].setItem("a", "b")`,
+    `window['sessionStorage']`,
+    `globalThis["indexedDB"]`,
+    "indexedDB.open('x')",
+  ])("storage outside the theme store: %s", (src) => {
+    const got = violations(MISC, src);
+    expect(got.some((r) => r === "storage" || r === "global-bracket")).toBe(true);
+  });
+
+  it("refuses computed bracket access on a global, which hides the storage name", () => {
+    expect(violations(MISC, `window["local" + "Storage"].clear()`)).toContain("global-bracket");
+    expect(violations(THEME, `${GOOD_THEME}\nwindow["local" + "Storage"]`)).toContain(
+      "global-bracket",
+    );
+  });
+
+  it.each([
+    ["another key", `${GOOD_THEME}\nenv.localStorage?.setItem("token", t);`],
+    ["a variable key", `${GOOD_THEME}\nenv.localStorage?.getItem(name);`],
+    ["setItem with a literal other key", `${GOOD_THEME}\nlocalStorage.setItem('title', t)`],
+    ["clear", `${GOOD_THEME}\nenv.localStorage.clear();`],
+    ["enumerating keys", `${GOOD_THEME}\nenv.localStorage.key(0);`],
+    ["removeItem", `${GOOD_THEME}\nenv.localStorage.removeItem(KEY);`],
+    ["sessionStorage", `${GOOD_THEME}\nsessionStorage.setItem(KEY, "x");`],
+    ["indexedDB", `${GOOD_THEME}\nindexedDB.open("x");`],
+    ["a changed key constant", GOOD_THEME.replace(THEME_KEY, "dm-session")],
+  ])("in the theme store, %s is caught", (_n, src) => {
+    expect(violations(THEME, src).length).toBeGreaterThan(0);
+  });
+
+  it("applies to .html: a module script's import and an inline sink are caught", () => {
+    const page = `<script type="module">import "@loom/kernel"; import x from '@docmind/auth';</script>`;
+    expect(violations("index.html", page)).toEqual(
+      expect.arrayContaining(["loom-package", "server-only"]),
+    );
+    expect(violations("index.html", "<script>localStorage.x = 1; eval(y)</script>")).toEqual(
+      expect.arrayContaining(["storage", "injection"]),
+    );
   });
 });
