@@ -49,7 +49,7 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
     "POST /api/ui/hydrate": noStore(
       "no-store",
       requireAuth(deps.authenticator, async (req, res, identity) => {
-        const body = await readJson(req, res, UiHydrateRequest);
+        const body = await readJson(req, res, UiHydrateRequest, { maskKeysUnder: ["params"] });
         if (!body) return;
         const results = await deps.views.hydrate(
           body.view,

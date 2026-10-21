@@ -16,6 +16,8 @@ import {
 } from "../documents/testHarness";
 import type { Chunk } from "../flows/ingest-document/chunker";
 import { PgChunkStore } from "../flows/ingest-document/pgChunks";
+import { ingestRun } from "../status/testing";
+import { readersFor } from "./readers";
 
 interface Value {
   rowKeys: string[];
@@ -94,6 +96,15 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
         ],
       );
     }
+    // a mix of statuses, so that a status read of the wrong user would show
+    for (const [who, id, spec] of [
+      [ALICE, mine, "ready"],
+      [ALICE, mine2, "failed:corrupt_content"],
+      [ALICE2, colleagues, "ready"],
+      [BOB, bobs, "failed:corrupt_content"],
+    ] as const)
+      for (const e of ingestRun(`u_${who.userId}:ingest-${id}.2`, spec)) h.status.onEvent(e);
+    await h.status.close();
     for (const [who, tag] of [
       [ALICE, "alice"],
       [BOB, "bob"],
@@ -176,13 +187,46 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
     ).toBe("error");
   });
 
-  it("filters by status for the table and not for the counts", async () => {
-    expect(
-      (await hydrate("alice", "library", "documents", { status: "failed" })).value.rowKeys,
-    ).toEqual([]);
+  it("filters by status for the table and not for the counts, and each user's statuses are their own", async () => {
+    const rows = async (user: string, status: string) =>
+      (await hydrate(user, "library", "documents", { status })).value.rowKeys;
+    expect(await rows("alice", "failed")).toEqual([mine2]);
+    expect(await rows("alice", "ready")).toEqual([mine]);
+    expect(await rows("alice2", "ready")).toEqual([colleagues]);
+    expect(await rows("alice2", "failed")).toEqual([]);
+    expect(await rows("bob", "failed")).toEqual([bobs]);
+    expect(await rows("bob", "ready")).toEqual([]);
     expect((await hydrate("alice", "library", "doc-total", { status: "failed" })).value.value).toBe(
       2,
     );
+    expect((await hydrate("alice", "library", "doc-ready")).value.value).toBe(1);
+    expect((await hydrate("alice", "detail", "doc-status", { id: mine })).value).toMatchObject({
+      level: "ok",
+    });
+    expect((await hydrate("alice", "detail", "doc-status", { id: mine2 })).value).toMatchObject({
+      level: "critical",
+    });
+  });
+
+  it("decrypts only the documents it returns: a status that matches nothing opens no title", async () => {
+    let opened = 0;
+    const counting = {
+      forUser: (userId: string) => {
+        const cipher = fields.forUser(userId);
+        return {
+          ...cipher,
+          openText: async (bind: string, env: unknown) => {
+            opened++;
+            return cipher.openText(bind, env);
+          },
+        };
+      },
+    } as unknown as FieldCrypto;
+    const readers = readersFor({ pool: h.app, fields: counting, status: h.status }, ALICE);
+    expect((await readers.documents({ limit: 200, status: "processing" })).items).toEqual([]);
+    expect(opened).toBe(0);
+    expect((await readers.documents({ limit: 1, status: "all" })).items).toHaveLength(1);
+    expect(opened).toBe(2); // one document: its title and its filename
   });
 
   it("answers 401 without a session, and the views route refuses an anonymous caller too", async () => {
@@ -195,7 +239,7 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
     expect(res.status).toBe(401);
   });
 
-  it("never logs content, an id or an email while serving, and fails closed for an erased user's stale session", async () => {
+  it("never logs content, an id or an email while serving", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     await hydrate("alice", "detail", "doc-status", { id: colleagues });
     for (const call of log.mock.calls)
@@ -246,7 +290,8 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
     // bob (another tenant) and alice2 (same tenant, another user) ask for alice's ids
     for (const user of ["bob", "alice2"]) {
       const seen = await everything(user, [mine, mine2]);
-      expect(seen).not.toMatch(/sentinel-(title|summary|point|passage|chat)-(alice|0|1|2)/);
+      expect(seen).not.toMatch(/sentinel-(title|summary|point|chat)-alice/);
+      expect(seen).not.toMatch(/sentinel-passage-/); // only alice has passages, so no passage number may appear
       expect(seen).not.toContain(mine);
       expect(seen).not.toContain(mine2);
       for (const handle of detail) {

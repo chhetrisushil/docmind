@@ -1,6 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import type { DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { CHAT_LIST_CAP, CONTENT_CAP, type UiReaders } from "@docmind/experiences";
+import { CHAT_LIST_CAP, CONTENT_CAP, type UiReaders, citedWindow } from "@docmind/experiences";
 import type { Pool } from "pg";
 import { listChatsPage } from "../chats/routes";
 import type { FieldCrypto } from "../crypto/fields";
@@ -27,8 +27,8 @@ const shown = (dto: DocumentDto): DocumentDto => ({ ...dto, error: fixedError(dt
 const PROCESSING = new Set<DocumentDto["status"]>(["uploaded", "parsing", "embedding"]);
 const matches =
   (status: "all" | "ready" | "processing" | "failed") =>
-  (d: DocumentDto): boolean =>
-    status === "all" || (status === "processing" ? PROCESSING.has(d.status) : d.status === status);
+  (state: DocumentDto["status"]): boolean =>
+    status === "all" || (status === "processing" ? PROCESSING.has(state) : state === status);
 
 /**
  * The readers the UI plane serves from, bound to ONE caller. The tenant and the owner come from `identity` (the session)
@@ -55,13 +55,14 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
           page.rows.map((r) => ({ id: r.id, generation: r.ingest_generation })),
         );
         for (const row of page.rows) {
-          const dto = shown(await toDto(row, cipher(), views.get(row.id) ?? UPLOADED));
-          if (!keep(dto)) continue;
+          // The status decides before anything is opened: only the documents returned are decrypted.
+          const view = views.get(row.id) ?? UPLOADED;
+          if (!keep(view.status)) continue;
           if (items.length === limit) {
             truncated = true; // one more match than asked for
             break;
           }
-          items.push(dto);
+          items.push(shown(await toDto(row, cipher(), view)));
         }
         if (truncated || !page.next) break;
         after = { t: page.next.created_cursor, i: page.next.id };
@@ -109,8 +110,7 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         )
           break;
       }
-      const cited = passage === undefined ? -1 : out.findIndex((p) => p.passageId === passage);
-      const keep = Math.max(upto, cited + 1);
+      const keep = citedWindow(out, upto, passage);
       return { items: out.slice(0, keep), more: more || out.length > keep };
     },
 

@@ -1,8 +1,8 @@
 import type { DocumentDto } from "@docmind/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { INVOKE_ID, type UiReaders, createInvoker } from "./invoker";
+import { INVOKE_ID, MAX_READS_PER_BATCH, type UiReaders, createInvoker } from "./invoker";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP } from "./providers";
-import { createViews } from "./views-api";
+import { MAX_CONCURRENT_READS, createViews } from "./views-api";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const doc = (n: number): DocumentDto => ({
@@ -444,5 +444,41 @@ describe("186c review follow-ups", () => {
       const [b] = await views().hydrate("library", [req("library", "ingest")], full, "u");
       expect(JSON.stringify(b)).not.toMatch(/at least/i);
     }
+  });
+});
+
+describe("the work one batch can cause is bounded", () => {
+  const distinct = (n: number) =>
+    Array.from({ length: n }, (_, i) => req("detail", "doc-content", { id: id(1), upto: i + 1 }));
+  it("a 32-request batch of distinct reads starts at most MAX_READS_PER_BATCH reads and answers the rest as errors", async () => {
+    const r = readers({ content: vi.fn(async () => ({ items: [], more: false })) });
+    const results = await views().hydrate("detail", distinct(32), r, "user-1");
+    expect(results).toHaveLength(32);
+    expect(r.content).toHaveBeenCalledTimes(MAX_READS_PER_BATCH);
+    expect(results.filter((x) => x.state === "error")).toHaveLength(32 - MAX_READS_PER_BATCH);
+    expect(results.filter((x) => x.state === "ready")).toHaveLength(MAX_READS_PER_BATCH);
+  });
+  it("never has more than MAX_CONCURRENT_READS reads in flight", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const r = readers({
+      content: vi.fn(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return { items: [], more: false };
+      }),
+    });
+    await views().hydrate("detail", distinct(32), r, "user-1");
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(MAX_CONCURRENT_READS);
+  });
+  it("identical reads share one read and cost no budget", async () => {
+    const r = readers();
+    const same = Array.from({ length: 32 }, () => req("library", "doc-total"));
+    const results = await views().hydrate("library", same, r, "user-1");
+    expect(r.documents).toHaveBeenCalledTimes(1);
+    expect(results.every((x) => x.state === "ready")).toBe(true);
   });
 });

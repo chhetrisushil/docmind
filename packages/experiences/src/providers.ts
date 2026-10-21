@@ -46,3 +46,17 @@ export function provider(
     cachePolicy: { ttlSeconds: 0, scope: "principal" },
   };
 }
+
+/**
+ * How many of a content read's items a view keeps: the first `upto`, or everything up to a cited passage that lies past
+ * them (186c M3), never more than CONTENT_CAP. The one rule, used by the server's reader and the invoker's clip.
+ */
+export function citedWindow(
+  items: readonly { passageId: string }[],
+  upto: number,
+  cited: string | undefined,
+): number {
+  const at =
+    cited === undefined || cited === "" ? -1 : items.findIndex((p) => p.passageId === cited);
+  return Math.min(CONTENT_CAP, Math.max(upto, at + 1));
+}

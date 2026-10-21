@@ -3,7 +3,7 @@ import { Uuid } from "@docmind/contracts";
 import type { TransientInvoker } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { z } from "zod";
-import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP } from "./providers";
+import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP, citedWindow } from "./providers";
 
 export interface RawDocuments {
   items: DocumentDto[];
@@ -47,6 +47,9 @@ const ARGS = {
   "chats.list": z.object({ q: z.string().max(100) }).strict(),
 } as const;
 
+/** Distinct reads one invoker (one hydrate POST) may start; identical reads share one and cost nothing. The rest are refused. */
+export const MAX_READS_PER_BATCH = 8;
+
 const fail = (channel: string): never => {
   throw new TypedFailure(channel, {});
 };
@@ -72,6 +75,7 @@ type Call = { key: unknown; exec: () => Promise<unknown> };
  */
 export function createInvoker(readers: UiReaders): TransientInvoker {
   const memo = new Map<string, Promise<unknown>>();
+  let started = 0;
   /** Validates synchronously and returns what to key and run; throws a TypedFailure on a refusal. */
   const plan = (toolId: string, input: unknown): Call => {
     if (toolId !== INVOKE_ID) return fail("unknownTool");
@@ -111,12 +115,7 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
                 upto: a.data.upto,
                 ...(a.data.passage !== "" && { passage: a.data.passage }),
               })) ?? fail("notFound");
-            // A cited passage past the first `upto` is kept with everything before it (186c M3), never beyond CONTENT_CAP.
-            const at =
-              a.data.passage === ""
-                ? -1
-                : raw.items.findIndex((p) => p.passageId === a.data.passage);
-            const keep = Math.min(CONTENT_CAP, Math.max(a.data.upto, at + 1));
+            const keep = citedWindow(raw.items, a.data.upto, a.data.passage);
             const content: RawContent = {
               items: raw.items.slice(0, keep),
               more: raw.more || raw.items.length > keep,
@@ -144,6 +143,9 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
         const key = stable(k);
         let p = memo.get(key);
         if (p === undefined) {
+          if (started >= MAX_READS_PER_BATCH)
+            return Promise.reject(new TypedFailure("readBudget", {}));
+          started++;
           p = exec();
           memo.set(key, p);
           // A failure is not remembered: only the calls already waiting on it share it.
