@@ -47,10 +47,17 @@ export interface Http {
   request<T = undefined>(method: string, path: string, o?: RequestOptions<T>): Promise<T>;
 }
 
-export function createHttp(deps: { fetch?: typeof fetch; onUnauthorized?: () => void } = {}): Http {
+export interface UnauthorizedDeps {
+  /** The session the request was sent in; passed back so a late 401 can be told from the current session's. */
+  epoch?: () => number;
+  onUnauthorized?: (epoch: number | undefined) => void;
+}
+
+export function createHttp(deps: { fetch?: typeof fetch } & UnauthorizedDeps = {}): Http {
   const doFetch = deps.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   return {
     async request<T>(method: string, path: string, o: RequestOptions<T> = {}): Promise<T> {
+      const sentIn = deps.epoch?.();
       const init: RequestInit = {
         method,
         credentials: "same-origin",
@@ -74,7 +81,7 @@ export function createHttp(deps: { fetch?: typeof fetch; onUnauthorized?: () => 
           await res.text().catch(() => ""),
           res.headers.get("retry-after"),
         );
-        if (res.status === 401 && failure.code === "unauthorized") deps.onUnauthorized?.();
+        if (res.status === 401 && failure.code === "unauthorized") deps.onUnauthorized?.(sentIn);
         throw failure;
       }
       if (res.status === 204) return undefined as T;

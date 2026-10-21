@@ -108,7 +108,7 @@ describe("dm-auth-form: sign in", () => {
   it("asks the browser for the right autofill hints", async () => {
     const { services } = setup();
     const inn = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-in" });
-    expect(q(inn, "input[type=email]").getAttribute("autocomplete")).toBe("email");
+    expect(q(inn, "input[type=email]").getAttribute("autocomplete")).toBe("username");
     expect(q(inn, "input[name=password]").getAttribute("autocomplete")).toBe("current-password");
     const up = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-up" });
     expect(q(up, "input[name=password]").getAttribute("autocomplete")).toBe("new-password");
@@ -181,5 +181,108 @@ describe("dm-auth-form: sign up", () => {
     expect(q<HTMLAnchorElement>(el, "a[href='/sign-up']")).not.toBeNull();
     const up = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-up" });
     expect(q<HTMLAnchorElement>(up, "a[href='/sign-in']")).not.toBeNull();
+  });
+});
+
+describe("dm-auth-form: fix round 1", () => {
+  const submit = (el: HTMLElement) =>
+    q<HTMLFormElement>(el, "form").dispatchEvent(new Event("submit", { cancelable: true }));
+  const focused = (el: HTMLElement) => root(el).activeElement;
+
+  it("describes the inputs by the error and the hint, and marks only the field the error is about", async () => {
+    const { services } = setup();
+    const el = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-up" });
+    const pw = q<HTMLInputElement>(el, "input[name=password]");
+    const hint = q(el, ".hint");
+    expect(hint.id).not.toBe("");
+    expect(pw.getAttribute("aria-describedby")).toContain(hint.id);
+    await fill(el, "a@example.com", "short");
+    submit(el);
+    await settle(el);
+    const err = q(el, "[role=alert]");
+    expect(err.id).not.toBe("");
+    expect(pw.getAttribute("aria-describedby")).toContain(err.id);
+    expect(pw.getAttribute("aria-invalid")).toBe("true");
+    expect(q(el, "input[type=email]").getAttribute("aria-invalid")).not.toBe("true");
+    expect(q(el, "input[type=email]").getAttribute("aria-describedby") ?? "").not.toContain(err.id);
+    await fill(el, "not-an-email", "a long enough password");
+    submit(el);
+    await settle(el);
+    expect(q(el, "input[type=email]").getAttribute("aria-invalid")).toBe("true");
+    expect(q(el, "input[type=email]").getAttribute("aria-describedby")).toContain(
+      q(el, "[role=alert]").id,
+    );
+    expect(pw.getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("a network or throttle error is not a field error", async () => {
+    const { services } = setup({
+      login: vi.fn(async () => {
+        throw new ApiError(0, "network");
+      }),
+    });
+    const el = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-in" });
+    await fill(el, "a@example.com", "pw");
+    submit(el);
+    await vi.waitFor(() => expect(q(el, "[role=alert]")).not.toBeNull());
+    await settle(el);
+    expect(q(el, "input[name=password]").getAttribute("aria-invalid")).not.toBe("true");
+    expect(q(el, "input[type=email]").getAttribute("aria-invalid")).not.toBe("true");
+  });
+
+  it("keeps the submit focusable while busy, ignores a second submit, and focuses the password after a refusal", async () => {
+    let refuse: (e: unknown) => void = () => {};
+    const login = vi.fn(
+      () =>
+        new Promise((_, rej) => {
+          refuse = rej;
+        }),
+    );
+    const { services } = setup({ login });
+    const el = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-in" });
+    await fill(el, "a@example.com", "pw");
+    const button = q<HTMLButtonElement>(el, "button[type=submit]");
+    button.focus();
+    submit(el);
+    await settle(el);
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(focused(el)).toBe(button);
+    submit(el);
+    expect(login).toHaveBeenCalledTimes(1);
+    refuse(new ApiError(401, "invalid_credentials"));
+    await vi.waitFor(() => expect(focused(el)).toBe(q(el, "input[name=password]")));
+    expect(button.getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("focuses the email on an invalid address and the error on a non-field error", async () => {
+    const { services } = setup({
+      login: vi.fn(async () => {
+        throw new ApiError(0, "network");
+      }),
+    });
+    const up = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-up" });
+    await fill(up, "nope", "a long enough password");
+    submit(up);
+    await vi.waitFor(() => expect(focused(up)).toBe(q(up, "input[type=email]")));
+    const el = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-in" });
+    await fill(el, "a@example.com", "pw");
+    submit(el);
+    await vi.waitFor(() => expect(focused(el)).toBe(q(el, "[role=alert]")));
+  });
+
+  it("uses username autofill on sign-in, posts natively, and trims the email", async () => {
+    const { services, api } = setup();
+    const el = await mountWith<HTMLElement>(services, "dm-auth-form", { mode: "sign-in" });
+    expect(q(el, "input[type=email]").getAttribute("autocomplete")).toBe("username");
+    expect(q(el, "form").getAttribute("method")).toBe("post");
+    await fill(el, "  a@example.com ", "pw");
+    submit(el);
+    await vi.waitFor(() =>
+      expect((api as never as { login: ReturnType<typeof vi.fn> }).login).toHaveBeenCalledWith({
+        email: "a@example.com",
+        password: "pw",
+      }),
+    );
   });
 });
