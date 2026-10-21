@@ -139,6 +139,7 @@ export class DmDocDetail extends LitElement {
       toasts,
       session,
       documentId,
+      outbox: services.outbox,
       upto: () => this.upto,
       active: () => this.isConnected && this.route?.id === documentId,
       confirm: (h, b, l, d) => confirmDialog(h, b, l, d, this.leaving.signal),

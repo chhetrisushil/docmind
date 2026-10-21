@@ -8,3 +8,4 @@ import "./dm-view";
 import "./dm-upload-zone";
 import "./dm-documents-page";
 import "./dm-doc-detail";
+import "./dm-chat-page";

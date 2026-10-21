@@ -4,7 +4,9 @@ import { createHttp } from "./api/http";
 import { type OpenSse, openSse } from "./api/sse";
 import { Router } from "./router";
 import { AuthStore } from "./state/auth";
+import type { Outbox } from "./state/outbox";
 import { ReceiptStore } from "./state/receipt";
+import { Store } from "./state/store";
 import { ThemeStore } from "./state/theme";
 import { ToastStore } from "./state/toasts";
 import { UploadsStore } from "./state/uploads";
@@ -18,6 +20,7 @@ export interface Services {
   receipt: ReceiptStore;
   uploads: UploadsStore;
   open: OpenSse;
+  outbox: Store<Outbox>;
 }
 
 export const servicesContext = createContext<Services>(Symbol.for("dm-services"));
@@ -48,5 +51,6 @@ export function createServices(o: ServiceOverrides = {}): Services {
     receipt: o.receipt ?? new ReceiptStore(),
     uploads: o.uploads ?? new UploadsStore(api, open, auth),
     open,
+    outbox: o.outbox ?? new Store<Outbox>(undefined),
   };
 }

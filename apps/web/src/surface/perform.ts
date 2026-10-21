@@ -2,6 +2,8 @@ import type { Intent } from "@docmind/contracts";
 import type { Api } from "../api/client";
 import { ApiError } from "../api/http";
 import type { Router } from "../router";
+import type { Outbox } from "../state/outbox";
+import type { Store } from "../state/store";
 import type { ToastStore } from "../state/toasts";
 import type { ViewSession } from "../ui/session";
 
@@ -12,6 +14,8 @@ export interface PerformContext {
   session: Pick<ViewSession, "invalidate" | "setParams">;
   /** The document the page has open and was served (set by the document page only). */
   documentId?: string;
+  /** Where a suggested question waits for the chat page that sends it. */
+  outbox?: Store<Outbox>;
   /** The page size the content handle has now. */
   upto?(): number;
   /** False once the page that asked has gone or moved on: a late answer then navigates nowhere. */
@@ -98,6 +102,7 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
       if (c.documentId === undefined) return false;
       try {
         const chat = await c.api.createChat({ scope: { documentIds: [c.documentId] } });
+        if (c.active?.() !== false) c.outbox?.set({ chatId: chat.id, text: intent.question });
         if (c.active?.() !== false) c.router.navigate({ name: "chat", chatId: chat.id });
       } catch {
         err(c.toasts, "Could not start a chat about that document.");

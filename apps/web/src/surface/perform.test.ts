@@ -142,6 +142,27 @@ describe("performIntent: the document", () => {
     expect(JSON.stringify(t.router.navigate.mock.calls)).not.toContain("due");
     expect(t.toasts.push).not.toHaveBeenCalled();
   });
+  it("leaves a suggested question for the chat page to send", async () => {
+    const t = ctx();
+    const outbox = { set: vi.fn() };
+    await performIntent({ type: "document.ask-question", question: "When is it due?" }, {
+      ...(t.c as object),
+      documentId: A,
+      outbox,
+    } as never);
+    expect(outbox.set).toHaveBeenCalledWith({ chatId: "c1", text: "When is it due?" });
+  });
+  it("leaves nothing in the outbox when the page is no longer active", async () => {
+    const t = ctx();
+    const outbox = { set: vi.fn() };
+    await performIntent({ type: "document.ask-question", question: "Q?" }, {
+      ...(t.c as object),
+      documentId: A,
+      outbox,
+      active: () => false,
+    } as never);
+    expect(outbox.set).not.toHaveBeenCalled();
+  });
   it("refuses a question when no document is open", async () => {
     const t = ctx();
     expect(await performIntent({ type: "document.ask-question", question: "Q?" }, t.c)).toBe(false);

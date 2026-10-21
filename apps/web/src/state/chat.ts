@@ -39,6 +39,8 @@ export interface ChatViewState {
   olderFailed: boolean;
   loading: boolean;
   closed: boolean;
+  /** The history is in and the chat is open: only then may a message be sent (an early send would be refused and show a false error). */
+  ready: boolean;
   problem?: ChatProblem;
   focus?: { entryId: string; passageId?: string };
   sourcesOpen: boolean;
@@ -91,6 +93,7 @@ export class ChatController {
     olderFailed: false,
     loading: true,
     closed: false,
+    ready: false,
     sourcesOpen: true,
   });
   private readonly fold = new ChatFold();
@@ -219,6 +222,7 @@ export class ChatController {
       olderFailed: this.olderFailed,
       loading: !this.fold.historyLoaded && this.problem === undefined,
       closed,
+      ready: this.fold.historyLoaded && !closed,
       ...(this.problem && { problem: this.problem }),
       ...(prev.focus && { focus: prev.focus }),
       sourcesOpen: prev.sourcesOpen,
@@ -336,20 +340,19 @@ export class ChatController {
     return held;
   }
 
-  /** Performs an intent the Chat widget raised (already checked for staleness and resolved by `intentOf`). */
-  async perform(intent: Intent): Promise<void> {
+  /** Performs an intent the Chat widget raised (already checked for staleness and resolved by `intentOf`); a send answers its outcome. */
+  async perform(intent: Intent): Promise<SendOutcome | undefined> {
     switch (intent.type) {
       case "chat.send":
-        await this.send(intent.text, undefined, intent.key);
-        return;
+        return this.send(intent.text, undefined, intent.key);
       case "chat.cite":
         this.select(intent.entryId, intent.refId);
-        return;
+        return undefined;
       case "chat.older":
         await this.loadOlder();
-        return;
+        return undefined;
       default:
-        return; // not a chat intent: the page handles it
+        return undefined; // not a chat intent: the page handles it
     }
   }
 
