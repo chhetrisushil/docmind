@@ -974,4 +974,35 @@ describe("dm-chat-page: sources, resize and dialogs", () => {
     await vi.waitFor(() => expect(sib.inert).toBe(false));
     expect((page.shadowRoot?.querySelector("header") as HTMLElement).inert).toBe(false);
   });
+  it("removing the page releases what the panel made inert, at once, or when an open dialog closes", async () => {
+    narrow();
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Due in 30 days"));
+    const sib = document.createElement("div");
+    page.parentNode?.append(sib);
+    (button(page, "button[data-sources]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(sib.inert).toBe(true));
+    page.remove();
+    expect(sib.inert).toBe(false);
+
+    const page2 = await t.mount();
+    await vi.waitFor(() => expect(chatText(page2)).toContain("Due in 30 days"));
+    const sib2 = document.createElement("div");
+    page2.parentNode?.append(sib2);
+    (button(page2, "button[data-sources]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(sib2.inert).toBe(true));
+    const d = document.createElement("dm-dialog") as HTMLElement & {
+      open: boolean;
+      heading: string;
+    };
+    d.heading = "Confirm";
+    d.open = true;
+    document.body.append(d);
+    await new Promise((r) => setTimeout(r, 0));
+    page2.remove();
+    expect(sib2.inert).toBe(true); // the dialog still relies on it
+    d.remove();
+    await vi.waitFor(() => expect(sib2.inert).toBe(false));
+  });
 });

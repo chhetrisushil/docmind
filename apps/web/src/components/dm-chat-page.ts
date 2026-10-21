@@ -132,7 +132,7 @@ export class DmChatPage extends LitElement {
     document.removeEventListener(DIALOG_CLOSED, this.onDialogClosed);
     this.wide?.removeEventListener("change", this.onResize);
     this.wide = undefined;
-    this.releaseModal();
+    this.releaseOnDisconnect();
     // A message nobody consumed does not wait for a later visit.
     const svc = this.ctx.services;
     if (svc && svc.outbox.get()?.chatId !== this.chatId) svc.outbox.set(undefined);
@@ -163,6 +163,21 @@ export class DmChatPage extends LitElement {
     }
   }
   /** Nodes the panel made inert stay so while a dialog is open (the dialog skipped them); they are released when it closes. */
+  /** The page is going: release now, or, while a dialog is open, as soon as it closes (a listener not tied to this page). */
+  private releaseOnDisconnect(): void {
+    if (!dialogOpen()) {
+      this.releaseModal();
+      return;
+    }
+    const held = this.inerted;
+    this.inerted = [];
+    const release = () => {
+      if (dialogOpen()) return;
+      document.removeEventListener(DIALOG_CLOSED, release);
+      for (const el of held) el.inert = false;
+    };
+    document.addEventListener(DIALOG_CLOSED, release);
+  }
   private releaseModal(): void {
     if (dialogOpen()) return;
     for (const el of this.inerted) el.inert = false;
