@@ -274,4 +274,19 @@ describe("dm-app: fix round 1", () => {
     await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
     expect(root(app).querySelector("dm-not-found")).toBeNull();
   });
+
+  it("draws signed-in routes inside the shell, and sign-in, account-deleted and not-found outside it", async () => {
+    const svc = services("/settings");
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() =>
+      expect(root(app).querySelector("dm-app-shell > dm-settings")).not.toBeNull(),
+    );
+    expect(root(app).querySelector("dm-app-shell dm-toasts")).toBeNull(); // the live regions stay outside
+    svc.router.navigate({ name: "account-deleted" });
+    await vi.waitFor(() => expect(root(app).querySelector("dm-account-deleted")).not.toBeNull());
+    expect(root(app).querySelector("dm-app-shell")).toBeNull();
+    svc.router.navigate(parseRoute("/nope"));
+    await vi.waitFor(() => expect(root(app).querySelector("dm-not-found")).not.toBeNull());
+    expect(root(app).querySelector("dm-app-shell")).toBeNull();
+  });
 });
