@@ -178,9 +178,6 @@ importers:
       '@loom-ui/renderer-lit':
         specifier: link:../../../loom-ui/packages/renderer-lit
         version: link:../../../loom-ui/packages/renderer-lit
-      '@loom/blueprint-runtime':
-        specifier: link:../../../loom/packages/blueprint-runtime
-        version: link:../../../loom/packages/blueprint-runtime
       '@loom/projection-runtime':
         specifier: link:../../../loom/packages/projection-runtime
         version: link:../../../loom/packages/projection-runtime
