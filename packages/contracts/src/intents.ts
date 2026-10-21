@@ -23,6 +23,8 @@ export type Intent =
 export interface Held {
   rowKeys?: readonly string[];
   list?: readonly unknown[];
+  /** The reference ids the server served for each chat entry (entry id to ref ids), for `chat.cite`. */
+  refs?: ReadonlyMap<string, readonly string[]>;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -33,7 +35,9 @@ const own = (r: Record<string, unknown>, k: string): unknown =>
 const isUuid = (v: unknown): v is string => typeof v === "string" && Uuid.safeParse(v).success;
 
 const ENTRY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const MAX_KEY = 200;
+/** loom-ui's submit-key shape (`isSubmitKey`, packages/core/src/chatActions.ts); the key becomes the turn's idempotency key. */
+const SUBMIT_KEY = /^[A-Za-z0-9_-]{16,128}$/;
+const MAX_QUESTION = 4000;
 const STATUSES = ["all", "ready", "processing", "failed"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -84,7 +88,9 @@ function resolve(
       if (a === "show-more") return { type: "content.more" };
       if (a === "ask-question") {
         const q = heldAt(own(p, "context"), held.list);
-        return typeof q === "string" ? { type: "document.ask-question", question: q } : undefined;
+        return typeof q === "string" && q.length >= 1 && q.length <= MAX_QUESTION
+          ? { type: "document.ask-question", question: q }
+          : undefined;
       }
       return undefined;
     }
@@ -107,7 +113,7 @@ function resolve(
         const key = own(p, "key");
         if (typeof raw !== "string" || typeof key !== "string") return undefined;
         const text = raw.trim();
-        return text.length >= 1 && text.length <= 4000 && key.length >= 1 && key.length <= MAX_KEY
+        return text.length >= 1 && text.length <= 4000 && SUBMIT_KEY.test(key)
           ? { type: "chat.send", text, key }
           : undefined;
       }
@@ -118,11 +124,21 @@ function resolve(
       if (type === "CHAT_REF_OPEN") {
         const entryId = own(p, "entryId");
         const refId = own(p, "refId");
-        return typeof entryId === "string" &&
-          ENTRY_ID.test(entryId) &&
-          typeof refId === "string" &&
-          ENTRY_ID.test(refId)
-          ? { type: "chat.cite", entryId, refId }
+        if (
+          typeof entryId !== "string" ||
+          typeof refId !== "string" ||
+          !(held.refs instanceof Map) ||
+          !ENTRY_ID.test(entryId)
+        )
+          return undefined;
+        const served = held.refs.get(entryId);
+        const found = Array.isArray(served)
+          ? (served as readonly unknown[]).find(
+              (r) => typeof r === "string" && r.toLowerCase() === refId.toLowerCase(),
+            )
+          : undefined;
+        return typeof found === "string" && ENTRY_ID.test(found)
+          ? { type: "chat.cite", entryId, refId: found }
           : undefined;
       }
       if (type === "LOAD_OLDER") return { type: "chat.older" };
@@ -146,7 +162,8 @@ function resolve(
 /**
  * The one place that says what a widget action means for DocMind, for every surface. Total: it never throws, and
  * `undefined` means "not an action of this view". The action is untrusted: its name must be on its view's closed list,
- * and an id or a text is taken from what the surface holds (`held`), never from the payload.
+ * and an id or a text is taken from what the surface holds (`held`), never from the payload (a chat citation must match
+ * `held.refs`). Staleness is the caller's job: run loom-ui's `isStaleAction` / `viewedVersion` check first; `intentOf` ignores it.
  */
 export function intentOf(
   view: ViewName,
