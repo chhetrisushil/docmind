@@ -84,7 +84,8 @@ type Handler = (state: ChatActivityState, event: EventEnvelope) => ChatActivityS
 const chatOnly =
   (handler: Handler): Handler =>
   (s, e) =>
-    isChatExecution(e.executionId) ? handler(s, e) : NEUTRAL;
+    // An empty state is the tombstone (or a non-chat row): nothing after it counts or resurrects.
+    isChatExecution(e.executionId) && Object.keys(s).length > 0 ? handler(s, e) : NEUTRAL;
 
 export const activityHandlers = {
   // The row exists from the start of the execution.
@@ -98,13 +99,15 @@ export const activityHandlers = {
       at: Number.isFinite(e.timestamp) ? e.timestamp + 0.5 : s.at,
     };
   }),
+  // The erasure tombstone Loom writes to an erased user's log: the row holds no counts afterwards.
+  PAYLOAD_SHREDDED: () => NEUTRAL,
 } satisfies Record<string, Handler>;
 
 /** The durable fold. Bump `version` when a handler's meaning changes: Loom re-folds at boot. */
 export const chatActivity = projection$<ChatActivityState>({
   id: CHAT_ACTIVITY_MODEL,
   name: "ChatActivity",
-  version: "2",
+  version: "3",
   initialState: INITIAL_ACTIVITY,
   handlers: activityHandlers,
 });

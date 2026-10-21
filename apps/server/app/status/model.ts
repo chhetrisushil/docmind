@@ -93,7 +93,8 @@ const NEUTRAL = {} as IngestStatusState;
 const ingestOnly =
   (handler: Handler): Handler =>
   (s, e) =>
-    isIngestExecution(e.executionId) ? handler(s, e) : NEUTRAL;
+    // An empty state is the tombstone (or a non-ingest row): nothing after it resurrects a status.
+    isIngestExecution(e.executionId) && Object.keys(s).length > 0 ? handler(s, e) : NEUTRAL;
 
 const rawHandlers = {
   // The row exists from the start of the execution (the stale-upload sweep relies on it).
@@ -119,6 +120,9 @@ const rawHandlers = {
       : { ...s, status: "failed", code: "internal" },
   // A failure after a terminal state (a specific code, or ready) changes nothing.
   EXECUTION_FAILED: (s) => (isTerminal(s) ? s : { ...s, status: "failed", code: "internal" }),
+  // The erasure tombstone Loom writes to an erased user's log (compliance Art. 17). A row a rebuild brings back for an
+  // erased execution must hold no status: the neutral state, like a chat execution's row.
+  PAYLOAD_SHREDDED: () => NEUTRAL,
 } satisfies Record<string, Handler>;
 
 export const ingestHandlers: Record<keyof typeof rawHandlers, Handler> = {
@@ -127,13 +131,14 @@ export const ingestHandlers: Record<keyof typeof rawHandlers, Handler> = {
   STEP_COMPLETED: ingestOnly(rawHandlers.STEP_COMPLETED),
   EXECUTION_CANCELLED: ingestOnly(rawHandlers.EXECUTION_CANCELLED),
   EXECUTION_FAILED: ingestOnly(rawHandlers.EXECUTION_FAILED),
+  PAYLOAD_SHREDDED: rawHandlers.PAYLOAD_SHREDDED,
 };
 
-/** The durable fold (ADR 0132). Bump `version` when a handler's meaning changes: Loom re-folds at boot. */
+/** The durable fold (ADR 0132). Bump `version` when a handler's meaning changes: Loom re-folds at boot ("4": erasure tombstones fold to the neutral state). */
 export const ingestStatus = projection$<IngestStatusState>({
   id: INGEST_STATUS_MODEL,
   name: "IngestStatus",
-  version: "3",
+  version: "4",
   initialState: INITIAL_STATUS,
   handlers: ingestHandlers,
 });

@@ -4,6 +4,7 @@ import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-mode
 import { describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "../flows/ingest-document/errors";
 import {
+  INGEST_STATUS_MODEL,
   INITIAL_STATUS,
   RECOVERY_EXHAUSTED_REASON,
   STATUS_MESSAGES,
@@ -19,7 +20,7 @@ import {
   progressOf,
   viewOf,
 } from "./model";
-import { evt, ingestRun } from "./testing";
+import { MemoryLog, evt, ingestRun } from "./testing";
 
 const U = randomUUID();
 const D = randomUUID();
@@ -169,20 +170,56 @@ describe("the fold", () => {
   it("is registered as one durable fold, with enums and codes only", () => {
     expect([ingestStatus.id, ingestStatus.version, ingestStatus.initialState]).toEqual([
       "ingest-status",
-      "3",
+      "4",
       INITIAL_STATUS,
     ]);
     expect(Object.keys(ingestStatus.handlers).sort()).toEqual([
       "EXECUTION_CANCELLED",
       "EXECUTION_FAILED",
       "EXECUTION_STARTED",
+      "PAYLOAD_SHREDDED",
       "STEP_COMPLETED",
       "STEP_STARTED",
     ]);
   });
+
+  it("skips a shredded payload, and folds the erasure tombstone to the neutral state", () => {
+    const started = evt(exec(), 0, "EXECUTION_STARTED", { input: {} });
+    const shreddedStep = evt(exec(), 1, "STEP_COMPLETED", { $shredded: true });
+    expect(foldIngestStatus([started, shreddedStep])).toEqual(INITIAL_STATUS);
+    const tombstone = evt(exec(), 2, "PAYLOAD_SHREDDED", { subjectId: U });
+    expect(foldIngestStatus([...ingestRun(exec(), "ready"), tombstone])).toEqual({});
+  });
+
+  it("keeps the tombstone state absorbing: a later event does not resurrect a status", () => {
+    const tombstone = evt(exec(), 2, "PAYLOAD_SHREDDED", { subjectId: U });
+    const later = [
+      evt(exec(), 3, "EXECUTION_FAILED", {}),
+      evt(exec(), 4, "STEP_STARTED", { stepId: "ingest-embed" }),
+    ];
+    expect(foldIngestStatus([...ingestRun(exec(), "ready"), tombstone, ...later])).toEqual({});
+  });
 });
 
 describe("through Loom's folded-model service", () => {
+  it("a PAYLOAD_SHREDDED event reaches the handler: the row an erased execution gets holds no status", async () => {
+    const store = new InMemoryReadModelStore();
+    const service = new ReadModelService(store, {});
+    await service.registerFolded({
+      projection: ingestStatus,
+      keyOf: ingestKeyOf,
+      scopeOf: ingestScopeOf,
+    });
+    const run = ingestRun(exec(), "ready");
+    const log = new MemoryLog();
+    // Loom writes ERASURE_PENDING to the `__loom_erasure__` control stream, not to this log.
+    log.append(...run, evt(exec(), run.length, "PAYLOAD_SHREDDED", { subjectId: U }));
+    await service.catchUp([log]);
+    expect(await store.getFoldedByKey(INGEST_STATUS_MODEL, [D])).toMatchObject([
+      { executionId: exec(), key: D, scope: U, state: {} },
+    ]);
+  });
+
   it("folds by key and scope; a non-ingest execution gets a row with null key and scope", async () => {
     const store = new InMemoryReadModelStore();
     const service = new ReadModelService(store, {});

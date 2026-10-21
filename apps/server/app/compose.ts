@@ -29,6 +29,7 @@ import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
 import type { ErasureWiring } from "./erasure/compliance";
+import { tolerantSource } from "./erasure/tolerantSource";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
@@ -153,16 +154,21 @@ export function buildServer(options: ComposeOptions) {
   const titles = options.chat && loomTitleStarter(app.runtime);
   const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
   const sensitive = statusSensitive(flowSteps(), options.status.source);
+  // The models fold through a source that reads an erased user's log as placeholders instead of throwing (E5). The
+  // runtime, the chat reads and every authoritative read keep the strict `options.status.source`.
+  const foldSource = options.erasure
+    ? tolerantSource({ raw: options.erasure.raw.eventStore, keys, strict: options.status.source })
+    : options.status.source;
   const status = new IngestStatus({
     writer: options.status.writer,
     readerFor: options.status.readerFor,
-    source: options.status.source,
+    source: foldSource,
     sensitive,
     bus: options.ingest.bus,
   });
   const activity = new ChatActivity({
     writer: options.status.writer,
-    source: options.status.source,
+    source: foldSource,
     sensitive,
   });
   feed.sinks = [status.onEvent, activity.onEvent];
