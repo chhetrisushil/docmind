@@ -15,8 +15,12 @@ import {
   type SignUpRequest,
   SignUpResponse,
   StopChatResponse,
+  UiHydrateResponse,
+  UiViewResponse,
   UploadDocumentResponse,
+  type ViewName,
 } from "@docmind/contracts";
+import type { HandleLoadRequest } from "@loom-ui/hydration/client";
 import { ApiError, type Http, apiErrorFrom } from "./http";
 
 const qs = (o: Record<string, string | number | undefined>): string => {
@@ -47,6 +51,12 @@ export interface Api {
   listMessages(id: string, cursor?: string): Promise<ListMessagesResponse>;
   sendMessage(id: string, req: SendMessageRequest): Promise<SendMessageResponse>;
   stopChat(id: string): Promise<StopChatResponse>;
+  uiView(name: ViewName, signal?: AbortSignal): Promise<UiViewResponse>;
+  uiHydrate(
+    view: ViewName,
+    requests: HandleLoadRequest[],
+    signal?: AbortSignal,
+  ): Promise<unknown[]>;
 }
 
 export function createApi(
@@ -131,5 +141,18 @@ export function createApi(
       }),
     stopChat: (id) =>
       http.request("POST", `/api/chats/${seg(id)}/stop`, { schema: StopChatResponse }),
+    uiView: (name, signal) =>
+      http.request("GET", `/api/ui/views/${seg(name)}?surface=web`, {
+        schema: UiViewResponse,
+        ...(signal && { signal }),
+      }),
+    uiHydrate: async (view, requests, signal) =>
+      (
+        await http.request("POST", "/api/ui/hydrate", {
+          body: { view, requests },
+          schema: UiHydrateResponse,
+          ...(signal && { signal }),
+        })
+      ).results,
   };
 }
