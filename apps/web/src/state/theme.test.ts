@@ -19,7 +19,9 @@ function env(opts: { dark?: boolean; stored?: string | null; throwing?: boolean 
     addEventListener: (_: string, fn: EventListener) => {
       listeners.push(fn);
     },
-    removeEventListener: () => {},
+    removeEventListener: (_: string, fn: EventListener) => {
+      listeners.splice(listeners.indexOf(fn), 1);
+    },
   };
   const doc = document.implementation.createHTMLDocument("t");
   return {
@@ -58,5 +60,27 @@ describe("ThemeStore", () => {
     const store = new ThemeStore(e.win);
     expect(() => store.choose("dark")).not.toThrow();
     expect(e.win.document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("applies the stored choice on construction", () => {
+    const e = env({ stored: "light", dark: true });
+    new ThemeStore(e.win);
+    expect(e.win.document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("watchSystem re-applies on an OS change while the choice is system, and stops", () => {
+    const e = env({ dark: true });
+    const store = new ThemeStore(e.win);
+    const stop = store.watchSystem();
+    expect(e.listeners).toHaveLength(1);
+    e.media.matches = true; // the OS flips to light
+    for (const fn of e.listeners) fn(new Event("change"));
+    expect(e.win.document.documentElement.dataset.theme).toBe("light");
+    store.choose("dark");
+    e.media.matches = true;
+    for (const fn of e.listeners) fn(new Event("change"));
+    expect(e.win.document.documentElement.dataset.theme).toBe("dark");
+    stop();
+    expect(e.listeners).toHaveLength(0);
   });
 });

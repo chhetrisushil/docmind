@@ -27,6 +27,7 @@ export class ThemeStore extends Store<ThemeChoice> {
   constructor(private readonly env: ThemeEnv = window) {
     super(stored(env));
     this.subscribe(() => this.apply());
+    this.apply(); // no flash: the stored choice is on the root element as soon as the store exists
   }
   choose(choice: ThemeChoice): void {
     try {
