@@ -14,6 +14,8 @@ export interface PerformContext {
   documentId?: string;
   /** The page size the content handle has now. */
   upto?(): number;
+  /** False once the page that asked has gone or moved on: a late answer then navigates nowhere. */
+  active?(): boolean;
   /** The page leaves the deleted document itself: called instead of refreshing the view. */
   onDeleted?(): void;
   confirm(heading: string, body: string, confirmLabel: string, danger?: boolean): Promise<boolean>;
@@ -50,7 +52,7 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
     case "document.ask":
       try {
         const chat = await c.api.createChat({ scope: { documentIds: [intent.id] } });
-        c.router.navigate({ name: "chat", chatId: chat.id });
+        if (c.active?.() !== false) c.router.navigate({ name: "chat", chatId: chat.id });
       } catch {
         err(c.toasts, "Could not start a chat about that document.");
       }
@@ -96,7 +98,7 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
       if (c.documentId === undefined) return false;
       try {
         const chat = await c.api.createChat({ scope: { documentIds: [c.documentId] } });
-        c.router.navigate({ name: "chat", chatId: chat.id });
+        if (c.active?.() !== false) c.router.navigate({ name: "chat", chatId: chat.id });
       } catch {
         err(c.toasts, "Could not start a chat about that document.");
       }

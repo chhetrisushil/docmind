@@ -174,4 +174,10 @@ describe("performIntent: the document", () => {
     expect(onDeleted).toHaveBeenCalledTimes(1);
     expect(t.session.invalidate).not.toHaveBeenCalled();
   });
+  it("does not navigate to the new chat when the page is no longer active", async () => {
+    const t = ctx();
+    const c = { ...(t.c as object), documentId: A, active: () => false } as never;
+    await performIntent({ type: "document.ask-question", question: "Q?" }, c);
+    expect(t.router.navigate).not.toHaveBeenCalled();
+  });
 });
