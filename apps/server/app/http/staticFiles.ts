@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
+import { pipeline } from "node:stream";
 import { StartupConfigError } from "../startupError";
 import { type Handler, sendError } from "./respond";
 
@@ -90,22 +91,22 @@ export function staticHandler(dir: string): Handler {
         "referrer-policy": "no-referrer",
       });
       if (req.method === "HEAD") {
-        await handle.close();
+        const done = handle;
+        handle = undefined;
+        await done.close();
         return void res.end();
       }
-      const body = handle.createReadStream({ autoClose: true }); // owns the descriptor from here
+      // The client may have gone while open and stat were pending: its "close" is already past.
+      if (res.destroyed || res.writableEnded) {
+        const done = handle;
+        handle = undefined;
+        await done.close();
+        return;
+      }
+      const body = handle.createReadStream({ autoClose: true }); // owns the descriptor from here, closes it once
       handle = undefined;
-      await new Promise<void>((done) => {
-        body.on("error", () => {
-          res.destroy();
-          done();
-        });
-        res.on("close", () => {
-          body.destroy();
-          done();
-        });
-        body.pipe(res);
-      });
+      // pipeline settles when either side ends or is already destroyed, and destroys the other.
+      await new Promise<void>((done) => pipeline(body, res, () => done()));
     } catch {
       await handle?.close().catch(() => undefined);
       if (res.headersSent) res.destroy();
