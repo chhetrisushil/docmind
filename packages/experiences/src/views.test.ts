@@ -21,7 +21,40 @@ describe("the experiences", () => {
     for (const n of NAMES) {
       expect(EXPERIENCES[n].versionHash).toMatch(/^sha256:/);
       expect(again.payload(n, "web").versionHash).toBe(views.payload(n, "web").versionHash);
+      for (const surface of SURFACES)
+        expect(JSON.stringify(again.payload(n, surface).blueprint)).toBe(
+          JSON.stringify(views.payload(n, surface).blueprint),
+        );
     }
+  });
+
+  it("refuse a placeholder or revision key under 16 bytes", () => {
+    const ok = "k".repeat(16);
+    expect(() => createViewPayloads({ placeholderKey: ok, revisionKey: ok })).not.toThrow();
+    for (const bad of ["", "k".repeat(15), "é".repeat(7)]) {
+      expect(() => createViewPayloads({ placeholderKey: bad, revisionKey: ok })).toThrow(
+        /16 bytes/,
+      );
+      expect(() => createViewPayloads({ placeholderKey: ok, revisionKey: bad })).toThrow(
+        /16 bytes/,
+      );
+    }
+  });
+
+  it("give every provider literal or empty arguments, and every overridable key exists in them", () => {
+    for (const n of NAMES)
+      for (const [handle, spec] of Object.entries(EXPERIENCES[n].providers)) {
+        for (const step of spec.executionGraph) {
+          const args = step.arguments as Record<string, unknown>;
+          for (const [k, v] of Object.entries(args)) {
+            const where = `${n}/${handle}/${k}`;
+            expect(["string", "number", "boolean"], where).toContain(typeof v);
+            if (typeof v === "string") expect(v, where).not.toMatch(/\{\{|\$\{|\$[A-Za-z_]|^@/);
+          }
+          for (const key of step.overridable ?? [])
+            expect(Object.keys(args), `${n}/${handle}`).toContain(key);
+        }
+      }
   });
 
   it.each(SURFACES)(

@@ -33,6 +33,12 @@ export const VIEW_NAMES = Object.keys(EXPERIENCES) as ViewName[];
 
 /** The sealed, compiled view per (name, surface) with its handle inventory: built once, content-free, the same for everyone. */
 export function createViewPayloads(o: ViewsOptions) {
+  for (const [name, key] of [
+    ["placeholderKey", o.placeholderKey],
+    ["revisionKey", o.revisionKey],
+  ] as const)
+    if (typeof key !== "string" || Buffer.byteLength(key) < 16)
+      throw new Error(`${name} must be at least 16 bytes`);
   const revisionOf = (handle: string, fingerprint: string): string =>
     createHmac("sha256", o.revisionKey).update(`${handle}\0${fingerprint}`).digest("hex");
   const cache = new Map<string, ViewPayload>();
