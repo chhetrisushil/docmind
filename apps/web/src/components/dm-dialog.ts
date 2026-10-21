@@ -18,7 +18,7 @@ const stack: DmDialog[] = [];
 const answered = new WeakSet<Event>();
 
 /** The parent of `node` in the flat tree: where it is drawn, not where it is written. */
-function flatParent(node: Node): Node | null {
+export function flatParent(node: Node): Node | null {
   const native = (node as Element).assignedSlot;
   if (native) return native;
   // Environments without `assignedSlot`: ask the parent's shadow root which slot holds this node.
