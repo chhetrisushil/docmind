@@ -2,7 +2,7 @@ import type { ChatMessageDto, ListMessagesResponse, SendMessageRequest } from "@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import type { SseOptions } from "../api/sse";
-import { ChatController, problemText, sourcesOf } from "./chat";
+import { ChatController, LIMITED_TEXT, problemText, sourcesOf } from "./chat";
 
 const PASSAGE = "c0ffee00-0000-4000-8000-000000000001";
 const DOC = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";
@@ -169,7 +169,7 @@ describe("ChatController: sending", () => {
     expect(t.api.sendMessage).not.toHaveBeenCalled();
     for (const [err, outcome] of [
       [new ApiError(503, "chat_unavailable"), "unavailable"],
-      [new ApiError(429, "too_many_requests"), "busy"],
+      [new ApiError(429, "too_many_requests"), "limited"],
       [new ApiError(0, "network"), "failed"],
       [new ApiError(500, "internal"), "failed"],
     ] as const) {
@@ -492,5 +492,92 @@ describe("ChatController: widget actions", () => {
     });
     await t.ctl.perform({ type: "chat.older" });
     expect(t.api.listMessages).toHaveBeenLastCalledWith("c1", "1.5");
+  });
+});
+
+describe("ChatController: fix round 1", () => {
+  it("a failed older page leaves a waiting turn and the chat alone, and can be retried", async () => {
+    let fail = true;
+    const t = setup({
+      listMessages: async (_id, cursor) => {
+        if (cursor !== undefined && fail) throw new ApiError(0, "network");
+        return cursor === undefined
+          ? { items: [msg(3, "user", 2), msg(4, "assistant", 2)], nextCursor: "1.25" }
+          : { items: [msg(1, "user", 1), msg(2, "assistant", 1)], nextCursor: null };
+      },
+    });
+    await t.ctl.start();
+    await t.ctl.send("hi");
+    expect(t.state()).toMatchObject({ pending: true, running: true });
+    await t.ctl.loadOlder();
+    expect(t.state()).toMatchObject({
+      pending: true,
+      running: true,
+      olderFailed: true,
+      hasOlder: true,
+    });
+    expect(t.state().problem).toBeUndefined();
+    fail = false;
+    await t.ctl.loadOlder();
+    expect(t.state()).toMatchObject({ olderFailed: false, hasOlder: false, pending: true });
+  });
+
+  it("a 429 is `limited`, with a fixed sentence", async () => {
+    const t = setup({
+      sendMessage: async () => {
+        throw new ApiError(429, "too_many_requests");
+      },
+    });
+    await t.ctl.start();
+    expect(await t.ctl.send("hi")).toBe("limited");
+    expect(LIMITED_TEXT).toBe("You are sending messages too quickly. Wait a moment and try again.");
+  });
+
+  it("retrying intent A after intent B succeeded reuses A's key; a widget key is not stored over it", async () => {
+    let n = 0;
+    const t = setup({
+      sendMessage: async () => {
+        n += 1;
+        if (n === 1) throw new ApiError(0, "network");
+        return { messageId: "m" };
+      },
+    });
+    await t.ctl.start();
+    await t.ctl.send("A");
+    await t.ctl.send("B");
+    await t.ctl.perform({ type: "chat.send", text: "A", key: "key-0123456789abcdef" });
+    await t.ctl.send("A");
+    expect(bodyOf(t, 1).messageId).not.toBe(bodyOf(t, 0).messageId);
+    expect(bodyOf(t, 2).messageId).toBe("key-0123456789abcdef");
+    expect(bodyOf(t, 3).messageId).toBe(bodyOf(t, 0).messageId);
+  });
+
+  it.each([408, 504])("a %i is retried with the same key", async (status) => {
+    let n = 0;
+    const t = setup({
+      sendMessage: async () => {
+        n += 1;
+        if (n === 1) throw new ApiError(status, "timeout");
+        return { messageId: "m" };
+      },
+    });
+    await t.ctl.start();
+    await t.ctl.send("x");
+    await t.ctl.send("x");
+    expect(bodyOf(t, 1).messageId).toBe(bodyOf(t, 0).messageId);
+  });
+
+  it("a user part stays plain; the reply is markdown", async () => {
+    const t = setup();
+    await t.ctl.start();
+    const [u, a] = t.state().transcript.entries;
+    expect(u?.parts?.every((p) => !("format" in p))).toBe(true);
+    expect(a?.parts?.some((p) => "format" in p && p.format === "markdown")).toBe(true);
+  });
+
+  it("does not send before the first page has landed, so an old reply cannot clear the wait", async () => {
+    const t = setup();
+    expect(await t.ctl.send("early")).toBe("failed");
+    expect(t.api.sendMessage).not.toHaveBeenCalled();
   });
 });

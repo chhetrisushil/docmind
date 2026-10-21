@@ -35,6 +35,8 @@ export interface ChatViewState {
   liveSteps: ChatToolStep[];
   hasOlder: boolean;
   loadingOlder: boolean;
+  /** The last older-page load failed; `loadOlder()` retries. The chat itself still works. */
+  olderFailed: boolean;
   loading: boolean;
   closed: boolean;
   problem?: ChatProblem;
@@ -42,7 +44,10 @@ export interface ChatViewState {
   sourcesOpen: boolean;
 }
 
-export type SendOutcome = "sent" | "unavailable" | "busy" | "failed";
+/** `busy`: a double activation (silent). `limited`: the server said 429 (show `LIMITED_TEXT`). */
+export type SendOutcome = "sent" | "unavailable" | "busy" | "limited" | "failed";
+
+export const LIMITED_TEXT = "You are sending messages too quickly. Wait a moment and try again.";
 
 /** Fixed sentences for the transport's fixed problem tokens. Nothing from the server or the transcript is ever shown. */
 export function problemText(p: ChatProblem): string {
@@ -83,6 +88,7 @@ export class ChatController {
     liveSteps: [],
     hasOlder: false,
     loadingOlder: false,
+    olderFailed: false,
     loading: true,
     closed: false,
     sourcesOpen: true,
@@ -94,12 +100,13 @@ export class ChatController {
   private settledTurn = 0;
   private problem: ChatProblem | undefined;
   private loadingOlder = false;
+  private olderFailed = false;
   private wasRunning = false; // for onActivity: a turn just ended
   private stopped = false;
   private sending = false;
   private stopping = false;
-  /** The one key of the user's current intent; kept after a send that may have landed, so the retry is idempotent. */
-  private intent: { sig: string; key: string } | undefined;
+  /** Keys of the last few intents, kept until their send succeeds or is refused, so a retry after a timeout is idempotent. */
+  private readonly keys = new Map<string, string>(); // signature to key, the last few intents
 
   constructor(
     private readonly d: {
@@ -117,6 +124,9 @@ export class ChatController {
       fold: this.fold,
       open: d.open,
       onChange: () => this.publish(),
+      onOlderFailed: () => {
+        this.olderFailed = true;
+      },
       onProblem: (p) => {
         this.problem = p;
         this.settle();
@@ -206,6 +216,7 @@ export class ChatController {
       liveSteps: this.fold.liveSteps,
       hasOlder: this.fold.olderCursor !== null,
       loadingOlder: this.loadingOlder,
+      olderFailed: this.olderFailed,
       loading: !this.fold.historyLoaded && this.problem === undefined,
       closed,
       ...(this.problem && { problem: this.problem }),
@@ -217,14 +228,18 @@ export class ChatController {
   /** `key` is the widget's own key when the action came from it; otherwise one key per intent is held here. */
   async send(text: string, editOf?: number, key?: string): Promise<SendOutcome> {
     const body = text.trim();
-    if (body === "" || this.stopped) return "failed";
+    // Before the first page is in, the awaited turn cannot be told from history: wait for it.
+    if (body === "" || this.stopped || !this.fold.historyLoaded) return "failed";
     if (this.sending) return "busy"; // a double activation: the first send is still in flight
     this.sending = true;
     const sig = `${editOf ?? ""}\n${body}`;
-    if (key === undefined) {
-      if (this.intent?.sig !== sig) this.intent = { sig, key: newMessageKey() };
-    } else this.intent = { sig, key };
-    const sendKey = this.intent?.key ?? newMessageKey();
+    let sendKey = key;
+    if (sendKey === undefined) {
+      sendKey = this.keys.get(sig) ?? newMessageKey();
+      this.keys.delete(sig);
+      this.keys.set(sig, sendKey);
+      if (this.keys.size > 4) this.keys.delete(this.keys.keys().next().value as string);
+    }
     const { entries } = this.state.get();
     this.awaiting = {
       turn: entries.reduce((m, e) => Math.max(m, e.turn), 0),
@@ -233,18 +248,18 @@ export class ChatController {
     this.publish();
     try {
       await this.transport.send(body, editOf, sendKey);
-      this.intent = undefined;
+      if (key === undefined) this.keys.delete(sig);
       if (this.problem === "unavailable") this.problem = undefined;
       this.d.onActivity?.();
       return "sent";
     } catch (err) {
       this.awaiting = undefined;
-      if (!mayHaveLanded(err)) this.intent = undefined;
+      if (key === undefined && !mayHaveLanded(err)) this.keys.delete(sig);
       let outcome: SendOutcome = "failed";
       if (err instanceof ApiError && err.status === 503 && err.code === "chat_unavailable") {
         this.problem = "unavailable";
         outcome = "unavailable";
-      } else if (err instanceof ApiError && err.status === 429) outcome = "busy";
+      } else if (err instanceof ApiError && err.status === 429) outcome = "limited";
       this.publish();
       return outcome;
     } finally {
@@ -283,6 +298,7 @@ export class ChatController {
   async loadOlder(): Promise<void> {
     if (this.loadingOlder || this.stopped) return;
     this.loadingOlder = true;
+    this.olderFailed = false;
     this.publish();
     try {
       await this.transport.loadOlder();
