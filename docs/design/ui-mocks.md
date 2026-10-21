@@ -350,3 +350,11 @@ Versus spec §7:
 9. The mocks' "Selected" library frame shows a toast "2 files added to the upload queue" next to a drag-over dropzone and a bulk-select bar at once; treat it as a composite demo, not a real state.
 
 Mock inconsistencies to not copy: file-tile label (DOC vs DOCX, IMG vs PNG/JPG) differs between chat and table; `--muted` is a derived token that must be defined in the app (included above); sheet label "Active . 12 min ago" and "Hover . 2 h ago" are annotations.
+
+Deviations applied in `apps/web/src/styles/tokens.css` (Task 178a), each covered by `contrast.test.ts` / `lu.test.ts`:
+1. Light `--dm-muted` is `color-mix(in srgb, var(--dm-text) 70%, transparent)`, not the dark 62%: 62% gives about 4.4:1 on `--dm-surface` in light; 70% gives about 5.9:1.
+2. Added `--dm-warn` (dark `oklch(0.8 0.13 80)`, light `oklch(0.5 0.12 70)`) for loom-ui's warning status.
+3. Added `--dm-tag-accent-bg`, `--dm-tag-accent-fg` and `--dm-scrim` (the mocks used these values inline).
+4. Added `color-scheme: dark` on `:root` and `color-scheme: light` on the light block.
+5. Added the `--lu-*` bridge in its own `:root` rule after the theme blocks, so loom-ui elements follow either theme.
+6. No colour pair needed a nudge: every pair in both themes passed at the values above.

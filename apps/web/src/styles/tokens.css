@@ -1,0 +1,140 @@
+:root {
+  /* Dark is the base (matches the mocks' token file). */
+  color-scheme: dark;
+  --dm-bg: #161826;
+  --dm-surface: #232532;
+  --dm-side: color-mix(in srgb, var(--dm-surface) 45%, var(--dm-bg));
+  --dm-text: #e9e9ed;
+  --dm-muted: color-mix(in srgb, var(--dm-text) 62%, transparent);
+  --dm-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+
+  --dm-accent: #9184d9;
+  --dm-accent-2: #a7a1db;
+  --dm-accent-100: #f5f4ff;
+  --dm-accent-200: #e7e5fe;
+  --dm-accent-300: #d2cefd;
+  --dm-accent-400: #b5abfc;
+  --dm-accent-500: #968ae0;
+  --dm-accent-600: #796cbf;
+  --dm-accent-700: #5d5294;
+  --dm-accent-800: #423a6a;
+  --dm-accent-900: #2b2741;
+
+  --dm-neutral-100: #f3f5fe;
+  --dm-neutral-200: #e4e7f5;
+  --dm-neutral-300: #cfd3e5;
+  --dm-neutral-400: #b2b6ca;
+  --dm-neutral-500: #9397ab;
+  --dm-neutral-600: #75798c;
+  --dm-neutral-700: #595d6c;
+  --dm-neutral-800: #3f424d;
+  --dm-neutral-900: #292b31;
+
+  /* Status */
+  --dm-ok: oklch(0.8 0.12 158);
+  --dm-ok-bg: oklch(0.31 0.05 158);
+  --dm-err: oklch(0.76 0.13 22);
+  --dm-err-bg: oklch(0.31 0.06 22);
+  --dm-warn: oklch(0.8 0.13 80);
+  --dm-busy: var(--dm-accent-200);
+  --dm-busy-bg: var(--dm-accent-900); /* uploading / parsing / indexing */
+  --dm-tag-accent-bg: var(--dm-accent-800);
+  --dm-tag-accent-fg: var(--dm-accent-100);
+  --dm-scrim: color-mix(in srgb, var(--dm-neutral-900) 55%, transparent);
+
+  /* File-type icon tiles: bg / fg per hue (dark). Hue: PDF 25, DOC/DOCX 255, MD 200, ORG 140, PNG/JPG 70, TXT neutral (chroma 0). */
+  --dm-ftype-bg: oklch(0.34 0.06 var(--h, 0));
+  --dm-ftype-fg: oklch(0.87 0.08 var(--h, 0));
+
+  --dm-font: "Inter", system-ui, sans-serif;
+  --dm-font-heading-weight: 500;
+
+  --dm-space-1: 2.8px;
+  --dm-space-2: 5.6px;
+  --dm-space-3: 8.4px;
+  --dm-space-4: 11.2px;
+  --dm-space-6: 16.8px;
+  --dm-space-8: 22.4px;
+
+  --dm-radius-sm: 4px;
+  --dm-radius-md: 8px;
+  --dm-radius-lg: 14px;
+
+  --dm-shadow-sm: 0 0 0 1px #3f424d;
+  --dm-shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0, 0, 0, 0.55);
+  --dm-shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0, 0, 0, 0.65);
+
+  --dm-focus-ring: 2px solid var(--dm-accent); /* offset 2px */
+
+  --dm-sidebar-w: 256px;
+  --dm-panel-w: 340px; /* desktop docked */
+  --dm-panel-w-overlay: 360px; /* tablet overlay */
+  --dm-measure: 72ch;
+}
+
+/* Light theme: apply via [data-theme="light"], and mirror under prefers-color-scheme if the app follows the OS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --dm-bg: #f3f5fe;
+  --dm-surface: #e4e7f5;
+  --dm-side: #eceff9;
+  --dm-text: #161826;
+  --dm-muted: color-mix(in srgb, var(--dm-text) 70%, transparent);
+  --dm-divider: color-mix(in srgb, #161826 16%, transparent);
+
+  --dm-accent: #5d5294;
+  --dm-accent-100: #2b2741;
+  --dm-accent-200: #423a6a;
+  --dm-accent-300: #5d5294;
+  --dm-accent-400: #796cbf;
+  --dm-accent-500: #968ae0;
+  --dm-accent-600: #b5abfc;
+  --dm-accent-700: #d2cefd;
+  --dm-accent-800: #e1defd;
+  --dm-accent-900: #ecebfd;
+
+  --dm-neutral-100: #292b31;
+  --dm-neutral-200: #3f424d;
+  --dm-neutral-300: #595d6c;
+  --dm-neutral-400: #75798c;
+  --dm-neutral-500: #9397ab;
+  --dm-neutral-600: #b2b6ca;
+  --dm-neutral-700: #cfd3e5;
+  --dm-neutral-800: #dde0ef;
+  --dm-neutral-900: #e9ecf8;
+
+  --dm-ok: oklch(0.46 0.11 158);
+  --dm-ok-bg: oklch(0.92 0.045 158);
+  --dm-err: oklch(0.5 0.16 25);
+  --dm-err-bg: oklch(0.93 0.035 25);
+  --dm-warn: oklch(0.5 0.12 70);
+
+  --dm-ftype-bg: oklch(0.9 0.04 var(--h, 0));
+  --dm-ftype-fg: oklch(0.42 0.1 var(--h, 0)); /* TXT: chroma 0 in both themes */
+
+  --dm-shadow-sm: 0 0 0 1px #cfd3e5;
+  --dm-shadow-md: 0 0 0 1px #cfd3e5, 0 6px 18px rgba(22, 24, 38, 0.1);
+  --dm-shadow-lg: 0 0 0 1px #b2b6ca, 0 16px 40px rgba(22, 24, 38, 0.16);
+}
+
+/* The loom-ui bridge: loom-ui reads only --lu-* properties. Defined once, outside the theme blocks, so both themes follow. */
+:root {
+  --lu-text: var(--dm-text);
+  --lu-text-dim: var(--dm-muted);
+  --lu-text-caption: var(--dm-muted);
+  --lu-border: var(--dm-divider);
+  --lu-panel: var(--dm-surface);
+  --lu-panel-2: color-mix(in srgb, var(--dm-text) 8%, var(--dm-surface));
+  --lu-grid: color-mix(in srgb, var(--dm-text) 10%, transparent);
+  --lu-accent: var(--dm-accent);
+  --lu-radius: var(--dm-radius-md);
+  --lu-delta-up: var(--dm-ok);
+  --lu-delta-up-bg: var(--dm-ok-bg);
+  --lu-delta-down: var(--dm-err);
+  --lu-delta-down-bg: var(--dm-err-bg);
+  --lu-delta-flat: var(--dm-muted);
+  --lu-delta-flat-bg: color-mix(in srgb, var(--dm-text) 8%, transparent);
+  --lu-status-ok: var(--dm-ok);
+  --lu-status-warning: var(--dm-warn);
+  --lu-status-critical: var(--dm-err);
+}
