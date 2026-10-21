@@ -293,7 +293,7 @@ resumable re-embed flow, driven by `chunks.embedding_model`.
   10. `pending()`, `erased()` and `get()` page through the requests by user id (`docmind_erasure_pending` is a keyset
      listing, 500 rows per call), so no request is skipped however many exist: the boot resume and the rescan see
      every pending request, and after a read-model rebuild or version bump (Loom's reset drops the tombstones) the
-     post-boot pass re-tombstones every erased user. The cost is a read of all request rows by the boot resume, by each 5-minute rescan and by each run's `get()`,
+     post-boot pass re-tombstones every erased user. The cost is a read of all request rows by the boot resume and by each 5-minute rescan, plus a scan of pages up to the user's id by each hold attempt's `get()`,
      which is small (ids, step names and a counter).
 
 ## 5. Ingestion

@@ -58,7 +58,8 @@ export const loomWarn = (message: string): void => console.warn("[loom]", warnin
  * The executions whose log Loom must never compact: the read models fold each ingest and chat execution from its first
  * event (ADR 0132), and a chat conversation parks on its inbox. The latter also keeps the erasure coordinator's one known
  * residual unreachable: a log compacted through its tip behind a whole-state sealed checkpoint reads as terminal on the
- * erase intent alone. Anything suspendable must stay in this list. `chat-title` is one step that always ends terminal.
+ * erase intent alone. Anything suspendable must stay in this list (nothing checks that for a new flow; retention.test.ts
+ * only pins the two families below and that nothing calls compact). `chat-title` is one step that is expected to end terminal.
  */
 export const compactionExempt = (executionId: string): boolean =>
   isIngestExecution(executionId) || isChatExecution(executionId);
