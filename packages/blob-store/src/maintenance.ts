@@ -1,10 +1,10 @@
-import { readdir, rm, stat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { readdir, rm, rmdir, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 import { isUuid, userDirOf } from "./paths";
 
 /**
  * Deletes every blob a user owns (the user's whole directory). Erasure step 3 (spec §4.4): rows
- * first, then this, then the key. Idempotent; `userDirOf` checks the ids so a path can never be
+ * first, then this, then the key. Removes the tenant directory when this was its last user. Idempotent; `userDirOf` checks the ids so a path can never be
  * built from anything but UUIDs.
  */
 export async function eraseUserBlobs(
@@ -12,7 +12,16 @@ export async function eraseUserBlobs(
   tenantId: string,
   userId: string,
 ): Promise<void> {
-  await rm(userDirOf(root, tenantId, userId), { recursive: true, force: true });
+  const userDir = userDirOf(root, tenantId, userId);
+  await rm(userDir, { recursive: true, force: true });
+  // The tenant directory is named by the tenant's id: it goes too once the last user's directory is gone. A
+  // non-empty one (a colleague's blobs, or an upload that just landed) is left alone.
+  try {
+    await rmdir(dirname(userDir));
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") throw err;
+  }
 }
 
 /** Names of the entries of `dir` of one kind, or none if `dir` is gone. Symlinks are never listed. */

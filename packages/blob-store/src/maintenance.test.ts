@@ -1,4 +1,11 @@
-import { mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
@@ -25,6 +32,22 @@ describe("eraseUserBlobs", () => {
 
     expect(await a.get(refA)).toBeNull();
     expect(await b.get(refB)).not.toBeNull();
+  });
+
+  it("removes the tenant directory with its last user, and keeps it while another user has blobs", async () => {
+    const root = freshRoot();
+    const keys = new InMemoryKeyStore();
+    await new EncryptedFsContentStore({ root, tenantId: T, userId: A, keys }).put(
+      new TextEncoder().encode("a"),
+    );
+    await new EncryptedFsContentStore({ root, tenantId: T, userId: B, keys }).put(
+      new TextEncoder().encode("b"),
+    );
+    await eraseUserBlobs(root, T, A);
+    expect(existsSync(join(root, T))).toBe(true);
+    await eraseUserBlobs(root, T, B);
+    expect(existsSync(join(root, T))).toBe(false);
+    await eraseUserBlobs(root, T, B); // idempotent
   });
 
   it("refuses ids that are not canonical UUIDs, so a path can never be built from them", async () => {
