@@ -15,6 +15,7 @@ import { baseStyles } from "../styles/base";
 import { performIntent } from "../surface/perform";
 import type { ActionHandler, ViewSession } from "../ui/session";
 import { confirmDialog } from "./confirm";
+import { deepActiveElement, flatParent } from "./dm-dialog";
 import "./dm-icon";
 import "./dm-view";
 
@@ -51,6 +52,8 @@ export class DmChatPage extends LitElement {
         :host { max-width: 1280px; }
         .layout { grid-template-columns: 1fr 340px; gap: 16px; }
       }
+      aside { overflow: auto; max-height: 100%; }
+      [data-backdrop] { position: fixed; inset: 0; background: rgb(0 0 0 / 0.4); z-index: 3; }
       @media (max-width: 1099px) {
         aside { position: fixed; inset: 0 0 0 auto; width: min(380px, 100%); background: var(--dm-surface); box-shadow: var(--dm-shadow-lg); z-index: 4; padding: 12px; overflow: auto; }
       }
@@ -65,6 +68,8 @@ export class DmChatPage extends LitElement {
   private panel: ViewSession | undefined;
   /** The control that opened the panel from a citation: Escape or Close gives focus back to it. */
   private opener: HTMLElement | undefined;
+  /** Elements made inert behind the modal (overlay) panel, restored on close. */
+  private inerted: HTMLElement[] = [];
   private bound: string | undefined | null = null;
   private off: (() => void) | undefined;
   private watch: MutationObserver | undefined;
@@ -83,15 +88,31 @@ export class DmChatPage extends LitElement {
     return r?.name === "chat" ? r.chatId : undefined;
   }
 
+  /** Below 1100px the panel is an overlay (modal); at or above it, it is docked beside the chat. */
+  private get narrow(): boolean {
+    return typeof matchMedia === "function" && !matchMedia("(min-width: 1100px)").matches;
+  }
+  private get modal(): boolean {
+    return this.narrow && (this.controller?.state.get().sourcesOpen ?? false);
+  }
+  private onDocKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && this.modal) void this.closePanel();
+  };
+
   connectedCallback(): void {
     super.connectedCallback();
+    document.addEventListener("keydown", this.onDocKey);
     if (this.hasUpdated) this.requestUpdate(); // a reconnect binds the chat again
   }
   protected updated(): void {
+    if (this.modal) this.isolate();
+    else this.releaseModal();
     const id = this.chatId;
     if (this.ctx.services && this.bound !== id) this.bind(id);
   }
   disconnectedCallback(): void {
+    document.removeEventListener("keydown", this.onDocKey);
+    this.releaseModal();
     // A message nobody consumed does not wait for a later visit.
     const svc = this.ctx.services;
     if (svc && svc.outbox.get()?.chatId !== this.chatId) svc.outbox.set(undefined);
@@ -99,6 +120,33 @@ export class DmChatPage extends LitElement {
     this.bound = null;
     super.disconnectedCallback();
   }
+  /** Everything outside the overlay panel stops taking focus and clicks, up through the shadow roots to the document. */
+  private isolate(): void {
+    const aside = this.renderRoot.querySelector("aside");
+    if (!aside) return;
+    let node: Node = aside;
+    while (node && node !== document.documentElement) {
+      const parent = flatParent(node);
+      if (!parent || parent === document) break;
+      const siblings: Node[] =
+        parent instanceof HTMLSlotElement
+          ? parent.assignedNodes({ flatten: true })
+          : Array.from(parent.childNodes);
+      for (const sib of siblings) {
+        if (sib === node || !(sib instanceof HTMLElement) || sib.inert) continue;
+        if (sib.localName === "script" || sib.localName === "style") continue;
+        if (sib.hasAttribute("data-dialog-live") || sib.hasAttribute("data-backdrop")) continue;
+        sib.inert = true;
+        this.inerted.push(sib);
+      }
+      node = parent instanceof ShadowRoot ? parent.host : parent;
+    }
+  }
+  private releaseModal(): void {
+    for (const el of this.inerted) el.inert = false;
+    this.inerted = [];
+  }
+
   /** Stops the stream and drops everything held for this chat. */
   private release(): void {
     this.off?.();
@@ -134,6 +182,7 @@ export class DmChatPage extends LitElement {
       },
     });
     this.controller = controller;
+    if (this.narrow) controller.toggleSources(false); // an overlay opens on a citation or the toggle, never by itself
     this.off = controller.state.subscribe(() => this.sync());
     void this.begin(controller, id);
     this.readMeta(controller, id);
@@ -234,18 +283,27 @@ export class DmChatPage extends LitElement {
       }),
     };
   };
-  private closePanel(): void {
+  private async closePanel(): Promise<void> {
     this.controller?.toggleSources(false);
+    this.releaseModal();
+    await this.updateComplete;
     const back = this.opener?.isConnected
       ? this.opener
       : (this.renderRoot.querySelector("button[data-sources]") as HTMLElement | null);
     this.opener = undefined;
     back?.focus();
   }
+  private async openPanel(): Promise<void> {
+    this.opener =
+      (this.renderRoot.querySelector("button[data-sources]") as HTMLElement | null) ?? undefined;
+    this.controller?.toggleSources(true);
+    await this.updateComplete;
+    (this.renderRoot.querySelector("aside h2") as HTMLElement | null)?.focus();
+  }
   private onPanelKey(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       e.stopPropagation();
-      this.closePanel();
+      void this.closePanel();
     }
   }
   private onReady = (e: Event) => {
@@ -337,9 +395,9 @@ export class DmChatPage extends LitElement {
       case "chat.scope":
         return this.scope(intent.scope);
       case "chat.cite": {
-        let active: Element | null = document.activeElement;
-        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
-        this.opener = active instanceof HTMLElement ? active : undefined;
+        const active = deepActiveElement();
+        this.opener =
+          active instanceof HTMLElement && active !== document.body ? active : undefined;
         await this.controller?.perform(intent);
         await this.updateComplete;
         (this.renderRoot.querySelector("aside h2") as HTMLElement | null)?.focus();
@@ -369,10 +427,10 @@ export class DmChatPage extends LitElement {
     const canRegenerate =
       st?.ready && !st.running && last?.role === "assistant" && last.status !== "streaming";
     return html`
-      <header>
+      <header ?inert=${this.modal}>
         <h1 title=${ifDefined(this.chatTitle)}>${this.chatId && this.chatTitle ? this.chatTitle : "New chat"}</h1>
         <span class="grow"></span>
-        <button class="btn secondary" data-sources aria-expanded=${String(st?.sourcesOpen ?? true)} aria-controls="sources" @click=${() => (st?.sourcesOpen === false ? this.controller?.toggleSources(true) : this.closePanel())}>Sources</button>
+        <button class="btn secondary" data-sources aria-expanded=${String(st?.sourcesOpen ?? true)} aria-controls=${ifDefined(st?.sourcesOpen === false ? undefined : "sources")} @click=${() => void (st?.sourcesOpen === false ? this.openPanel() : this.closePanel())}>Sources</button>
         ${st?.running ? html`<button class="btn secondary" data-stop @click=${() => void this.controller?.stop()}><dm-icon name="stop"></dm-icon>Stop</button>` : null}
         ${canRegenerate && last ? html`<button class="btn secondary" data-regenerate @click=${() => void this.regenerate(last.id)}><dm-icon name="arrow-clockwise"></dm-icon>Regenerate</button>` : null}
       </header>
@@ -388,11 +446,11 @@ export class DmChatPage extends LitElement {
         ${st?.olderFailed ? html`<div data-older-failed role="alert" class="muted">Could not load earlier messages.<button class="btn ghost" data-older-retry @click=${() => void this.controller?.loadOlder()}>Try again</button></div>` : null}
       </div>
       <div class="layout">
-        <div class="main">${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
+        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
         ${
           st?.sourcesOpen
-            ? html`<aside id="sources" aria-label="Sources" @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>
-                <header><h2 tabindex="-1">Sources</h2><span class="grow"></span><button class="btn ghost" data-sources-close @click=${() => this.closePanel()}>Close</button></header>
+            ? html`${this.narrow ? html`<div data-backdrop @click=${() => void this.closePanel()}></div>` : null}<aside id="sources" aria-label="Sources" aria-modal=${ifDefined(this.narrow ? "true" : undefined)} @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>
+                <header><h2 tabindex="-1">Sources</h2><span class="grow"></span><button class="btn ghost" data-sources-close @click=${() => void this.closePanel()}>Close</button></header>
                 ${keyed(this.chatId ?? "new", html`<dm-view name="sources" .onAct=${this.actPanel} @view-ready=${this.onPanelReady}></dm-view>`)}
               </aside>`
             : null

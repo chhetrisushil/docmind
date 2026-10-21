@@ -1,5 +1,5 @@
 import type { ChatMessageDto } from "@docmind/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import type { SseOptions } from "../api/sse";
 import { Router } from "../router";
@@ -659,6 +659,26 @@ const panelRaise = (p: Element, payload: Record<string, unknown>) => {
   vi.spyOn(v.session as Session, "isFresh").mockReturnValue(true); // the staleness check is the session's own, tested there
   return (v.session as Session).dispatch({ type: "A2UI_ACTION", widgetId: "w", payload }, v.onAct);
 };
+const focusedIsRefOrToggle = (p: Element, ref: HTMLElement) =>
+  deepActive() === ref || p.shadowRoot?.activeElement === button(p, "button[data-sources]");
+const deepActive = () => {
+  let el: Element | null = document.activeElement;
+  while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+  return el;
+};
+const media = (wide: boolean) =>
+  vi.stubGlobal("matchMedia", (q: string) => ({
+    matches: q.includes("1100px") ? wide : false,
+    media: q,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+const narrow = () => media(false);
+beforeEach(() => media(true));
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 const OTHER = "c0ffee00-0000-4000-8000-000000000002";
 const OTHER_DOC = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d12";
 
@@ -752,7 +772,7 @@ describe("dm-chat-page: sources", () => {
     toggle.click();
     await vi.waitFor(() => expect(panel(page)).toBeDefined());
   });
-  it("is a labelled complementary landmark; a citation moves focus to its heading, Escape returns it", async () => {
+  it("is a labelled complementary landmark; a citation moves focus to its heading, Escape returns it to the marker", async () => {
     const t = setup();
     const page = await t.mount();
     await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
@@ -765,9 +785,111 @@ describe("dm-chat-page: sources", () => {
     await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(heading));
     aside.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await vi.waitFor(() => expect(panel(page)).toBeUndefined());
-    await vi.waitFor(() => {
-      const back = chatRoot(page)?.activeElement ?? page.shadowRoot?.activeElement;
-      expect(back).toBeTruthy();
+    await vi.waitFor(() => expect(focusedIsRefOrToggle(page, ref)).toBe(true));
+  });
+  it("Close returns focus like Escape; a citation with no prior focus falls back to the Sources toggle", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Contract"));
+    (document.activeElement as HTMLElement | null)?.blur();
+    (chatRoot(page)?.querySelector("button.ref") as HTMLButtonElement).click();
+    const heading = page.shadowRoot?.querySelector("aside h2") as HTMLElement;
+    await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(heading));
+    (button(page, "button[data-sources-close]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.activeElement).toBe(button(page, "button[data-sources]")),
+    );
+  });
+  it("the toggle opens the panel into focus on its heading, and closing it keeps focus on the toggle", async () => {
+    const t = setup();
+    const page = await t.mount();
+    const toggle = button(page, "button[data-sources]") as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-controls")).toBe("sources");
+    toggle.focus();
+    toggle.click();
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    expect(toggle.hasAttribute("aria-controls")).toBe(false);
+    await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(toggle));
+    toggle.click();
+    const heading = () => page.shadowRoot?.querySelector("aside h2");
+    await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(heading()));
+  });
+  it("opens the second source's document with its own ids; a selected source is first (index 0)", async () => {
+    const second = { ...cited, passageId: OTHER, documentId: OTHER_DOC, docTitle: "Lease" };
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(async () => ({
+        items: [
+          msg(1, "user", 1),
+          msg(2, "assistant", 1, {
+            text: `One [[${PASSAGE}]] and [[${OTHER}]].`,
+            citations: [cited, second],
+          }),
+        ],
+        nextCursor: null,
+      })),
     });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Lease"));
+    const buttons = () => Array.from(panelView(page)?.querySelectorAll("button") ?? []);
+    expect(buttons()).toHaveLength(2);
+    buttons()[1]?.click();
+    await vi.waitFor(() =>
+      expect(t.services.router.get()).toEqual({ name: "document", id: OTHER_DOC, passage: OTHER }),
+    );
+    t.services.router.navigate({ name: "chat", chatId: CHAT });
+    await vi.waitFor(() => expect(panelText(page)).toContain("Lease"));
+    const refs = Array.from(chatRoot(page)?.querySelectorAll("button.ref") ?? []);
+    (refs[1] as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Selected - Page 2"));
+    expect(panelText(page).indexOf("Lease")).toBeLessThan(panelText(page).indexOf("Contract"));
+    buttons()[0]?.click();
+    await vi.waitFor(() =>
+      expect(t.services.router.get()).toEqual({ name: "document", id: OTHER_DOC, passage: OTHER }),
+    );
+  });
+});
+
+describe("dm-chat-page: sources below 1100px", () => {
+  it("starts closed; a citation opens a modal panel with a backdrop and the chat inert behind it", async () => {
+    narrow();
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Due in 30 days"));
+    expect(panel(page)).toBeUndefined();
+    const toggle = button(page, "button[data-sources]") as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(page.shadowRoot?.querySelector("[data-backdrop]")).toBeNull();
+    const ref = chatRoot(page)?.querySelector("button.ref") as HTMLButtonElement;
+    ref.focus();
+    ref.click();
+    await vi.waitFor(() => expect(panel(page)).toBeDefined());
+    expect(page.shadowRoot?.querySelector("aside")?.getAttribute("aria-modal")).toBe("true");
+    expect((page.shadowRoot?.querySelector(".main") as HTMLElement).inert).toBe(true);
+    expect((page.shadowRoot?.querySelector("header") as HTMLElement).inert).toBe(true);
+    expect(page.shadowRoot?.querySelector("[data-backdrop]")).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.activeElement).toBe(page.shadowRoot?.querySelector("aside h2")),
+    );
+    // Escape works with focus outside the panel.
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    expect((page.shadowRoot?.querySelector(".main") as HTMLElement).inert).toBe(false);
+    await vi.waitFor(() => expect(focusedIsRefOrToggle(page, ref)).toBe(true));
+  });
+  it("the toggle opens it into focus on the heading; the backdrop closes it back to the toggle", async () => {
+    narrow();
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(chatText(page)).toContain("Due in 30 days"));
+    const toggle = button(page, "button[data-sources]") as HTMLButtonElement;
+    toggle.focus();
+    toggle.click();
+    await vi.waitFor(() =>
+      expect(page.shadowRoot?.activeElement).toBe(page.shadowRoot?.querySelector("aside h2")),
+    );
+    (page.shadowRoot?.querySelector("[data-backdrop]") as HTMLElement).click();
+    await vi.waitFor(() => expect(panel(page)).toBeUndefined());
+    await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(toggle));
   });
 });
