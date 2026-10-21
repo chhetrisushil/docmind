@@ -27,10 +27,17 @@ describe("dm-icon", () => {
     expect(el.shadowRoot?.querySelector("svg")).toBeNull();
   });
 
+  it("draws nothing for inherited object names", async () => {
+    for (const name of ["constructor", "__proto__", "toString"]) {
+      const el = await mount({ name });
+      expect(el.shadowRoot?.querySelector("svg"), name).toBeNull();
+    }
+  });
+
   it("ships every icon the mocks use as an inline svg without scripts", () => {
     for (const [name, svg] of Object.entries(ICONS)) {
       expect(svg.startsWith("<svg"), name).toBe(true);
-      expect(/<script|onload=|href=/i.test(svg), name).toBe(false);
+      expect(/<script|\\son\\w+=|href=|foreignObject|javascript:/i.test(svg), name).toBe(false);
     }
     expect(Object.keys(ICONS).length).toBeGreaterThanOrEqual(30);
   });

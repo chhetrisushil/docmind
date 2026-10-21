@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -11,11 +11,16 @@ function files(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {
     const p = join(dir, n);
     if (statSync(p).isDirectory()) return n === "testing" ? [] : files(p);
-    return /\.(ts|css|html)$/.test(n) && !n.endsWith(".test.ts") ? [p] : [];
+    return /\.(ts|tsx|js|mjs|css|html|svg)$/.test(n) && !/\.test\.[tj]sx?$/.test(n) ? [p] : [];
   });
 }
-// Everything shipped to the browser: src/** plus the page itself.
-const app = [...files(SRC), join(ROOT, "index.html")].map((p) => ({
+// Everything shipped to the browser: src/**, public/ (if any) and the page itself.
+const publicDir = join(ROOT, "public");
+const app = [
+  ...files(SRC),
+  ...(existsSync(publicDir) ? files(publicDir) : []),
+  join(ROOT, "index.html"),
+].map((p) => ({
   path: rel(p),
   text: readFileSync(p, "utf8"),
 }));
@@ -51,14 +56,15 @@ const isForbiddenLoom = (s: string) => {
   return !BROWSER_LOOM.some((ok) => s === ok || s.startsWith(`${ok}/`));
 };
 
-const MARKUP = /unsafeHTML|unsafeSVG|unsafeStatic|innerHTML|outerHTML|insertAdjacentHTML/;
+const MARKUP = /unsafeHTML|unsafeSVG|unsafeStatic|unsafeCSS|innerHTML|outerHTML|insertAdjacentHTML/;
 // Never allowed anywhere: other ways to turn a string into markup or code.
 const INJECTION =
-  /\bsrcdoc\b|createContextualFragment|\bDOMParser\b|\beval\s*\(|\bnew\s+Function\s*\(|(?<![\w$.])Function\s*\(/;
+  /\bsrcdoc\b|createContextualFragment|\bDOMParser\b|\beval\s*\(|\bnew\s+Function\s*\(|(?<![\w$.])Function\s*\(|\bdocument\s*\.\s*write(?:ln)?\s*\(|setHTMLUnsafe|parseHTMLUnsafe|\bdocument\s*\.\s*cookie\b|\bcookieStore\b|(?<![\w$.])require\s*\(/;
 const THIN = /defineSemanticCatalog|defineReshapers|genesis\(|@docmind\/experiences|@docmind\/auth/;
 const STORAGE = /localStorage|sessionStorage|indexedDB/;
-// window["local" + "Storage"] hides the name from STORAGE, so bracket access on a global is refused outright.
-const GLOBAL_BRACKET = /\b(?:window|globalThis|self|top|parent|frames)\s*\??\.?\s*\[/;
+// window["local" + "Storage"] hides the name from STORAGE, so bracket access directly on window/globalThis/self is
+// refused outright (not `this.frames[i]`, `node.parent[key]`, `top[1]` or CSS such as `.window[open]`).
+const GLOBAL_BRACKET = /(?<![\w$.#-])(?:window|globalThis|self)(?:\?\.)?\[/;
 
 /** Rule names an app file breaks; empty when it is clean. */
 function violations(path: string, text: string): string[] {
@@ -68,17 +74,24 @@ function violations(path: string, text: string): string[] {
   if (specs.some(isForbiddenLoom)) bad.push("loom-package");
   if (!MARKUP_ALLOWED.has(path) && MARKUP.test(text)) bad.push("markup");
   if (INJECTION.test(text)) bad.push("injection");
-  if (GLOBAL_BRACKET.test(text)) bad.push("global-bracket");
+  if (!path.endsWith(".css") && GLOBAL_BRACKET.test(text)) bad.push("global-bracket");
   if (!STORAGE_ALLOWED.has(path) && STORAGE.test(text)) bad.push("storage");
   if (STORAGE_ALLOWED.has(path)) bad.push(...themeStorageViolations(text));
   return bad;
 }
 
 /** In the theme store: only `dm-theme` may be read or written, nothing may be enumerated or cleared. */
-function themeStorageViolations(text: string): string[] {
+function themeStorageViolations(source: string): string[] {
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const bad: string[] = [];
   if (/sessionStorage|indexedDB|\.clear\s*\(|\.key\s*\(|\.removeItem\s*\(/.test(text))
     bad.push("theme-storage-api");
+  if (
+    /\blocalStorage\s*(?:\?\.)?\s*(?:\[|\.\w+\s*=(?!=))|\[\s*["'`](?:get|set|remove)Item["'`]\s*\]/.test(
+      text,
+    )
+  )
+    bad.push("theme-storage-member");
   if (!new RegExp(`const KEY = "${THEME_KEY}";`).test(text)) bad.push("theme-key-const");
   for (const m of text.matchAll(/\b(?:getItem|setItem)\s*\(\s*([^,)]*)/g)) {
     const arg = (m[1] as string).trim();
@@ -98,6 +111,18 @@ describe("the dependency and security rules of apps/web", () => {
   });
   it("breaks none of the rules: no server package, only the two Loom browser runtimes, no markup minting, no injection, no storage but dm-theme", () => {
     for (const a of app) expect(violations(a.path, a.text), a.path).toEqual([]);
+  });
+});
+
+// Allowlisted files that a later task creates; every other allowlisted path must exist now, so a typo is caught.
+const CREATED_BY_LATER_TASK = new Set(["src/components/dm-app.ts"]); // Task 181
+describe("the allowlists", () => {
+  it("name files that exist, or are listed as created by a later task", () => {
+    const paths = new Set(app.map((a) => a.path));
+    for (const p of [...MARKUP_ALLOWED, ...STORAGE_ALLOWED])
+      expect(paths.has(p) || CREATED_BY_LATER_TASK.has(p), p).toBe(true);
+    for (const p of CREATED_BY_LATER_TASK)
+      expect(MARKUP_ALLOWED.has(p) || STORAGE_ALLOWED.has(p), p).toBe(true);
   });
 });
 
@@ -191,6 +216,49 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
     expect(got.some((r) => r === "storage" || r === "global-bracket")).toBe(true);
   });
 
+  it.each([
+    "this.frames[i]",
+    "node.parent[key]",
+    "const top = stack[0]; top[1]",
+    "windowSize[i]",
+    "const w = parent[key]",
+    "my.window[i]",
+  ])("bracket access that is not on a global is fine: %s", (src) => {
+    expect(violations(MISC, src)).toEqual([]);
+  });
+
+  it("does not read CSS selectors as global bracket access", () => {
+    const css = ".top[hidden] { } .parent [data-x] { } .window[open] { } self[x] { }";
+    expect(violations("src/styles/x.css", css)).toEqual([]);
+    expect(
+      violations(MISC, "css`.top[hidden] { } .parent [data-x] { } .window[open] { }`"),
+    ).toEqual([]);
+  });
+
+  it.each(["window[i]", "globalThis?.[k]", `self["x"]`])(
+    "global bracket access is caught: %s",
+    (src) => {
+      expect(violations(MISC, src)).toContain("global-bracket");
+    },
+  );
+
+  it.each([
+    "document.write(x)",
+    "document.writeln(x)",
+    "el.setHTMLUnsafe(x)",
+    "Document.parseHTMLUnsafe(x)",
+    "document.cookie = 'a=b'",
+    "cookieStore.set('a', 'b')",
+    "const m = require('x')",
+  ])("further sinks are caught everywhere: %s", (src) => {
+    expect(violations(MISC, src)).toContain("injection");
+    expect(violations("src/components/dm-icon.ts", src)).toContain("injection");
+  });
+
+  it("unsafeCSS is markup minting", () => {
+    expect(violations(MISC, "unsafeCSS(x)")).toContain("markup");
+  });
+
   it("refuses computed bracket access on a global, which hides the storage name", () => {
     expect(violations(MISC, `window["local" + "Storage"].clear()`)).toContain("global-bracket");
     expect(violations(THEME, `${GOOD_THEME}\nwindow["local" + "Storage"]`)).toContain(
@@ -204,6 +272,13 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
     ["setItem with a literal other key", `${GOOD_THEME}\nlocalStorage.setItem('title', t)`],
     ["clear", `${GOOD_THEME}\nenv.localStorage.clear();`],
     ["enumerating keys", `${GOOD_THEME}\nenv.localStorage.key(0);`],
+    ["bracket member", `${GOOD_THEME}\nenv.localStorage?.["setItem"]("token", t);`],
+    ["bracket key", `${GOOD_THEME}\nenv.localStorage["x"];`],
+    ["property assignment", `${GOOD_THEME}\nenv.localStorage.token = t;`],
+    [
+      "KEY only in a comment",
+      GOOD_THEME.replace('const KEY = "dm-theme";', '// const KEY = "dm-theme";\nconst KEY = "x";'),
+    ],
     ["removeItem", `${GOOD_THEME}\nenv.localStorage.removeItem(KEY);`],
     ["sessionStorage", `${GOOD_THEME}\nsessionStorage.setItem(KEY, "x");`],
     ["indexedDB", `${GOOD_THEME}\nindexedDB.open("x");`],

@@ -12,8 +12,8 @@ export class DmIcon extends LitElement {
   declare name: string;
   declare label: string | undefined;
   render() {
-    const svg = (ICONS as Record<string, string>)[this.name];
-    return svg ? html`${unsafeSVG(svg)}` : html``;
+    if (!Object.hasOwn(ICONS, this.name)) return html``;
+    return html`${unsafeSVG((ICONS as Record<string, string>)[this.name] as string)}`;
   }
   updated() {
     if (this.label) {
