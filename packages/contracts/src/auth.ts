@@ -52,3 +52,7 @@ export const ErasureInProgressBody = z.object({
   error: z.object({ code: z.literal("erasure_in_progress"), message: z.string() }),
 });
 export type ErasureInProgressBody = z.infer<typeof ErasureInProgressBody>;
+
+/** `GET /api/erasure/:receipt`: the state of the erasure a receipt belongs to. Nothing else is ever returned. */
+export const ErasureStatusResponse = z.object({ state: z.enum(["pending", "done"]) });
+export type ErasureStatusResponse = z.infer<typeof ErasureStatusResponse>;

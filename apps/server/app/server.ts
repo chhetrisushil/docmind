@@ -135,12 +135,13 @@ export function createHttpServer(
       armRequestTimeout(req, res, limits);
     // The async wrapper turns a synchronous throw and a rejected promise into the same failure.
     (async () => found.handler(req, res, found.ctx))().catch((err: unknown) => {
-      // Class name, method and path only: the message could carry a secret. The client gets the
-      // fixed body below, never the error.
+      // Class name, method and the matched route pattern only: the message could carry a secret, and the raw
+      // path can (`/api/erasure/:receipt` carries the receipt token). The client gets the fixed body below,
+      // never the error.
       console.error(
         "handler failed",
         method,
-        path,
+        found.route,
         err instanceof Error ? err.constructor.name : typeof err,
       );
       if (res.headersSent) res.end();

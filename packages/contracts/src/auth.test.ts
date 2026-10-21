@@ -4,6 +4,7 @@ import {
   DeleteAccountResponse,
   ErasureInProgressBody,
   ErasureReceipt,
+  ErasureStatusResponse,
   ErrorBody,
   LoginRequest,
   MeResponse,
@@ -79,6 +80,15 @@ describe("delete account contract", () => {
       `${"A".repeat(42)} `,
     ])
       expect(ErasureReceipt.safeParse(bad).success).toBe(false);
+  });
+});
+
+describe("erasure status contract", () => {
+  it("answers with exactly { state } and the state is pending or done", () => {
+    expect(ErasureStatusResponse.parse({ state: "pending" })).toEqual({ state: "pending" });
+    expect(ErasureStatusResponse.parse({ state: "done" })).toEqual({ state: "done" });
+    expect(ErasureStatusResponse.safeParse({ state: "failed" }).success).toBe(false);
+    expect(ErasureStatusResponse.safeParse({}).success).toBe(false);
   });
 });
 
