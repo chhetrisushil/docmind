@@ -1,0 +1,35 @@
+{
+  "name": "@docmind/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The DocMind web surface: Vite, Lit and loom-ui's Lit renderer.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:tests": "tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@docmind/contracts": "workspace:*",
+    "@fontsource-variable/inter": "^5.1.0",
+    "@lit/context": "^1.1.3",
+    "@loom-ui/core": "*",
+    "@loom-ui/hydration": "*",
+    "@loom-ui/renderer-lit": "*",
+    "@loom/blueprint-runtime": "*",
+    "@loom/projection-runtime": "*",
+    "@phosphor-icons/core": "^2.1.1",
+    "lit": "^3.2.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "happy-dom": "^20.11.12",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}
