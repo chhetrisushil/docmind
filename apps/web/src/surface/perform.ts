@@ -109,6 +109,9 @@ async function perform(intent: Intent, c: PerformContext): Promise<boolean> {
       }
       return true;
     }
+    case "source.open":
+      c.router.navigate({ name: "document", id: intent.documentId, passage: intent.passageId });
+      return true;
     case "content.more":
       c.session.setParams({ upto: Math.min(200, (c.upto?.() ?? 20) + 20) }, "doc-content");
       return true;

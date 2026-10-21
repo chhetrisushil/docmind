@@ -202,3 +202,11 @@ describe("performIntent: the document", () => {
     expect(t.router.navigate).not.toHaveBeenCalled();
   });
 });
+
+describe("performIntent: sources", () => {
+  it("opens a cited passage in its document", async () => {
+    const t = ctx();
+    await performIntent({ type: "source.open", passageId: "p1", documentId: A }, t.c);
+    expect(t.router.navigate).toHaveBeenCalledWith({ name: "document", id: A, passage: "p1" });
+  });
+});
