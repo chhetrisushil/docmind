@@ -51,7 +51,11 @@ export interface Api {
 
 export function createApi(
   http: Http,
-  opts: { xhr?: () => XMLHttpRequest; onUnauthorized?: () => void } = {},
+  opts: {
+    xhr?: () => XMLHttpRequest;
+    epoch?: () => number;
+    onUnauthorized?: (epoch: number | undefined) => void;
+  } = {},
 ): Api {
   const newXhr = opts.xhr ?? (() => new XMLHttpRequest());
   return {
@@ -74,6 +78,7 @@ export function createApi(
     uploadDocument: (file, o = {}) =>
       new Promise((resolve, reject) => {
         if (o.signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
+        const sentIn = opts.epoch?.();
         const xhr = newXhr();
         xhr.open("POST", "/api/documents");
         xhr.withCredentials = true;
@@ -102,7 +107,7 @@ export function createApi(
             xhr.responseText,
             xhr.getResponseHeader("retry-after"),
           );
-          if (xhr.status === 401 && failure.code === "unauthorized") opts.onUnauthorized?.();
+          if (xhr.status === 401 && failure.code === "unauthorized") opts.onUnauthorized?.(sentIn);
           reject(failure);
         };
         o.signal?.addEventListener("abort", () => xhr.abort(), { once: true });

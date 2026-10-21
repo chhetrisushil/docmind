@@ -13,7 +13,10 @@ import "./dm-toasts";
 /** The root: provides the services, follows the router and draws the view of the current route. */
 export class DmApp extends LitElement {
   static properties = { services: { attribute: false } };
-  static styles = [baseStyles, css`:host { display: block; height: 100%; }`];
+  static styles = [
+    baseStyles,
+    css`:host { display: block; height: 100%; } .boot { padding: 32px; color: var(--dm-muted); }`,
+  ];
   declare services: Services;
   private stopWatching: (() => void) | undefined;
   private provider: ContextProvider<typeof servicesContext> | undefined;
@@ -66,19 +69,26 @@ export class DmApp extends LitElement {
       return { wait: false, to: { name: "chat" } };
     return { wait: false };
   }
-  updated() {
+  /** The redirect happens before render, inside the running update: one render, and render sees the new route. */
+  willUpdate() {
     const { to } = this.decide();
     if (to) this.services.router.navigate(to, { replace: true });
   }
   render() {
     const { wait, to } = this.decide();
-    // Until the session is known, and for the one render before a redirect, nothing of any view is drawn.
-    if (wait || to) return html`<div class="boot" aria-busy="true"></div><dm-toasts></dm-toasts>`;
+    // The view is a nested part and dm-toasts sits outside it, so the live regions survive every view change.
+    return html`${wait || to ? this.busy() : this.view()}<dm-toasts></dm-toasts>`;
+  }
+  /** Until the session is known (or for a render that should not happen after a redirect), nothing of any view is drawn. */
+  private busy() {
+    return html`<div class="boot" role="status" aria-busy="true">Loading…</div>`;
+  }
+  private view() {
     const route = this.route?.value ?? this.services.router.get();
     const tag = unsafeStatic(VIEWS[route.name] ?? "dm-not-found"); // the tag comes from our own table, never from the URL
     return route.name === "sign-in" || route.name === "sign-up"
-      ? html`<${tag} mode=${route.name}></${tag}><dm-toasts></dm-toasts>`
-      : html`<${tag}></${tag}><dm-toasts></dm-toasts>`;
+      ? html`<${tag} mode=${route.name}></${tag}>`
+      : html`<${tag}></${tag}>`;
   }
 }
 customElements.define("dm-app", DmApp);

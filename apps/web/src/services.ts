@@ -27,9 +27,10 @@ export interface ServiceOverrides extends Partial<Services> {
 export function createServices(o: ServiceOverrides = {}): Services {
   // A 401 'unauthorized' from any call ends the session; the route guard in dm-app does the redirect.
   const late: { auth?: AuthStore } = {};
-  const onUnauthorized = () => late.auth?.expired();
-  const http = createHttp({ ...(o.fetch && { fetch: o.fetch }), onUnauthorized });
-  const api = o.api ?? createApi(http, { ...(o.xhr && { xhr: o.xhr }), onUnauthorized });
+  const onUnauthorized = (epoch: number | undefined) => late.auth?.expired(epoch);
+  const epoch = () => late.auth?.epoch ?? 0;
+  const http = createHttp({ ...(o.fetch && { fetch: o.fetch }), epoch, onUnauthorized });
+  const api = o.api ?? createApi(http, { ...(o.xhr && { xhr: o.xhr }), epoch, onUnauthorized });
   const auth = o.auth ?? new AuthStore(api);
   late.auth = auth;
   return {

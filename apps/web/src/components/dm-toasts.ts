@@ -24,8 +24,8 @@ export class DmToasts extends LitElement {
     const all = toasts?.get() ?? [];
     // Both live regions exist from the first render, so a screen reader is already listening when a toast arrives.
     return html`
-      <div class="region" role="status">${all.filter((t) => t.kind !== "err").map((t) => this.item(t))}</div>
-      <div class="region" role="alert">${all.filter((t) => t.kind === "err").map((t) => this.item(t))}</div>`;
+      <div class="region" role="status" aria-atomic="false">${all.filter((t) => t.kind !== "err").map((t) => this.item(t))}</div>
+      <div class="region" role="alert" aria-atomic="false">${all.filter((t) => t.kind === "err").map((t) => this.item(t))}</div>`;
   }
   private item(t: Toast) {
     const toasts = this.ctx.services?.toasts;

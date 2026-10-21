@@ -23,19 +23,28 @@ export function authErrorText(err: unknown): string {
 }
 
 export class AuthStore extends Store<AuthState> {
+  /** Counts the sessions this browser has held; a request remembers the one it was sent in. */
+  private session = 0;
+  get epoch(): number {
+    return this.session;
+  }
   constructor(private readonly api: Pick<Api, "me" | "login" | "logout" | "signUp">) {
     super({ status: "unknown" });
   }
   /** Asks the server who this browser is. Any failure means anonymous: the sign-in screen is the safe place to land. */
   async bootstrap(): Promise<void> {
     try {
-      this.set({ status: "signed-in", me: await this.api.me() });
+      const me = await this.api.me();
+      this.session += 1;
+      this.set({ status: "signed-in", me });
     } catch {
       this.signedOut();
     }
   }
   async login(req: LoginRequest): Promise<void> {
-    this.set({ status: "signed-in", me: await this.api.login(req) }); // a refusal throws and leaves the state alone
+    const me = await this.api.login(req); // a refusal throws and leaves the state alone
+    this.session += 1;
+    this.set({ status: "signed-in", me });
   }
   /** Sign-up answers 202 whether or not the address exists, so the account is only known to work once the sign-in succeeds. */
   async signUp(req: SignUpRequest): Promise<void> {
@@ -50,12 +59,14 @@ export class AuthStore extends Store<AuthState> {
     }
     this.signedOut();
   }
-  /** A 401 'unauthorized' came back from any call: the session ended. */
-  expired(): void {
+  /** A 401 'unauthorized' came back from a call sent in session `epoch`: that session ended. A late answer for an older session is ignored. */
+  expired(epoch?: number): void {
+    if (epoch !== undefined && epoch !== this.session) return;
     this.signedOut();
   }
   signedOut(): void {
     if (this.get().status === "anonymous") return;
+    this.session += 1;
     this.set({ status: "anonymous" });
   }
 }

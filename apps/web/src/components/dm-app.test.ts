@@ -5,6 +5,7 @@ import { createServices } from "../services";
 import { AuthStore } from "../state/auth";
 import { mountWith } from "../testing/mount";
 import "./index";
+import { DmApp } from "./dm-app";
 
 const ME = {
   userId: "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10",
@@ -97,6 +98,8 @@ describe("dm-app", () => {
     const alert = root(toasts).querySelector("[role=alert]") as HTMLElement;
     expect(status).not.toBeNull();
     expect(alert).not.toBeNull();
+    expect(status.getAttribute("aria-atomic")).toBe("false");
+    expect(alert.getAttribute("aria-atomic")).toBe("false");
     expect(root(toasts).querySelectorAll("[data-toast]").length).toBe(0);
     svc.toasts.push({ kind: "ok", text: "Saved" });
     svc.toasts.push({ kind: "err", text: "Failed" });
@@ -205,5 +208,70 @@ describe("dm-app", () => {
       expect(nav).not.toHaveBeenCalled();
       expect(svc.win.history.replaceState).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("dm-app: fix round 1", () => {
+  it("keeps the same toast regions through the busy marker and every navigation", async () => {
+    let release: (v: unknown) => void = () => {};
+    const svc = servicesWithAuth("/settings", {
+      me: () =>
+        new Promise((r) => {
+          release = r;
+        }),
+    });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    const toasts = root(app).querySelector("dm-toasts") as HTMLElement;
+    expect(toasts).not.toBeNull();
+    await settle(toasts);
+    const status = root(toasts).querySelector("[role=status]");
+    const alert = root(toasts).querySelector("[role=alert]");
+    release(ME);
+    await vi.waitFor(() => expect(root(app).querySelector("[aria-busy='true']")).toBeNull());
+    for (const path of ["/documents", "/sign-in", "/nope"]) {
+      svc.router.navigate(parseRoute(path));
+      await settle(app);
+      expect(root(app).querySelector("dm-toasts")).toBe(toasts);
+      expect(root(toasts).querySelector("[role=status]")).toBe(status);
+      expect(root(toasts).querySelector("[role=alert]")).toBe(alert);
+    }
+  });
+
+  it("redirects in one render, without Lit's update-after-update warning", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const render = vi.spyOn(DmApp.prototype, "render");
+    const svc = servicesWithAuth("/documents", {
+      me: async () => {
+        throw new ApiError(401, "unauthorized");
+      },
+    });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    await settle(app);
+    const lit = warn.mock.calls.filter((c) => String(c[0]).includes("scheduled an update"));
+    warn.mockRestore();
+    const renders = render.mock.calls.length;
+    render.mockRestore();
+    expect(lit).toEqual([]);
+    expect(renders).toBe(2); // busy while unknown, then the sign-in view: no extra pass for the redirect
+  });
+
+  it("the busy marker is a labelled status", async () => {
+    const svc = servicesWithAuth("/chats", { me: () => new Promise(() => {}) });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    const busy = root(app).querySelector("[aria-busy='true']") as HTMLElement;
+    expect(busy.getAttribute("role")).toBe("status");
+    expect(busy.textContent).toContain("Loading");
+  });
+
+  it("an anonymous visitor to an unknown path lands on sign-in", async () => {
+    const svc = servicesWithAuth("/nope", {
+      me: async () => {
+        throw new ApiError(401, "unauthorized");
+      },
+    });
+    const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
+    await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
+    expect(root(app).querySelector("dm-not-found")).toBeNull();
   });
 });
