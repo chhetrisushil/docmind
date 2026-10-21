@@ -57,7 +57,10 @@ function body(chunks: string[], opts: { hang?: boolean } = {}): Response {
 }
 const status = (code: number) => new Response(null, { status: code });
 
-function harness(responses: (Response | Error)[]) {
+function harness(
+  responses: (Response | Error)[],
+  extra: Partial<Parameters<typeof openSse>[0]> = {},
+) {
   const frames: SseFrame[] = [];
   const closes: SseCloseReason[] = [];
   const sleeps: number[] = [];
@@ -79,6 +82,8 @@ function harness(responses: (Response | Error)[]) {
   const handle = openSse({
     url: "/api/x",
     fetch: fetch as never,
+    random: () => 1,
+    ...extra,
     sleep: async (ms) => {
       sleeps.push(ms);
     },
@@ -175,7 +180,10 @@ describe("openSse", () => {
             cancelled = true;
           },
         });
-        return new Response(stream, { status: 200 });
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
       }) as never,
       sleep: async () => {},
       onFrame: (f) => {
@@ -220,5 +228,119 @@ describe("openSse", () => {
     });
     await vi.waitFor(() => expect(urls).toEqual(["/api/x?cursor=1", "/api/x?cursor=2"]));
     handle.close();
+  });
+});
+
+describe("openSse reconnect policy", () => {
+  const sleepsOf = async (responses: (Response | Error)[], n: number, extra = {}) => {
+    const h = harness(responses, extra);
+    await vi.waitFor(() => expect(h.seen.length).toBe(n));
+    h.handle.close();
+    return h;
+  };
+
+  it("caps every delay at maxDelayMs, the exponential one and the server's retry: alike", async () => {
+    const fails = Array.from({ length: 8 }, () => status(503));
+    const h = await sleepsOf(fails, 9);
+    expect(h.sleeps).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+    const r = await sleepsOf([body(["retry: 999999\ndata: a\n\n"])], 2);
+    expect(r.sleeps).toEqual([30000]);
+  });
+
+  it("jitters every delay into [50%, 100%] using the injected random", async () => {
+    const lo = await sleepsOf([status(503), status(503)], 3, { random: () => 0 });
+    expect(lo.sleeps).toEqual([500, 1000]);
+    const mid = await sleepsOf([status(503)], 2, { random: () => 0.5 });
+    expect(mid.sleeps).toEqual([750]);
+  });
+
+  it("clamps a server retry: of 0 to the floor, and keeps the last retry: across later failures", async () => {
+    const h = await sleepsOf(
+      [body(["retry: 0\ndata: a\n\n"]), body(["retry: 8000\ndata: b\n\n"]), status(503)],
+      4,
+    );
+    expect(h.sleeps).toEqual([250, 8000, 8000]);
+  });
+
+  it("honours Retry-After on a refusal, bounded by maxDelayMs", async () => {
+    const h = await sleepsOf(
+      [
+        new Response(null, { status: 429, headers: { "retry-after": "7" } }),
+        new Response(null, { status: 503, headers: { "retry-after": "3600" } }),
+      ],
+      3,
+    );
+    expect(h.sleeps).toEqual([7000, 30000]);
+  });
+
+  it("does not reset the backoff on a bare 200 that dies, and gives up as 'failed' after maxDeadOpens", async () => {
+    const h = harness([body([]), body([]), body([]), body([], { hang: true })], {
+      maxDeadOpens: 3,
+    });
+    await h.done;
+    expect(h.closes).toEqual(["failed"]);
+    expect(h.sleeps).toEqual([1000, 2000]);
+    expect(h.seen.length).toBe(3);
+  });
+
+  it("gives up as 'failed' when a frame replayed from the last id overflows again and again", async () => {
+    const big = () => body(["id: 1.1\ndata: a\n\n", `data: ${"z".repeat(1_100_000)}`]);
+    const h = harness([big(), big(), big(), body([], { hang: true })]);
+    await h.done;
+    expect(h.closes).toEqual(["failed"]);
+    expect(h.seen.map((s) => s.lastEventId)).toEqual([null, "1.1", "1.1"]);
+    expect(h.sleeps).toEqual([1000, 2000]);
+  });
+
+  it("delivers the frames completed before an overflow in the same chunk", async () => {
+    const h = harness([
+      body([`id: 2.1\ndata: ok\n\ndata: ${"z".repeat(1_100_000)}`]),
+      body([], { hang: true }),
+    ]);
+    await vi.waitFor(() => expect(h.seen.length).toBe(2));
+    expect(h.frames.map((f) => f.data)).toEqual(["ok"]);
+    expect(h.seen[1]?.lastEventId).toBe("2.1");
+    h.handle.close();
+  });
+
+  it("releases the body of every refusal, and treats a non-event-stream 200 as a failure", async () => {
+    let cancelled = 0;
+    const res = (code: number, type?: string) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            cancelled++;
+          },
+        }),
+        { status: code, ...(type && { headers: { "content-type": type } }) },
+      );
+    const h = harness([res(503), res(200, "text/html"), res(200)]);
+    await vi.waitFor(() => expect(h.seen.length).toBe(4));
+    expect(cancelled).toBe(3);
+    expect(h.opens()).toBe(1); // only the hanging fallback after the three bad answers
+    h.handle.close();
+    for (const code of [401, 404, 403]) {
+      const before = cancelled;
+      const t = harness([res(code)]);
+      await t.done;
+      expect(cancelled).toBe(before + 1);
+    }
+  });
+
+  it("strips a leading BOM, and sends the lastEventId option on the first attempt", async () => {
+    const enc = new TextEncoder();
+    const stream = () =>
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode("\uFEFFdata: a\n\n"));
+        },
+      });
+    const h = harness(
+      [new Response(stream(), { status: 200, headers: { "content-type": "text/event-stream" } })],
+      { lastEventId: () => "9.9" },
+    );
+    await vi.waitFor(() => expect(h.frames.map((f) => f.data)).toEqual(["a"]));
+    expect(h.seen[0]?.lastEventId).toBe("9.9");
+    h.handle.close();
   });
 });
