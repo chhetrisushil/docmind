@@ -1,6 +1,13 @@
 import { ChatStreamEvent } from "@docmind/contracts";
-import { compileFingerprint } from "@loom-ui/core/browser";
+import { TABLE_ROW_ACTION, compileFingerprint, tableRowProblems } from "@loom-ui/core/browser";
 import { ChatFeed } from "@loom-ui/core/chat";
+import {
+  CHAT_REF_OPEN_ACTION,
+  chatMarkdownLines,
+  parseChatMarkdown,
+  resolveMdMarkers,
+  splitRefMarkers,
+} from "@loom-ui/core/chat-ui";
 import { HydrationStore } from "@loom-ui/hydration/client";
 import { type DomRenderHandle, litRegistry, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
 import "@loom-ui/renderer-lit/elements/lu-note";
@@ -75,5 +82,32 @@ describe("the web scaffold", () => {
     report("sse", new TypeError("sentinel-title-0123456789"));
     report("sse", "a string with sentinel-answer-0123456789");
     expect(error.mock.calls).toEqual([["sse TypeError"], ["sse string"]]);
+  });
+});
+
+describe("the loom-ui pin carries the generic additions DocMind needs", () => {
+  it("has Table row actions (176a)", () => {
+    expect(TABLE_ROW_ACTION).toBe("TABLE_ROW_ACTION");
+    expect(
+      tableRowProblems({ rows: [["a"]], rowActions: [[{ id: "open", label: "Open" }]] }).map(
+        (p) => p.message,
+      ),
+    ).toEqual(["rowActions need rowKeys"]);
+  });
+  it("has Chat reference markers (176b)", () => {
+    expect(CHAT_REF_OPEN_ACTION).toBe("CHAT_REF_OPEN");
+    expect(splitRefMarkers("a [[x1]]", new Set(["x1"]), { hideAll: false })).toEqual([
+      { type: "text", text: "a " },
+      { type: "ref", id: "x1", n: 1 },
+    ]);
+  });
+  it("has opt-in markdown for assistant text (176c to 176k)", () => {
+    const doc = parseChatMarkdown("Due **now** [[a1]] [x](javascript:alert(1))", { markers: true });
+    const shown = resolveMdMarkers(doc, new Set(["a1"]), { hideAll: false });
+    expect(JSON.stringify(shown)).toContain('"type":"strong"');
+    expect(JSON.stringify(shown)).toContain('"type":"ref"');
+    expect(JSON.stringify(shown)).not.toContain("javascript:");
+    expect(chatMarkdownLines(shown).join("\n")).toBe("Due **now** [1] x");
+    expect(new ChatFeed({ markdown: true }).value().entries).toEqual([]);
   });
 });
