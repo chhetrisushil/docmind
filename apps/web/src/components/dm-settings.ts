@@ -3,7 +3,7 @@ import { ApiError } from "../api/http";
 import { authErrorText } from "../state/auth";
 import { ServicesController } from "../state/services-controller";
 import type { ThemeChoice } from "../state/theme";
-import { baseStyles } from "../styles/base";
+import { ariaDisabledStyles, baseStyles } from "../styles/base";
 import "./dm-dialog";
 import "./dm-icon";
 
@@ -34,12 +34,12 @@ export class DmSettings extends LitElement {
   };
   static styles = [
     baseStyles,
+    ariaDisabledStyles,
     css`
       :host { display: block; padding: 28px 40px; max-width: 720px; }
       h1 { font-size: 26px; margin-bottom: 20px; }
       section { padding: 16px 0; border-top: 1px solid var(--dm-divider); display: grid; gap: 10px; }
       h2 { font-size: 16px; }
-      .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
       .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
       select { min-height: 36px; border-radius: var(--dm-radius-md); background: var(--dm-surface); color: var(--dm-text); border: 1px solid var(--dm-divider); padding: 0 8px; font: inherit; }
     `,

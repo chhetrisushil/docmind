@@ -1,7 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { ApiError } from "../api/http";
 import { ServicesController } from "../state/services-controller";
-import { baseStyles } from "../styles/base";
+import { ariaDisabledStyles, baseStyles } from "../styles/base";
 import "./dm-icon";
 
 export class DmAccountDeleted extends LitElement {
@@ -12,12 +12,12 @@ export class DmAccountDeleted extends LitElement {
   };
   static styles = [
     baseStyles,
+    ariaDisabledStyles,
     css`
       :host { display: grid; place-items: center; min-height: 100%; padding: 32px 16px; }
       main { width: min(520px, 100%); display: grid; gap: 14px; }
       h1 { font-size: 26px; }
       code { display: block; padding: 12px; border-radius: var(--dm-radius-md); background: var(--dm-surface); box-shadow: var(--dm-shadow-sm); overflow-wrap: anywhere; user-select: all; }
-      .btn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
       .row { display: flex; gap: 8px; flex-wrap: wrap; }
     `,
   ];
