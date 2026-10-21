@@ -1,8 +1,13 @@
 import {
   ChatMessageDto,
+  ChatSessionDto,
+  DeleteAccountResponse,
+  ErasureStatusResponse,
   ListDocumentsResponse,
   ListMessagesResponse,
   MeResponse,
+  SignUpResponse,
+  UploadDocumentResponse,
 } from "@docmind/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { FakeServer } from "./fakeServer";
@@ -32,14 +37,12 @@ const frames = (s: FakeServer, path: string) => {
 };
 async function signedIn() {
   const s = new FakeServer();
-  expect(
-    (
-      await post(s, "/api/auth/sign-up", {
-        email: "ada@example.com",
-        password: "correct horse battery",
-      })
-    ).status,
-  ).toBe(202);
+  const signUp = await post(s, "/api/auth/sign-up", {
+    email: "ada@example.com",
+    password: "correct horse battery",
+  });
+  expect(signUp.status).toBe(202);
+  expect(SignUpResponse.safeParse(await signUp.json()).success).toBe(true);
   const res = await post(s, "/api/auth/login", {
     email: "ada@example.com",
     password: "correct horse battery",
@@ -70,12 +73,12 @@ describe("FakeServer: auth", () => {
     expect((await post(s, "/api/me", { password: "nope" }, "DELETE")).status).toBe(401);
     const res = await post(s, "/api/me", { password: "correct horse battery" }, "DELETE");
     expect(res.status).toBe(202);
-    const { receipt } = (await res.json()) as { receipt: string };
+    const { receipt } = DeleteAccountResponse.parse(await res.json());
     expect(s.loggedIn).toBe(false);
-    expect(await (await s.fetch(`/api/erasure/${receipt}`, {})).json()).toEqual({
-      state: "pending",
-    });
-    expect(await (await s.fetch(`/api/erasure/${receipt}`, {})).json()).toEqual({ state: "done" });
+    const check = async () =>
+      ErasureStatusResponse.parse(await (await s.fetch(`/api/erasure/${receipt}`, {})).json());
+    expect(await check()).toEqual({ state: "pending" });
+    expect(await check()).toEqual({ state: "done" });
     expect((await s.fetch("/api/erasure/unknown", {})).status).toBe(404);
   });
 });
@@ -102,10 +105,7 @@ describe("FakeServer: documents", () => {
     xhr.send(form);
     await done;
     expect(xhr.status).toBe(200);
-    const created = JSON.parse(xhr.responseText) as {
-      document: { id: string; status: string };
-      duplicate: boolean;
-    };
+    const created = UploadDocumentResponse.parse(JSON.parse(xhr.responseText));
     expect(created.document.status).toBe("uploaded");
     await vi.waitFor(() =>
       expect(seen.map((f) => (f.data as { status?: string }).status)).toEqual([
@@ -187,6 +187,7 @@ describe("FakeServer: the UI plane", () => {
 describe("FakeServer: chat", () => {
   it("runs a turn on send: the user's message, reasoning, a tool step, answer deltas, then the cited reply", async () => {
     const s = await signedIn();
+    frames(s, "/api/documents/events");
     const xhr = s.xhr() as unknown as {
       open(m: string, u: string): void;
       send(f: FormData): void;
@@ -200,7 +201,13 @@ describe("FakeServer: chat", () => {
     });
     xhr.send(form);
     await up;
-    const chat = (await (await post(s, "/api/chats", { scope: "all" })).json()) as { id: string };
+    await vi.waitFor(() => expect(s.docs[0]?.status).toBe("ready"));
+    const chat = ChatSessionDto.parse(await (await post(s, "/api/chats", { scope: "all" })).json());
+    const renamed = ChatSessionDto.parse(
+      await (await post(s, `/api/chats/${chat.id}`, { title: "T" }, "PATCH")).json(),
+    );
+    expect(renamed.title).toBe("T");
+    s.closeAfterTurn = true;
     const seen = frames(s, `/api/chats/${chat.id}/stream`);
     await vi.waitFor(() => expect(seen.map((f) => f.event)).toContain("status"));
     expect(
@@ -221,5 +228,14 @@ describe("FakeServer: chat", () => {
     expect(reply.text).toContain(`[[${reply.citations[0]?.passageId}]]`);
     expect(reply.steps.length).toBe(1);
     expect(reply.reasoning?.text).toBeTruthy();
+    await vi.waitFor(() => expect(seen.map((f) => f.event)).toContain("closed"));
+  });
+  it("holds a frame pushed before any stream is open and delivers it when one opens; refuses an invalid frame", async () => {
+    const s = await signedIn();
+    const progress = { documentId: crypto.randomUUID(), step: "parse", status: "parsing" };
+    s.push("/api/documents/events", "progress", progress);
+    const seen = frames(s, "/api/documents/events");
+    await vi.waitFor(() => expect(seen.map((f) => f.event)).toEqual(["progress"]));
+    expect(() => s.push("/api/documents/events", "progress", { documentId: "x" })).toThrow();
   });
 });

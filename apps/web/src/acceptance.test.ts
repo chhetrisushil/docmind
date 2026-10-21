@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { Router } from "./router";
 import { createServices } from "./services";
@@ -17,15 +18,18 @@ const wait = (check: () => unknown) => vi.waitFor(check, { timeout: 8000 });
 const SCENARIO_TIMEOUT = 30_000;
 
 function boot(server: FakeServer, path: string) {
+  const urls: string[] = [path];
   const win = {
     location: { pathname: path, search: "" },
     history: {
       pushState: (_s: unknown, _t: string, u: string) => {
+        urls.push(u);
         const url = new URL(u, "http://fake.test");
         win.location.pathname = url.pathname;
         win.location.search = url.search;
       },
       replaceState: (_s: unknown, _t: string, u: string) => {
+        urls.push(u);
         const url = new URL(u, "http://fake.test");
         win.location.pathname = url.pathname;
         win.location.search = url.search;
@@ -42,7 +46,7 @@ function boot(server: FakeServer, path: string) {
   const app = document.createElement("dm-app") as HTMLElement & { services: typeof services };
   app.services = services;
   document.body.append(app);
-  return { app, services };
+  return { app, services, urls };
 }
 const find = (root: ParentNode, selector: string) => deepFind(root, selector) as HTMLElement;
 const text = (root: ParentNode) => deepText(root).replace(/\s+/g, " ");
@@ -67,8 +71,10 @@ describe("M6 acceptance", () => {
       const logged: string[] = [];
       for (const level of ["log", "info", "warn", "error", "debug"] as const)
         vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
-          logged.push(args.map(String).join(" "));
+          // Every argument is serialised in full, objects and errors included: a secret inside an object argument must be caught too.
+          logged.push(args.map((a) => inspect(a, { depth: 8, maxStringLength: null })).join(" "));
         });
+      localStorage.clear();
       const server = new FakeServer();
       // A desktop-width window: the sources panel is docked beside the chat (happy-dom's default window is narrower than 1100px).
       vi.stubGlobal("matchMedia", (q: string) => ({
@@ -94,11 +100,16 @@ describe("M6 acceptance", () => {
       await wait(() => expect(find(page.app, "dm-sessions")).not.toBeNull());
       await wait(() => expect(find(page.app, "lu-chat")).not.toBeNull());
       expect(unnamedControls(page.app)).toEqual([]);
+      // The theme preference is the one thing the app may keep in the browser.
+      find(page.app, "button[data-theme-toggle]").click();
+      expect(localStorage.getItem("dm-theme")).toMatch(/^(light|dark)$/);
 
       // 3. The library is empty (a loom-ui Note); upload a file; it becomes Ready on the live stream, in a loom-ui Table.
       follow(find(page.app, "a[data-documents]"));
       await wait(() => expect(route(page)).toEqual({ name: "documents" }));
       await wait(() => expect(text(page.app)).toContain("No documents yet"));
+      // Hold the document short of Ready, so the in-between states on the live stream can be seen.
+      const finish = server.hold("ready");
       const zone = find(page.app, "dm-upload-zone");
       const input = zone.shadowRoot?.querySelector("input[type=file]") as HTMLInputElement;
       Object.defineProperty(input, "files", {
@@ -114,6 +125,13 @@ describe("M6 acceptance", () => {
           SENTINEL.title,
         ),
       );
+      await wait(() =>
+        expect(text(find(find(page.app, "dm-documents-page"), "lu-table"))).toContain("Indexing"),
+      );
+      expect(text(find(find(page.app, "dm-documents-page"), "lu-table"))).not.toContain("Ready");
+      expect(server.calls).toContain("GET /api/documents/events");
+      expect(server.docs[0]?.status).toBe("embedding");
+      finish();
       await wait(() =>
         expect(text(find(find(page.app, "dm-documents-page"), "lu-table"))).toContain("Ready"),
       );
@@ -136,11 +154,17 @@ describe("M6 acceptance", () => {
       const ask = deepAll(page.app, "button").find(
         (b) => b.textContent?.trim() === "When is payment due?",
       ) as HTMLButtonElement;
+      // Hold the reply short of its durable message: the answer must show as a partial one first.
+      const reply = server.hold("message");
       ask.click();
 
       // 5. The chat opens scoped to the document, the question is sent for us, and the answer streams and ends cited.
       await wait(() => expect(route(page).name).toBe("chat"));
       const chatId = (route(page) as { chatId: string }).chatId;
+      await wait(() => expect(text(find(page.app, "lu-chat"))).toContain("Payment is due in"));
+      expect(server.messages.get(chatId)?.some((m) => m.role === "assistant")).toBe(false);
+      expect(server.calls).toContain(`GET /api/chats/${chatId}/stream`);
+      reply();
       await wait(() => expect(find(page.app, "lu-chat button.ref")).not.toBeNull());
       expect(find(page.app, "lu-chat button.ref").textContent).toBe("1");
       expect(text(find(page.app, "lu-chat"))).toContain("When is payment due?");
@@ -159,11 +183,16 @@ describe("M6 acceptance", () => {
         find(page.app, "dm-chat-page"),
         "lu-text-input textarea, lu-text-input input",
       );
+      server.closeAfterTurn = true; // this turn ends the chat: the client must close its stream
       type(box, SENTINEL.question);
       submit(box.closest("form") as HTMLElement);
       await wait(() => expect(text(find(page.app, "lu-chat"))).toContain(SENTINEL.question));
       await wait(() =>
         expect(deepAll(page.app, "lu-chat button.ref").length).toBeGreaterThanOrEqual(2),
+      );
+      await wait(() => expect(server.openStreams(`/api/chats/${chatId}/stream`)).toBe(0));
+      await wait(() =>
+        expect(find(find(page.app, "dm-chat-page"), "[data-closed]")).not.toBeNull(),
       );
 
       // 5c. The answer is markdown, drawn as elements by loom-ui: emphasis, a list and a safe link; raw HTML and an unsafe link stay inert.
@@ -185,7 +214,9 @@ describe("M6 acceptance", () => {
       ) as HTMLButtonElement;
       open.click();
       await wait(() => expect(route(page).name).toBe("document"));
-      expect((route(page) as { passage?: string }).passage).toBeTruthy();
+      expect((route(page) as { passage?: string }).passage).toBe(
+        server.passageIdOf((server.docs[0] as { id: string }).id),
+      );
       await wait(() =>
         expect(find(page.app, "[role=tab][aria-selected=true]")?.textContent?.trim()).toBe(
           "Content",
@@ -209,6 +240,7 @@ describe("M6 acceptance", () => {
       );
       labelled(page.app, "td.row-actions button", "Rename: New chat")?.click();
       await wait(() => expect(document.querySelector("dm-dialog input")).not.toBeNull());
+      expect(unnamedControls(document.querySelector("dm-dialog") as HTMLElement)).toEqual([]);
       (document.querySelector("dm-dialog input") as HTMLInputElement).value = "Payment terms";
       (
         [...document.querySelectorAll("dm-dialog button")].find(
@@ -234,6 +266,9 @@ describe("M6 acceptance", () => {
       await wait(() => expect(text(page.app)).toContain("In progress"));
       find(page.app, "button[data-check]").click();
       await wait(() => expect(text(page.app)).toContain("Done."));
+      // The receipt is shown once and never kept: not in the address, not in the history entries.
+      expect(page.urls.some((u) => u.includes(server.receipt))).toBe(false);
+      expect(JSON.stringify(page.services.router.get())).not.toContain(server.receipt);
       page.app.remove();
 
       // 9. The data views were loom-ui's: the fake served the REAL compiled experiences, and every stamped action was fresh.
@@ -255,7 +290,7 @@ describe("M6 acceptance", () => {
       for (const line of logged)
         for (const secret of secrets)
           expect(line.includes(secret), "console line carried a secret").toBe(false);
-      expect(Object.keys(localStorage).every((k) => k === "dm-theme")).toBe(true);
+      expect(Object.keys(localStorage)).toEqual(["dm-theme"]);
       expect(JSON.stringify(Object.entries(localStorage))).not.toMatch(
         new RegExp(secrets.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")),
       );
