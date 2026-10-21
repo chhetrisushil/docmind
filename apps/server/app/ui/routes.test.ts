@@ -138,6 +138,15 @@ describe("POST /api/ui/hydrate", () => {
     });
     expect(big.status).toBe(413);
   });
+  it("does not echo a client-chosen params key in a 400", async () => {
+    const one = await req("doc-total");
+    const bad = await post({
+      view: "library",
+      requests: [{ ...one, params: { "sentinel-key-xyz": {} } }],
+    });
+    expect(bad.status).toBe(400);
+    expect(await bad.text()).not.toContain("sentinel");
+  });
   it("refuses a malformed body, an anonymous caller and a cross-origin post", async () => {
     const empty = await post({ view: "library", requests: [] });
     expect(empty.status).toBe(400);

@@ -31,6 +31,18 @@ function tooLarge(req: IncomingMessage, res: ServerResponse): undefined {
   return undefined;
 }
 
+/** An issue path as text. Segments after a name in `mask` are client-chosen record keys: they are shown as `*`. */
+function pathOf(path: readonly (string | number)[], mask: readonly string[]): string {
+  const out: (string | number)[] = [];
+  let masking = false;
+  for (const segment of path) {
+    if (masking && typeof segment === "string") out.push("*");
+    else out.push(segment);
+    masking = typeof segment === "string" && mask.includes(segment);
+  }
+  return out.join(".") || "body";
+}
+
 /**
  * Reads and validates a JSON request body. On any problem it has already answered (415, 413 or
  * 400) and returns undefined, so a route does `if (!body) return;`. Requiring application/json
@@ -40,7 +52,7 @@ export async function readJson<S extends z.ZodTypeAny>(
   req: IncomingMessage,
   res: ServerResponse,
   schema: S,
-  options: { maxBytes?: number } = {},
+  options: { maxBytes?: number; maskKeysUnder?: readonly string[] } = {},
 ): Promise<z.infer<S> | undefined> {
   const max = options.maxBytes ?? DEFAULT_MAX_BODY_BYTES;
   const type = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
@@ -65,7 +77,7 @@ export async function readJson<S extends z.ZodTypeAny>(
     // Only the path and the zod issue code: zod's message can echo the submitted value.
     const problems = parsed.error.issues
       .slice(0, MAX_ISSUES)
-      .map((i) => `${i.path.join(".") || "body"}: ${i.code}`);
+      .map((i) => `${pathOf(i.path, options.maskKeysUnder ?? [])}: ${i.code}`);
     sendError(res, 400, "invalid_request", problems.join("; "));
     return undefined;
   }

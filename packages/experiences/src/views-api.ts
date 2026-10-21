@@ -15,6 +15,8 @@ import { reshapers } from "./reshapers";
 import { EXPERIENCES } from "./views";
 
 const MAX_BATCH = 32;
+/** Reads in flight at once for one POST: the app pool is shared with every other user. */
+export const MAX_CONCURRENT_READS = 4;
 /** What a finding reports for a handle the view does not bind: the client chose that text, so it is never logged. */
 const UNBOUND = "unbound";
 
@@ -71,6 +73,7 @@ export function createViews(o: ViewsOptions): Views {
           principalId,
           now: Date.now(),
           maxBatch: MAX_BATCH,
+          maxConcurrentCalls: MAX_CONCURRENT_READS,
           onFinding: (handle, finding) =>
             o.onFinding?.(
               Object.hasOwn(experience.providers, handle) ? handle : UNBOUND,
