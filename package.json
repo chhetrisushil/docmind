@@ -26,6 +26,7 @@
       "@loom/agent": "link:../loom/packages/agent",
       "@loom/app": "link:../loom/packages/app",
       "@loom/classify": "link:../loom/packages/classify",
+      "@loom/compliance": "link:../loom/packages/compliance",
       "@loom/cli": "link:../loom/tools/cli",
       "@loom/conformance": "link:../loom/packages/conformance",
       "@loom/conversation": "link:../loom/packages/conversation",

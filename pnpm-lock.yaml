@@ -8,6 +8,7 @@ overrides:
   '@loom/agent': link:../loom/packages/agent
   '@loom/app': link:../loom/packages/app
   '@loom/classify': link:../loom/packages/classify
+  '@loom/compliance': link:../loom/packages/compliance
   '@loom/cli': link:../loom/tools/cli
   '@loom/conformance': link:../loom/packages/conformance
   '@loom/conversation': link:../loom/packages/conversation
@@ -74,6 +75,9 @@ importers:
       '@loom/classify':
         specifier: link:../../../loom/packages/classify
         version: link:../../../loom/packages/classify
+      '@loom/compliance':
+        specifier: link:../../../loom/packages/compliance
+        version: link:../../../loom/packages/compliance
       '@loom/conversation':
         specifier: link:../../../loom/packages/conversation
         version: link:../../../loom/packages/conversation
