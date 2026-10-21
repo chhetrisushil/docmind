@@ -415,6 +415,68 @@ export function payloadIsIdsOnly(value: unknown, key = ""): boolean {
   return false;
 }
 
+const COLUMN_TOKEN = /^[A-Za-z0-9_.:~#-]{1,200}$/;
+const CIPHER_ID = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$/;
+const SEAL_PATH = /^[A-Z][A-Z0-9_]{2,63}(\.[A-Za-z0-9_]{1,64}(\[\])?){0,8}$/;
+const EVENT_TYPE = /^[A-Z][A-Z0-9_]{2,63}$/;
+/** The operational keys Loom stamps on an envelope's metadata, each with the only value shape it may have. */
+const METADATA: Record<string, (v: unknown) => boolean> = {
+  kernel: (v) => v === true,
+  fence: (v) => Number.isSafeInteger(v) && (v as number) >= 0,
+  computeTarget: (v) => typeof v === "string" && COLUMN_TOKEN.test(v),
+  // The seal marker (`SealMarker`): `{ v: 1, cipher, covers }`, the cipher id and the `EVENT_TYPE.field.path` entries it sealed.
+  seal: (v) => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+    const m = v as Record<string, unknown>;
+    return (
+      Object.keys(m).sort().join() === "cipher,covers,v" &&
+      m.v === 1 &&
+      typeof m.cipher === "string" &&
+      CIPHER_ID.test(m.cipher) &&
+      Array.isArray(m.covers) &&
+      m.covers.every((c) => typeof c === "string" && SEAL_PATH.test(c))
+    );
+  },
+};
+
+/**
+ * The plaintext columns of a raw event other than its payload, judged by shape: ids and fixed tokens (no whitespace, no
+ * quotes, at most 200 characters), `eventType` upper snake case, non-negative integers for `sequence` and `timestamp`, and
+ * metadata that is null or only Loom's operational keys with their value shapes. Returns the names of the offending
+ * columns (`metadata.<key>` for a key); never a value.
+ */
+export function eventColumnProblems(e: {
+  id: unknown;
+  workflowId: unknown;
+  executionId: unknown;
+  eventType: unknown;
+  sequence: unknown;
+  timestamp: unknown;
+  metadata?: unknown;
+}): string[] {
+  const bad: string[] = [];
+  const token = (name: string, v: unknown) => {
+    if (typeof v !== "string" || !COLUMN_TOKEN.test(v)) bad.push(name);
+  };
+  token("id", e.id);
+  // Loom's control events (ERASURE_PENDING, PAYLOAD_SHREDDED) carry an empty workflow id.
+  if (e.workflowId !== "") token("workflowId", e.workflowId);
+  token("executionId", e.executionId);
+  if (typeof e.eventType !== "string" || !EVENT_TYPE.test(e.eventType)) bad.push("eventType");
+  for (const name of ["sequence", "timestamp"] as const) {
+    const v = e[name];
+    if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) bad.push(name);
+  }
+  const m = e.metadata;
+  if (m !== undefined && m !== null) {
+    if (typeof m !== "object" || Array.isArray(m)) bad.push("metadata");
+    else
+      for (const [k, v] of Object.entries(m))
+        if (METADATA[k]?.(v) !== true) bad.push(`metadata.${k}`);
+  }
+  return bad;
+}
+
 const ALLOWED: Allowed[] = [
   // D7: Loom execution ids are plaintext and carry the user's id (and the document or chat id), so every row of the
   // user's own executions names them. The content of those rows is sealed under the destroyed key; here only that the
@@ -609,6 +671,11 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
     const events = await raw.read(id);
     if (events.length === 0) continue; // gone altogether (an inbox stream retired with its conversation)
     assertNoPlaintext(events, secrets);
+    // The columns beside the payload (ids, workflow, type, sequence, timestamp, metadata): shape only, so a new key that
+    // carried content would fail here rather than pass because it holds no known sentinel.
+    expect(
+      events.flatMap((e) => eventColumnProblems(e).map((column) => `${e.eventType}:${column}`)),
+    ).toEqual([]);
     expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
     // Every payload of the execution, needle or not: a sealed or shredded envelope, a tombstone, or listed ids/tokens.
     expect(

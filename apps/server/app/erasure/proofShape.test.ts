@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { type Hit, type Who, payloadIsIdsOnly, unexpected, unlistedStrings } from "./e2eSupport";
+import {
+  type Hit,
+  type Who,
+  eventColumnProblems,
+  payloadIsIdsOnly,
+  unexpected,
+  unlistedStrings,
+} from "./e2eSupport";
 
 const who: Who = {
   userId: randomUUID(),
@@ -121,5 +128,81 @@ describe("the proof's allowlist of residue", () => {
       ["note"],
     );
     expect(unlistedStrings({ a: envelope, b: { __loomEnc: "x" } })).toEqual(["__loomEnc"]);
+  });
+});
+
+describe("the shape of a raw event's plaintext columns", () => {
+  const event = {
+    id: `${own}-3`,
+    workflowId: "ingest-document",
+    executionId: own,
+    eventType: "STEP_STARTED",
+    sequence: 3,
+    timestamp: 1_760_000_000_000,
+    payload: {},
+  };
+
+  it("accepts ids, fixed tokens, numbers and Loom's operational metadata", () => {
+    expect(eventColumnProblems(event)).toEqual([]);
+    expect(eventColumnProblems({ ...event, metadata: { kernel: true } })).toEqual([]);
+    expect(eventColumnProblems({ ...event, metadata: { fence: 4, kernel: true } })).toEqual([]);
+    expect(eventColumnProblems({ ...event, metadata: { computeTarget: "worker-1" } })).toEqual([]);
+    expect(eventColumnProblems({ ...event, metadata: null })).toEqual([]);
+    const seal = {
+      v: 1,
+      cipher: "loom/aes-256-gcm",
+      covers: ["EXECUTION_STARTED.input.documentId", "STEP_COMPLETED.result.items[].id"],
+    };
+    expect(eventColumnProblems({ ...event, metadata: { seal } })).toEqual([]);
+    expect(
+      eventColumnProblems({ ...event, workflowId: "", eventType: "PAYLOAD_SHREDDED" }),
+    ).toEqual([]);
+    expect(
+      eventColumnProblems({
+        ...event,
+        workflowId: "__loom_erasure__",
+        executionId: "__loom_erasure__",
+        id: "erasure-0",
+        timestamp: 0,
+      }),
+    ).toEqual([]);
+  });
+
+  it("names the column that holds anything else, and never the value", () => {
+    const content = "Acme Holdings invoice";
+    expect(eventColumnProblems({ ...event, workflowId: content })).toEqual(["workflowId"]);
+    expect(eventColumnProblems({ ...event, id: content })).toEqual(["id"]);
+    expect(eventColumnProblems({ ...event, executionId: content })).toEqual(["executionId"]);
+    expect(eventColumnProblems({ ...event, eventType: "step started" })).toEqual(["eventType"]);
+    expect(eventColumnProblems({ ...event, sequence: -1 })).toEqual(["sequence"]);
+    expect(eventColumnProblems({ ...event, timestamp: "yesterday" })).toEqual(["timestamp"]);
+    expect(eventColumnProblems({ ...event, metadata: { note: content } })).toEqual([
+      "metadata.note",
+    ]);
+    expect(eventColumnProblems({ ...event, metadata: { fence: content } })).toEqual([
+      "metadata.fence",
+    ]);
+    expect(eventColumnProblems({ ...event, metadata: { kernel: false } })).toEqual([
+      "metadata.kernel",
+    ]);
+    expect(eventColumnProblems({ ...event, metadata: [content] })).toEqual(["metadata"]);
+    expect(
+      eventColumnProblems({
+        ...event,
+        metadata: { seal: { v: 1, cipher: "loom/aes-256-gcm", covers: [content] } },
+      }),
+    ).toEqual(["metadata.seal"]);
+    expect(
+      eventColumnProblems({ ...event, metadata: { seal: { v: 1, cipher: content, covers: [] } } }),
+    ).toEqual(["metadata.seal"]);
+    expect(
+      eventColumnProblems({
+        ...event,
+        metadata: { seal: { v: 1, cipher: "loom/aes-256-gcm", covers: [], note: content } },
+      }),
+    ).toEqual(["metadata.seal"]);
+    expect(
+      JSON.stringify(eventColumnProblems({ ...event, metadata: { note: content } })),
+    ).not.toContain(content);
   });
 });
