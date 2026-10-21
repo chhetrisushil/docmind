@@ -285,6 +285,9 @@ importers:
       '@loom-ui/hydration':
         specifier: link:../../../loom-ui/packages/hydration
         version: link:../../../loom-ui/packages/hydration
+      '@loom/blueprint-runtime':
+        specifier: link:../../../loom/packages/blueprint-runtime
+        version: link:../../../loom/packages/blueprint-runtime
       '@loom/core':
         specifier: link:../../../loom/packages/core
         version: link:../../../loom/packages/core
