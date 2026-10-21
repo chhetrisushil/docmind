@@ -26,6 +26,14 @@ vi.mock("./flows/ingest-document/recovery", () => ({
     return { stop: note("recovery.stop"), idle: async () => {} };
   },
 }));
+let hydrateFails = false;
+vi.mock("./erasure/compliance", () => ({
+  hydrateSubjectIndex: async () => {
+    calls.push("hydrateIndex");
+    if (hydrateFails) throw new RangeError("u_6a1f0c52-1111-4222-8333-444455556666");
+    return 0;
+  },
+}));
 vi.mock("./documents/sweeper", () => ({
   startSweeper: () => {
     calls.push("startSweeper");
@@ -73,9 +81,20 @@ function parts(
   } as unknown as BootIngestParts;
 }
 
+/** `parts()` for an app that has the subject index (an erasure-wired build). */
+function withIndex(over: Partial<BootIngestParts> = {}) {
+  const p = parts(over);
+  const app = p.built.app as unknown as { subjectIndex: object; start: () => void };
+  app.subjectIndex = { subjects: () => [] };
+  app.start = () => void calls.push("appStart");
+  (p.durable as unknown as { raw: object }).raw = { eventStore: {} };
+  return p;
+}
+
 beforeEach(() => {
   calls.length = 0;
   owned.length = 0;
+  hydrateFails = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -254,5 +273,54 @@ describe("bootIngest", () => {
     calls.length = 0;
     await expect(handle.stop()).rejects.toBeInstanceOf(RangeError);
     expect(calls.at(-1)).toBe("endPool");
+  });
+
+  it("hydrates the subject index after the models boot and before the decoy and the bind", async () => {
+    await bootIngest(withIndex({ listen: async () => void calls.push("listen") }));
+    expect(calls.slice(0, 7)).toEqual([
+      "verifyVectors",
+      "bootStatus",
+      "bootActivity",
+      "hydrateIndex",
+      "appStart",
+      "primeDecoy",
+      "listen",
+    ]);
+  });
+
+  it("starts the app (its timers) only after the index is hydrated, and not at all if hydration fails", async () => {
+    await bootIngest(withIndex());
+    expect(calls.indexOf("hydrateIndex")).toBeLessThan(calls.indexOf("appStart"));
+    calls.length = 0;
+    hydrateFails = true;
+    await expect(bootIngest(withIndex())).rejects.toThrow();
+    expect(calls).not.toContain("appStart");
+  });
+
+  it("logs counts only when the index is hydrated", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    await bootIngest(withIndex());
+    expect(info).toHaveBeenCalledWith("subject index hydrated", { subjects: 0, executions: 0 });
+  });
+
+  it("a failed hydration cleans up, logs the class only, and never listens or starts recovery", async () => {
+    hydrateFails = true;
+    const logged = vi.spyOn(console, "error");
+    await expect(
+      bootIngest(withIndex({ listen: async () => void calls.push("listen") })),
+    ).rejects.toThrow(/^subject index failed to boot$/);
+    expect(logged).toHaveBeenCalledWith("subject index failed", "RangeError");
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("u_6a1f0c52");
+    expect(calls).toEqual(
+      expect.arrayContaining(["closeIngest", "closeApp", "closeDurable", "endPool"]),
+    );
+    expect(calls).not.toContain("listen");
+    expect(calls).not.toContain("startRecovery:owner-1");
+  });
+
+  it("skips hydration for an app built without the erasure wiring", async () => {
+    await bootIngest(parts());
+    expect(calls).not.toContain("hydrateIndex");
+    expect(calls).not.toContain("appStart");
   });
 });

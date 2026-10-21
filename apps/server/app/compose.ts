@@ -28,6 +28,7 @@ import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
+import type { ErasureWiring } from "./erasure/compliance";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
@@ -44,6 +45,11 @@ export interface StatusStores {
 }
 
 export interface ComposeOptions {
+  /**
+   * M5: the raw (unwrapped) stores erasure shreds on. With it the app is built with `compliance`
+   * and `bootIngest` hydrates the subject index. Absent: no erasure (most tests).
+   */
+  erasure?: { raw: ErasureWiring["raw"] };
   /** The docmind_app pool: auth, documents and the ingest step read through it. */
   pool: Pool;
   keys: KeyStore;
@@ -129,6 +135,7 @@ export function buildServer(options: ComposeOptions) {
         ...(titleLlm && { llm: titleLlm }),
       },
     }),
+    ...(options.erasure && { erasure: { keys, raw: options.erasure.raw } }),
     onEvent: (event) => {
       for (const sink of feed.sinks) {
         try {

@@ -111,6 +111,7 @@ export async function setupServer() {
     keys,
     storage: durable.storage,
     crypto: durable.crypto,
+    erasure: { raw: durable.raw },
     limits,
     blobRoot,
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
