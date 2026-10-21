@@ -272,5 +272,134 @@ describe.skipIf(!PG_URL)(
         ).toBeNull();
       });
     });
+
+    describe("docmind_erasure_status", () => {
+      const status = async (hash: Buffer | null) =>
+        (await app.query("SELECT public.docmind_erasure_status($1) AS s", [hash])).rows[0].s;
+
+      it("answers the state of the request a receipt hash belongs to, across tenants, and NULL for any other hash", async () => {
+        expect(await status(receipts.get(U2) as Buffer)).toBe("pending"); // bob, tenant 2: the caller needs no tenant context
+        expect(await status(receipts.get(U1) as Buffer)).toBe("done"); // finished above
+        expect(await status(newHash())).toBeNull();
+        expect(await status(Buffer.alloc(0))).toBeNull();
+      });
+
+      it("is STRICT: a NULL hash answers NULL, and it takes a hash and returns a state, nothing else", async () => {
+        expect(await status(null)).toBeNull();
+        const { rows } = await owner.query(
+          "SELECT pg_get_function_arguments(oid) AS args, pg_get_function_result(oid) AS result FROM pg_proc WHERE proname = 'docmind_erasure_status'",
+        );
+        expect(rows).toEqual([{ args: "p_receipt_hash bytea", result: "text" }]);
+      });
+    });
+
+    describe("docmind_delete_empty_tenant", () => {
+      it("keeps a tenant that still has a user, deletes one that has none, and ignores NULL and unknown ids", async () => {
+        const del = async (t: string | null) =>
+          (await app.query("SELECT docmind_delete_empty_tenant($1) AS gone", [t])).rows[0].gone;
+        // Its own tenant and user, so the seeded ones stay for the tests below.
+        const [tenant, user] = [randomUUID(), randomUUID()];
+        await owner.query("SELECT auth_sign_up($1, $2, $3, 'hash')", [
+          tenant,
+          user,
+          `${user}@example.com`,
+        ]);
+        expect(await del(tenant)).toBe(false);
+        expect((await owner.query("SELECT 1 FROM tenants WHERE id = $1", [tenant])).rowCount).toBe(
+          1,
+        );
+        await owner.query("DELETE FROM users WHERE tenant_id = $1", [tenant]);
+        expect(await del(tenant)).toBe(true);
+        expect((await owner.query("SELECT 1 FROM tenants WHERE id = $1", [tenant])).rowCount).toBe(
+          0,
+        );
+        expect(await del(tenant)).toBe(false); // again: gone already
+        expect(await del(null)).toBeNull();
+        expect(await del(randomUUID())).toBe(false);
+        expect((await owner.query("SELECT 1 FROM tenants WHERE id = $1", [T2])).rowCount).toBe(1); // seeded tenants untouched
+      });
+    });
+
+    describe("a user who is being erased cannot log in or authenticate", () => {
+      it("auth_find_login and auth_find_session stop answering once erasing_at is set, by the user's own transaction", async () => {
+        await withTenant(app, T1, (tx) =>
+          tx.query(
+            "INSERT INTO auth_sessions (token_hash, tenant_id, user_id, expires_at) VALUES ('live', $1, $2, now() + interval '1 day')",
+            [T1, U1B],
+          ),
+        );
+        expect(
+          (await app.query("SELECT * FROM auth_find_login('alice2@example.com')")).rowCount,
+        ).toBe(1);
+        expect((await app.query("SELECT * FROM auth_find_session('live')")).rowCount).toBe(1);
+        await withTenant(app, T1, (tx) =>
+          tx.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U1B]),
+        );
+        expect(
+          (await app.query("SELECT * FROM auth_find_login('alice2@example.com')")).rowCount,
+        ).toBe(0);
+        expect((await app.query("SELECT * FROM auth_find_session('live')")).rowCount).toBe(0);
+        expect(
+          (await app.query("SELECT * FROM auth_find_login('alice@example.com')")).rowCount,
+        ).toBe(1); // another user is unaffected
+      });
+    });
+
+    it("an erasing user stays erasing: erasing_at cannot be cleared or changed, and the email can only be the scrubbed one", async () => {
+      const upd = (sql: string) => withTenant(app, T1, (tx) => tx.query(sql, [U1B]));
+      await expect(upd("UPDATE users SET erasing_at = NULL WHERE id = $1")).rejects.toMatchObject({
+        code: "23514",
+      });
+      await expect(
+        upd("UPDATE users SET erasing_at = now() + interval '1 day' WHERE id = $1"),
+      ).rejects.toMatchObject({
+        code: "23514",
+      });
+      await expect(
+        upd("UPDATE users SET email = 'back@example.com' WHERE id = $1"),
+      ).rejects.toMatchObject({ code: "23514" });
+      await upd("UPDATE users SET email = 'erased:' || id::text WHERE id = $1"); // the scrub is allowed
+      expect(
+        (await owner.query("SELECT erasing_at FROM users WHERE id = $1", [U1B])).rows[0].erasing_at,
+      ).not.toBeNull();
+    });
+
+    it("the app role can rewrite users.email inside its own tenant transaction, and only there (the request-time scrub needs no function)", async () => {
+      const scrub = (tenant: string, user: string) =>
+        withTenant(app, tenant, (tx) =>
+          tx.query("UPDATE users SET email = 'erased:' || id::text WHERE id = $1", [user]),
+        ) as Promise<{ rowCount: number }>;
+      expect((await scrub(T1, U2)).rowCount).toBe(0); // bob belongs to tenant 2: RLS hides the row
+      expect(
+        (await owner.query("SELECT email FROM users WHERE id = $1", [U2])).rows[0].email,
+      ).not.toMatch(/^erased:/);
+      expect((await scrub(T1, U1B)).rowCount).toBe(1);
+      expect(
+        (await owner.query("SELECT email FROM users WHERE id = $1", [U1B])).rows[0].email,
+      ).toBe(`erased:${U1B}`);
+      expect(
+        (await owner.query("SELECT 1 FROM users WHERE email = 'alice2@example.com'")).rowCount,
+      ).toBe(0); // the old address is free
+    });
+
+    it("the four definer functions pin search_path, are definers, are strict, and are executable by the app role alone", async () => {
+      const { rows } = await owner.query(
+        `SELECT p.proname, p.prosecdef, p.proisstrict, p.proconfig,
+              pg_get_userbyid(p.proowner) AS owner,
+              (SELECT array_agg(g ORDER BY g) FROM (
+                 SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END || ':' || a.privilege_type AS g
+                   FROM aclexplode(p.proacl) a) x) AS acl
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = ANY ($1) ORDER BY p.proname`,
+        [FUNCTIONS],
+      );
+      expect(rows.map((r) => r.proname)).toEqual(FUNCTIONS);
+      for (const r of rows) {
+        expect(r.prosecdef).toBe(true);
+        expect(r.proconfig).toEqual(["search_path=pg_catalog, pg_temp"]);
+        expect(r.acl).toEqual([`${r.owner}:EXECUTE`, "docmind_app:EXECUTE"].sort());
+      }
+      expect(rows.filter((r) => r.proisstrict).map((r) => r.proname)).toEqual(FUNCTIONS); // each takes arguments, so each is STRICT
+    });
   },
 );
