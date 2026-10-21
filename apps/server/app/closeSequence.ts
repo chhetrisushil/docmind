@@ -32,6 +32,10 @@ export async function bounded(work: Promise<unknown>, ms: number, step: string):
 
 /** What the close sequence calls; main.ts supplies the real ones. */
 export interface CloseDeps {
+  /** The eraser: ends its backoff waits and lets a running step finish, bounded; absent when erasure is not composed. */
+  stopErasure?(): Promise<unknown>;
+  /** The eraser's advisory-lock pool, ended once the eraser has stopped; absent without erasure. */
+  closeErasureLocks?(): Promise<unknown>;
   startsIdle(): Promise<unknown>;
   closeIngest(): Promise<unknown>;
   /** The chat's in-flight model calls; absent when chat is not composed. */
@@ -47,6 +51,7 @@ export interface CloseDeps {
 /**
  * The steps `runAll` runs once the server has stopped accepting requests, in the order that keeps
  * them safe:
+ *  0. stop the eraser (an erasure step may still call the ingest port and the chat; it finishes before they close);
  *  1. let fired flow starts settle (bounded: a start stuck on a dead database must not keep the stores open);
  *  2. interrupt the ingest steps and the chat's model calls (their steps stay un-completed in the log,
  *     like ingest's, and recovery re-runs them next boot; the chat flow declares no turn deadline, so
@@ -62,7 +67,13 @@ export const closeSequence = (
   poolEndMs = POOL_END_MS,
 ): (() => Promise<unknown>)[] => {
   const closeChat = d.closeChat?.bind(d);
+  const stopErasure = d.stopErasure?.bind(d);
+  const closeErasureLocks = d.closeErasureLocks?.bind(d);
   return [
+    ...(stopErasure ? [() => stopErasure()] : []),
+    ...(closeErasureLocks
+      ? [() => bounded(closeErasureLocks(), poolEndMs, "closeErasureLocks")]
+      : []),
     () => drainWithin(d.startsIdle(), SHUTDOWN_DRAIN_MS),
     () => d.closeIngest(),
     ...(closeChat ? [() => closeChat()] : []),

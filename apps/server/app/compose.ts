@@ -8,7 +8,7 @@ import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { ReadModelStore } from "@loom/plugin-read-model";
-import type { Pool } from "pg";
+import { Pool } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
@@ -29,7 +29,11 @@ import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
 import type { ErasureWiring } from "./erasure/compliance";
+import { ERASURE_CONCURRENCY, Eraser, type ErasureDeps } from "./erasure/eraser";
+import { pgErasureSql } from "./erasure/pgSteps";
+import { PgErasureStore } from "./erasure/pgStore";
 import { tolerantSource } from "./erasure/tolerantSource";
+import { erasureDeps, requireKeyDestroyedProof } from "./erasure/wire";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
@@ -50,10 +54,17 @@ export interface StatusStores {
 
 export interface ComposeOptions {
   /**
-   * M5: the raw (unwrapped) stores erasure shreds on. With it the app is built with `compliance`
-   * and `bootIngest` hydrates the subject index. Absent: no erasure (most tests).
+   * M5: the raw (unwrapped) stores erasure shreds on. With it the app is built with `compliance`,
+   * `bootIngest` hydrates the subject index, and the `Eraser` is composed. `loomPool` is the Loom pool (the eraser
+   * removes the user's leftover timers and leases). Absent: no erasure and no eraser (the CLI, most tests).
+   * `wrap` and `sleep` are test seams: a crash test wraps a step, the acceptance stack shortens the backoff.
    */
-  erasure?: { raw: ErasureWiring["raw"] };
+  erasure?: {
+    raw: ErasureWiring["raw"];
+    loomPool: Pool;
+    wrap?: (deps: ErasureDeps) => ErasureDeps;
+    sleep?: ErasureDeps["sleep"];
+  };
   /** The docmind_app pool: auth, documents and the ingest step read through it. */
   pool: Pool;
   keys: KeyStore;
@@ -197,6 +208,45 @@ export function buildServer(options: ComposeOptions) {
       eventStore: options.status.source,
       reasoning,
     });
+  // After the streams exist: the eraser closes them per user.
+  const erasure = options.erasure;
+  if (erasure) requireKeyDestroyedProof(keys);
+  // Advisory locks live on a small pool of their own, on the same app connection settings: a lock held through a
+  // backoff must never take a connection the app or the key store needs.
+  const erasureLocks = erasure
+    ? new Pool({ ...pool.options, max: ERASURE_CONCURRENCY + 1, connectionTimeoutMillis: 10_000 })
+    : undefined;
+  const erasureStore = erasure && new PgErasureStore(pool);
+  const eraser =
+    erasure && erasureLocks && erasureStore
+      ? new Eraser(
+          (erasure.wrap ?? ((d: ErasureDeps) => d))(
+            erasureDeps({
+              app,
+              runtime: app.runtime,
+              keys,
+              store: erasureStore,
+              sql: pgErasureSql({
+                app: pool,
+                locks: erasureLocks,
+                loom: erasure.loomPool,
+                blobRoot: options.blobRoot,
+              }),
+              starts,
+              ...(titles && { titles }),
+              ingest,
+              ...(chat && { chat }),
+              status,
+              activity,
+              closeStreams: (userId) => {
+                events.closeUser(userId);
+                chatStreams?.closeUser(userId);
+              },
+              ...(erasure.sleep && { sleep: erasure.sleep }),
+            }),
+          ),
+        )
+      : undefined;
   const server = createHttpServer(
     {
       ...authRoutes({
@@ -253,6 +303,10 @@ export function buildServer(options: ComposeOptions) {
     events,
     /** Ends every open chat stream; shutdown calls it right after `events.closeAll()` (a stream never ends on its own). Absent without chat. */
     chatStreams,
+    /** Runs and resumes erasures; absent without options.erasure. Boot calls resumeAll(); shutdown calls stop(). */
+    eraser,
+    /** The advisory-lock pool of the eraser; shutdown ends it after the eraser stops. Absent without options.erasure. */
+    erasureLocks,
     /** Stops feeding the models; shutdown calls it before `status.close()` and `activity.close()` so a late event is not folded onto closing pools. */
     detachStatusFeed: () => {
       feed.sinks = [];

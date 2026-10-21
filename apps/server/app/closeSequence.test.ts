@@ -30,6 +30,31 @@ describe("closeSequence", () => {
     ]);
   });
 
+  it("stops the eraser before anything it may still call is closed", async () => {
+    const calls: string[] = [];
+    const note = (name: string) => async () => void calls.push(name);
+    await runAll(
+      ...closeSequence({
+        stopErasure: note("stopErasure"),
+        closeErasureLocks: note("closeErasureLocks"),
+        startsIdle: note("starts"),
+        closeIngest: note("closeIngest"),
+        closeHeartbeat: note("closeHeartbeat"),
+        detachStatusFeed: () => void calls.push("detach"),
+        closeStatus: note("closeStatus"),
+        closeApp: note("closeApp"),
+        closeDurable: note("closeDurable"),
+        endPool: note("endPool"),
+      }),
+    );
+    expect(calls.slice(0, 4)).toEqual([
+      "stopErasure",
+      "closeErasureLocks",
+      "starts",
+      "closeIngest",
+    ]);
+  });
+
   it("cuts the chat's in-flight model calls right after the ingest steps, before the leases are released", async () => {
     const calls: string[] = [];
     const note = (name: string) => async () => void calls.push(name);
