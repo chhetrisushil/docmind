@@ -233,6 +233,7 @@ describe("dm-settings", () => {
       });
     const fetchFake = (async (path: string, init: RequestInit) => {
       if (path === "/api/auth/login") return json(200, ME);
+      if (String(path).includes("/api/ui/")) return new Promise<Response>(() => {}); // the sidebar's chat list
       if (init.method === "DELETE") throw new TypeError("offline");
       return json(401, { error: { code: "unauthorized", message: "no" } });
     }) as never;

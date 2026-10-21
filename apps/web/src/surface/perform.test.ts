@@ -3,11 +3,22 @@ import { ApiError } from "../api/http";
 import { performIntent } from "./perform";
 
 const A = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
-function ctx(over: Record<string, unknown> = {}) {
-  const api = {
+type Mock = ReturnType<typeof vi.fn>;
+/** The slice of `Api` the intents call, as mocks (so a test reads `t.api.patchChat.mock...` typed). */
+interface ApiMocks {
+  createChat: Mock;
+  retryDocument: Mock;
+  deleteDocument: Mock;
+  patchChat: Mock;
+  deleteChat: Mock;
+}
+function ctx(over: Partial<Record<keyof ApiMocks, Mock>> = {}) {
+  const api: ApiMocks = {
     createChat: vi.fn(async () => ({ id: "c1" })),
     retryDocument: vi.fn(async () => ({})),
     deleteDocument: vi.fn(async () => {}),
+    patchChat: vi.fn(async () => ({})),
+    deleteChat: vi.fn(async () => {}),
     ...over,
   };
   const router = { navigate: vi.fn() };
@@ -208,5 +219,95 @@ describe("performIntent: sources", () => {
     const t = ctx();
     await performIntent({ type: "source.open", passageId: "p1", documentId: A }, t.c);
     expect(t.router.navigate).toHaveBeenCalledWith({ name: "document", id: A, passage: "p1" });
+  });
+});
+
+describe("performIntent: chats", () => {
+  it("opens a chat", async () => {
+    const t = ctx();
+    await performIntent({ type: "chat.open", id: A }, t.c);
+    expect(t.router.navigate).toHaveBeenCalledWith({ name: "chat", chatId: A });
+  });
+  it("renames with the new title and refreshes; nothing happens when the dialog is cancelled", async () => {
+    const t = ctx();
+    const c = {
+      ...(t.c as object),
+      titleOf: () => "Old",
+      prompt: vi.fn(async () => "New"),
+    } as never;
+    await performIntent({ type: "chat.rename", id: A }, c);
+    expect(t.api.patchChat).toHaveBeenCalledWith(A, { title: "New" });
+    expect(t.session.invalidate).toHaveBeenCalledWith("chats");
+    const cancelled = {
+      ...(t.c as object),
+      titleOf: () => "Old",
+      prompt: vi.fn(async () => undefined),
+    } as never;
+    t.api.patchChat.mockClear();
+    await performIntent({ type: "chat.rename", id: A }, cancelled);
+    expect(t.api.patchChat).not.toHaveBeenCalled();
+  });
+  it("trims a rename to 200 characters and fails with a fixed sentence", async () => {
+    const t = ctx({
+      patchChat: vi.fn(async () => {
+        throw new Error("secret title");
+      }),
+    });
+    const c = { ...(t.c as object), prompt: vi.fn(async () => "x".repeat(300)) } as never;
+    await performIntent({ type: "chat.rename", id: A }, c);
+    expect(t.api.patchChat).toHaveBeenCalledWith(A, { title: "x".repeat(200) });
+    expect(t.toasts.push).toHaveBeenCalledWith({
+      kind: "err",
+      text: "Could not rename that chat.",
+    });
+  });
+  it("deletes after a confirmation, and goes to a new chat when it was the open one", async () => {
+    const t = ctx();
+    await performIntent({ type: "chat.delete", id: A }, {
+      ...(t.c as object),
+      openChatId: A,
+    } as never);
+    expect(t.api.deleteChat).toHaveBeenCalledWith(A);
+    expect(t.router.navigate).toHaveBeenCalledWith({ name: "chat" });
+    expect(t.session.invalidate).toHaveBeenCalledWith("chats");
+  });
+  it("does not navigate for another chat, a cancelled confirmation, or a sidebar that has gone", async () => {
+    const t = ctx();
+    await performIntent({ type: "chat.delete", id: A }, {
+      ...(t.c as object),
+      openChatId: "other",
+    } as never);
+    await performIntent({ type: "chat.delete", id: A }, {
+      ...(t.c as object),
+      openChatId: A,
+      active: () => false,
+    } as never);
+    expect(t.router.navigate).not.toHaveBeenCalled();
+    const no = ctx();
+    no.confirm.mockResolvedValueOnce(false);
+    await performIntent({ type: "chat.delete", id: A }, no.c);
+    expect(no.api.deleteChat).not.toHaveBeenCalled();
+  });
+  it("a second delete while the first is in flight sends one request", async () => {
+    let release: () => void = () => {};
+    const t = ctx({
+      deleteChat: vi.fn(
+        () =>
+          new Promise<void>((r) => {
+            release = r;
+          }),
+      ),
+    });
+    const a = performIntent({ type: "chat.delete", id: A }, t.c);
+    const b = performIntent({ type: "chat.delete", id: A }, t.c);
+    await vi.waitFor(() => expect(t.api.deleteChat).toHaveBeenCalledTimes(1));
+    release();
+    await Promise.all([a, b]);
+    expect(t.api.deleteChat).toHaveBeenCalledTimes(1);
+  });
+  it("searches through the chats handle's parameter", async () => {
+    const t = ctx();
+    await performIntent({ type: "chats.search", q: "invo" }, t.c);
+    expect(t.session.setParams).toHaveBeenCalledWith({ q: "invo" }, "chats");
   });
 });

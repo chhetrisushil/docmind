@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServices } from "../services";
 import { AuthStore } from "../state/auth";
+import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
 import "./dm-app-shell";
 import "./dm-dialog";
@@ -12,6 +13,7 @@ const ME = {
 };
 async function setup(children = "") {
   const api = {
+    ...fakeUi().api,
     me: async () => ME,
     login: async () => ME,
     logout: vi.fn(async () => {}),
@@ -32,11 +34,11 @@ const settle = (el: Element) =>
   (el as unknown as { updateComplete: Promise<unknown> }).updateComplete;
 
 describe("dm-app-shell", () => {
-  it("has labelled landmarks: navigation, main, the sidebar slot, and the user's email in the footer", async () => {
+  it("has labelled landmarks: navigation, main, the chats list, and the user's email in the footer", async () => {
     const { el } = await setup();
     expect(q(el, "nav[aria-label='Primary']")).not.toBeNull();
     expect(q(el, "main")).not.toBeNull();
-    expect(q(el, "slot[name='sidebar']")).not.toBeNull();
+    expect(q(el, "dm-sessions")).not.toBeNull();
     expect(q(el, "[data-user]").textContent).toBe("a@example.com");
   });
 
@@ -159,17 +161,16 @@ describe("dm-app-shell", () => {
     expect(services.router.route).toEqual(before);
   });
 
-  it("puts what is slotted in the right places", async () => {
-    const { el } = await setup(`<p id="view">View</p><p slot="sidebar" id="list">Chats</p>`);
-    const side = q<HTMLSlotElement>(el, "slot[name='sidebar']");
-    expect(side.assignedNodes().map((n) => (n as Element).id)).toEqual(["list"]);
+  it("puts what is slotted into the main region, and the chats list in the sidebar", async () => {
+    const { el } = await setup(`<p id="view">View</p>`);
     const main = q<HTMLSlotElement>(el, "main slot:not([name])");
     expect(main.assignedNodes().map((n) => (n as Element).id)).toEqual(["view"]);
+    expect(q<HTMLElement>(el, "aside").contains(q(el, "dm-sessions"))).toBe(true);
   });
 
   it("a dialog opened inside the view makes the sidebar and the navigation inert, and releases them on close", async () => {
     const { el } = await setup(
-      `<dm-dialog id="dlg" heading="Sure?"><p>Body</p><button slot="actions" id="ok">OK</button></dm-dialog><p slot="sidebar">Chats</p>`,
+      `<dm-dialog id="dlg" heading="Sure?"><p>Body</p><button slot="actions" id="ok">OK</button></dm-dialog>`,
     );
     const dlg = el.querySelector("#dlg") as HTMLElement & { open: boolean };
     dlg.open = true;

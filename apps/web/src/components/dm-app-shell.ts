@@ -2,8 +2,9 @@ import { LitElement, css, html } from "lit";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
 import "./dm-icon";
+import "./dm-sessions";
 
-/** The frame of every signed-in page: a sidebar (with a slot for the chats list) and a main region for the view. */
+/** The frame of every signed-in page: a sidebar (with the chats list) and a main region for the view. */
 export class DmAppShell extends LitElement {
   static properties = { menuOpen: { state: true } };
   static styles = [
@@ -53,10 +54,7 @@ export class DmAppShell extends LitElement {
     if (this.route !== undefined && route !== this.route && this.menuOpen) {
       // any route change closes the overlay; focus that was inside it would fall to the body, so it goes to the Menu button
       const inside = this.renderRoot.querySelector("aside");
-      const active = document.activeElement;
-      this.refocus =
-        inside?.contains(this.shadowRoot?.activeElement ?? null) === true ||
-        (active !== null && this.contains(active) && active.closest("[slot=sidebar]") !== null);
+      this.refocus = inside?.contains(this.shadowRoot?.activeElement ?? null) === true;
       this.menuOpen = false;
     }
     this.route = route;
@@ -106,7 +104,7 @@ export class DmAppShell extends LitElement {
           <button class="btn primary" data-new-chat @click=${this.newChat}><dm-icon name="plus"></dm-icon>New chat</button>
           <a class="nav" data-documents href="/documents" aria-current=${here ? "page" : "false"}><dm-icon name="files"></dm-icon>Documents</a>
         </nav>
-        <div class="list"><slot name="sidebar"></slot></div>
+        <div class="list"><dm-sessions></dm-sessions></div>
         <footer>
           <span data-user>${auth?.status === "signed-in" ? auth.me.email : ""}</span>
           <a class="btn icon" href="/settings" aria-label="Settings"><dm-icon name="gear"></dm-icon></a>
