@@ -36,6 +36,7 @@ describe("dm-view", () => {
     const el = await mountWith<HTMLElement>(services, "dm-view", { name: "library-empty" });
     await vi.waitFor(() => expect(q(el, "[role=alert]")).not.toBeNull());
     expect(q(el, "[role=alert]").textContent).toContain("could not be loaded");
+    // negative wait: give a wrong automatic retry the chance to happen
     await new Promise((r) => setTimeout(r, 30));
     expect(api.uiView).toHaveBeenCalledTimes(1); // a failed fetch does not retry by itself
     fail = false;
@@ -90,6 +91,7 @@ describe("dm-view", () => {
     await vi.waitFor(() => expect(held).toHaveLength(3));
     for (const h of held) h.resolve();
     await vi.waitFor(() => expect(el.session?.name).toBe("library-empty"));
+    // negative wait: give a stray extra mount the chance to happen
     await new Promise((r) => setTimeout(r, 30));
     expect(el.shadowRoot?.querySelectorAll("#host lu-note").length).toBe(1);
     expect(el.shadowRoot?.querySelectorAll("#host > *").length).toBeGreaterThan(0);
@@ -113,6 +115,7 @@ describe("dm-view", () => {
     await vi.waitFor(() => expect(api.uiView).toHaveBeenCalledTimes(1));
     el.remove();
     g.resolve();
+    // negative wait: give a late event or mount the chance to happen after the disconnect
     await new Promise((r) => setTimeout(r, 30));
     expect(seen).not.toHaveBeenCalled();
     expect(el.session).toBeUndefined();
@@ -138,6 +141,7 @@ describe("dm-view", () => {
     await vi.waitFor(() => expect(api.uiView).toHaveBeenCalledTimes(1));
     el.remove();
     g.resolve();
+    // negative wait: give a late event or phase change the chance to happen after the disconnect
     await new Promise((r) => setTimeout(r, 30));
     expect(seen).not.toHaveBeenCalled();
     expect(el.phase).toBe("loading");

@@ -210,6 +210,7 @@ describe("ViewSession: bounds and teardown", () => {
     s.start();
     s.mount(t.host, () => undefined);
     await vi.waitFor(() => expect(onFailed).toHaveBeenCalledTimes(1));
+    // negative wait: give a further reload the chance to happen after the failure
     await new Promise((r) => setTimeout(r, 40));
     expect(t.ui.calls.views.length).toBe(4); // the helper's own open, this session's open and two reloads
     expect(onFailed).toHaveBeenCalledTimes(1);
@@ -251,6 +252,7 @@ describe("ViewSession: bounds and teardown", () => {
     const before = t.ui.calls.hydrate.length;
     await t.session.reload();
     await vi.waitFor(() => expect(t.session.statusOf("documents")).toBe("ready"));
+    // negative wait: give a second hydrate request the chance to happen
     await new Promise((r) => setTimeout(r, 20));
     expect(t.ui.calls.hydrate.length - before).toBeLessThanOrEqual(1);
   });
