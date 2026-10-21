@@ -60,6 +60,9 @@ importers:
       '@docmind/embeddings':
         specifier: workspace:*
         version: link:../../packages/embeddings
+      '@docmind/experiences':
+        specifier: workspace:*
+        version: link:../../packages/experiences
       '@docmind/keystore-pg':
         specifier: workspace:*
         version: link:../../packages/keystore-pg

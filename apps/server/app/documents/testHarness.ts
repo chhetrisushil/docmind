@@ -7,6 +7,7 @@ import type { Authenticator, Identity } from "@docmind/auth";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
 import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { startFakeOllama } from "@docmind/embeddings/testing";
+import { createViews } from "@docmind/experiences";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { type ChunkVectorStore, InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
@@ -29,6 +30,7 @@ import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
+import { uiRoutes } from "../ui/routes";
 import { documentEventRoutes } from "./events";
 import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
@@ -390,8 +392,14 @@ export async function startDocumentServer(
     const starts =
       wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
     const events = documentEventRoutes({ authenticator: testAuthenticator, bus: ingest.bus });
+    const views = createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
     const server = createHttpServer({
       ...documentRoutes({ ...wrapped, starts }),
+      ...uiRoutes({
+        authenticator: testAuthenticator,
+        views,
+        readers: { pool: app, fields, status: ingest.status },
+      }),
       ...events.routes,
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

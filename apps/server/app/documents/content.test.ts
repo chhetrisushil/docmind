@@ -15,6 +15,10 @@ describe("the content cursor", () => {
     Buffer.from("o:1.5").toString("base64url"),
     Buffer.from("o:1234567890").toString("base64url"),
     Buffer.from("x:5").toString("base64url"),
+    "bzo1==", // padded: not what encodeContentCursor produces
+    "b zo1", // the decoder would skip the space
+    "bzo1\n",
+    `${encodeContentCursor(5)}=`,
   ])("refuses %j", (c) => {
     expect(decodeContentCursor(c)).toBeNull();
   });

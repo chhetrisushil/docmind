@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
+import { createViews } from "@docmind/experiences";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import { createConversationReader } from "@loom/conversation";
@@ -43,6 +45,7 @@ import { createHttpServer } from "./server";
 import type { UserExecutionLister } from "./status/forgetUser";
 import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
+import { uiRoutes } from "./ui/routes";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
 export interface StatusStores {
@@ -198,6 +201,14 @@ export function buildServer(options: ComposeOptions) {
     ? options.wrapIngest(loomIngest(app.runtime))
     : loomIngest(app.runtime);
   const starts = new StartScheduler(ingest);
+  // The keys are per process: a restart changes the handle revisions (a connected client sees one extra reload), and two
+  // processes behind one balancer would answer different versionHash values. DocMind is single-process (spec section 10).
+  // A finding is logged as its code alone: never the handle, the params or the value.
+  const views = createViews({
+    placeholderKey: randomBytes(32).toString("hex"),
+    revisionKey: randomBytes(32).toString("hex"),
+    onFinding: (_handle, code) => console.error(`ui finding ${code}`),
+  });
   const store = new PgAuthStore(pool);
   const throttle = new PgThrottle(pool);
   const authenticator = new PasswordAuthenticator(store);
@@ -291,6 +302,7 @@ export function buildServer(options: ComposeOptions) {
         starts,
         status,
       }),
+      ...uiRoutes({ authenticator, views, readers: { pool, fields, status } }),
       ...(chat &&
         reasoning &&
         chatRoutes({

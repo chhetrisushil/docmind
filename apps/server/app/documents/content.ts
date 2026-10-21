@@ -14,10 +14,12 @@ const SEALED = z.object({ text: z.string(), headingPath: z.array(z.string()) });
 export const encodeContentCursor = (ordinal: number): string =>
   Buffer.from(`o:${ordinal}`).toString("base64url");
 
-/** The ordinal a cursor names, or null: opaque to clients, validated like any input (no sign, no leading zero, nine digits at most). */
+/** The ordinal a cursor names, or null: opaque to clients, validated like any input (no sign, no leading zero, nine digits at most, canonical base64url only). */
 export function decodeContentCursor(cursor: string): number | null {
   const match = /^o:(0|[1-9][0-9]{0,8})$/.exec(Buffer.from(cursor, "base64url").toString("utf8"));
-  return match ? Number(match[1]) : null;
+  if (!match) return null;
+  // Node's decoder skips whitespace and padding: only the exact string `encodeContentCursor` makes is a cursor.
+  return encodeContentCursor(Number(match[1])) === cursor ? Number(match[1]) : null;
 }
 
 interface Row {
@@ -39,6 +41,8 @@ export async function readContent(
   after: number,
 ): Promise<DocumentContentResponse | null> {
   const rows = await withTenant(pool, identity.tenantId, async (tx) => {
+    // Re-checked here although the route's auth ran: a session outlives the start of an erasure, and this reader also serves
+    // the UI plane, so it must read nothing for a user whose erasure began after the session was issued.
     const alive = await tx.query("SELECT 1 FROM users WHERE id = $1 AND erasing_at IS NULL", [
       identity.userId,
     ]);

@@ -111,9 +111,15 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
                 upto: a.data.upto,
                 ...(a.data.passage !== "" && { passage: a.data.passage }),
               })) ?? fail("notFound");
+            // A cited passage past the first `upto` is kept with everything before it (186c M3), never beyond CONTENT_CAP.
+            const at =
+              a.data.passage === ""
+                ? -1
+                : raw.items.findIndex((p) => p.passageId === a.data.passage);
+            const keep = Math.min(CONTENT_CAP, Math.max(a.data.upto, at + 1));
             const content: RawContent = {
-              items: raw.items.slice(0, a.data.upto),
-              more: raw.more || raw.items.length > a.data.upto,
+              items: raw.items.slice(0, keep),
+              more: raw.more || raw.items.length > keep,
             };
             return { content, cited: a.data.passage === "" ? undefined : a.data.passage };
           },
