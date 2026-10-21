@@ -17,7 +17,7 @@ import { APP_PASSWORD, LOOM_PASSWORD, type TestDb, createTestDb } from "../db/te
 import { createTitleLlm } from "../flows/chat-title/llm";
 import { closeIngest, createIngestWiring } from "../flows/ingest-document/limits";
 import { runAll } from "../shutdown";
-import { pgStatusReaderFor, pgStatusWriter } from "../status/pgStores";
+import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "../status/pgStores";
 import { type DurableStorage, openDurableStorage } from "../storage";
 import { loadBlobRoot, loadLimits } from "./limits";
 import { openSse } from "./testHarness";
@@ -146,6 +146,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
         writer: pgStatusWriter(durable.pool),
         readerFor: pgStatusReaderFor(app),
         source: durable.storage.eventStore,
+        userExecutions: pgUserExecutions(durable.pool),
       },
       chat: {
         settings,

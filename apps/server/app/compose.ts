@@ -34,6 +34,7 @@ import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
 import { createHttpServer } from "./server";
+import type { UserExecutionLister } from "./status/forgetUser";
 import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
 
@@ -43,6 +44,8 @@ export interface StatusStores {
   readerFor(identity: Identity): ReadModelStore;
   /** The decrypting event store the model reads (live and catch-up source); its sealing covers feed the sensitive map. */
   source: EventStore;
+  /** User erasure's reader of the Loom pool (`pgUserExecutions`). Absent (most tests): the models purge by scope only. */
+  userExecutions?: UserExecutionLister;
 }
 
 export interface ComposeOptions {
@@ -165,11 +168,13 @@ export function buildServer(options: ComposeOptions) {
     source: foldSource,
     sensitive,
     bus: options.ingest.bus,
+    ...(options.status.userExecutions && { userExecutions: options.status.userExecutions }),
   });
   const activity = new ChatActivity({
     writer: options.status.writer,
     source: foldSource,
     sensitive,
+    ...(options.status.userExecutions && { userExecutions: options.status.userExecutions }),
   });
   feed.sinks = [status.onEvent, activity.onEvent];
   const ingest = options.wrapIngest
