@@ -38,6 +38,8 @@ export interface TransportDeps {
   open: OpenSse;
   onChange(): void;
   onProblem(p: "load" | "stream" | "gone"): void;
+  /** An older page failed to load: the chat itself still works. Without it the failure is a "load" problem. */
+  onOlderFailed?(): void;
 }
 
 export function createChatTransport(d: TransportDeps): ChatTransport {
@@ -105,7 +107,7 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
         if (!closed) d.onChange();
       } catch (err) {
         report("chat-older", err);
-        if (!closed) d.onProblem("load");
+        if (!closed) (d.onOlderFailed ?? (() => d.onProblem("load")))();
       } finally {
         loadingOlder = false;
       }
