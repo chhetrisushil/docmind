@@ -125,3 +125,20 @@ export const DocumentProgressEvent = z
     message: "an event without a step must be failed",
   });
 export type DocumentProgressEvent = z.infer<typeof DocumentProgressEvent>;
+
+/** One passage (chunk) of a document in reading order, for the Content tab. Passages overlap by about 15%. */
+export const DocumentPassage = z.object({
+  passageId: Uuid,
+  ordinal: Count,
+  locator: Locator,
+  headingPath: z.array(z.string()),
+  text: z.string(),
+});
+export type DocumentPassage = z.infer<typeof DocumentPassage>;
+
+/** `GET /api/documents/:id/content?cursor`: 20 passages per page; `nextCursor` is null on the last page. */
+export const DocumentContentResponse = z.object({
+  items: z.array(DocumentPassage),
+  nextCursor: Cursor.nullable(),
+});
+export type DocumentContentResponse = z.infer<typeof DocumentContentResponse>;

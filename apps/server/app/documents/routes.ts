@@ -7,6 +7,7 @@ import {
   type StagedBlob,
 } from "@docmind/blob-store";
 import {
+  type DocumentContentResponse,
   ListDocumentsQuery,
   type ListDocumentsResponse,
   type RetryDocumentResponse,
@@ -22,6 +23,7 @@ import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { UPLOADED } from "../status/model";
+import { decodeContentCursor, readContent } from "./content";
 import { decodeCursor, encodeCursor } from "./cursor";
 import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
@@ -328,6 +330,24 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       const view = await deps.status.forDocument(identity, row.id, row.ingest_generation);
       json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view));
     }),
+
+    "GET /api/documents/:id/content": requireAuth(
+      deps.authenticator,
+      async (req, res, identity, ctx) => {
+        // Passages are plaintext: nothing may cache them, on any answer.
+        res.setHeader("cache-control", "no-store");
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const raw = new URL(req.url ?? "/", "http://localhost").searchParams.get("cursor");
+        const after = raw === null ? -1 : decodeContentCursor(raw);
+        if (after === null) return sendError(res, 400, "invalid_cursor", "cursor is not valid");
+        // A malformed id answers exactly like a missing or foreign one.
+        const page = parsed.success
+          ? await readContent(deps.pool, deps.fields, identity, parsed.data.toLowerCase(), after)
+          : null;
+        if (!page) return sendError(res, 404, "not_found", "document not found");
+        json(res, 200, page satisfies DocumentContentResponse);
+      },
+    ),
 
     "POST /api/documents/:id/retry": requireAuth(
       deps.authenticator,
