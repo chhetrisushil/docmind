@@ -212,8 +212,10 @@ describe("dm-app", () => {
     const app = await mountWith<HTMLElement>(svc, "dm-app", { services: svc });
     await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
     await settle(app);
+    // let the sign-out burst of requests settle before counting
     await new Promise((r) => setTimeout(r, 50));
     const count = seen.length;
+    // negative wait: nothing more may be requested once signed out
     await new Promise((r) => setTimeout(r, 100));
     expect(seen.length).toBe(count);
     expect(win.history.replaceState).toHaveBeenCalledTimes(1);
@@ -336,9 +338,11 @@ describe("dm-app: the sidebar", () => {
     await vi.waitFor(() => expect(svc.router.route).toEqual({ name: "sign-in" }));
     await settle(app);
     expect(seen.filter((u) => u.includes("/api/ui/")).length).toBeGreaterThan(0);
+    // let the sign-out burst of requests settle before counting
     await new Promise((r) => setTimeout(r, 50));
     const ui = () => seen.filter((u) => u.includes("/api/ui/")).length;
     const count = ui();
+    // negative wait: nothing more may be requested once signed out
     await new Promise((r) => setTimeout(r, 100));
     expect(ui()).toBe(count);
     expect(win.history.replaceState).toHaveBeenCalledTimes(1);
