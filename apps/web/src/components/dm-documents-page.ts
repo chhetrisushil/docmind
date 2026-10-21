@@ -142,6 +142,7 @@ export class DmDocumentsPage extends LitElement {
         router,
         toasts,
         session,
+        active: () => this.isConnected && !this.leaving.signal.aborted,
         confirm: (h, b, l, d) => confirmDialog(h, b, l, d, this.leaving.signal),
       }),
     };
