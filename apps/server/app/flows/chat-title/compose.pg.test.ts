@@ -58,10 +58,10 @@ describe.skipIf(!PG_URL)(
         blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
         secureCookies: false,
         trustProxy: false,
-        ingest: { ...createIngestWiring({}), sleep: async () => {} },
+        ingest: { ...createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" }), sleep: async () => {} },
         status: { writer: store, readerFor: () => store, source: events },
         chat: {
-          settings: loadChatSettings({}),
+          settings: loadChatSettings({ DOCMIND_LLM_PROVIDER: "off" }),
           llm: { provider: stub, observer: {} },
           ...(titleLlm && { titleLlm: stub }),
           timers: new InMemoryTimerStore(),

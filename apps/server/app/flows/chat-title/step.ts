@@ -21,7 +21,7 @@ export interface ChatTitleDeps {
   fields: FieldCrypto;
   /** The decrypting reader of the conversation log (`createConversationReader(eventStore)`); it does not authorize. */
   reader: Pick<ConversationReader, "read">;
-  /** Absent without a Claude key: the step then skips. */
+  /** Absent when the title role is off: the step then skips. */
   llm?: LlmProvider;
   /** Test seam: the wait between attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
