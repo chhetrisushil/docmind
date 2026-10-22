@@ -16,13 +16,14 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 
 | Milestone | Scope                                          | State                          |
 |-----------+------------------------------------------------+--------------------------------|
-| M0        | Foundations: workspace, CI, contracts, tenancy | shipped                        |
-| M1        | Identity and keys: password auth, KeyStore, sealed Postgres event store | shipped |
-| M2        | Document storage: encrypted blobs, upload/list/get/delete API | shipped         |
-| M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | shipped  |
-| M4        | Chat and history: tools, agent, citations      | shipped                        |
-| M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | shipped                |
-| M6        | Web UI (=apps/web=, =packages/experiences=)    | shipped                        |
+| M0        | Foundations: workspace, CI, contracts, tenancy | merged                         |
+| M1        | Identity and keys: password auth, KeyStore, sealed Postgres event store | merged  |
+| M2        | Document storage: encrypted blobs, upload/list/get/delete API | merged          |
+| M3        | Ingestion: parsers, chunking, embeddings, analysis, summaries, links | merged   |
+| M4        | Chat and history: tools, agent, citations      | merged                         |
+| M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | merged                 |
+| M6        | Web UI (=apps/web=, =packages/experiences=)    | merged                         |
+| LLM       | Pluggable LLM providers (Ollama, Gemini, Claude per role), see [[file:docs/operations/llm-providers.md][the runbook]] | in progress |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
 The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
@@ -39,11 +40,11 @@ Data flow as built:
    (=*_enc=) are encrypted with =FieldCrypto=.
 3. After the upload commits, the server starts the =ingest-document= flow on Loom (ids only in the
    input and event log): parse (sandboxed child process), chunk, embed (Ollama, pgvector), analyze,
-   summarize (Claude, optional), link. Deleting a document cancels every generation of the flow first.
+   summarize (language model, optional), link. Deleting a document cancels every generation of the flow first.
 4. =GET /api/documents= (keyset paging), =GET /api/documents/:id= and =DELETE /api/documents/:id=
    complete the API; =POST /api/documents/:id/retry= re-runs a failed document. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
 
-5. =/api/chats= (create, list, messages, send, stream, reasoning, stop, patch, delete) runs a =doc-assistant= agent over Claude with five read-only tools; answers cite =[[chunk id]]= markers that are validated on read. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
+5. =/api/chats= (create, list, messages, send, stream, reasoning, stop, patch, delete) runs a =doc-assistant= agent over the configured chat model (Ollama by default) with five read-only tools; answers cite =[[chunk id]]= markers that are validated on read. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
 6. =DELETE /api/me= (body =password=) erases the account: it records a durable request, logs the user out
    everywhere, frees the email, answers 202 with a receipt, and a background =Eraser= stops the user's work,
    destroys the user's key (which makes every event, snapshot, sealed column and blob unreadable),
@@ -203,19 +204,18 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_INGEST_CONCURRENCY=, =DOCMIND_INGEST_TENANT_CONCURRENCY= | Ingest steps at once overall (default 4) and per tenant (default 2) |
 | =DOCMIND_OLLAMA_URL=, =DOCMIND_EMBED_MODEL=, =DOCMIND_EMBED_DIMENSIONS=, =DOCMIND_EMBED_TIMEOUT_MS= | Embeddings through Ollama (optional; dimensions must match the vector column) |
 | =DOCMIND_TEST_PG_URL=                        | Enables the Postgres test suites                      |
-| =ANTHROPIC_API_KEY=                          | Enables summaries and image/scanned-PDF vision; without it summaries are skipped and vision documents fail as =vision_unavailable= |
-| =ANTHROPIC_BASE_URL=                         | Optional gateway or proxy for the Anthropic API       |
-| =DOCMIND_SUMMARY_MODEL=, =DOCMIND_VISION_MODEL= | Models for summaries (default =claude-haiku-5-5=) and vision (default =claude-sonnet-5-5=) |
-| =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request Claude timeout for summaries (default 60000) |
-| =DOCMIND_VISION_TIMEOUT_MS=                  | Per-request Claude timeout for vision (default 180000, max 600000) |
+| =DOCMIND_LLM_PROVIDER=, =DOCMIND_{CHAT,TITLE,SUMMARY,VISION,VISION_PDF}_PROVIDER= and =_MODEL= | Provider (=ollama=, =gemini=, =anthropic=, =off=) and model per role; unset means Ollama's =gemma4:31b-cloud= (a =-cloud= model sends document text, prompts and images to Ollama's cloud), and scanned PDF pages use Gemini when =GEMINI_API_KEY= is set. Full list, boot errors and limits: [[file:docs/operations/llm-providers.md][LLM providers runbook]] |
+| =GEMINI_API_KEY=, =GEMINI_BASE_URL=, =DOCMIND_GEMINI_THINKING_BUDGET= | Gemini credentials (copy the key into this repo's =.env=, never commit it), optional base URL, and thinking budget (default 0) |
+| =ANTHROPIC_API_KEY=, =ANTHROPIC_BASE_URL=    | Claude, used only by roles set to =anthropic=; a key alone enables nothing |
+| =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request timeout for summaries (default 60000) |
+| =DOCMIND_VISION_TIMEOUT_MS=                  | Per-request timeout for vision (default 180000, max 600000) |
 | =DOCMIND_SUMMARY_MAX_CHARS=                  | Most document text one summary reads (default 400000, at most 5000000) |
 | =DOCMIND_PUBLIC_ORIGIN=                      | Browser-visible origin, exactly =scheme://host[:port]= (punycode, no default port), for a proxy that rewrites Host |
 | =DOCMIND_MAX_CONNECTIONS=                    | Most simultaneous HTTP connections (default 2000, at most 65535) |
-| =DOCMIND_CHAT_MODEL=, =DOCMIND_CHAT_EFFORT=, =DOCMIND_CHAT_MAX_TOKENS= | Chat model (default =claude-opus-5-5=), effort (=medium=) and the longest reply in tokens (16000) |
+| =DOCMIND_CHAT_EFFORT=, =DOCMIND_CHAT_MAX_TOKENS= | Chat effort (=medium=) and the longest reply in tokens (16000) |
 | =DOCMIND_CHAT_CONTEXT_TOKENS=                | Context window used to fit a prompt (default 150000, at least twice =DOCMIND_CHAT_MAX_TOKENS= or boot refuses); older turns leave the prompt, never the history |
-| =DOCMIND_CHAT_ENVELOPE_KEY=, =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS= | Required with =ANTHROPIC_API_KEY= (at least 32 characters). Signs chat inbox messages; the previous key is only for rotation and takes up to 4 comma-separated keys of 32 to 512 characters. Never logged |
+| =DOCMIND_CHAT_ENVELOPE_KEY=, =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS= | Set it whenever chat is on (32 to 512 characters); unset, DocMind boots with a random per-process key and one warning, and chats written under it cannot be read after a restart. Signs chat inbox messages; the previous key is only for rotation and takes up to 4 comma-separated keys of 32 to 512 characters. Never logged |
 | =DOCMIND_CHAT_GENERAL_KNOWLEDGE=             | =true= lets the assistant answer beyond the documents (default =false=) |
-| =DOCMIND_TITLE_MODEL=                        | Model for automatic chat titles (default =claude-haiku-5-5=) |
 | =DOCMIND_RETRIEVAL_HOPS=                     | Link hops from each search result, 0 to 2 (default 1) |
 
 Generate the KEK as described in =.env.example=. Losing it makes all encrypted data unreadable.
@@ -255,7 +255,7 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
   parsed text of a failed document stays sealed until a retry or a delete.
 - Upgrading from flow version 2.3.0: executions still running under it are given up
   (=ingest-flow-mismatch=); the user can retry them.
-- Chat: without =ANTHROPIC_API_KEY= creating a chat and sending a message answer 503 =chat_unavailable=; the rest works. Rotating the envelope key: set the old one as =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS=, the new one as =DOCMIND_CHAT_ENVELOPE_KEY=, restart, and remove the previous key after an hour. The first boot after this release re-folds the ingest-status read model once, because sealing the chat and reasoning event paths changes its fold version. pgvector 0.8.0 or later is required (the server refuses to start below it). If the chat-activity model cannot start, the server logs it and lists chats by creation time.
+- Chat: with the chat provider =off= (~DOCMIND_CHAT_PROVIDER=off~), creating a chat and sending a message answer 503 =chat_unavailable= ("Chat is not available on this server."); the rest works. LLM providers, boot errors and failure modes: [[file:docs/operations/llm-providers.md][the LLM providers runbook]]. Rotating the envelope key: set the old one as =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS=, the new one as =DOCMIND_CHAT_ENVELOPE_KEY=, restart, and remove the previous key after an hour. The first boot after this release re-folds the ingest-status read model once, because sealing the chat and reasoning event paths changes its fold version. pgvector 0.8.0 or later is required (the server refuses to start below it). If the chat-activity model cannot start, the server logs it and lists chats by creation time.
 - Chat cost: one chat turn is a few model calls (one per tool round); titles use the small model once per chat. The chat flow has no turn deadline: the provider's 180 s request timeout bounds each attempt, and a tool times out after 30 s.
 - Erasure: =DELETE /api/me= with ={"password": "..."}= answers 202 and erases in the background (409
   =erasure_in_progress= if one is already recorded). Watch it with =SELECT state, steps, attempts FROM
@@ -293,7 +293,7 @@ requests of at most 200 changed lines and 10 files, opened as drafts.
   as =pending= (the audit rows of the live database are the list) and start the server. A backup of the
   key store that outlives the 30 days defeats erasure for everyone in it; delete it on the same schedule.
   The blob directory is encrypted per user and needs the same schedule.
-- Cost: a summary makes one Claude request per 24,000 characters of text (at most 400,000 characters:
+- Cost: a summary makes one language-model request per 24,000 characters of text (at most 400,000 characters:
   at least about 17 map requests, up to about twice that when sections are just over 12,000
   characters, since whole sections are packed) plus one reduce request. Vision reads at most 12 text-less pages per PDF, 4 per request
   (PDFs over 100 pages or 22 MiB raw are refused for vision); images are limited to 5 MiB of base64
@@ -341,7 +341,7 @@ The backup and restore drill (restore into an empty database, verify, re-run era
 - Erasure (M5) must also cover =chat_sessions=, =chat_turn_items=, =chat_reasoning_texts= and the =chat-activity= read-model rows, plus: the =ingest-status= and =chat-activity= read-model rows of chat and chat-title executions (their key and scope may be NULL, so purge by execution id prefix =u_<user>=), the Loom timers rows, the chat-title executions, and the conversation streams (destroying the user's key covers their content).
 - Documents that reached =ready= before flow 3.0.0 never get stats, summary, entities or links.
   Re-upload them; a re-ingest tool is planned for M7. There is no production data yet.
-- Parse retries use =LLM_RETRY= for every format (a crash is retried as patiently as a Claude outage).
+- Parse retries use =LLM_RETRY= for every format (a crash is retried as patiently as a model outage).
 - A summarize attempt can hold one of the process's ingest slots for up to 10 minutes.
 
 * Documentation map

@@ -13,7 +13,7 @@ Start the server again after the command exits.
 ## 2. Run
 
 Build, then set the same environment as the server (`DATABASE_URL`, `LOOM_DATABASE_URL`, the KEK, the
-`DOCMIND_*` and `ANTHROPIC_API_KEY` variables, and also `PORT`, `HOST`, `DOCMIND_PUBLIC_ORIGIN` and the
+`DOCMIND_*`, `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` variables (without `GEMINI_API_KEY` a backfill runs with `vision_pdf` off and scanned PDFs fail as `vision_unavailable`), and also `PORT`, `HOST`, `DOCMIND_PUBLIC_ORIGIN` and the
 rest: the command binds no port, but it shares the server's configuration checks):
 
 ```sh
