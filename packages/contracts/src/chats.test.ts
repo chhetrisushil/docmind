@@ -232,4 +232,36 @@ describe("chat contracts", () => {
     const { cursor: _cursor, ...noCursor } = message;
     expect(ChatStreamEvent.safeParse({ kind: "message", ...noCursor }).success).toBe(false);
   });
+
+  it("carries a failed reply's reason as a closed enum only", () => {
+    const base = {
+      id: "2",
+      turn: 1,
+      role: "assistant",
+      text: "",
+      status: "failed",
+      citations: [],
+      cursor: "0.2",
+      reasoning: null,
+      steps: [],
+      outcome: null,
+      createdAt: "2026-10-21T10:00:00.000Z",
+    };
+    for (const failureReason of [
+      "rate-limited",
+      "quota",
+      "tool-error",
+      "denied",
+      "model-error",
+      "turn-failed",
+      "cancelled",
+    ])
+      expect(ChatMessageDto.parse({ ...base, failureReason }).failureReason).toBe(failureReason);
+    expect(ChatMessageDto.parse(base).failureReason).toBeUndefined();
+    for (const bad of ["boom: 429 from provider", "too-long", "", null, 429])
+      expect(ChatMessageDto.safeParse({ ...base, failureReason: bad }).success).toBe(false);
+    expect(
+      ChatStreamEvent.parse({ kind: "message", ...base, failureReason: "quota" }),
+    ).toMatchObject({ failureReason: "quota" });
+  });
 });

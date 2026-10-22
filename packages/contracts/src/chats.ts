@@ -87,6 +87,18 @@ export const ChatReasoningDto = z.object({
 });
 export type ChatReasoningDto = z.infer<typeof ChatReasoningDto>;
 
+/** Why a turn failed: Loom's fixed, user-safe TurnResult reasons (any other becomes `model-error`). Never a provider message or status. */
+export const ChatFailureReason = z.enum([
+  "rate-limited",
+  "quota",
+  "tool-error",
+  "denied",
+  "model-error",
+  "turn-failed",
+  "cancelled",
+]);
+export type ChatFailureReason = z.infer<typeof ChatFailureReason>;
+
 export const ChatMessageDto = z.object({
   /** The conversation record's ordinal, in decimal (the record's own `ord`). The history cursor and the SSE `id:` are `cursor`. */
   id: z.string().regex(/^(0|[1-9][0-9]{0,14})$/),
@@ -102,6 +114,8 @@ export const ChatMessageDto = z.object({
   reasoning: ChatReasoningDto.nullable(),
   steps: z.array(ChatToolStep),
   outcome: ChatOutcome.nullable(),
+  /** Only on a failed assistant message (also in its SSE `message` frame). */
+  failureReason: ChatFailureReason.optional(),
   createdAt: IsoDateTime,
 });
 export type ChatMessageDto = z.infer<typeof ChatMessageDto>;
