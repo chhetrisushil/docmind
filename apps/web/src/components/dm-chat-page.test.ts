@@ -389,6 +389,49 @@ describe("dm-chat-page: a chat", () => {
     );
   });
 
+  it("publishes no picker when the chat's scope cannot be read, even after a window focus", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => {
+        throw new ApiError(500, "boom");
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(t.api.getChat).toHaveBeenCalled());
+    await loaded(page);
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(chips(page)).toEqual([]);
+    expect(picker(page)?.querySelector("[data-empty]") ?? null).toBeNull();
+  });
+
+  it("publishes no picker on a window focus before the chat's scope has loaded, then the right chips", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => {
+        await gate;
+        return {
+          id: CHAT,
+          title: null,
+          scope: { documentIds: [DOC] },
+          createdAt: "2026-10-21T10:00:00.000Z",
+          lastMessageAt: null,
+          messageCount: 2,
+        };
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(t.api.getChat).toHaveBeenCalled());
+    window.dispatchEvent(new Event("focus"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(chips(page)).toEqual([]);
+    expect(picker(page)?.querySelector("[data-empty]") ?? null).toBeNull();
+    release();
+    await vi.waitFor(() => expect(chips(page)).toEqual([DOC]));
+  });
+
   it("a deleted document stays as a 'Removed document' chip and is dropped on the next save", async () => {
     const GONE = "00000000-0000-4000-8000-0000000000ee";
     const t = setup(`/chats/${CHAT}`, {

@@ -76,6 +76,8 @@ export class DmChatPage extends LitElement {
   private watch: MutationObserver | undefined;
   /** The scope this chat searches: the server's for an existing chat, the page's own for a new one (sent with its first message). */
   private scopeNow: ChatScope = "all";
+  /** Whether scopeNow is the chat's real scope: a new chat knows it at once, a saved chat once it is read. */
+  private scopeKnown = false;
   /** What the picker offers, once loaded; nothing is published before it (a chip would be mislabelled). */
   private offer:
     | { docs: ScopeDoc[]; capped: boolean; found: Map<string, ScopeDoc>; removed: Set<string> }
@@ -215,6 +217,7 @@ export class DmChatPage extends LitElement {
     this.release();
     this.bound = id;
     this.scopeNow = "all";
+    this.scopeKnown = id === undefined;
     this.offer = undefined;
     this.offered = [];
     this.loads++;
@@ -251,6 +254,7 @@ export class DmChatPage extends LitElement {
         if (this.controller !== controller) return;
         this.chatTitle = c.title ?? undefined;
         this.scopeNow = c.scope;
+        this.scopeKnown = true;
         void this.loadOffer();
       },
       () => {},
@@ -260,7 +264,7 @@ export class DmChatPage extends LitElement {
   /** The recent documents, plus a lookup for any of the scope's that the list does not hold. */
   private async loadOffer(): Promise<void> {
     const api = this.ctx.services?.api;
-    if (!api) return;
+    if (!api || !this.scopeKnown) return; // never publish a picker for a scope we have not read
     const n = ++this.loads;
     try {
       const { docs, capped } = await listRecent(api);
