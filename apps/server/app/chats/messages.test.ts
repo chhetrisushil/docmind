@@ -109,3 +109,42 @@ describe("toMessageDtos reasoning", () => {
     expect(turnKeyOf(noOrd as HistoryEntry)).toBeUndefined();
   });
 });
+
+describe("toMessageDtos failureReason", () => {
+  const dto = async (over: Partial<HistoryEntry>) => {
+    const deps = depsOf(new FakeItems(), { forReplies: async () => new Map() });
+    const [m] = await toMessageDtos(deps, IDENTITY, C, [entry(over)]);
+    return m;
+  };
+  it.each([
+    "rate-limited",
+    "quota",
+    "tool-error",
+    "denied",
+    "model-error",
+    "turn-failed",
+    "cancelled",
+  ])("passes Loom's %s through on a failed reply", async (reason) => {
+    expect((await dto({ status: "failed", reason }))?.failureReason).toBe(reason);
+  });
+  it.each([undefined, "too-long", "provider said: 429 secret-detail"])(
+    "maps a missing or unknown reason (%s) to model-error without echoing it",
+    async (reason) => {
+      const m = await dto({ status: "failed", ...(reason !== undefined && { reason }) });
+      expect(m?.failureReason).toBe("model-error");
+      expect(JSON.stringify(m)).not.toContain("secret-detail");
+    },
+  );
+  it("sets none on a reply that did not fail, a rejected message or a user message", async () => {
+    expect(await dto({ status: "complete", reason: "quota" })).not.toHaveProperty("failureReason");
+    expect(await dto({ status: "interrupted", reason: "quota" })).not.toHaveProperty(
+      "failureReason",
+    );
+    expect(await dto({ role: "user", status: "rejected", reason: "denied" })).not.toHaveProperty(
+      "failureReason",
+    );
+    expect(await dto({ role: "user", status: "failed", reason: "denied" })).not.toHaveProperty(
+      "failureReason",
+    );
+  });
+});
