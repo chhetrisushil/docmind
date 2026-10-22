@@ -58,7 +58,7 @@ export const EMBED_RETRY: RetryPolicy = { maxAttempts: 6, backoffMs: 1_000, back
 export const EMBED_BACKOFF_CAP_MS = 30_000;
 
 /**
- * The policy of steps that call Claude (summarize; parse, for vision). An API overload (529) or a rate
+ * The policy of steps that call an LLM (summarize; parse, for vision). An API overload (529) or a rate
  * limit lasts seconds to minutes: 2, 4, 8, 16 and 32 s between 6 attempts, each wait capped at
  * LLM_BACKOFF_CAP_MS. Part of the flow's identity: declared on steps in Task 121 (flow 3.0.0).
  */

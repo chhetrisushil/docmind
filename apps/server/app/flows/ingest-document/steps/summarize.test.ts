@@ -3,6 +3,7 @@ import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/
 import type { ParsedDocument } from "@docmind/parsers";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { describe, expect, it, vi } from "vitest";
+import { bounded } from "../../../llm/bounded";
 import type { IngestStartInput } from "../flow";
 import type { EntityMention } from "../pgEntities";
 import { LLM_RETRY } from "../stepEffect";
@@ -113,6 +114,14 @@ function deps(
 const run = (s: ReturnType<typeof deps>) => summarizeEffect(s.d).execute(s.ref, {} as never);
 const withModel = (complete: LlmProvider["complete"]): LlmProvider =>
   Object.assign({ complete }, { model: "claude-test" });
+
+describe("summarize step: model id through bounded", () => {
+  it.each(["gemma4:31b-cloud", "gemini-3.5-flash"])("records %s", async (model) => {
+    const inner = Object.assign(scripted().provider, { model });
+    const llm = bounded(inner, { maxTokens: 2048, timeoutMs: 5_000 });
+    expect(await run(deps({ llm }))).toMatchObject({ outcome: "done", model });
+  });
+});
 
 describe("summarize step", () => {
   it("skips without a provider and stores nothing", async () => {

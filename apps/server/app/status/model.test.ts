@@ -116,7 +116,7 @@ describe("the fold", () => {
 
   it("has the exact vision_unavailable text and folds it as a failed code", () => {
     expect(STATUS_MESSAGES.vision_unavailable).toBe(
-      "Reading images needs a Claude API key on the server.",
+      "Reading this kind of document is not available on this server.",
     );
     expect(foldIngestStatus(ingestRun(exec(), "failed:vision_unavailable"))).toMatchObject({
       status: "failed",
