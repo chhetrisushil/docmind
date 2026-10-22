@@ -8,6 +8,7 @@ import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime
 import { EncryptingEventStore, InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
+import { type CompatReply, type FakeOpenAiCompat, startFakeOpenAiCompat } from "../llm/testing";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
 import { chatConversationId } from "./ids";
@@ -19,10 +20,10 @@ import { C, FakeItems, MemoryReasoningRows, T, U } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { type ChatWiring, connectChat, prepareChat } from "./wiring";
 
-export interface ChatStack {
+export interface ChatStack<F = FakeAnthropic> {
   app: ReturnType<typeof buildApp>;
   chat: ChatWiring;
-  fake: FakeAnthropic;
+  fake: F;
   /** The unsealed log, as Postgres would hold it. */
   raw: InMemoryAsyncEventStore;
   items: FakeItems;
@@ -36,7 +37,10 @@ export interface ChatStack {
   start(): Promise<string>;
   send(conversationId: string, text: string): Promise<void>;
   /** Waits until the conversation has `n` assistant messages and returns all of them so far. */
-  replies(conversationId: string, n: number): Promise<{ text: string; status: string }[]>;
+  replies(
+    conversationId: string,
+    n: number,
+  ): Promise<{ text: string; status: string; reason?: string }[]>;
   close(): Promise<void>;
 }
 
@@ -48,23 +52,51 @@ const PRINCIPAL = { tenant: T, actor: U };
  * fakes (so no Postgres), which is what the sealing and flow tests need; Task 155 runs the same chat
  * over Postgres and fake Ollama.
  */
-export async function startChatStack(o: {
-  scripts: StreamScript[];
+interface StackOptions {
   passages?: Passage[];
   rotateEveryTurns?: number;
   generalKnowledge?: boolean;
   /** Makes retrieval throw this (to prove a collaborator's message never reaches the log). */
   searchError?: Error;
-}): Promise<ChatStack> {
+}
+
+export async function startChatStack(
+  o: { scripts: StreamScript[] } & StackOptions,
+): Promise<ChatStack> {
   const fake = await startFakeAnthropic();
   const queue = [...o.scripts];
   fake.reply(() => ({ stream: queue.shift() as StreamScript }));
   const env = {
+    DOCMIND_LLM_PROVIDER: "anthropic",
     ANTHROPIC_API_KEY: "sk-test-not-real",
     ANTHROPIC_BASE_URL: fake.url,
     DOCMIND_CHAT_ENVELOPE_KEY: "e".repeat(32),
     ...(o.generalKnowledge && { DOCMIND_CHAT_GENERAL_KNOWLEDGE: "true" }),
   };
+  return buildChatStack(fake, env, o);
+}
+
+/** The same stack over a fake Ollama (OpenAI-compatible); `replies[n]` answers request n, any later one is a 500. */
+export async function startOllamaChatStack(
+  o: { replies: ((n: number, body: Record<string, unknown>) => CompatReply)[] } & StackOptions,
+): Promise<ChatStack<FakeOpenAiCompat>> {
+  const fake = await startFakeOpenAiCompat();
+  fake.reply((n, body) =>
+    (o.replies[n] ?? (() => ({ kind: "error", status: 500 }) as CompatReply))(n, body),
+  );
+  const env = {
+    DOCMIND_OLLAMA_URL: fake.url,
+    DOCMIND_CHAT_ENVELOPE_KEY: "e".repeat(32),
+    ...(o.generalKnowledge && { DOCMIND_CHAT_GENERAL_KNOWLEDGE: "true" }),
+  };
+  return buildChatStack(fake, env, o);
+}
+
+async function buildChatStack<F extends { close(): Promise<void> }>(
+  fake: F,
+  env: NodeJS.ProcessEnv,
+  o: StackOptions,
+): Promise<ChatStack<F>> {
   const settings = loadChatSettings(env);
   const llm = createChatLlm(env, settings);
   const raw = new InMemoryAsyncEventStore();
@@ -133,7 +165,7 @@ export async function startChatStack(o: {
     },
     async replies(conversationId, n) {
       const stop = new AbortController();
-      const out: { text: string; status: string }[] = [];
+      const out: { text: string; status: string; reason?: string }[] = [];
       for await (const item of followConversation(
         { reader: chat.reader, eventStore: events },
         conversationId,
@@ -143,7 +175,11 @@ export async function startChatStack(o: {
         },
       )) {
         if (item.type !== "message" || item.entry.role !== "assistant") continue;
-        out.push({ text: item.entry.text, status: item.entry.status });
+        out.push({
+          text: item.entry.text,
+          status: item.entry.status,
+          ...(item.entry.reason !== undefined && { reason: item.entry.reason }),
+        });
         if (out.length === n) {
           stop.abort();
           break;

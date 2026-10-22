@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { positiveInt } from "../documents/limits";
-import { envModelId } from "../flows/ingest-document/limits";
+import { type RoleProvider, loadLlmRoles } from "../llm/roles";
 import { StartupConfigError } from "../startupError";
 
 export const CHAT_EFFORTS = ["low", "medium", "high", "max"] as const;
@@ -14,6 +14,8 @@ export interface ChatSettings {
   hops: 0 | 1 | 2;
   generalKnowledge: boolean;
   titleModel: string;
+  provider: RoleProvider;
+  titleProvider: RoleProvider;
   /** Signs the inbox envelopes (D11). Never logged, never returned in an error. */
   envelopeKey: string;
   previousKeys: readonly string[];
@@ -28,15 +30,10 @@ const blankToUndefined = (v: string | undefined) => (v?.trim() ? v.trim() : unde
 function envelopeKeys(env: NodeJS.ProcessEnv): { envelopeKey: string; previousKeys: string[] } {
   const current = blankToUndefined(env.DOCMIND_CHAT_ENVELOPE_KEY);
   const previousRaw = blankToUndefined(env.DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS);
-  const apiKey = blankToUndefined(env.ANTHROPIC_API_KEY);
   const valid = (k: string) => k.length >= MIN_KEY_CHARS && k.length <= MAX_KEY_CHARS;
   if (current !== undefined && !valid(current))
     throw new StartupConfigError(
       `DOCMIND_CHAT_ENVELOPE_KEY must be ${MIN_KEY_CHARS} to ${MAX_KEY_CHARS} characters`,
-    );
-  if (current === undefined && apiKey !== undefined)
-    throw new StartupConfigError(
-      "DOCMIND_CHAT_ENVELOPE_KEY is required when ANTHROPIC_API_KEY is set",
     );
   const previousKeys = (previousRaw ?? "")
     .split(",")
@@ -54,7 +51,7 @@ function envelopeKeys(env: NodeJS.ProcessEnv): { envelopeKey: string; previousKe
     throw new StartupConfigError(
       `DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS entries must be ${MIN_KEY_CHARS} to ${MAX_KEY_CHARS} characters`,
     );
-  // No API key means no chat: nothing can be sent, so a per-process key only lets the flows be built.
+  // Unset: a per-process key (envelopes do not survive a restart; llmWarnings says so once at boot). Production sets it.
   return { envelopeKey: current ?? randomBytes(32).toString("hex"), previousKeys };
 }
 
@@ -75,14 +72,17 @@ export function loadChatSettings(env: NodeJS.ProcessEnv = process.env): ChatSett
     throw new StartupConfigError(
       "DOCMIND_CHAT_CONTEXT_TOKENS must be at least twice DOCMIND_CHAT_MAX_TOKENS",
     );
+  const llm = loadLlmRoles(env);
   return {
-    model: envModelId(env, "DOCMIND_CHAT_MODEL", "claude-opus-5-5"),
+    model: llm.roles.chat.model,
+    provider: llm.roles.chat.provider,
+    titleProvider: llm.roles.title.provider,
     effort: effort as ChatEffort,
     maxTokens,
     contextTokens,
     hops: Number(hops) as 0 | 1 | 2,
     generalKnowledge: gk === "true",
-    titleModel: envModelId(env, "DOCMIND_TITLE_MODEL", "claude-haiku-5-5"),
+    titleModel: llm.roles.title.model,
     ...envelopeKeys(env),
   };
 }

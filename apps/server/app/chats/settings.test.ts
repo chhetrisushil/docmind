@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { llmWarnings, loadLlmRoles } from "../llm/roles";
 import { StartupConfigError } from "../startupError";
 import { loadChatSettings } from "./settings";
 
 const KEY = "k".repeat(32);
-const withKey = { ANTHROPIC_API_KEY: "sk-test-not-real", DOCMIND_CHAT_ENVELOPE_KEY: KEY };
+const OFF = { DOCMIND_LLM_PROVIDER: "off" };
+const withKey = {
+  DOCMIND_LLM_PROVIDER: "anthropic",
+  ANTHROPIC_API_KEY: "sk-test-not-real",
+  DOCMIND_CHAT_ENVELOPE_KEY: KEY,
+};
 
 describe("loadChatSettings", () => {
   it("has the decided defaults", () => {
@@ -15,6 +21,8 @@ describe("loadChatSettings", () => {
       hops: 1,
       generalKnowledge: false,
       titleModel: "claude-haiku-5-5",
+      provider: "anthropic",
+      titleProvider: "anthropic",
       envelopeKey: KEY,
       previousKeys: [],
     });
@@ -81,21 +89,55 @@ describe("loadChatSettings", () => {
     ).toThrow(/DOCMIND_CHAT_CONTEXT_TOKENS.*DOCMIND_CHAT_MAX_TOKENS/);
   });
 
-  it("requires the envelope key when an API key is set, and says which variable", () => {
-    expect(() => loadChatSettings({ ANTHROPIC_API_KEY: "sk-test-not-real" })).toThrow(
-      /^DOCMIND_CHAT_ENVELOPE_KEY is required when ANTHROPIC_API_KEY is set$/,
+  it("defaults to Ollama gemma for chat and titles, with a per-process key when none is set (G03)", () => {
+    const s = loadChatSettings({});
+    expect(s).toMatchObject({
+      provider: "ollama",
+      titleProvider: "ollama",
+      model: "gemma4:31b-cloud",
+      titleModel: "gemma4:31b-cloud",
+    });
+    expect(s.envelopeKey.length).toBeGreaterThanOrEqual(32);
+    expect(loadChatSettings({}).envelopeKey).not.toBe(s.envelopeKey);
+  });
+
+  it("an enabled chat without DOCMIND_CHAT_ENVELOPE_KEY keeps a per-process key; the warning names only the variable", () => {
+    const env = { DOCMIND_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "sk-test-not-real" };
+    expect(() => loadChatSettings(env)).not.toThrow();
+    const w = llmWarnings(loadLlmRoles(env), env);
+    expect(w).toContain(
+      "DOCMIND_CHAT_ENVELOPE_KEY is not set: chat envelopes do not survive a restart",
     );
+    const keyed = { ...env, DOCMIND_CHAT_ENVELOPE_KEY: KEY };
+    expect(llmWarnings(loadLlmRoles(keyed), keyed).join("\n")).not.toContain("ENVELOPE");
+    const off = { DOCMIND_CHAT_PROVIDER: "off" };
+    expect(llmWarnings(loadLlmRoles(off), off).join("\n")).not.toContain("ENVELOPE");
+  });
+
+  it("chat off still gets a per-process key, and the chat and title providers are read", () => {
+    const s = loadChatSettings({
+      DOCMIND_CHAT_PROVIDER: "off",
+      DOCMIND_TITLE_PROVIDER: "gemini",
+      GEMINI_API_KEY: "g",
+    });
+    expect(s.provider).toBe("off");
+    expect(s.titleProvider).toBe("gemini");
+    expect(s.envelopeKey.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it("accepts DOCMIND_CHAT_EFFORT=max", () => {
+    expect(loadChatSettings({ DOCMIND_CHAT_EFFORT: "max" }).effort).toBe("max");
   });
 
   it("without an API key uses a random per-process key, different each time and long enough", () => {
-    const a = loadChatSettings({}).envelopeKey;
-    const b = loadChatSettings({}).envelopeKey;
+    const a = loadChatSettings(OFF).envelopeKey;
+    const b = loadChatSettings(OFF).envelopeKey;
     expect(a).not.toBe(b);
     expect(a.length).toBeGreaterThanOrEqual(32);
   });
 
   it("refuses previous keys without a current one, and more than four", () => {
-    expect(() => loadChatSettings({ DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS: KEY })).toThrow(
+    expect(() => loadChatSettings({ ...OFF, DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS: KEY })).toThrow(
       /DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS needs DOCMIND_CHAT_ENVELOPE_KEY/,
     );
     const five = Array.from({ length: 5 }, (_, i) => String(i).repeat(32)).join(",");

@@ -29,11 +29,15 @@ const collaborators = () => ({
     new FieldCrypto(new InMemoryKeyStore()),
   ),
 });
-const env = { ANTHROPIC_API_KEY: "sk-test-not-real", DOCMIND_CHAT_ENVELOPE_KEY: KEY };
+const env = {
+  DOCMIND_LLM_PROVIDER: "anthropic",
+  ANTHROPIC_API_KEY: "sk-test-not-real",
+  DOCMIND_CHAT_ENVELOPE_KEY: KEY,
+};
 
 function prepare(over: Record<string, string> = {}, withLlm = true) {
   const e = { ...env, ...over };
-  const settings = loadChatSettings(withLlm ? e : {});
+  const settings = loadChatSettings(withLlm ? e : { DOCMIND_LLM_PROVIDER: "off" });
   const store = new InMemoryAsyncEventStore();
   const llm = withLlm ? createChatLlm(e, settings) : undefined;
   const prepared = prepareChat({

@@ -94,7 +94,7 @@ describe.skipIf(!PG_URL)(
       const res = await hNoKey.req("alice", "POST", "/api/chats", {});
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({
-        error: { code: "chat_unavailable", message: "Chat needs a Claude API key on the server." },
+        error: { code: "chat_unavailable", message: "Chat is not available on this server." },
       });
       expect((await hNoKey.owner.query("SELECT 1 FROM chat_sessions")).rowCount).toBe(0);
       expect(hNoKey.fake.calls).toEqual([]);
