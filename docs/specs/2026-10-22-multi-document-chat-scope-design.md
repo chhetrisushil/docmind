@@ -36,18 +36,22 @@ A chat-family kind at `CHAT_TYPE_VERSION`. Static props:
 | `emptyLabel` | string | what an empty selection reads as |
 | `placeholder` | string | the search box's placeholder |
 | `maxSelected` | integer 1–100 | the most values that can be chosen |
-| `note` | string, optional | a line under the control (e.g. that the options are capped) |
 
 It must bind its value. The bound value:
 
 ```ts
-{ options: { value: string; label: string; hint?: string }[]; selected: string[] }
+{ options: { value: string; label: string; hint?: string }[]; selected: string[]; note?: string }
 ```
+
+`note` is a line under the control (for example, that the options are capped). It is part of the value,
+not a prop, because a prop is fixed when the experience is compiled and the host only knows at run time
+whether to show it.
 
 The shared checker (`kindValues.ts`, `values.ts`, alongside the other chat-family kinds) accepts it when
 every label and hint is a string, the option values are unique, every `selected` value is one of the
-options and appears once, `options` has at most 500 entries and `selected` at most `maxSelected`. A
-value that fails is refused like any malformed binding. `hint` is shown after the label (DocMind uses
+options and appears once, `options` has at most 500 entries, `selected` at most 100, and `note` is
+1–200 characters. A value that fails is refused like any malformed binding. (`maxSelected` is enforced
+by the widget and by host acceptance.) `hint` is shown after the label (DocMind uses
 it for "processing", "failed").
 
 `inputSpecFromProps` returns `{ kind: "MultiSelectInput", maxSelected }` when the props are valid.
@@ -81,8 +85,10 @@ freshness, value checks, then the key is claimed last. The submission is
   dispatches one `SELECT_MANY` with a fresh key; the control is disabled until the bound value changes
   or the action is refused, and on a refusal it shows the bound value again. At `maxSelected` "+ Add…"
   is disabled.
-- **Terminal** (`renderer-terminal`, `interactive.ts`). A numbered list with `[x]` marks; typing numbers
-  (space- or comma-separated) toggles them, Enter dispatches `SELECT_MANY`.
+- **Terminal** (`renderer-terminal`). The prompt lists the chosen options marked `(current)` and counts
+  the rest. The interactive checklist (`interactive.ts`) opens on Enter with the bound choice ticked:
+  arrows move, Space ticks or unticks (never past `maxSelected`), Enter dispatches `SELECT_MANY`, Escape
+  backs out; 10 options show around the cursor. (Digits, as the select uses, only reach 9.)
 
 Both renderer READMEs and the core README document the kind and the action.
 
@@ -100,14 +106,16 @@ Both renderer READMEs and the core README document the kind and the action.
 
 `ScopeSelect` becomes a `MultiSelectInput` with label "Search in", `emptyLabel` "All documents",
 placeholder "Add a document…", `maxSelected` 100, still bound to the `chatScope` handle. The page sets
-`note` when the options are capped (see Edge cases).
+the value's `note` when the options are capped (see Edge cases).
 
 ### Chat page (`apps/web/src/components/dm-chat-page.ts`)
 
-- **Options.** On bind the page lists ready documents with the library's list call and `LIST_CAP`
-  (200), most recent first, and lists them again when documents change (the existing documents-changed
-  signal if there is one, otherwise when the page regains focus). It publishes `chatScope` as
-  `{ options, selected }` and keeps the option ids as `held.list` for the resolver.
+- **Options.** When a chat binds, and again when the window regains focus (the web app has no
+  documents-changed signal), the page lists the 200 most recent documents (`GET /api/documents`, 100
+  per page; the API client gains `listDocuments` and `getDocument`) and offers the ready ones. A
+  document in the scope that the list does not hold is read on its own (`GET /api/documents/:id`). Nothing
+  is published until this has loaded, so no chip is mislabelled. It publishes `chatScope` as
+  `{ options, selected, note? }` and keeps the option ids as `held.list` for the resolver.
 - **Existing chat.** `selected` is the chat's served scope (`[]` for `"all"`). A `chat.scope` intent sends
   `PATCH /api/chats/:id { scope }` and republishes after it succeeds. This replaces `startedIds`,
   `scopeValue` and the `"started"` branch of `scope()`.
@@ -127,9 +135,10 @@ No change. `ChatScope`, `normalizeScope`, `scopeIsOwned`, `PATCH` and retrieval 
 
 | Case | Behaviour |
 |---|---|
-| A document in the scope was deleted | The options are the listed documents plus every id in the scope. An id the list cannot return becomes an option labelled "Removed document", so the chip stays and can be removed. On the next change the page drops those ids from the `PATCH`; if none remain, the scope is `"all"`. Retrieval already finds nothing for them. |
+| A document in the scope was deleted | The options are the scope's documents first, then the other ready ones. A scope id whose own read is a 404 becomes an option labelled "Removed document", so the chip stays and can be removed. On the next change the page drops those ids from the `PATCH`; if none remain, the scope is `"all"`. Retrieval already finds nothing for them. A read that fails another way also shows "Removed document" but is never dropped, so a network error cannot shrink a scope. |
+| A document has no title | It shows as "Untitled document". |
 | A document in the scope is processing or failed | Shown as a chip with its title and hint "processing" / "failed". Not offered by "+ Add…" until ready. |
-| More than 200 ready documents | Options are the 200 most recent ready documents plus every document in the scope; `note` reads "Showing the 200 most recent documents". Server-side search is out of scope. |
+| More than 200 documents | Options are the ready documents among the 200 most recent, plus every document in the scope; `note` reads "Showing the 200 most recent documents". Server-side search is out of scope. |
 | The save fails (network, 4xx) | The bound value is not changed, so the control shows it again; toast "Could not change where this chat searches." A retry uses a fresh key. |
 | A 101st document | "+ Add…" is disabled at 100; the host and the resolver refuse more. |
 | The last chip is removed | The scope becomes `"all"`; the control reads "All documents". |
