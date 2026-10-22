@@ -234,3 +234,37 @@ describe("uploadDocument", () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("documents for the scope picker", () => {
+  it("lists a page of documents, 100 at a time, with the cursor when given", async () => {
+    const { api, calls } = apiWith(() => ok({ items: [], nextCursor: null }));
+    await api.listDocuments();
+    await api.listDocuments("abc");
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ["GET", "/api/documents?limit=100"],
+      ["GET", "/api/documents?cursor=abc&limit=100"],
+    ]);
+  });
+
+  it("reads one document by id, escaped, and surfaces a 404 as an ApiError", async () => {
+    const doc = {
+      id: "00000000-0000-4000-8000-00000000000a",
+      title: "Q3 report",
+      filename: "q3.pdf",
+      mime: "application/pdf",
+      sizeBytes: 10,
+      status: "ready",
+      error: null,
+      stats: null,
+      summary: null,
+      createdAt: "2026-10-21T10:00:00.000Z",
+      updatedAt: "2026-10-21T10:00:00.000Z",
+    };
+    const { api, calls } = apiWith((url) =>
+      url.endsWith("a%2Fb") ? ok({ error: { code: "not_found" } }, 404) : ok(doc),
+    );
+    expect(await api.getDocument(doc.id)).toEqual(doc);
+    await expect(api.getDocument("a/b")).rejects.toMatchObject({ status: 404 });
+    expect(calls.map((c) => c.url)).toEqual([`/api/documents/${doc.id}`, "/api/documents/a%2Fb"]);
+  });
+});

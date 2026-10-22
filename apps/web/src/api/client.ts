@@ -3,8 +3,9 @@ import {
   type CreateChatRequest,
   type DeleteAccountRequest,
   DeleteAccountResponse,
-  type DocumentDto,
+  DocumentDto,
   ErasureStatusResponse,
+  ListDocumentsResponse,
   ListMessagesResponse,
   type LoginRequest,
   MeResponse,
@@ -40,6 +41,8 @@ export interface Api {
   erasureStatus(receipt: string): Promise<ErasureStatusResponse>;
   deleteDocument(id: string): Promise<void>;
   retryDocument(id: string): Promise<DocumentDto>;
+  listDocuments(cursor?: string): Promise<ListDocumentsResponse>;
+  getDocument(id: string): Promise<DocumentDto>;
   uploadDocument(
     file: File,
     o?: { onProgress?(percent: number): void; signal?: AbortSignal },
@@ -85,6 +88,11 @@ export function createApi(
           schema: RetryDocumentResponse,
         })
       ).document,
+    listDocuments: (cursor) =>
+      http.request("GET", `/api/documents${qs({ cursor, limit: 100 })}`, {
+        schema: ListDocumentsResponse,
+      }),
+    getDocument: (id) => http.request("GET", `/api/documents/${seg(id)}`, { schema: DocumentDto }),
     uploadDocument: (file, o = {}) =>
       new Promise((resolve, reject) => {
         if (o.signal?.aborted) return reject(new DOMException("aborted", "AbortError"));
