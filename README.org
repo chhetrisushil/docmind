@@ -10,6 +10,9 @@ under a per-user key, so account erasure can be made final by destroying that ke
 
 Document storage, ingestion, linked retrieval, chat, account erasure and the web UI exist today (see Status).
 
+New to the code? Read [[file:docs/architecture.md][the architecture]] for how the system fits together, then
+[[file:docs/codebase-guide.md][the codebase guide]] for where to start reading and in what order.
+
 * Status
 
 Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spec]] (section 9).
