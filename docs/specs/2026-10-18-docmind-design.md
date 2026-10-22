@@ -22,7 +22,7 @@ DocMind lets a signed-in user:
 - **Auth lives in this app** (email + password), behind an `Authenticator` interface that AetherOS
   identity can replace later.
 - **Local-first:** runs on a laptop with docker-compose (Postgres + pgvector, Ollama). Embeddings are
-  local by default; chat, summaries and vision use Claude.
+  local by default; chat, summaries and vision use a provider chosen per role (Ollama gemma by default, Gemini for scanned PDF pages, Claude optional).
 - **Reuse Loom, never duplicate.** New code is written only for capabilities Loom lacks.
 - **Small PRs:** ≤200 changed lines and ≤10 files each, opened as **drafts**, merged only after the
   owner's review.
@@ -88,7 +88,7 @@ Dependency rules:
 | `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search(…, {documentIds?})`, `vectors`, `neighbours` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector. Search uses the HNSW index with iterative scans, so **pgvector 0.8.0 or newer is a boot requirement** (`verify` fails the boot below it). A search filtered by `documentIds` is exact; an unfiltered one is approximate. Which of several chunks with exactly equal scores fill the last places of `limit` is unspecified (an index scan does not break ties); returned hits are still ordered by score then id. |
 | `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
 | `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
-| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | `packages/llm-anthropic` on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). It never sends `temperature` (the 5.x models answer 400 to any non-default value). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors. Non-streaming from M3 (summaries, vision), streaming and reasoning from M4 |
+| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | Providers: `packages/llm-anthropic` (Claude), Loom's `OpenAiProvider` (Ollama) and `GeminiProvider`, built per role by `apps/server/app/llm` and wrapped by a bounding layer (timeout, token cap, errors mapped by status only; the error classes live in `@docmind/llm-anthropic` for historical reasons). The Claude provider is on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). It never sends `temperature` (the 5.x models answer 400 to any non-default value). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors. Non-streaming from M3 (summaries, vision), streaming and reasoning from M4 |
 | `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | `chat_sessions` table plus the `chat-activity` folded model; no projection writes to Postgres |
 | `PassageReader`, `LinkReader`, `Retriever` | apps/server | owner-scoped reads of passages and links, and the linked retrieval of `docs/design/linked-retrieval.md` | Postgres through `withTenant` |
 
@@ -321,7 +321,7 @@ the same transaction, so chunks always derive from the current parsed row. A sup
 | **chunk** | App-local section-bounded chunker (`chunker.ts`). Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
 | **embed** | Batches of 64 → `EmbeddingProvider` → `ChunkVectorStore.upsert` (onto the existing chunk rows), idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
 | **analyze** | Deterministic and local: word and page counts, reading time (230 words/min), language (stop-word vote over 8 languages, else null), outline (depth ≤ 2, ≤ 50 entries), notable dates and numbers (≤ 20 each). Stored sealed in `documents.stats_enc`. Word segmentation (`Intl.Segmenter`) is synchronous. |
-| **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest` and `fenceUntrustedMedia`. Without `ANTHROPIC_API_KEY`, summaries are skipped. |
+| **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest` and `fenceUntrustedMedia`. With the summary provider `off`, summaries are skipped. |
 | **link** | Writes `chunk_links`: `structure` (next chunk within a section 0.9; other chunks of a section of at most 8 chunks 0.6), `similar` (5 nearest chunks of the owner's other documents, score ≥ 0.80; exact vector scans until M4, an index search from M4), `entity` (shared entity, weight 1/(1+ln n)) and `reference` (another document's title, ≥ 8 characters, as a whole phrase: 0.7). Owner-scoped, top 24 links per chunk. The LLM fallback for ambiguous references is M7, beside the retrieval eval. |
 | **finalize** | Set `status=ready`. |
 
@@ -333,7 +333,7 @@ the same transaction, so chunks always derive from the current parsed row. A sup
 - **Transient** failures (LLM or embedder 429/5xx, timeouts, Ollama down) retry with exponential
   backoff.
 - **Permanent** failures (corrupt file, password-protected PDF, unsupported content) set
-  `status=failed` with a human-readable error (a document that needs Claude vision without a key fails as `vision_unavailable`). `POST /api/documents/:id/retry` re-runs the flow.
+  `status=failed` with a human-readable error (a document that needs vision from a role that is off fails as `vision_unavailable`). `POST /api/documents/:id/retry` re-runs the flow.
 - Deleting a document cancels its flow. A delete cancels every generation first.
 - Entity writes take a per-owner shared advisory lock, and a delete's orphan-entity purge the exclusive one; link writes take a per-owner exclusive advisory lock. Both link foreign keys are transient failures (never `document_gone`).
 
@@ -353,8 +353,8 @@ lease-only periodic scan).
 | org | `orga` | heading path |
 | docx | `mammoth` → HTML → section tree (zip budget checked first) | heading path |
 | doc | `word-extractor` | paragraph range |
-| pdf | `unpdf` (pdf.js), page by page; pages without text go to Claude, at most 12 per document in requests of 4 pages (own `DOCMIND_VISION_TIMEOUT_MS`, default 180 s); a batch Claude permanently rejects is dropped when the PDF has text pages, while an outage still retries the step; PDFs ≤ 100 pages / 22 MiB raw for vision (the Messages API caps a request at 32 MB and base64 adds a third) | page number |
-| image | Claude vision: transcribe text and describe the image; ≤ 5 MiB of base64 (≈ 3.75 MiB raw), ≤ 8000 px a side; an answer truncated by `max_tokens` is `too_large` | image region |
+| pdf | `unpdf` (pdf.js), page by page; pages without text are read by the role's provider (default Gemini; gemma through Ollama refuses PDFs), at most 12 per document in requests of 4 pages (own `DOCMIND_VISION_TIMEOUT_MS`, default 180 s); a batch the provider permanently rejects is dropped when the PDF has text pages, while an outage still retries the step; PDFs ≤ 100 pages and, for vision, ≤ 22 MiB raw on Claude (the Messages API caps a request at 32 MB and base64 adds a third) or ≤ 14 MiB on Gemini (deliberately conservative) | page number |
+| image | Vision by the role's provider (default gemma through Ollama): transcribe text and describe the image; ≤ 5 MiB of base64 (≈ 3.75 MiB raw), ≤ 8000 px a side; an answer truncated by `max_tokens` is `too_large` | image region |
 
 Scanned PDF pages with no text layer are routed through the image path. Known limit: CJK PDFs that need predefined CMaps extract as empty text and so go to vision.
 
@@ -367,7 +367,7 @@ Scanned PDF pages with no text layer are routed through the image path. Known li
 | `GET /api/documents/:id/content?cursor` | The document's passages in order, paged, decrypted for the owner only (404 otherwise). |
 | `GET /api/ui/views/:view?surface=` | The sealed, compiled experience of a view for a surface, with its handle inventory. Authenticated; never carries user data. |
 | `POST /api/ui/hydrate` | Answers handle loads for a view with identity-bound, owner-scoped readers; at most 8 distinct reads per request, 4 at a time. |
-| `POST /api/chats {scope?}` | Create a chat (503 `chat_unavailable` without an Anthropic key). The only place a conversation starts. |
+| `POST /api/chats {scope?}` | Create a chat (503 `chat_unavailable` when the chat provider is off). The only place a conversation starts. |
 | `GET /api/chats?cursor&q` | List sessions, newest activity first, 50 per page. `q` filters by title after decryption (the newest 2,000 are scanned). |
 | `GET /api/chats/:id/messages?cursor` | Paged history, 30 per page, oldest first within a page, merged with the sealed turn items (citations, tool steps) and reasoning. `ChatMessageDto` carries `reasoning` (folded, bounded) and `cursor`. |
 | `POST /api/chats/:id/messages` | Send a turn: 202 with `messageId`; `editOf` regenerates or edits; body at most 64 KiB. A message sent while a turn runs interrupts it. |
@@ -428,11 +428,12 @@ Five tools. Chunks are searchable once embedded, whatever the document's status.
 
 The chat shows the model's reasoning.
 
-- **What is shown.** Claude's *summarized* thinking: requests use
+- **What is shown.** With Claude, its *summarized* thinking: requests use
   `thinking: {type: "adaptive", display: "summarized"}`. The raw chain of thought is never exposed by
   the API on any model.
 - **Provider.** Loom's `AnthropicProvider` sends no `thinking` setting, sends no effort or cache breakpoints, maps `stop_reason: "refusal"` to `end_turn` and puts the response body in its errors. DocMind adds
   `packages/llm-anthropic`, which implements Loom's `llm` interface on `fetch` with its own byte-capped SSE reader, not the SDK (open question 7). It streams, reports `refusal` with its `stop_details`, sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`), places cache breakpoints, never sends `temperature`, and implements Loom's ADR 0133 reasoning contract. It is a candidate for upstreaming into `@loom/llm` later.
+- **As built with other providers.** Ollama's gemma (through Loom's `OpenAiProvider`, with `reasoning_effort` sent so the model reasons) returns its own reasoning text, not a summary. Loom records it as kind `text` and it shows under the same Thinking row. Effort maps to `reasoning_effort` (`low`, `medium`, `high`; `max` becomes `high`). A reply never ends in a refusal outcome and nothing meters usage. The chat cannot run on Gemini (Loom's `GeminiProvider` does not stream). The error classes live in `@docmind/llm-anthropic` for historical reasons.
 - **Reasoning follows Loom's ADR 0133.** The provider returns the model's summarized thinking and the order of its blocks. Loom records the signatures in the log, keeps the readable text in a sidecar store (DocMind's, sealed under the owner's key), sends the signed blocks back unchanged within one tool loop and drops them on any edit. A restart in the middle of a loop keeps them because both live in durable storage. What the API returns with `display: "summarized"` is a summary, never the raw chain of thought, and is shown as such. Across turns the history is text only, which the API accepts. A refused or stopped reply keeps no durable reasoning.
 - **Stream.** DocMind's own SSE (H2) shows `reasoning` and `reasoning-partial`, `tool` and `tool-reset` (for example "Searched documents: 'Q3 revenue' → 8 passages"), and `answer` deltas; see §6.1. History carries the same as `ChatMessageDto.reasoning`.
 - **Storage.** Tool steps are sealed `chat_turn_items`; reasoning is the Loom capture plus sealed `chat_reasoning_texts`, so past chats show them.
