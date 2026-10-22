@@ -69,7 +69,7 @@ const libraryEmpty = (): Experience =>
         id: "empty",
         type: "Notice",
         props: {
-          text: "No documents yet. Drop a file anywhere on this page, or choose Upload. DocMind reads it, and then you can ask questions about it.",
+          text: "No documents yet. Drop a file in the box above, or choose browse. DocMind reads it, and then you can ask questions about it.",
         },
       }),
     ],

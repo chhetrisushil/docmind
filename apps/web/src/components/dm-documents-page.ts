@@ -11,7 +11,7 @@ import "./dm-view";
 const HANDLES = ["documents", "doc-total", "doc-ready", "ingest"] as const;
 const STREAM_ENDED = "Live updates stopped. Reload the page to see new progress.";
 
-/** The library: a header with the upload zone over the `library` experience (or `library-empty`). It draws no data; it performs intents. */
+/** The library: one upload zone (compact in the header, or the big one when the library is empty) over the `library` experience (or `library-empty`). It draws no data; it performs intents. */
 export class DmDocumentsPage extends LitElement {
   static properties = { empty: { state: true } };
   static styles = [
@@ -152,7 +152,7 @@ export class DmDocumentsPage extends LitElement {
     return html`
       <header>
         <h1>Documents</h1>
-        <dm-upload-zone variant="compact" ?hide-queue=${this.empty}></dm-upload-zone>
+        ${this.empty ? null : html`<dm-upload-zone variant="compact"></dm-upload-zone>`}
       </header>
       ${this.empty ? html`<dm-upload-zone variant="empty"></dm-upload-zone>` : null}
       <dm-view name=${this.empty ? "library-empty" : "library"} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`;

@@ -106,6 +106,14 @@ describe("dm-documents-page", () => {
       ),
     );
     expect(t.page.shadowRoot?.querySelector("dm-upload-zone[variant=empty]")).not.toBeNull();
+    expect(t.page.shadowRoot?.querySelectorAll("dm-upload-zone").length).toBe(1);
+  });
+
+  it("shows only the compact upload zone once the library has documents", async () => {
+    const t = await setup([doc(1)]);
+    await vi.waitFor(() => expect(view(t.page).getAttribute("name")).toBe("library"));
+    const zones = [...(t.page.shadowRoot?.querySelectorAll("dm-upload-zone") ?? [])];
+    expect(zones.map((z) => z.getAttribute("variant"))).toEqual(["compact"]);
   });
 
   it("opens a document and starts a chat about it from the row buttons", async () => {
