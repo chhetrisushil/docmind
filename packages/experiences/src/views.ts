@@ -203,12 +203,10 @@ const chat = (): Experience =>
         handle: "chatScope",
         priority: "P2",
         props: {
-          size: "compact",
           label: "Search in",
-          options: [
-            { value: "all", label: "All documents" },
-            { value: "started", label: "The documents this chat started with" },
-          ],
+          emptyLabel: "All documents",
+          placeholder: "Add a document…",
+          maxSelected: 100,
         },
       }),
       widget({

@@ -148,12 +148,18 @@ describe("the experiences", () => {
     const nodes = () => (EXPERIENCES.chat.root as unknown as { children: N[] }).children;
     const scope = () => nodes().find((n) => n.id === "scope") as N;
 
-    it("is bound to the chatScope handle and sized compact, with no static value", () => {
+    it("is a multi-select bound to the chatScope handle, offering documents as data, never as props", () => {
+      expect(scope().type).toBe("ScopeSelect");
       expect(scope().binding).toEqual({ handle: "chatScope", priority: "P2" });
-      expect(scope().props.size).toBe("compact");
-      expect(scope().props).not.toHaveProperty("value");
-      expect(scope().props).not.toHaveProperty("defaultValue");
+      expect(scope().props).toEqual({
+        label: "Search in",
+        emptyLabel: "All documents",
+        placeholder: "Add a document…",
+        maxSelected: 100,
+      });
       expect(Object.keys(EXPERIENCES.chat.providers).sort()).toEqual(["chatScope", "transcript"]);
+      const entry = DOCMIND_CATALOG.entries.find((e) => e.name === "ScopeSelect");
+      expect((entry?.surfaces?.web as { kind: string }).kind).toBe("MultiSelectInput");
     });
     it("puts the scope between the transcript and the composer, the composer after it", () => {
       expect(nodes().map((n) => n.id)).toEqual(["transcript", "scope", "composer"]);

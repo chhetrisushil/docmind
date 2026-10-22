@@ -27,6 +27,11 @@ export const KINDS = {
     props: ["label", "options", "placeholder", "size"],
     binding: "optional",
   },
+  MultiSelectInput: {
+    kind: "MultiSelectInput",
+    props: ["label", "emptyLabel", "placeholder", "maxSelected"],
+    binding: "required",
+  },
 } as const satisfies Record<string, KindContract>;
 export type KindName = keyof typeof KINDS;
 
@@ -44,7 +49,7 @@ export const ENTRY_KINDS = {
   DocumentContent: "A2UIView",
   Transcript: "Chat",
   Composer: "TextInput",
-  ScopeSelect: "SelectInput",
+  ScopeSelect: "MultiSelectInput",
   ChatSearch: "TextInput",
   ChatTable: "Table",
   SourcesPanel: "A2UIView",
