@@ -1,6 +1,6 @@
 import { AnthropicMessagesProvider, LlmOutputError } from "@docmind/llm-anthropic";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PermanentIngestError } from "./errors";
 import { pngBytes } from "./imageFixtures";
@@ -10,15 +10,14 @@ let fake: FakeAnthropic;
 let reader: VisionReader;
 beforeAll(async () => {
   fake = await startFakeAnthropic();
-  reader = new VisionReader(
-    new AnthropicMessagesProvider({
-      apiKey: "test-key-not-real",
-      model: "claude-sonnet-5-5",
-      maxTokens: 1024,
-      timeoutMs: 5_000,
-      baseUrl: fake.url,
-    }),
-  );
+  const provider = new AnthropicMessagesProvider({
+    apiKey: "test-key-not-real",
+    model: "claude-sonnet-5-5",
+    maxTokens: 1024,
+    timeoutMs: 5_000,
+    baseUrl: fake.url,
+  });
+  reader = new VisionReader({ image: provider, pdf: provider });
 });
 afterAll(async () => {
   await fake?.close();
@@ -127,5 +126,84 @@ describe("VisionReader: an answer truncated by max_tokens", () => {
     fake.reply(() => ({ text: '[{"page":1,"text":"cut o', stopReason: "max_tokens" }));
     const pdf = new TextEncoder().encode("%PDF-1.4 fake");
     await expect(reader.readPdfPages(pdf, [1])).rejects.toBeInstanceOf(PermanentIngestError);
+  });
+});
+
+describe("VisionReader: an empty answer that ended the turn", () => {
+  it("is a permanent unsupported_content for pdf pages (a blocked transcription is blocked again)", async () => {
+    fake.reply(() => ({ text: "" }));
+    const pdf = new TextEncoder().encode("%PDF-1.4 fake");
+    await expect(reader.readPdfPages(pdf, [1])).rejects.toMatchObject({
+      name: "PermanentIngestError",
+      code: "unsupported_content",
+    });
+  });
+});
+
+describe("VisionReader capabilities", () => {
+  const fakeProvider = () => {
+    const seen: unknown[] = [];
+    const provider = {
+      name: "fake",
+      capabilities: {},
+      complete: async (req: unknown) => {
+        seen.push(req);
+        return { content: '{"text":"t","description":"d"}', stopReason: "end_turn", usage: {} };
+      },
+    } as unknown as LlmProvider;
+    return { provider, seen };
+  };
+
+  it("reports what its providers can read", () => {
+    const { provider } = fakeProvider();
+    const r = new VisionReader({ image: provider });
+    expect(r.canReadImages).toBe(true);
+    expect(r.canReadPdf).toBe(false);
+    expect(r.pdfMaxBytes).toBe(VISION_PDF_MAX_BYTES);
+    const p = new VisionReader({ pdf: provider, pdfMaxBytes: 14 * 1024 * 1024 });
+    expect(p.canReadImages).toBe(false);
+    expect(p.canReadPdf).toBe(true);
+    expect(p.pdfMaxBytes).toBe(14 * 1024 * 1024);
+  });
+
+  it("fails as vision_unavailable without the matching provider", async () => {
+    const { provider } = fakeProvider();
+    await expect(
+      new VisionReader({ image: provider }).readPdfPages(new Uint8Array([1]), [1]),
+    ).rejects.toMatchObject({ code: "vision_unavailable" });
+    await expect(
+      new VisionReader({ pdf: provider }).readImage(PNG_BYTES, "image/png"),
+    ).rejects.toMatchObject({ code: "vision_unavailable" });
+  });
+
+  it("sends pdf pages to the pdf provider and images to the image provider", async () => {
+    const img = fakeProvider();
+    const pdf = { ...fakeProvider() };
+    pdf.provider.complete = async (req: unknown) => {
+      pdf.seen.push(req);
+      return { content: '[{"page":1,"text":"x"}]', stopReason: "end_turn", usage: {} } as never;
+    };
+    const r = new VisionReader({ image: img.provider, pdf: pdf.provider });
+    await r.readPdfPages(new Uint8Array([37, 80, 68, 70]), [1]);
+    expect(pdf.seen).toHaveLength(1);
+    expect(img.seen).toHaveLength(0);
+    await r.readImage(PNG_BYTES, "image/png");
+    expect(img.seen).toHaveLength(1);
+    expect(pdf.seen).toHaveLength(1);
+  });
+
+  it("refuses a pdf provider with no positive cap", () => {
+    const { provider } = fakeProvider();
+    for (const cap of [0, -1, Number.NaN])
+      expect(() => new VisionReader({ pdf: provider, pdfMaxBytes: cap })).toThrow(/pdfMaxBytes/);
+  });
+
+  it("applies its own pdf cap", async () => {
+    const { provider, seen } = fakeProvider();
+    const r = new VisionReader({ pdf: provider, pdfMaxBytes: 4 });
+    await expect(r.readPdfPages(new Uint8Array(5), [1])).rejects.toThrow(
+      /^pdf exceeds the size limit$/,
+    );
+    expect(seen).toHaveLength(0);
   });
 });

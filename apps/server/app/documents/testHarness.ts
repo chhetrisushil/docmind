@@ -27,6 +27,12 @@ import {
   createIngestWiring,
 } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
+import {
+  type FakeGemini,
+  type FakeOpenAiCompat,
+  startFakeGemini,
+  startFakeOpenAiCompat,
+} from "../llm/testing";
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
@@ -39,6 +45,9 @@ import { InMemoryProgressBus } from "./progress";
 import { type NewDocument, filenameBind, insertDocument, titleBind } from "./repo";
 import { type DocumentRoutesDeps, documentRoutes } from "./routes";
 import { StartScheduler } from "./startScheduler";
+
+/** A test value, not a secret: the Gemini key the harness gives the wiring; the fake sees it as a header. */
+export const GEMINI_TEST_KEY = "test-key-not-real";
 
 export const T1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 export const T2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -73,6 +82,20 @@ export const testAuthenticator: Authenticator = {
 export const PNG = (tag = "") =>
   Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d49484452", "hex"), Buffer.from(tag)]);
 export const PDF = (tag = "") => Buffer.from(`%PDF-1.7\n${tag}\n%%EOF`);
+/** Serialises PDF object bodies (object n is objs[n-1]; object 1 is the catalog) with an xref table. */
+const pdfFromObjects = (objs: string[]): Buffer => {
+  let out = "%PDF-1.4\n";
+  const offsets = objs.map((o, i) => {
+    const at = out.length;
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    return at;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+};
 /** A real one-page PDF whose text layer is `text` (ASCII, no parentheses or backslashes); an array is one line each, on a taller page. */
 export const makePdf = (text: string | string[]): Buffer => {
   const lines = typeof text === "string" ? [text] : text;
@@ -85,17 +108,7 @@ export const makePdf = (text: string | string[]): Buffer => {
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
   ];
-  let out = "%PDF-1.4\n";
-  const offsets = objs.map((o, i) => {
-    const at = out.length;
-    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
-    return at;
-  });
-  const xref = out.length;
-  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
-  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(out, "latin1");
+  return pdfFromObjects(objs);
 };
 /** A two-page PDF: page 1 has the text layer `text`, page 2 has none (a scan, read by vision). */
 export const twoPagePdf = (text: string): Buffer => {
@@ -111,17 +124,17 @@ export const twoPagePdf = (text: string): Buffer => {
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     "<< /Length 0 >>\nstream\n\nendstream",
   ];
-  let out = "%PDF-1.4\n";
-  const offsets = objs.map((o, i) => {
-    const at = out.length;
-    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
-    return at;
-  });
-  const xref = out.length;
-  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
-  for (const at of offsets) out += `${String(at).padStart(10, "0")} 00000 n \n`;
-  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
-  return Buffer.from(out, "latin1");
+  return pdfFromObjects(objs);
+};
+/** A one-page PDF with no text layer at all: only vision can read it. */
+export const scannedPdf = (): Buffer => {
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R >>",
+    "<< /Length 0 >>\nstream\n\nendstream",
+  ];
+  return pdfFromObjects(objs);
 };
 export const TEXT = (tag = "") => Buffer.from(`some plain text ${tag}\n`);
 
@@ -197,6 +210,8 @@ function makeIngest(
   status: IngestStatus;
   statusStore: InMemoryReadModelStore;
   bus: InMemoryProgressBus;
+  /** The (unsealed, in-memory) event log of every ingest execution. */
+  eventStore: InMemoryAsyncEventStore;
   close(): Promise<void>;
 } {
   const eventStore = new InMemoryAsyncEventStore();
@@ -281,6 +296,7 @@ function makeIngest(
     status,
     statusStore,
     bus,
+    eventStore,
     close: async () => {
       probe.release();
       probe.releaseStart();
@@ -305,9 +321,14 @@ export interface DocumentHarness {
   status: IngestStatus;
   statusStore: InMemoryReadModelStore;
   bus: InMemoryProgressBus;
+  /** The ingest executions' event log, as the flow wrote it. */
+  eventStore: InMemoryAsyncEventStore;
   events: ReturnType<typeof documentEventRoutes>;
   /** The fake Claude behind the wiring's providers (its key is set only with `llm: true`). */
   fake: FakeAnthropic;
+  /** With `llm: "ollama"`: the fake Ollama (chat completions; other paths reach the embedding fake) and the fake Gemini. */
+  compat?: FakeOpenAiCompat;
+  gemini?: FakeGemini;
   /** Test seams: embed requests answered by the fake Ollama, and parse-runner runs. */
   embedCalls(): number;
   parseRuns(): number;
@@ -324,7 +345,9 @@ export async function startDocumentServer(
     /** Test seam: wraps the route dependencies, e.g. to inject a failure. */
     deps?: (deps: DocumentRoutesDeps) => DocumentRoutesDeps;
     /** Gives the wiring a Claude key and base URL pointing at `fake`; without it there is no key. */
-    llm?: boolean;
+    llm?: boolean | "ollama";
+    /** With `llm: "ollama"`: no Gemini key, so scanned PDF pages cannot be read. */
+    withoutGeminiKey?: boolean;
   } = {},
 ): Promise<DocumentHarness> {
   const db = await createTestDb();
@@ -346,12 +369,23 @@ export async function startDocumentServer(
     });
   const fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
   const claude = await startFakeAnthropic();
+  const compat =
+    overrides.llm === "ollama" ? await startFakeOpenAiCompat({ forward: fake.url }) : undefined;
+  const gemini = overrides.llm === "ollama" ? await startFakeGemini() : undefined;
   try {
     const wiring = createIngestWiring({
-      DOCMIND_OLLAMA_URL: fake.url,
+      // The embedding fake and the chat fake share one URL in production: the compat fake forwards non-/v1 paths.
+      DOCMIND_OLLAMA_URL: compat?.url ?? fake.url,
+      DOCMIND_LLM_PROVIDER:
+        overrides.llm === "ollama" ? "ollama" : overrides.llm ? "anthropic" : "off",
       DOCMIND_EMBED_MODEL: "fake-embed",
       DOCMIND_EMBED_DIMENSIONS: "64",
-      ...(overrides.llm && {
+      ...(gemini &&
+        !overrides.withoutGeminiKey && {
+          GEMINI_API_KEY: GEMINI_TEST_KEY,
+          GEMINI_BASE_URL: gemini.url,
+        }),
+      ...(overrides.llm === true && {
         ANTHROPIC_API_KEY: "test-key-not-real",
         ANTHROPIC_BASE_URL: claude.url,
       }),
@@ -417,8 +451,11 @@ export async function startDocumentServer(
       status: ingest.status,
       statusStore: ingest.statusStore,
       bus: ingest.bus,
+      eventStore: ingest.eventStore,
       events,
       fake: claude,
+      ...(compat && { compat }),
+      ...(gemini && { gemini }),
       embedCalls: () => fake.batches.length,
       parseRuns: () => parseRuns,
       upload(user, name, data) {
@@ -455,6 +492,8 @@ export async function startDocumentServer(
           () => app.end(),
           () => fake.close(),
           () => claude.close(),
+          async () => void (await compat?.close()),
+          async () => void (await gemini?.close()),
         );
         await db.drop();
         rmSync(root, { recursive: true, force: true });
@@ -463,6 +502,8 @@ export async function startDocumentServer(
   } catch (err) {
     await fake.close(); // a later setup step failed: the fakes would otherwise leak
     await claude.close();
+    await compat?.close();
+    await gemini?.close();
     throw err;
   }
 }

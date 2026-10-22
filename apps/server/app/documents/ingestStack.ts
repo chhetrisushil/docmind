@@ -112,6 +112,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     cleanups.unshift(async () => void (await claude?.close()));
     const wiring = createIngestWiring({
       DOCMIND_OLLAMA_URL: fake.url,
+      DOCMIND_LLM_PROVIDER: "off",
       DOCMIND_EMBED_MODEL: "fake-embed",
       DOCMIND_EMBED_DIMENSIONS: "768",
     });
@@ -120,12 +121,13 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     cleanups.unshift(() => closeIngest(wiring));
     const chatEnv = claude
       ? {
+          DOCMIND_LLM_PROVIDER: "anthropic",
           ANTHROPIC_API_KEY: "test-key-not-real",
           ANTHROPIC_BASE_URL: claude.url,
           DOCMIND_CHAT_ENVELOPE_KEY: CHAT_TEST_ENVELOPE_KEY,
           DOCMIND_TITLE_MODEL: "title-model",
         }
-      : {};
+      : { DOCMIND_LLM_PROVIDER: "off" };
     const settings = loadChatSettings(chatEnv);
     const llm = createChatLlm(chatEnv, settings);
     const titleLlm = createTitleLlm(chatEnv, settings);

@@ -47,9 +47,14 @@ function compose(chat = false) {
     blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
     secureCookies: false,
     trustProxy: false,
-    ingest: { ...createIngestWiring({}), sleep: async () => {} }, // no real backoff on the failing guard
+    ingest: { ...createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" }), sleep: async () => {} }, // no real backoff on the failing guard
     status: { writer: store, readerFor: () => store, source: events },
-    ...(chat && { chat: { settings: loadChatSettings({}), timers: new InMemoryTimerStore() } }),
+    ...(chat && {
+      chat: {
+        settings: loadChatSettings({ DOCMIND_LLM_PROVIDER: "off" }),
+        timers: new InMemoryTimerStore(),
+      },
+    }),
   });
   return { composed, store };
 }

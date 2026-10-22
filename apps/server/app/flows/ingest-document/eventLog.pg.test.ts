@@ -82,6 +82,7 @@ describe.skipIf(!PG_URL)(
       fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
       wiring = createIngestWiring({
         DOCMIND_OLLAMA_URL: fake.url,
+        DOCMIND_LLM_PROVIDER: "off",
         DOCMIND_EMBED_MODEL: "fake-embed",
         DOCMIND_EMBED_DIMENSIONS: "64",
       });
@@ -677,6 +678,7 @@ describe.skipIf(!PG_URL)(
       });
       wiring = createIngestWiring({
         DOCMIND_OLLAMA_URL: ollama.url,
+        DOCMIND_LLM_PROVIDER: "anthropic",
         DOCMIND_EMBED_MODEL: "fake-embed",
         DOCMIND_EMBED_DIMENSIONS: "64",
         ANTHROPIC_API_KEY: "test-key-not-real",
@@ -735,8 +737,8 @@ describe.skipIf(!PG_URL)(
       ];
       const models = [
         wiring.embedder.modelId,
-        wiring.llm.config.summaryModel,
-        wiring.llm.config.visionModel,
+        wiring.llm.roles.roles.summary.model,
+        wiring.llm.roles.roles.vision.model,
       ];
       for (const ref of refs) {
         const handle = await app.runtime.start(ingestDocumentFlow, ref, {
@@ -763,7 +765,7 @@ describe.skipIf(!PG_URL)(
         ])
           expect(json).not.toContain(text);
         // meaningful: the models the steps report are the real providers', not "none"
-        expect(json).toContain(wiring.llm.config.summaryModel);
+        expect(json).toContain(wiring.llm.roles.roles.summary.model);
       }
       // the fake really served every Claude path: the pdf scan, the image, and both summary calls
       const systems = claude.requests.map((r) => String(r.body.system));

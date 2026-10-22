@@ -5,7 +5,6 @@ import { loadLimits } from "../../documents/limits";
 import { StartupConfigError } from "../../startupError";
 import {
   createIngestWiring,
-  insecureBaseUrlWarning,
   loadEmbedConfig,
   loadGateLimits,
   loadLlmConfig,
@@ -63,7 +62,7 @@ describe("maxInputBytes", () => {
 
 describe("createIngestWiring", () => {
   it("builds a registry with the default parsers, a runner and a bus", () => {
-    const w = createIngestWiring({});
+    const w = createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" });
     expect(w.registry.ids()).toEqual(["txt", "md", "org", "docx", "doc", "pdf"]);
     expect(w.runner.active()).toBe(0);
   });
@@ -71,16 +70,16 @@ describe("createIngestWiring", () => {
   it.each(["1.5", "0", "abc"])(
     "rejects DOCMIND_PARSE_CONCURRENCY=%s naming the variable but not the value",
     (value) => {
-      expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: value })).toThrow(
-        /^DOCMIND_PARSE_CONCURRENCY must be a positive integer$/,
-      );
+      expect(() =>
+        createIngestWiring({ DOCMIND_LLM_PROVIDER: "off", DOCMIND_PARSE_CONCURRENCY: value }),
+      ).toThrow(/^DOCMIND_PARSE_CONCURRENCY must be a positive integer$/);
     },
   );
 
   it("rejects DOCMIND_PARSE_CONCURRENCY over its bound", () => {
-    expect(() => createIngestWiring({ DOCMIND_PARSE_CONCURRENCY: "17" })).toThrow(
-      /^DOCMIND_PARSE_CONCURRENCY must be at most 16$/,
-    );
+    expect(() =>
+      createIngestWiring({ DOCMIND_LLM_PROVIDER: "off", DOCMIND_PARSE_CONCURRENCY: "17" }),
+    ).toThrow(/^DOCMIND_PARSE_CONCURRENCY must be at most 16$/);
   });
 });
 
@@ -136,13 +135,18 @@ describe("DOCMIND_EMBED_TIMEOUT_MS against the per-attempt bound", () => {
 describe("createIngestWiring embedder", () => {
   it("builds the embedder from the configuration", () => {
     const { embedder } = createIngestWiring({
+      DOCMIND_LLM_PROVIDER: "off",
       DOCMIND_EMBED_MODEL: "m",
       DOCMIND_EMBED_DIMENSIONS: "8",
     });
     expect(embedder).toMatchObject({ modelId: "ollama/m", dimensions: 8 });
   });
   it("fails startup on a bad URL with a StartupConfigError naming the variable, never the value", () => {
-    const run = () => createIngestWiring({ DOCMIND_OLLAMA_URL: "http://user:hunter2@host:1" });
+    const run = () =>
+      createIngestWiring({
+        DOCMIND_LLM_PROVIDER: "off",
+        DOCMIND_OLLAMA_URL: "http://user:hunter2@host:1",
+      });
     expect(run).toThrow(StartupConfigError);
     expect(run).toThrow(/^DOCMIND_OLLAMA_URL must be an http\(s\) URL/);
     expect(run).not.toThrow(/hunter2/);
@@ -176,7 +180,7 @@ describe("loadGateLimits", () => {
     expect(() => loadGateLimits({ [name]: value })).toThrow(new RegExp(name));
   });
   it("is built into the wiring", () => {
-    expect(createIngestWiring({}).gate.active).toBe(0);
+    expect(createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" }).gate.active).toBe(0);
   });
 });
 
@@ -191,12 +195,10 @@ describe("parseStepTimeoutMs", () => {
 describe("LLM config and providers", () => {
   it("loads LLM config with defaults and no providers when the key is unset or blank", () => {
     for (const env of [{}, { ANTHROPIC_API_KEY: "   " }]) {
-      const w = createIngestWiring(env);
+      const w = createIngestWiring({ ...env, DOCMIND_LLM_PROVIDER: "off" });
       expect(w.llm.summary).toBeUndefined();
       expect(w.llm.vision).toBeUndefined();
       expect(w.llm.config).toMatchObject({
-        summaryModel: "claude-haiku-5-5",
-        visionModel: "claude-sonnet-5-5",
         timeoutMs: 60_000,
         visionTimeoutMs: 180_000,
       });
@@ -206,6 +208,7 @@ describe("LLM config and providers", () => {
   it("reads the vision timeout, accepts the maximum, and keeps the key out of the wiring", () => {
     expect(loadLlmConfig({ DOCMIND_VISION_TIMEOUT_MS: "600000" }).visionTimeoutMs).toBe(600_000);
     const w = createIngestWiring({
+      DOCMIND_LLM_PROVIDER: "anthropic",
       ANTHROPIC_API_KEY: "k-secret-123",
       DOCMIND_LLM_TIMEOUT_MS: "1000",
     });
@@ -217,6 +220,7 @@ describe("LLM config and providers", () => {
 
   it("builds both providers with their own models when the key is set", () => {
     const w = createIngestWiring({
+      DOCMIND_LLM_PROVIDER: "anthropic",
       ANTHROPIC_API_KEY: "k-test",
       DOCMIND_SUMMARY_MODEL: "claude-x-1",
     });
@@ -234,12 +238,44 @@ describe("LLM config and providers", () => {
         /DOCMIND_VISION_TIMEOUT_MS/,
       );
     expect(() =>
-      createIngestWiring({ ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "http://u:SECRETPW@h" }),
+      createIngestWiring({
+        DOCMIND_LLM_PROVIDER: "anthropic",
+        ANTHROPIC_API_KEY: "k",
+        ANTHROPIC_BASE_URL: "http://u:SECRETPW@h",
+      }),
     ).toThrow(
-      /^ANTHROPIC_BASE_URL must be an http\(s\) URL without credentials, query or fragment$/,
+      /^ANTHROPIC_BASE_URL must be an http or https URL without credentials, query or fragment$/,
     );
-    expect(() => createIngestWiring({ ANTHROPIC_API_KEY: "bad\nkey" })).toThrow(
-      /^ANTHROPIC_API_KEY must be a header-safe string$/,
+    expect(() =>
+      createIngestWiring({ DOCMIND_LLM_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "bad\nkey" }),
+    ).toThrow(/^ANTHROPIC_API_KEY must be a header-safe string$/);
+  });
+});
+
+describe("ingest on the configured providers", () => {
+  it("defaults to Ollama for summary and images, and leaves the pdf role off without a Gemini key", () => {
+    const w = createIngestWiring({});
+    expect(w.llm.summary).toBeDefined();
+    expect(w.llm.vision).toBeDefined();
+    expect(w.llm.visionPdf).toBeUndefined();
+    expect(w.llm.config.visionTimeoutMs).toBe(180_000);
+  });
+
+  it("builds the pdf provider when GEMINI_API_KEY is set, and no key reaches the wiring", () => {
+    const w = createIngestWiring({ GEMINI_API_KEY: "test-key-not-real" });
+    expect(w.llm.visionPdf).toBeDefined();
+    expect(inspect(w.llm, { depth: 6, showHidden: true })).not.toContain("test-key-not-real");
+  });
+
+  it("leaves a role off when its provider is off", () => {
+    const w = createIngestWiring({ DOCMIND_SUMMARY_PROVIDER: "off" });
+    expect(w.llm.summary).toBeUndefined();
+    expect(w.llm.vision).toBeDefined();
+  });
+
+  it("refuses an Anthropic role without a key, naming variables only", () => {
+    expect(() => createIngestWiring({ DOCMIND_SUMMARY_PROVIDER: "anthropic" })).toThrow(
+      /^ANTHROPIC_API_KEY is not set \(DOCMIND_SUMMARY_PROVIDER=anthropic\)$/,
     );
   });
 });
@@ -248,41 +284,14 @@ describe("loadSummaryMaxChars", () => {
   it("defaults to 400000, accepts the maximum, and is built into the wiring", () => {
     expect(loadSummaryMaxChars({})).toBe(400_000);
     expect(loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: "5000000" })).toBe(5_000_000);
-    expect(createIngestWiring({ DOCMIND_SUMMARY_MAX_CHARS: "1000" }).summaryMaxChars).toBe(1_000);
+    expect(
+      createIngestWiring({ DOCMIND_LLM_PROVIDER: "off", DOCMIND_SUMMARY_MAX_CHARS: "1000" })
+        .summaryMaxChars,
+    ).toBe(1_000);
   });
   it.each(["abc", "0", "5000001"])("rejects %s naming the variable", (value) => {
     expect(() => loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: value })).toThrow(
       /DOCMIND_SUMMARY_MAX_CHARS/,
     );
-  });
-});
-
-describe("insecureBaseUrlWarning", () => {
-  it.each([
-    [undefined],
-    [""],
-    ["https://api.example.com"],
-    ["https://llm.internal:8443/v1"],
-    ["http://localhost:8080"],
-    ["HTTP://LOCALHOST"],
-    ["http://127.0.0.1:9000"],
-    ["http://127.1.2.3"],
-    ["http://[::1]:9000"],
-    ["not a url"], // the provider refuses it with its own message
-  ])("is silent for %j", (url) => {
-    expect(insecureBaseUrlWarning(url)).toBeUndefined();
-  });
-
-  it.each([
-    ["http://llm.internal"],
-    ["http://10.0.0.5:8080/v1"],
-    ["http://192.168.1.20"],
-    ["http://example.com:80"],
-  ])("warns for plain http to %j, without echoing the address", (url) => {
-    const warning = insecureBaseUrlWarning(url);
-    expect(warning).toBe(
-      "ANTHROPIC_BASE_URL is plain http:// to a host that is not this machine: the API key and document text travel unencrypted",
-    );
-    expect(warning).not.toContain("llm.internal");
   });
 });

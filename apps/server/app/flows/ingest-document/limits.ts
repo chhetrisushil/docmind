@@ -1,11 +1,12 @@
 import { OllamaEmbeddingProvider } from "@docmind/embeddings";
-import { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
 import { ParseRunner, ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import type { ParseLimits } from "@docmind/parsers";
 import type { LlmProvider } from "@loom/llm";
 import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
 import { loadLimits, positiveInt } from "../../documents/limits";
 import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress";
+import { createRoleProvider } from "../../llm/factory";
+import { type LlmRole, type LlmRoleSettings, loadLlmRoles } from "../../llm/roles";
 import { StartupConfigError } from "../../startupError";
 import { IngestGate } from "./gate";
 import { STEP_TIMEOUT_MS } from "./stepEffect";
@@ -24,10 +25,16 @@ export interface IngestWiring {
   gate: IngestGate;
   /** The parse limits the runner was built with; parse's attempt timeout derives from them. */
   runnerLimits: ParseLimits;
-  /** Claude providers; both are undefined without ANTHROPIC_API_KEY (summaries skipped, images fail as vision_unavailable). */
   /** The most document text a summary reads. */
   summaryMaxChars: number;
-  llm: { summary?: LlmProvider; vision?: LlmProvider; config: LlmSettings };
+  /** A provider is undefined when its role is off (summaries skipped; images or scanned pages fail as vision_unavailable). */
+  llm: {
+    summary?: LlmProvider;
+    vision?: LlmProvider;
+    visionPdf?: LlmProvider;
+    roles: LlmRoleSettings;
+    config: LlmSettings;
+  };
   /** Test seam: the wait between retry attempts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -94,53 +101,24 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
   }
 }
 
-const MODEL_ID = /^[a-z0-9][a-z0-9.\-]{0,99}$/;
 const MAX_LLM_TIMEOUT_MS = 300_000;
 const MAX_VISION_TIMEOUT_MS = 600_000;
 const SUMMARY_MAX_TOKENS = 2_048;
 const VISION_MAX_TOKENS = 16_000;
 
-/** Claude settings kept on the wiring. It never holds the API key (R10): the key lives only inside the providers. */
+/** Timeouts for the LLM steps. It never holds a key (R10): keys live only inside the providers. */
 export interface LlmSettings {
-  baseUrl?: string;
-  summaryModel: string;
-  visionModel: string;
   timeoutMs: number;
   visionTimeoutMs: number;
 }
 
-const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
+export { envModelId } from "../../llm/modelId";
 
-/**
- * A warning (fixed text, no address) when ANTHROPIC_BASE_URL is plain http:// to a host other than this machine: the key
- * and the document text would cross the network unencrypted. Silent for https, loopback and anything that is not a URL
- * (the provider rejects that with its own message). Called once, at boot.
- */
-export function insecureBaseUrlWarning(baseUrl: string | undefined): string | undefined {
-  if (!baseUrl) return undefined;
-  let url: URL;
-  try {
-    url = new URL(baseUrl);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "http:" || LOOPBACK_HOST.test(url.hostname)) return undefined;
-  return "ANTHROPIC_BASE_URL is plain http:// to a host that is not this machine: the API key and document text travel unencrypted";
-}
-
-export const envModelId = (env: NodeJS.ProcessEnv, name: string, fallback: string): string => {
-  const v = env[name]?.trim() || fallback;
-  if (!MODEL_ID.test(v)) throw new StartupConfigError(`${name} must be a model id`);
-  return v;
-};
-
-/** Claude settings. The key is optional (D7): without it summaries are skipped and images fail as vision_unavailable. */
-export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmSettings {
-  const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || undefined;
+export function loadLlmConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  roles: LlmRoleSettings = loadLlmRoles(env),
+): LlmSettings {
   return {
-    ...(baseUrl && { baseUrl }),
-    summaryModel: envModelId(env, "DOCMIND_SUMMARY_MODEL", "claude-haiku-5-5"),
-    visionModel: envModelId(env, "DOCMIND_VISION_MODEL", "claude-sonnet-5-5"),
     timeoutMs: positiveInt(env, "DOCMIND_LLM_TIMEOUT_MS", 60_000, MAX_LLM_TIMEOUT_MS),
     // A vision request reads up to VISION_PDF_PAGES_PER_REQUEST dense pages: far slower than a summary.
     visionTimeoutMs: positiveInt(env, "DOCMIND_VISION_TIMEOUT_MS", 180_000, MAX_VISION_TIMEOUT_MS),
@@ -148,32 +126,19 @@ export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmSettings
 }
 
 function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
-  const config = loadLlmConfig(env);
-  const { baseUrl } = config;
-  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
-  if (!apiKey) return { config };
-  const make = (model: string, maxTokens: number, timeoutMs: number) => {
-    try {
-      return new AnthropicMessagesProvider({
-        apiKey,
-        model,
-        maxTokens,
-        timeoutMs,
-        ...(baseUrl && { baseUrl }),
-      });
-    } catch (err) {
-      // The provider's messages name an option, never a value; say which variable it came from.
-      if (err instanceof TypeError && /^baseUrl/.test(err.message))
-        throw new StartupConfigError(err.message.replace(/^baseUrl/, "ANTHROPIC_BASE_URL"));
-      if (err instanceof TypeError && /^apiKey/.test(err.message))
-        throw new StartupConfigError("ANTHROPIC_API_KEY must be a header-safe string");
-      throw err;
-    }
-  };
+  const roles = loadLlmRoles(env);
+  const config = loadLlmConfig(env, roles);
+  const make = (role: LlmRole, maxTokens: number, timeoutMs: number) =>
+    createRoleProvider(role, roles, env, { maxTokens, timeoutMs });
+  const summary = make("summary", SUMMARY_MAX_TOKENS, config.timeoutMs);
+  const vision = make("vision", VISION_MAX_TOKENS, config.visionTimeoutMs);
+  const visionPdf = make("visionPdf", VISION_MAX_TOKENS, config.visionTimeoutMs);
   return {
+    roles,
     config,
-    summary: make(config.summaryModel, SUMMARY_MAX_TOKENS, config.timeoutMs),
-    vision: make(config.visionModel, VISION_MAX_TOKENS, config.visionTimeoutMs),
+    ...(summary && { summary }),
+    ...(vision && { vision }),
+    ...(visionPdf && { visionPdf }),
   };
 }
 

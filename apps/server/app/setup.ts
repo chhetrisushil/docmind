@@ -8,9 +8,10 @@ import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createTitleLlm } from "./flows/chat-title/llm";
-import { createIngestWiring, insecureBaseUrlWarning } from "./flows/ingest-document/limits";
+import { createIngestWiring } from "./flows/ingest-document/limits";
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadWebDir } from "./http/staticFiles";
+import { llmWarnings } from "./llm/roles";
 import { loadMaxConnections } from "./server";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
@@ -45,16 +46,11 @@ export async function setupServer() {
   const webDir = loadWebDir(process.env.DOCMIND_WEB_DIR); // before anything opens
   const maxConnections = loadMaxConnections(); // before anything opens
   const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
-  if (!ingest.llm.summary)
-    console.warn("summaries and image reading are off: ANTHROPIC_API_KEY is not set");
+  // Role-aware boot warnings (fixed text, variable names only), here so a bad provider variable has already refused to start.
+  for (const w of llmWarnings(ingest.llm.roles, process.env)) console.warn(w);
   const chatSettings = loadChatSettings(); // before any connection opens: a bad variable must not reach recovery
   const chatLlm = createChatLlm(process.env, chatSettings);
   const titleLlm = createTitleLlm(process.env, chatSettings);
-  if (!chatLlm) console.warn("chat is off: ANTHROPIC_API_KEY is not set");
-  // Once per process, for all the Anthropic providers (they share the variable); only when one was built, since
-  // without a key nothing is sent. The text names the variable, never the URL.
-  const insecure = insecureBaseUrlWarning(ingest.llm.config.baseUrl);
-  if (insecure && (ingest.llm.summary || chatLlm || titleLlm)) console.warn(insecure);
 
   const pool = await createAppPool(databaseUrl);
 

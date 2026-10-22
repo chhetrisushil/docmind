@@ -7,7 +7,11 @@ import { IngestConfigError } from "./errors";
 import { createIngestWiring } from "./limits";
 import { pgIngestDeps } from "./pgDeps";
 
-const env = { DOCMIND_EMBED_MODEL: "a", DOCMIND_EMBED_DIMENSIONS: "8" };
+const env = {
+  DOCMIND_LLM_PROVIDER: "off",
+  DOCMIND_EMBED_MODEL: "a",
+  DOCMIND_EMBED_DIMENSIONS: "8",
+};
 const args = (wiring: ReturnType<typeof createIngestWiring>, vectors: InMemoryChunkVectors) => ({
   pool: {} as Pool,
   fields: {} as FieldCrypto,
