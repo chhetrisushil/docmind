@@ -12,6 +12,7 @@ import {
   createDefaultParsers,
 } from "@docmind/parsers";
 import { describe, expect, it, vi } from "vitest";
+import { LlmConfigError } from "../../../llm/bounded";
 import { DocumentGoneError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import { pngBytes } from "../imageFixtures";
@@ -311,6 +312,13 @@ describe("parse step: images", () => {
     expect(await run(d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
   });
 
+  it("fails as vision_unavailable when the vision reader cannot read images", async () => {
+    const vision = { readPdfPages: vi.fn(), readImage: vi.fn(), canReadImages: false };
+    const { d } = deps({ source: imageSource(png(640, 480), "image/png"), vision });
+    expect(await run(d)).toEqual({ outcome: "failed", code: "vision_unavailable" });
+    expect(vision.readImage).not.toHaveBeenCalled();
+  });
+
   it("fails as too_large over 5 MiB or 8000 px, and corrupt_content when the header does not parse", async () => {
     const vision = { readPdfPages: vi.fn(), readImage: vi.fn() };
     const failed = async (bytes: Uint8Array) =>
@@ -435,6 +443,57 @@ describe("parse step: scanned pdf pages", () => {
     expect(await run(tooBig.d)).toEqual({ outcome: "failed", code: "too_large" });
   });
 
+  it("fails a textless-only pdf as vision_unavailable when the reader cannot read pdfs", async () => {
+    const vision = { readImage: vi.fn(), readPdfPages: vi.fn(), canReadPdf: false };
+    const none = { text: "", sections: [], media: [scanned(1)] };
+    expect(await run(pdfDeps(none, { vision }).d)).toEqual({
+      outcome: "failed",
+      code: "vision_unavailable",
+    });
+    const mixed = { text: "one", sections: [page(1, "one")], media: [scanned(2)] };
+    expect((await run(pdfDeps(mixed, { vision }).d)).outcome).toBe("done");
+    expect(vision.readPdfPages).not.toHaveBeenCalled();
+  });
+
+  it("applies the reader's own pdf cap: 15 MiB passes at 22 MiB and is too_large at 14 MiB", async () => {
+    const mib = 1024 * 1024;
+    const textless = { text: "", sections: [], media: [scanned(1)] };
+    const run15 = (pdfMaxBytes: number) => {
+      const vision = {
+        readImage: vi.fn(),
+        readPdfPages: vi.fn(async () => new Map([[1, "t"]])),
+        pdfMaxBytes,
+      };
+      return run(pdfDeps(textless, { vision, source: pdfSource(new Uint8Array(15 * mib)) }).d);
+    };
+    expect((await run15(22 * mib)).outcome).toBe("done");
+    expect(await run15(14 * mib)).toEqual({ outcome: "failed", code: "too_large" });
+  });
+
+  it("a rejected credential fails the step even when text pages exist", async () => {
+    const readPdfPages = vi.fn(async () => {
+      throw new LlmConfigError(401);
+    });
+    const kept = pdfDeps(
+      { text: "x", sections: [page(1, "x")], media: [scanned(2)] },
+      { vision: { readImage: vi.fn(), readPdfPages } },
+    );
+    await expect(run(kept.d)).rejects.toThrow(/^ingest step failed: parse$/);
+    expect(readPdfPages).toHaveBeenCalledTimes(1); // fatal: not retried, not dropped
+  });
+
+  it("a rejected credential with status 400 is not corrupt_content and fails the step", async () => {
+    const readPdfPages = vi.fn(async () => {
+      throw new LlmConfigError(400);
+    });
+    const kept = pdfDeps(
+      { text: "x", sections: [page(1, "x")], media: [scanned(2)] },
+      { vision: { readImage: vi.fn(), readPdfPages } },
+    );
+    await expect(run(kept.d)).rejects.toThrow(/^ingest step failed: parse$/);
+    expect(readPdfPages).toHaveBeenCalledTimes(1);
+  });
+
   it("drops a batch that fails permanently when text pages exist, and keeps the other batches", async () => {
     const parsed = {
       text: "zero",
@@ -459,6 +518,23 @@ describe("parse step: scanned pdf pages", () => {
       );
       expect(await run(kept.d)).toEqual({ outcome: "done", count: 1 });
     }
+  });
+
+  it("an empty provider answer drops the scanned pages of a pdf with text, and fails a scanned-only pdf as unsupported_content", async () => {
+    const empty = vi.fn(async () => {
+      throw new PermanentIngestError("unsupported_content");
+    });
+    const kept = pdfDeps(
+      { text: "x", sections: [page(1, "x")], media: [scanned(2)] },
+      { vision: { readImage: vi.fn(), readPdfPages: empty } },
+    );
+    expect(await run(kept.d)).toEqual({ outcome: "done", count: 1 });
+    expect(empty).toHaveBeenCalledTimes(1);
+    const only = pdfDeps(
+      { text: "", sections: [], media: [scanned(1)] },
+      { vision: { readImage: vi.fn(), readPdfPages: empty } },
+    );
+    expect(await run(only.d)).toEqual({ outcome: "failed", code: "unsupported_content" });
   });
 
   it("still retries a transient vision failure even when text pages exist", async () => {

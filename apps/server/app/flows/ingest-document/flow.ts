@@ -25,7 +25,7 @@ export const ingestParseStep = step$({
   name: "IngestParse",
   inputSchema: IngestStartInput,
   outputSchema: StepResult,
-  // Declared policy; stepEffect enforces it. Parse calls Claude for images and scanned pages.
+  // Declared policy; stepEffect enforces it. Parse calls the LLM for images and scanned pages.
   retry: LLM_RETRY,
 });
 
@@ -107,7 +107,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
     id: "ingest-document",
     name: "IngestDocument",
     // Loom refuses a changed flow under an old version. 2.3.0: embed got its own retry policy (EMBED_RETRY).
-    // 3.0.0: parse and summarize retry with LLM_RETRY (Claude outages).
+    // 3.0.0: parse and summarize retry with LLM_RETRY (provider outages).
     version: "3.0.0",
     inputSchema: IngestStartInput,
     outputSchema: IngestOutput,

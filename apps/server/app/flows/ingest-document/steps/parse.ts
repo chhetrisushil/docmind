@@ -7,6 +7,7 @@ import type {
   ParserRegistry,
 } from "@docmind/parsers";
 import type { Effect } from "@loom/effect-runtime";
+import { LlmConfigError } from "../../../llm/bounded";
 import { BlobMissingError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import { imageSize } from "../imageSize";
@@ -39,10 +40,11 @@ export interface ParseDeps extends StepSeams {
   registry: ParserRegistry;
   runner: Pick<ParseRunner, "run">;
   /**
-   * Reads images and textless PDF pages with Claude; absent without an API key (images then fail as
+   * Reads images and textless PDF pages with the configured providers; absent when both roles are off (images then fail as
    * vision_unavailable; a PDF keeps its text pages, or fails as vision_unavailable if it has none).
    */
-  vision?: Pick<VisionReader, "readImage" | "readPdfPages">;
+  vision?: Pick<VisionReader, "readImage" | "readPdfPages"> &
+    Partial<Pick<VisionReader, "canReadImages" | "canReadPdf" | "pdfMaxBytes">>;
   /** The parsed text bound (limits.ts maxChars); vision text is added after the runner's own check. */
   maxChars: number;
   /**
@@ -74,25 +76,29 @@ async function visionCall<T>(call: () => Promise<T>): Promise<T> {
     return await call();
   } catch (err) {
     if (err instanceof LlmRefusalError) throw new PermanentIngestError("unsupported_content");
-    if (err instanceof LlmRequestError && err.status === 400)
+    // A rejected credential can carry status 400 (Gemini): it is configuration, not a damaged file.
+    if (err instanceof LlmRequestError && !(err instanceof LlmConfigError) && err.status === 400)
       throw new PermanentIngestError("corrupt_content");
     throw err;
   }
 }
 
+// A rejected credential (LlmConfigError) is not about this page: it must fail the step, not drop pages.
 const isPermanentVisionError = (err: unknown): boolean =>
-  err instanceof PermanentIngestError ||
-  err instanceof LlmRequestError ||
-  err instanceof LlmRefusalError;
+  !(err instanceof LlmConfigError) &&
+  (err instanceof PermanentIngestError ||
+    err instanceof LlmRequestError ||
+    err instanceof LlmRefusalError);
 
-/** D8: images are read by Claude, in this process, from the original bytes; nothing decodes them here. */
+/** D8: images are read by the configured vision provider, in this process, from the original bytes; nothing decodes them here. */
 async function readImageDocument(
   deps: ParseDeps,
   bytes: Uint8Array,
   mime: string,
   signal?: AbortSignal,
 ): Promise<ParsedResult> {
-  if (!deps.vision) throw new PermanentIngestError("vision_unavailable");
+  if (!deps.vision || deps.vision.canReadImages === false)
+    throw new PermanentIngestError("vision_unavailable");
   if (base64Length(bytes.length) > VISION_MAX_BYTES) throw new PermanentIngestError("too_large");
   const size = imageSize(bytes, mime);
   if (!size) throw new PermanentIngestError("corrupt_content");
@@ -122,19 +128,22 @@ async function withScannedPages(
   if (scanned.length === 0) return parsed;
   const vision = deps.vision;
   const totalPages = parsed.sections.length + scanned.length;
-  if (!vision || bytes.length > VISION_PDF_MAX_BYTES || totalPages > VISION_PDF_MAX_PAGES) {
+  const canPdf = vision !== undefined && vision.canReadPdf !== false;
+  const cap = vision?.pdfMaxBytes ?? VISION_PDF_MAX_BYTES;
+  if (!canPdf || bytes.length > cap || totalPages > VISION_PDF_MAX_PAGES) {
     if (parsed.sections.length > 0) return { ...parsed, media: [] };
-    throw new PermanentIngestError(vision ? "too_large" : "vision_unavailable");
+    throw new PermanentIngestError(canPdf ? "too_large" : "vision_unavailable");
   }
+  const reader = vision as NonNullable<typeof vision>;
   const wanted = scanned.slice(0, VISION_PDF_MAX_SCANNED);
   const read = new Map<number, string>();
   for (let i = 0; i < wanted.length; i += VISION_PDF_PAGES_PER_REQUEST) {
     const batch = wanted.slice(i, i + VISION_PDF_PAGES_PER_REQUEST);
     try {
-      for (const [page, text] of await visionCall(() => vision.readPdfPages(bytes, batch, signal)))
+      for (const [page, text] of await visionCall(() => reader.readPdfPages(bytes, batch, signal)))
         read.set(page, text);
     } catch (err) {
-      // With text pages in hand, a batch Claude will never accept costs only its own pages. A
+      // With text pages in hand, a batch the provider will never accept costs only its own pages. A
       // transient failure (outage, bad output) still propagates so the step retries.
       if (parsed.sections.length > 0 && isPermanentVisionError(err)) continue;
       throw err;
