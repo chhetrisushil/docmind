@@ -200,7 +200,10 @@ const chat = (): Experience =>
       widget({
         id: "scope",
         type: "ScopeSelect",
+        handle: "chatScope",
+        priority: "P2",
         props: {
+          size: "compact",
           label: "Search in",
           options: [
             { value: "all", label: "All documents" },
@@ -220,7 +223,7 @@ const chat = (): Experience =>
         },
       }),
     ],
-    providers: { transcript: published("transcript") },
+    providers: { transcript: published("transcript"), chatScope: published("chatScope") },
   });
 
 const sources = (): Experience =>

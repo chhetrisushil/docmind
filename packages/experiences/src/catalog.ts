@@ -1,4 +1,10 @@
-import { type KindContract, type SemanticCatalog, defineSemanticCatalog } from "@loom-ui/core";
+import {
+  CHAT_TYPE_VERSION,
+  type KindContract,
+  type SemanticCatalog,
+  defineSemanticCatalog,
+  isChatFamilyKind,
+} from "@loom-ui/core";
 
 /** The surfaces DocMind compiles for. Adding one means adding a key to every entry below, nothing else. */
 export const SURFACES = ["web", "terminal"] as const;
@@ -16,7 +22,11 @@ export const KINDS = {
     props: ["label", "placeholder", "multiline", "maxChars", "submitLabel"],
     binding: "none",
   },
-  SelectInput: { kind: "SelectInput", props: ["label", "options", "placeholder"], binding: "none" },
+  SelectInput: {
+    kind: "SelectInput",
+    props: ["label", "options", "placeholder", "size"],
+    binding: "optional",
+  },
 } as const satisfies Record<string, KindContract>;
 export type KindName = keyof typeof KINDS;
 
@@ -41,11 +51,15 @@ export const ENTRY_KINDS = {
 } as const satisfies Record<string, KindName>;
 export type EntryName = keyof typeof ENTRY_KINDS;
 
+/** The version an entry is authored and declared at: loom-ui's chat-family kinds carry `CHAT_TYPE_VERSION`, the rest 1.0.0. The catalogue lookup matches it exactly. */
+export const entryVersion = (name: EntryName): string =>
+  isChatFamilyKind(ENTRY_KINDS[name]) ? CHAT_TYPE_VERSION : "1.0.0";
+
 export const DOCMIND_CATALOG: SemanticCatalog = defineSemanticCatalog({
   id: "docmind.v1",
   entries: Object.entries(ENTRY_KINDS).map(([name, kind]) => ({
     name,
-    version: "1.0.0",
+    version: entryVersion(name as EntryName),
     props: [...KINDS[kind].props],
     ...(kind === "Note" && { textProps: ["text"] }),
     binding: KINDS[kind].binding,

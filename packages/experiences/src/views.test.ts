@@ -1,5 +1,6 @@
+import { CHAT_TYPE_VERSION, chatCatalogEntries } from "@loom-ui/core";
 import { describe, expect, it } from "vitest";
-import { SURFACES } from "./catalog";
+import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
 import { EXPERIENCES } from "./views";
 
@@ -83,7 +84,7 @@ describe("the experiences", () => {
         "doc-words:P1",
       ]);
       expect(handlesOf("sessions")).toEqual(["chats:P0"]);
-      expect(handlesOf("chat")).toEqual(["transcript:P2"]);
+      expect(handlesOf("chat")).toEqual(["chatScope:P2", "transcript:P2"]);
       expect(handlesOf("sources")).toEqual(["sources:P2"]);
     },
   );
@@ -120,5 +121,51 @@ describe("the experiences", () => {
     expect(JSON.stringify(views.payload("library-empty", "web").blueprint)).toContain(
       "No documents yet",
     );
+  });
+
+  describe("the chat's scope control", () => {
+    type N = {
+      id: string;
+      type: string;
+      typeVersion: string;
+      props: Record<string, unknown>;
+      binding?: { handle: string; priority: string };
+      span: number;
+      order: string;
+    };
+    const nodes = () => (EXPERIENCES.chat.root as unknown as { children: N[] }).children;
+    const scope = () => nodes().find((n) => n.id === "scope") as N;
+
+    it("is bound to the chatScope handle and sized compact, with no static value", () => {
+      expect(scope().binding).toEqual({ handle: "chatScope", priority: "P2" });
+      expect(scope().props.size).toBe("compact");
+      expect(scope().props).not.toHaveProperty("value");
+      expect(scope().props).not.toHaveProperty("defaultValue");
+      expect(Object.keys(EXPERIENCES.chat.providers).sort()).toEqual(["chatScope", "transcript"]);
+    });
+    it("puts the scope between the transcript and the composer, the composer after it", () => {
+      expect(nodes().map((n) => n.id)).toEqual(["transcript", "scope", "composer"]);
+      expect(nodes().map((n) => n.order)).toEqual(["a", "b", "c"]);
+    });
+    it("authors every chat-family node at the version loom-ui's catalogue carries", () => {
+      for (const n of nodes()) expect(n.typeVersion, n.id).toBe(CHAT_TYPE_VERSION);
+      const lib = (EXPERIENCES.library.root as unknown as { children: N[] }).children;
+      expect(lib.find((n) => n.id === "filter")?.typeVersion).toBe(CHAT_TYPE_VERSION);
+      expect(lib.find((n) => n.id === "total")?.typeVersion).toBe("1.0.0");
+    });
+    it("declares each chat-family entry exactly as loom-ui's own chat catalogue does (version, props, binding)", () => {
+      const theirs = new Map(chatCatalogEntries().map((e) => [e.name, e]));
+      let seen = 0;
+      for (const e of DOCMIND_CATALOG.entries) {
+        const kind = (e.surfaces?.web as { kind: string }).kind;
+        const t = theirs.get(kind);
+        if (!t) continue;
+        seen++;
+        expect(e.version, e.name).toBe(t.version);
+        expect(e.binding, e.name).toBe(t.binding);
+        expect(e.props, e.name).toEqual(t.props);
+      }
+      expect(seen).toBeGreaterThanOrEqual(5);
+    });
   });
 });
