@@ -1,19 +1,12 @@
-import { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
+import type { LlmProvider } from "@loom/llm";
 import type { ChatSettings } from "../../chats/settings";
+import { createRoleProvider } from "../../llm/factory";
+import { loadLlmRoles } from "../../llm/roles";
 
-/** The small model that names chats: one short, non-streamed call, no thinking, no observer. Absent without a key. */
+/** The small model that names chats: one short, non-streamed call, no thinking, no observer. Absent when the role is off. */
 export function createTitleLlm(
   env: NodeJS.ProcessEnv,
-  settings: ChatSettings,
-): AnthropicMessagesProvider | undefined {
-  const apiKey = env.ANTHROPIC_API_KEY?.trim() || undefined;
-  if (!apiKey) return undefined;
-  const baseUrl = env.ANTHROPIC_BASE_URL?.trim() || undefined;
-  return new AnthropicMessagesProvider({
-    apiKey,
-    model: settings.titleModel,
-    maxTokens: 256,
-    timeoutMs: 30_000,
-    ...(baseUrl && { baseUrl }),
-  });
+  _settings: ChatSettings,
+): LlmProvider | undefined {
+  return createRoleProvider("title", loadLlmRoles(env), env, { maxTokens: 256, timeoutMs: 30_000 });
 }

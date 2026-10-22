@@ -116,7 +116,7 @@ export async function seedUser(
   email: string,
 ): Promise<Seeded> {
   const claude = st.claude;
-  if (!claude) throw new Error("the stack has no fake Claude");
+  if (!claude) throw new Error("the stack has no fake LLM provider");
   const [inDoc, inFile, inAsk, inAnswer, inTitle] = [
     `sentinel-doc-${tag()}`,
     `sentinel-file-${tag()}`,
