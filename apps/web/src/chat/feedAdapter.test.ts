@@ -62,6 +62,21 @@ describe("entryIdOf / wireOfMessage", () => {
     });
     expect("reason" in wireOfMessage(msg(2, "assistant", 1))).toBe(false);
   });
+  it("hands loom-ui a failed reply's reason 1:1, each token has its own sentence", () => {
+    const wire = (failureReason?: ChatMessageDto["failureReason"]) =>
+      wireOfMessage(msg(2, "assistant", 1, { status: "failed", failureReason }));
+    for (const r of [
+      "model-error",
+      "denied",
+      "rate-limited",
+      "quota",
+      "tool-error",
+      "turn-failed",
+      "cancelled",
+    ] as const)
+      expect(wire(r)).toMatchObject({ reason: r });
+    expect(wire(undefined)).toMatchObject({ reason: "model-error" });
+  });
   it("lists the cited passage ids once each as the wire's refs, and none when nothing is cited", () => {
     const c = {
       passageId: PASSAGE,

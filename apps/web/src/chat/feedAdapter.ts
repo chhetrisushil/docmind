@@ -1,4 +1,5 @@
 import type {
+  ChatFailureReason,
   ChatMessageDto,
   ChatOutcome,
   ChatReasoningDto,
@@ -31,11 +32,23 @@ const REASON: Record<ChatOutcome, string> = {
   max_iterations: "max-iterations",
 };
 
+/** loom-ui has a sentence for each of Loom's failure reasons, so the token is the reason itself. */
+const FAILURE_TOKEN: Record<ChatFailureReason, string> = {
+  "model-error": "model-error",
+  denied: "denied",
+  "rate-limited": "rate-limited",
+  quota: "quota",
+  "tool-error": "tool-error",
+  "turn-failed": "turn-failed",
+  cancelled: "cancelled",
+};
+
 /** The shape `chatEntryFromWire` reads. The server's `createdAt` (ISO) becomes `at` (epoch ms); the ordinal `id` becomes `ord`. */
 export function wireOfMessage(m: ChatMessageDto): Record<string, unknown> {
   const reason =
     m.status === "failed"
-      ? "model-error"
+      ? // A newer server may send a reason this build does not know: the generic sentence.
+        (FAILURE_TOKEN[m.failureReason ?? "model-error"] ?? "model-error")
       : m.status === "rejected"
         ? "rejected"
         : m.outcome
