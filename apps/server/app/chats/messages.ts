@@ -1,5 +1,5 @@
 import type { Identity } from "@docmind/auth";
-import type { ChatMessageDto } from "@docmind/contracts";
+import { ChatFailureReason, type ChatMessageDto } from "@docmind/contracts";
 import type { Conversations, HistoryEntry } from "@loom/conversation";
 import type { PrincipalChain } from "@loom/effect-runtime";
 import { citeReply, documentTitles } from "./citations";
@@ -53,6 +53,13 @@ export async function readHistoryPage(
 
 const statusOf = (s: HistoryEntry["status"]): ChatMessageDto["status"] =>
   s === "restricted" ? "rejected" : s;
+
+const FAILURE_REASONS: ReadonlySet<string> = new Set(ChatFailureReason.options);
+/** Loom's fixed reason for a failed turn; missing or any other value is `model-error`. Only the enum value leaves. */
+const failureReasonOf = (reason: string | undefined): ChatFailureReason =>
+  reason !== undefined && FAILURE_REASONS.has(reason)
+    ? (reason as ChatFailureReason)
+    : "model-error";
 
 /**
  * Chat messages for history entries (oldest first): each reply gets the citations, reasoning, steps and outcome of
@@ -124,6 +131,7 @@ export async function toMessageDtos(
       reasoning: reasoning.get(e.cursor) ?? null,
       steps,
       outcome,
+      ...(e.status === "failed" && { failureReason: failureReasonOf(e.reason) }),
     };
   });
 }
