@@ -23,7 +23,7 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M4        | Chat and history: tools, agent, citations      | merged                         |
 | M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | merged                 |
 | M6        | Web UI (=apps/web=, =packages/experiences=)    | merged                         |
-| LLM       | Pluggable LLM providers (Ollama, Gemini, Claude per role), see [[file:docs/operations/llm-providers.md][the runbook]] | in progress |
+| LLM       | Pluggable LLM providers (Ollama, Gemini, Claude per role), see [[file:docs/operations/llm-providers.md][the runbook]] | merged |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
 The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
