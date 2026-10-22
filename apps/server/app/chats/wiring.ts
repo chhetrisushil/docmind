@@ -98,6 +98,7 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
     documents: c.documents,
   });
   if (o.llm) {
+    // Ollama reports no usage or cache telemetry, so on Ollama the observer receives none.
     o.llm.observer.current = chatObserver({ items: c.items });
     effects[CHAT_MODEL_TOOL_ID] = chatModelEffect(
       createAgentModelEffect(hub.wrapProvider(o.llm.provider), {

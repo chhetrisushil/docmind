@@ -109,13 +109,13 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
     ]);
   });
 
-  it("answers 503 chat_unavailable without a Claude key, and sends nothing", async () => {
+  it("answers 503 chat_unavailable without a chat provider, and sends nothing", async () => {
     const chatId = await seedChat(noKey, ALICE);
     const firedBefore = fired.length;
     const res = await noKey.req("alice", "POST", `/api/chats/${chatId}/messages`, { text: "hi" });
-    expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+    expect([res.status, await res.json()]).toEqual([
       503,
-      "chat_unavailable",
+      { error: { code: "chat_unavailable", message: "Chat is not available on this server." } },
     ]);
     expect(noKey.fake.sent).toEqual([]);
     expect(fired).toHaveLength(firedBefore);

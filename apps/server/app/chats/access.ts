@@ -23,7 +23,7 @@ export const notFound = (res: Parameters<typeof sendError>[0]) =>
   sendError(res, 404, "not_found", "chat not found");
 
 export const unavailable = (res: Parameters<typeof sendError>[0]) =>
-  sendError(res, 503, "chat_unavailable", "Chat needs a Claude API key on the server.");
+  sendError(res, 503, "chat_unavailable", "Chat is not available on this server.");
 
 /**
  * The caller's live chat for the `:id` param, or null for anything else (malformed, unknown, foreign,

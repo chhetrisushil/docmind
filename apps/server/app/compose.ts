@@ -95,7 +95,7 @@ export interface ComposeOptions {
   vectors?: ChunkVectorStore & { verify?(tenantId: string): Promise<void> };
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
-  /** M4 chat: the settings, the Claude provider (absent without a key) and the timer store. Absent: no chat (the CLI, most tests). */
+  /** M4 chat: the settings, the chat LLM provider (absent when chat is off) and the timer store. Absent: no chat (the CLI, most tests). */
   chat?: { settings: ChatSettings; llm?: ChatLlm; titleLlm?: LlmProvider; timers: TimerStore };
 }
 

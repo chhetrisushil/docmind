@@ -38,7 +38,7 @@ export interface ChatRouteDeps {
   pool: Pool;
   authenticator: Authenticator;
   fields: FieldCrypto;
-  /** `chat.available` is false without ANTHROPIC_API_KEY: create and send answer 503 (D12); everything else works. */
+  /** `chat.available` is false without a configured chat provider: create and send answer 503 (D12); everything else works. */
   chat: ChatWiring;
   /** The decrypting event store the stream follows (`followConversation`). */
   eventStore: EventStore;
