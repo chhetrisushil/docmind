@@ -10,6 +10,9 @@
   },
   "scripts": {
     "build": "turbo run build",
+    "start": "tsx --env-file=.env apps/server/app/main.ts",
+    "serve": "pnpm build && pnpm db:migrate && pnpm start",
+    "db:migrate": "tsx --env-file=.env apps/server/app/db/migrate.ts",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
     "typecheck:tests": "turbo run typecheck:tests",
@@ -18,6 +21,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
+    "tsx": "4.23.15",
     "turbo": "^2.3.3",
     "typescript": "^5.6.3"
   },
