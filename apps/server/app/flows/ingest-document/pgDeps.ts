@@ -3,6 +3,7 @@ import type { KeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import { EntityKeys } from "../../crypto/entityKeys";
 import type { FieldCrypto } from "../../crypto/fields";
+import { type ProviderName, pdfMaxBytes } from "../../llm/roles";
 import type { IngestDeps } from "./deps";
 import { IngestConfigError } from "./errors";
 import { type IngestWiring, parseStepTimeoutMs } from "./limits";
@@ -64,7 +65,16 @@ export function pgIngestDeps({
     shutdown: wiring.shutdown.signal,
     gate: wiring.gate,
     parseStepTimeoutMs: parseStepTimeoutMs(wiring.runnerLimits, wiring.llm.config.visionTimeoutMs),
-    ...(wiring.llm.vision && { vision: new VisionReader(wiring.llm.vision) }),
+    ...((wiring.llm.vision || wiring.llm.visionPdf) && {
+      vision: new VisionReader({
+        ...(wiring.llm.vision && { image: wiring.llm.vision }),
+        ...(wiring.llm.visionPdf && { pdf: wiring.llm.visionPdf }),
+        ...(wiring.llm.visionPdf && {
+          // visionPdf is set only when its provider is not "off", so the cast holds.
+          pdfMaxBytes: pdfMaxBytes(wiring.llm.roles.roles.visionPdf.provider as ProviderName),
+        }),
+      }),
+    }),
     ...(wiring.sleep && { sleep: wiring.sleep }),
   };
 }

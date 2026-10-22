@@ -56,6 +56,7 @@ describe.skipIf(!PG_URL)(
       fake = await startFakeOllama({ dimensions: 64, model: "fake-embed" });
       const wiring = createIngestWiring({
         DOCMIND_OLLAMA_URL: fake.url,
+        DOCMIND_LLM_PROVIDER: "off",
         DOCMIND_EMBED_MODEL: "fake-embed",
         DOCMIND_EMBED_DIMENSIONS: "64",
       });

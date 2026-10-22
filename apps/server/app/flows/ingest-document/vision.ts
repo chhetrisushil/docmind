@@ -45,18 +45,33 @@ const PdfAnswer = z.array(z.object({ page: z.number().int().min(1), text: z.stri
 const ImageAnswer = z.object({ text: z.string(), description: z.string() });
 
 /**
- * Reads images and textless PDF pages with Claude, in the server process: the bytes
+ * Reads images and textless PDF pages with the configured providers, in the server process: the bytes
  * go to the API as an untrusted part and are never decoded here (M3b D8). The answer is document text:
  * the caller seals it like any parsed text and never logs it.
  */
 export class VisionReader {
-  constructor(private readonly provider: LlmProvider) {}
+  private readonly image: LlmProvider | undefined;
+  private readonly pdf: LlmProvider | undefined;
+  readonly pdfMaxBytes: number;
+  constructor(o: { image?: LlmProvider; pdf?: LlmProvider; pdfMaxBytes?: number }) {
+    this.image = o.image;
+    this.pdf = o.pdf;
+    this.pdfMaxBytes = o.pdfMaxBytes ?? VISION_PDF_MAX_BYTES;
+    if (this.pdf && !(this.pdfMaxBytes > 0)) throw new RangeError("pdfMaxBytes must be positive");
+  }
+  get canReadImages(): boolean {
+    return this.image !== undefined;
+  }
+  get canReadPdf(): boolean {
+    return this.pdf !== undefined;
+  }
 
   async readImage(
     bytes: Uint8Array,
     mime: string,
     signal?: AbortSignal,
   ): Promise<{ text: string; description: string }> {
+    if (!this.image) throw new PermanentIngestError("vision_unavailable");
     // Defense in depth: the parse step checks first, so it never reaches this.
     if (base64Length(bytes.length) > VISION_MAX_BYTES)
       throw new RangeError("image exceeds the size limit");
@@ -84,7 +99,7 @@ export class VisionReader {
       },
       GUARD,
     );
-    const res = await this.provider.complete({ ...request, ...(signal && { signal }) });
+    const res = await this.image.complete({ ...request, ...(signal && { signal }) });
     // A transcription cut off by max_tokens will be cut off again: permanent, not 6 retries ending `internal`.
     if (res.stopReason === "max_tokens") throw new PermanentIngestError("too_large");
     const out = jsonAnswer(res.content, ImageAnswer);
@@ -100,8 +115,9 @@ export class VisionReader {
     pages: number[],
     signal?: AbortSignal,
   ): Promise<Map<number, string>> {
+    if (!this.pdf) throw new PermanentIngestError("vision_unavailable");
     // Defense in depth: the parse step checks first, so it never reaches this.
-    if (bytes.length > VISION_PDF_MAX_BYTES) throw new RangeError("pdf exceeds the size limit");
+    if (bytes.length > this.pdfMaxBytes) throw new RangeError("pdf exceeds the size limit");
     const request = guardRequest(
       {
         system: `${PDF_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
@@ -126,8 +142,10 @@ export class VisionReader {
       },
       GUARD,
     );
-    const res = await this.provider.complete({ ...request, ...(signal && { signal }) });
+    const res = await this.pdf.complete({ ...request, ...(signal && { signal }) });
     if (res.stopReason === "max_tokens") throw new PermanentIngestError("too_large");
+    // Nothing at all (a safety or recitation stop, no candidates) will come back empty again: no retries.
+    if (res.content.trim() === "") throw new PermanentIngestError("unsupported_content");
     const asked = new Set(pages);
     const out = new Map<number, string>();
     for (const { page, text } of jsonAnswer(res.content, PdfAnswer)) {
