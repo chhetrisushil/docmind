@@ -1,5 +1,6 @@
 import { CHAT_TYPE_VERSION, chatCatalogEntries } from "@loom-ui/core";
 import { describe, expect, it } from "vitest";
+import { SOURCES_VIEW } from "./a2ui";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
 import { EXPERIENCES } from "./views";
@@ -11,6 +12,17 @@ const handlesOf = (name: (typeof NAMES)[number]) =>
     .payload(name, "web")
     .inventory.handles.map((h) => `${h.handle}:${h.priority}`)
     .sort();
+
+describe("the sources view", () => {
+  it("marks the selected item and keys it by passage, and still builds into a sealed payload", () => {
+    const item = SOURCES_VIEW.nodes.find((n) => n.id === "s-item") as Record<string, unknown>;
+    expect(item.selected).toEqual({ path: "/selected" });
+    expect(item.selectedKey).toEqual({ path: "/passageId" });
+    expect(views.payload("sources", "web").inventory.handles.map((h) => h.handle)).toEqual([
+      "sources",
+    ]);
+  });
+});
 
 describe("the experiences", () => {
   it("are six, sealed and content-addressed, and the same bytes every boot", () => {

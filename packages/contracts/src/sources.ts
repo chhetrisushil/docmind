@@ -10,6 +10,8 @@ export interface SourcesData {
     snippet: string;
     passageId: string;
     documentId: string;
+    /** True for the one citation the reader picked; the view highlights it. Order never changes. */
+    selected: boolean;
     index: number;
   }[];
 }
@@ -21,16 +23,15 @@ export interface SourcesData {
 export function sourcesValue(citations: readonly Citation[], selected?: string): SourcesData {
   if (citations.length === 0)
     return { note: "Sources appear when the answer is complete.", sources: [] };
-  const pick = selected === undefined ? undefined : citations.find((c) => c.passageId === selected);
-  const ordered = pick ? [pick, ...citations.filter((c) => c !== pick)] : [...citations];
   return {
     note: `${citations.length} ${citations.length === 1 ? "source" : "sources"} for this answer.`,
-    sources: ordered.map((c, index) => ({
+    sources: citations.map((c, index) => ({
       title: c.docTitle === "" ? "Untitled document" : c.docTitle,
-      where: `${c === pick ? "Selected - " : ""}${locatorText(c.locator)}`,
+      where: locatorText(c.locator),
       snippet: c.snippet,
       passageId: c.passageId,
       documentId: c.documentId,
+      selected: selected !== undefined && c.passageId === selected,
       index,
     })),
   };

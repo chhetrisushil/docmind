@@ -174,7 +174,7 @@ describe("M6 acceptance", () => {
       await wait(() => expect(text(find(page.app, "aside#sources"))).toContain(SENTINEL.title));
       find(page.app, "lu-chat button.ref").click();
       await wait(() =>
-        expect(text(find(page.app, "aside#sources"))).toContain("Selected - Page 1"),
+        expect(deepAll(find(page.app, "aside#sources"), "[aria-current=true]")).toHaveLength(1),
       );
       expect(unnamedControls(page.app)).toEqual([]);
 

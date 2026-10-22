@@ -27,15 +27,24 @@ describe("sourcesValue", () => {
     expect(v.sources.map((s) => s.index)).toEqual([0, 1]);
     expect(sourcesValue([c(1)]).note).toBe("1 source for this answer.");
   });
-  it("puts the selected passage first and marks it; the index follows the published order", () => {
-    const v = sourcesValue([c(1), c(2), c(3)], c(3).passageId);
-    expect(v.sources.map((s) => s.passageId)).toEqual([
-      c(3).passageId,
-      c(1).passageId,
-      c(2).passageId,
-    ]);
-    expect(v.sources[0]?.where).toBe("Selected - Page 3");
-    expect(v.sources.map((s) => s.index)).toEqual([0, 1, 2]);
+  it("keeps the citations' order whichever is selected, and marks exactly that one", () => {
+    const all = [c(1), c(2), c(3)];
+    for (const pick of all) {
+      const v = sourcesValue(all, pick.passageId);
+      expect(v.sources.map((s) => s.passageId)).toEqual(all.map((x) => x.passageId));
+      expect(v.sources.map((s) => s.index)).toEqual([0, 1, 2]);
+      expect(v.sources.filter((s) => s.selected)).toHaveLength(1);
+      expect(v.sources.find((s) => s.selected)?.passageId).toBe(pick.passageId);
+    }
+  });
+  it("marks none without a selection or with an unknown one, and never prefixes the place", () => {
+    for (const sel of [undefined, "00000000-0000-4000-8000-0000000000ff"]) {
+      const v = sourcesValue([c(1), c(2)], sel);
+      expect(v.sources.map((s) => s.selected)).toEqual([false, false]);
+    }
+    const v = sourcesValue([c(1), c(2)], c(2).passageId);
+    expect(v.sources.map((s) => s.where)).toEqual(["Page 1", "Page 2"]);
+    expect(JSON.stringify(v)).not.toContain("Selected - ");
   });
   it("names every kind of place, and a place it does not know", () => {
     const where = (locator: Citation["locator"]) =>
