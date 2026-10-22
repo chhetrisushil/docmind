@@ -122,10 +122,7 @@ const composerHost = (p: Element) => viewOf(p)?.shadowRoot?.querySelector("lu-te
 const composer = (p: Element) => composerHost(p)?.shadowRoot as ShadowRoot | undefined;
 const phase = (p: Element) => composer(p)?.querySelector("form")?.getAttribute("data-phase");
 const selectOf = (p: Element) =>
-  viewOf(p)?.shadowRoot?.querySelector("lu-select-input")?.shadowRoot?.querySelector("select") as
-    | HTMLSelectElement
-    | null
-    | undefined;
+  p.shadowRoot?.querySelector("select#scope") as HTMLSelectElement | null | undefined;
 function typeAndSend(p: Element, text: string) {
   const root = composer(p) as ShadowRoot;
   const input = root.querySelector("textarea,input") as HTMLTextAreaElement;
@@ -332,20 +329,88 @@ describe("dm-chat-page: a chat", () => {
     select.value = "all";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     await vi.waitFor(() => expect(t.api.patchChat).toHaveBeenCalledWith(CHAT, { scope: "all" }));
-    await vi.waitFor(() =>
-      expect(
-        viewOf(page)
-          ?.shadowRoot?.querySelector("lu-select-input")
-          ?.shadowRoot?.querySelector("[data-phase]")
-          ?.getAttribute("data-phase"),
-      ).toBe("sent"),
-    );
     const again = selectOf(page) as HTMLSelectElement;
     again.value = "started";
     again.dispatchEvent(new Event("change", { bubbles: true }));
     await vi.waitFor(() =>
       expect(t.api.patchChat).toHaveBeenLastCalledWith(CHAT, { scope: { documentIds: [DOC] } }),
     );
+  });
+
+  it("shows the chat's persisted scope in the select, and keeps the choice across turns", async () => {
+    let scope: unknown = { documentIds: [DOC] };
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title: null,
+        scope,
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+      patchChat: vi.fn(async (_id: string, body: { scope: unknown }) => {
+        scope = body.scope;
+        return {};
+      }),
+    });
+    const page = await t.mount();
+    await loaded(page);
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+    const select = selectOf(page) as HTMLSelectElement;
+    select.value = "all";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(t.api.patchChat).toHaveBeenCalledWith(CHAT, { scope: "all" }));
+    typeAndSend(page, "next question");
+    await vi.waitFor(() => expect(t.api.sendMessage).toHaveBeenCalled());
+    await vi.waitFor(() => expect(phase(page)).toBe("sent"));
+    expect(selectOf(page)?.value).toBe("all");
+  });
+
+  it("shows 'all' for a chat searching every document, and never patches the scope by itself", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title: null,
+        scope: "all",
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+    });
+    const page = await t.mount();
+    await loaded(page);
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("all"));
+    expect(t.api.patchChat).not.toHaveBeenCalled();
+  });
+
+  it("puts the choice back when the server refuses it", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      patchChat: vi.fn(async () => {
+        throw new ApiError(500, "boom");
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+    const select = selectOf(page) as HTMLSelectElement;
+    select.value = "all";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(t.services.toasts.get().map((x) => x.text)).toContain(
+        "Could not change where this chat searches.",
+      ),
+    );
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+  });
+
+  it("draws the scope control compactly under the transcript, sized to its content", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(selectOf(page)).toBeInstanceOf(HTMLSelectElement));
+    const bar = page.shadowRoot?.querySelector("[data-scope]") as HTMLElement;
+    expect(bar.previousElementSibling?.localName).toBe("dm-view");
+    expect(viewOf(page)?.contains(bar)).toBe(false);
+    expect(getComputedStyle(selectOf(page) as HTMLSelectElement).width).not.toBe("100%");
+    expect(bar.querySelector("label")?.textContent).toBe("Search in");
   });
 
   it("says so when the chat cannot be loaded or does not exist", async () => {

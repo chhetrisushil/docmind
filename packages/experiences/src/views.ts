@@ -184,6 +184,7 @@ const sessions = (): Experience =>
     },
   });
 
+/** The chat's "Search in" control is not here: SelectInput cannot show a value (lu-inputs has no `value` prop), so the web page draws it and pins it to the chat's persisted scope. */
 const chat = (): Experience =>
   build({
     id: "docmind.chat",
@@ -196,17 +197,6 @@ const chat = (): Experience =>
         priority: "P2",
         title: "Conversation",
         props: { emptyText: "Ask a question about your documents." },
-      }),
-      widget({
-        id: "scope",
-        type: "ScopeSelect",
-        props: {
-          label: "Search in",
-          options: [
-            { value: "all", label: "All documents" },
-            { value: "started", label: "The documents this chat started with" },
-          ],
-        },
       }),
       widget({
         id: "composer",

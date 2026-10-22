@@ -34,7 +34,11 @@ const PROBLEM_TEXT: Record<ChatProblem, string> = {
 };
 
 export class DmChatPage extends LitElement {
-  static properties = { chatTitle: { state: true }, queued: { state: true } };
+  static properties = {
+    chatTitle: { state: true },
+    queued: { state: true },
+    scopeValue: { state: true },
+  };
   static styles = [
     baseStyles,
     css`
@@ -63,6 +67,10 @@ export class DmChatPage extends LitElement {
   declare chatTitle: string | undefined;
   /** The first message is waiting after a failed send: Retry or Discard. */
   declare queued: boolean;
+  /** Where the chat searches, as the server holds it; changed only by the user's choice (or the server's answer). */
+  declare scopeValue: "all" | "started" | undefined;
+  /** A choice is on its way to the server: a re-read of the chat must not undo it. */
+  private scopeBusy = false;
   controller: ChatController | undefined;
   private session: ViewSession | undefined;
   private panel: ViewSession | undefined;
@@ -82,6 +90,7 @@ export class DmChatPage extends LitElement {
     super();
     this.chatTitle = undefined;
     this.queued = false;
+    this.scopeValue = undefined;
   }
   private get chatId(): string | undefined {
     const r = this.ctx.services?.router.get();
@@ -203,6 +212,7 @@ export class DmChatPage extends LitElement {
     this.release();
     this.bound = id;
     this.startedIds = undefined;
+    this.scopeValue = undefined;
     this.chatTitle = undefined;
     this.queued = false;
     this.creating = false;
@@ -233,6 +243,7 @@ export class DmChatPage extends LitElement {
         if (this.controller !== controller) return;
         this.chatTitle = c.title ?? undefined;
         if (typeof c.scope === "object") this.startedIds = [...c.scope.documentIds];
+        if (!this.scopeBusy) this.scopeValue = typeof c.scope === "object" ? "started" : "all";
       },
       () => {},
     );
@@ -408,13 +419,30 @@ export class DmChatPage extends LitElement {
       }
       scope = { documentIds: this.startedIds };
     }
+    const before = this.scopeValue;
+    this.scopeValue = value;
+    this.scopeBusy = true;
     try {
       await svc.api.patchChat(id, { scope });
       return { ok: true };
     } catch {
+      if (this.chatId === id) this.scopeValue = before;
       this.toast("Could not change where this chat searches.");
       return { ok: false };
+    } finally {
+      this.scopeBusy = false;
     }
+  }
+  private onScope(e: Event): void {
+    const el = e.target as HTMLSelectElement;
+    const value = el.value;
+    if (value !== "all" && value !== "started") {
+      el.value = this.scopeValue ?? "all";
+      return;
+    }
+    void this.scope(value).then((r) => {
+      if (!r.ok) el.value = this.scopeValue ?? "all";
+    });
   }
 
   private act: ActionHandler = async (a) => {
@@ -484,7 +512,9 @@ export class DmChatPage extends LitElement {
         ${st?.olderFailed ? html`<div data-older-failed role="alert" class="muted">Could not load earlier messages.<button class="btn ghost" data-older-retry @click=${() => void this.controller?.loadOlder()}>Try again</button></div>` : null}
       </div>
       <div class="layout">
-        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
+        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}
+          ${this.chatId && this.scopeValue ? html`<div class="scope" data-scope><label for="scope">Search in</label><select id="scope" .value=${this.scopeValue} @change=${(e: Event) => this.onScope(e)}><option value="all">All documents</option><option value="started" ?disabled=${!this.startedIds}>The documents this chat started with</option></select></div>` : null}
+        </div>
         ${
           st?.sourcesOpen
             ? html`${this.narrow ? html`<div data-backdrop @click=${() => void this.closePanel()}></div>` : null}<aside id="sources" aria-label="Sources" aria-modal=${ifDefined(this.narrow ? "true" : undefined)} @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>
