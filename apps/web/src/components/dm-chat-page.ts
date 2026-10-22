@@ -2,6 +2,7 @@ import { type ChatScope, intentOf, sourcesValue } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
+import { type ScopeDoc, listRecent, lookUp, pickerValue, scopeFor } from "../chat/scopePicker";
 import {
   ChatController,
   type ChatProblem,
@@ -73,9 +74,16 @@ export class DmChatPage extends LitElement {
   private bound: string | undefined | null = null;
   private off: (() => void) | undefined;
   private watch: MutationObserver | undefined;
-  private startedIds: string[] | undefined;
-  /** The scope the server holds for this chat: only ever "all" or "started", published as the select's current choice. */
-  private scopeValue: "all" | "started" | undefined;
+  /** The scope this chat searches: the server's for an existing chat, the page's own for a new one (sent with its first message). */
+  private scopeNow: ChatScope = "all";
+  /** What the picker offers, once loaded; nothing is published before it (a chip would be mislabelled). */
+  private offer:
+    | { docs: ScopeDoc[]; capped: boolean; found: Map<string, ScopeDoc>; removed: Set<string> }
+    | undefined;
+  /** The option ids last published: all a SELECT_MANY may name. */
+  private offered: string[] = [];
+  /** Bumped on every bind and reload: an older load's answer is dropped. */
+  private loads = 0;
   /** A first send is creating its chat: a second activation waits for nothing and starts nothing. */
   private creating = false;
   private readonly ctx = new ServicesController(this, (s) => [s.router]);
@@ -117,6 +125,7 @@ export class DmChatPage extends LitElement {
     super.connectedCallback();
     document.addEventListener("keydown", this.onDocKey);
     document.addEventListener(DIALOG_CLOSED, this.onDialogClosed);
+    window.addEventListener("focus", this.onFocus);
     if (typeof matchMedia === "function") {
       this.wide = matchMedia("(min-width: 1100px)");
       this.wide.addEventListener("change", this.onResize);
@@ -132,6 +141,7 @@ export class DmChatPage extends LitElement {
   disconnectedCallback(): void {
     document.removeEventListener("keydown", this.onDocKey);
     document.removeEventListener(DIALOG_CLOSED, this.onDialogClosed);
+    window.removeEventListener("focus", this.onFocus);
     this.wide?.removeEventListener("change", this.onResize);
     this.wide = undefined;
     this.releaseOnDisconnect();
@@ -204,13 +214,18 @@ export class DmChatPage extends LitElement {
     if (!svc) return;
     this.release();
     this.bound = id;
-    this.startedIds = undefined;
-    this.scopeValue = undefined;
+    this.scopeNow = "all";
+    this.offer = undefined;
+    this.offered = [];
+    this.loads++;
     this.chatTitle = undefined;
     this.queued = false;
     this.creating = false;
     if (svc.outbox.get()?.chatId !== id) svc.outbox.set(undefined); // never sent into a chat other than its own
-    if (id === undefined) return void this.requestUpdate();
+    if (id === undefined) {
+      void this.loadOffer();
+      return void this.requestUpdate();
+    }
     const controller = new ChatController({
       api: svc.api,
       auth: svc.auth,
@@ -229,19 +244,40 @@ export class DmChatPage extends LitElement {
     this.requestUpdate();
   }
 
-  /** The chat's title and the documents it started with, as served. */
+  /** The chat's title and scope, as served. */
   private readMeta(controller: ChatController, id: string): void {
     void this.ctx.services?.api.getChat(id).then(
       (c) => {
         if (this.controller !== controller) return;
         this.chatTitle = c.title ?? undefined;
-        if (typeof c.scope === "object") this.startedIds = [...c.scope.documentIds];
-        this.scopeValue = typeof c.scope === "object" ? "started" : "all";
-        this.publishScope();
+        this.scopeNow = c.scope;
+        void this.loadOffer();
       },
       () => {},
     );
   }
+
+  /** The recent documents, plus a lookup for any of the scope's that the list does not hold. */
+  private async loadOffer(): Promise<void> {
+    const api = this.ctx.services?.api;
+    if (!api) return;
+    const n = ++this.loads;
+    try {
+      const { docs, capped } = await listRecent(api);
+      const listed = new Set(docs.map((d) => d.id.toLowerCase()));
+      const missing =
+        this.scopeNow === "all"
+          ? []
+          : this.scopeNow.documentIds.filter((id) => !listed.has(id.toLowerCase()));
+      const { found, removed } = await lookUp(api, missing);
+      if (n !== this.loads) return;
+      this.offer = { docs, capped, found, removed };
+      this.publishScope();
+    } catch {
+      if (n === this.loads) this.toast("Could not load your documents.");
+    }
+  }
+  private onFocus = () => void this.loadOffer();
 
   private async begin(controller: ChatController, id: string): Promise<void> {
     await controller.start();
@@ -280,11 +316,12 @@ export class DmChatPage extends LitElement {
     this.queued = false;
   }
 
-  /** The select's bound value: the chat's persisted scope (a new chat searches everything). Nothing else is ever published. */
+  /** The picker's bound value: what is offered and what this chat searches. Nothing until the offer is loaded. */
   private publishScope(): void {
-    const value = this.controller === undefined ? "all" : this.scopeValue;
-    if (value === "all" || value === "started")
-      this.session?.publish("chatScope", value, "SelectInput");
+    if (this.offer === undefined) return;
+    const v = pickerValue(this.offer.docs, this.scopeNow, this.offer.found, this.offer.capped);
+    this.offered = v.options.map((o) => o.value);
+    this.session?.publish("chatScope", v, "MultiSelectInput");
   }
 
   /** The page folds the transcript itself, so it publishes it into the experience's store. */
@@ -358,6 +395,7 @@ export class DmChatPage extends LitElement {
   }
   private onReady = (e: Event) => {
     this.session = (e as CustomEvent<{ session: ViewSession }>).detail.session;
+    this.publishScope(); // the offer may have loaded before the view was ready
     this.watch?.disconnect();
     const root = (e.target as HTMLElement).shadowRoot;
     if (root) {
@@ -390,7 +428,7 @@ export class DmChatPage extends LitElement {
       if (this.creating) return { ok: false };
       this.creating = true;
       try {
-        const chat = await svc.api.createChat({ scope: "all" });
+        const chat = await svc.api.createChat({ scope: this.scopeNow });
         document.dispatchEvent(new CustomEvent("dm-chats-changed")); // the sidebar lists the new chat
         const route = svc.router.get();
         // The user left before the chat existed: the text is discarded, never sent into a chat they are not in.
@@ -409,21 +447,20 @@ export class DmChatPage extends LitElement {
     return { ok: false };
   }
 
-  private async scope(value: "all" | "started") {
+  private async scope(next: ChatScope) {
     const svc = this.ctx.services;
+    if (!svc) return { ok: false };
+    const scope =
+      next === "all" ? "all" : scopeFor(next.documentIds, this.offer?.removed ?? new Set());
     const id = this.chatId;
-    if (!svc || id === undefined) return { ok: false };
-    let scope: ChatScope = "all";
-    if (value === "started") {
-      if (!this.startedIds) {
-        this.toast("This chat was not started from specific documents.");
-        return { ok: false };
-      }
-      scope = { documentIds: this.startedIds };
+    if (id === undefined) {
+      this.scopeNow = scope; // a new chat: sent with its first message
+      this.publishScope();
+      return { ok: true };
     }
     try {
       await svc.api.patchChat(id, { scope });
-      this.scopeValue = value;
+      this.scopeNow = scope;
       this.publishScope();
       return { ok: true };
     } catch {
@@ -434,7 +471,10 @@ export class DmChatPage extends LitElement {
 
   private act: ActionHandler = async (a) => {
     // The view session has checked the action is fresh. What it names is looked up in what the chat served, never believed.
-    const intent = intentOf("chat", a, { refs: this.controller?.heldRefs() ?? new Map() });
+    const intent = intentOf("chat", a, {
+      refs: this.controller?.heldRefs() ?? new Map(),
+      list: this.offered,
+    });
     if (!intent) return { ok: false, reason: "refused" };
     switch (intent.type) {
       case "chat.send": {
