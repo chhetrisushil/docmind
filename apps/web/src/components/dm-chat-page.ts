@@ -74,6 +74,8 @@ export class DmChatPage extends LitElement {
   private off: (() => void) | undefined;
   private watch: MutationObserver | undefined;
   private startedIds: string[] | undefined;
+  /** The scope the server holds for this chat: only ever "all" or "started", published as the select's current choice. */
+  private scopeValue: "all" | "started" | undefined;
   /** A first send is creating its chat: a second activation waits for nothing and starts nothing. */
   private creating = false;
   private readonly ctx = new ServicesController(this, (s) => [s.router]);
@@ -203,6 +205,7 @@ export class DmChatPage extends LitElement {
     this.release();
     this.bound = id;
     this.startedIds = undefined;
+    this.scopeValue = undefined;
     this.chatTitle = undefined;
     this.queued = false;
     this.creating = false;
@@ -233,6 +236,8 @@ export class DmChatPage extends LitElement {
         if (this.controller !== controller) return;
         this.chatTitle = c.title ?? undefined;
         if (typeof c.scope === "object") this.startedIds = [...c.scope.documentIds];
+        this.scopeValue = typeof c.scope === "object" ? "started" : "all";
+        this.publishScope();
       },
       () => {},
     );
@@ -275,6 +280,13 @@ export class DmChatPage extends LitElement {
     this.queued = false;
   }
 
+  /** The select's bound value: the chat's persisted scope (a new chat searches everything). Nothing else is ever published. */
+  private publishScope(): void {
+    const value = this.controller === undefined ? "all" : this.scopeValue;
+    if (value === "all" || value === "started")
+      this.session?.publish("chatScope", value, "SelectInput");
+  }
+
   /** The page folds the transcript itself, so it publishes it into the experience's store. */
   private sync(): void {
     const st = this.controller?.state.get();
@@ -282,6 +294,7 @@ export class DmChatPage extends LitElement {
       this.session.publish("transcript", { entries: [] }, "Chat");
     else if (st)
       this.session?.publish("transcript", st.transcript, "Chat", { streaming: st.running });
+    this.publishScope();
     this.syncPanel(st);
     this.guardComposer();
     this.requestUpdate();
@@ -410,6 +423,8 @@ export class DmChatPage extends LitElement {
     }
     try {
       await svc.api.patchChat(id, { scope });
+      this.scopeValue = value;
+      this.publishScope();
       return { ok: true };
     } catch {
       this.toast("Could not change where this chat searches.");

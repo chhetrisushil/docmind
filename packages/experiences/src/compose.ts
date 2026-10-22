@@ -7,7 +7,7 @@ import {
   genesis,
 } from "@loom-ui/core";
 import { seal } from "@loom-ui/core/log";
-import type { EntryName } from "./catalog";
+import { type EntryName, entryVersion } from "./catalog";
 
 export type Child = SemanticNode | ContainerNode;
 
@@ -28,7 +28,7 @@ export function widget(o: {
     order: "",
     kind: "semantic",
     type: o.type,
-    typeVersion: "1.0.0",
+    typeVersion: entryVersion(o.type),
     span: o.span ?? 12,
     props: o.props ?? {},
     ...(o.title !== undefined && { label: label(`ui.${o.id}`, o.title) }),

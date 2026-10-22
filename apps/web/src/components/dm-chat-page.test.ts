@@ -121,11 +121,9 @@ const chatText = (p: Element) => chatRoot(p)?.textContent?.replace(/\s+/g, " ") 
 const composerHost = (p: Element) => viewOf(p)?.shadowRoot?.querySelector("lu-text-input");
 const composer = (p: Element) => composerHost(p)?.shadowRoot as ShadowRoot | undefined;
 const phase = (p: Element) => composer(p)?.querySelector("form")?.getAttribute("data-phase");
+const selectHost = (p: Element) => viewOf(p)?.shadowRoot?.querySelector("lu-select-input");
 const selectOf = (p: Element) =>
-  viewOf(p)?.shadowRoot?.querySelector("lu-select-input")?.shadowRoot?.querySelector("select") as
-    | HTMLSelectElement
-    | null
-    | undefined;
+  selectHost(p)?.shadowRoot?.querySelector("select") as HTMLSelectElement | null | undefined;
 function typeAndSend(p: Element, text: string) {
   const root = composer(p) as ShadowRoot;
   const input = root.querySelector("textarea,input") as HTMLTextAreaElement;
@@ -346,6 +344,108 @@ describe("dm-chat-page: a chat", () => {
     await vi.waitFor(() =>
       expect(t.api.patchChat).toHaveBeenLastCalledWith(CHAT, { scope: { documentIds: [DOC] } }),
     );
+  });
+
+  it("shows the chat's persisted scope in the select, and keeps the choice across turns", async () => {
+    let scope: unknown = { documentIds: [DOC] };
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title: null,
+        scope,
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+      patchChat: vi.fn(async (_id: string, body: { scope: unknown }) => {
+        scope = body.scope;
+        return {};
+      }),
+    });
+    const page = await t.mount();
+    await loaded(page);
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+    const select = selectOf(page) as HTMLSelectElement;
+    select.value = "all";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(t.api.patchChat).toHaveBeenCalledWith(CHAT, { scope: "all" }));
+    typeAndSend(page, "next question");
+    await vi.waitFor(() => expect(t.api.sendMessage).toHaveBeenCalled());
+    await vi.waitFor(() => expect(phase(page)).toBe("sent"));
+    expect(selectOf(page)?.value).toBe("all");
+  });
+
+  it("shows 'all' for a chat searching every document, and never patches the scope by itself", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title: null,
+        scope: "all",
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+    });
+    const page = await t.mount();
+    await loaded(page);
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("all"));
+    expect(t.api.patchChat).not.toHaveBeenCalled();
+  });
+
+  it("puts the choice back when the server refuses it", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      patchChat: vi.fn(async () => {
+        throw new ApiError(500, "boom");
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+    const select = selectOf(page) as HTMLSelectElement;
+    select.value = "all";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(t.services.toasts.get().map((x) => x.text)).toContain(
+        "Could not change where this chat searches.",
+      ),
+    );
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("started"));
+  });
+
+  it("draws the scope control compact, after the transcript and before the composer", async () => {
+    const t = setup();
+    const page = await t.mount();
+    await vi.waitFor(() => expect(selectOf(page)).toBeInstanceOf(HTMLSelectElement));
+    expect((selectHost(page) as HTMLElement).hasAttribute("compact")).toBe(true);
+    const order = Array.from(
+      viewOf(page)?.shadowRoot?.querySelectorAll("lu-chat, lu-select-input, lu-text-input") ?? [],
+    ).map((e) => e.localName);
+    expect(order.indexOf("lu-select-input")).toBeGreaterThan(order.indexOf("lu-chat"));
+    expect(page.shadowRoot?.querySelector("[data-scope]")).toBeNull(); // no web-only replacement
+  });
+
+  it("refuses 'started' for a chat with no started documents, with the toast, and the select reverts", async () => {
+    const t = setup(`/chats/${CHAT}`, {
+      getChat: vi.fn(async () => ({
+        id: CHAT,
+        title: null,
+        scope: "all",
+        createdAt: "2026-10-21T10:00:00.000Z",
+        lastMessageAt: null,
+        messageCount: 2,
+      })),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("all"));
+    const select = selectOf(page) as HTMLSelectElement;
+    select.value = "started";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(t.services.toasts.get().map((x) => x.text)).toContain(
+        "This chat was not started from specific documents.",
+      ),
+    );
+    await vi.waitFor(() => expect(selectOf(page)?.value).toBe("all"));
+    expect(t.api.patchChat).not.toHaveBeenCalled();
   });
 
   it("says so when the chat cannot be loaded or does not exist", async () => {

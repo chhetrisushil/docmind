@@ -132,6 +132,18 @@ describe("the terminal surface", () => {
     expect(out).toContain(A2UI_PLACEHOLDER);
     expect(out).not.toContain("Payment is due in 30 days.");
   });
+  it("draws the chat's scope with the current choice marked, from the published scope", async () => {
+    const h = open("chat");
+    await settled(h);
+    expect(h.split.publishValue("chatScope", "started", { kind: "SelectInput" })).toEqual({
+      ok: true,
+    });
+    const line = draw(h)
+      .split("\n")
+      .find((l) => l.includes("current"));
+    expect(line).toContain("The documents this chat started with");
+    expect(line).not.toContain("All documents");
+  });
   it("draws the chat list", async () => expect(await frame("sessions")).toContain("Invoices"));
   it("a document the reader does not return (null) is an error row on the terminal, with no content", async () => {
     const out = await frame("detail", { id: id(9) });
