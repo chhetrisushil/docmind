@@ -805,7 +805,38 @@ describe("dm-chat-page: sources", () => {
     expect(panelText(page)).toContain("Page 2");
     expect(panelText(page)).toContain("Net 30");
     (chatRoot(page)?.querySelector("button.ref") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(panelText(page)).toContain("Selected - Page 2"));
+    await vi.waitFor(() => expect(panelView(page)?.querySelector("[aria-current]")).not.toBeNull());
+  });
+  it("a clicked marker highlights its source in place, never reordering the list", async () => {
+    const second = { ...cited, passageId: OTHER, docTitle: "Annex", snippet: "Net 60" };
+    const t = setup(`/chats/${CHAT}`, {
+      listMessages: vi.fn(async () => ({
+        items: [
+          msg(1, "user", 1),
+          msg(2, "assistant", 1, {
+            text: `Due in 30 days [[${PASSAGE}]] or 60 [[${OTHER}]].`,
+            citations: [cited, second],
+          }),
+        ],
+        nextCursor: null,
+      })),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(panelText(page)).toContain("Annex"));
+    const titles = () =>
+      [...(panelView(page)?.querySelectorAll("[aria-current]") ?? [])].map((e) => e.textContent);
+    const order = () => panelText(page).match(/Contract|Annex/g);
+    const refs = [...(chatRoot(page)?.querySelectorAll("button.ref") ?? [])] as HTMLButtonElement[];
+    expect(refs).toHaveLength(2);
+    refs[1]?.click();
+    await vi.waitFor(() => expect(titles()).toHaveLength(1));
+    expect(titles()[0]).toContain("Annex");
+    expect(order()).toEqual(["Contract", "Annex"]);
+    expect(panelText(page)).not.toContain("Selected - ");
+    refs[0]?.click();
+    await vi.waitFor(() => expect(titles()[0]).toContain("Contract"));
+    expect(titles()).toHaveLength(1);
+    expect(order()).toEqual(["Contract", "Annex"]);
   });
   it("says sources appear when the answer is complete while a reply streams", async () => {
     const t = setup(`/chats/${CHAT}`, {
@@ -930,7 +961,7 @@ describe("dm-chat-page: sources", () => {
     const heading = () => page.shadowRoot?.querySelector("aside h2");
     await vi.waitFor(() => expect(page.shadowRoot?.activeElement).toBe(heading()));
   });
-  it("opens the second source's document with its own ids; a selected source is first (index 0)", async () => {
+  it("opens the second source's document with its own ids; a selected source keeps its place, so the action still resolves it", async () => {
     const second = { ...cited, passageId: OTHER, documentId: OTHER_DOC, docTitle: "Lease" };
     const t = setup(`/chats/${CHAT}`, {
       listMessages: vi.fn(async () => ({
@@ -956,9 +987,9 @@ describe("dm-chat-page: sources", () => {
     await vi.waitFor(() => expect(panelText(page)).toContain("Lease"));
     const refs = Array.from(chatRoot(page)?.querySelectorAll("button.ref") ?? []);
     (refs[1] as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(panelText(page)).toContain("Selected - Page 2"));
-    expect(panelText(page).indexOf("Lease")).toBeLessThan(panelText(page).indexOf("Contract"));
-    buttons()[0]?.click();
+    await vi.waitFor(() => expect(panelView(page)?.querySelector("[aria-current]")).not.toBeNull());
+    expect(panelText(page).indexOf("Contract")).toBeLessThan(panelText(page).indexOf("Lease"));
+    buttons()[1]?.click();
     await vi.waitFor(() =>
       expect(t.services.router.get()).toEqual({ name: "document", id: OTHER_DOC, passage: OTHER }),
     );
