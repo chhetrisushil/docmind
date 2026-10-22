@@ -115,12 +115,17 @@ export class AnthropicMessagesProvider implements LlmProvider {
   /** The request body as JSON. Reasoning parts of the request go back as blocks when thinking is on (ADR 0133). */
   #body(request: LlmRequest, stream: boolean): string {
     return JSON.stringify(
-      toMessagesBody(request, this.model, this.o.maxTokens, {
-        thinking: this.o.thinking === true,
-        ...(this.o.effort !== undefined && { effort: this.o.effort }),
-        cache: this.o.cache === true,
-        stream,
-      }),
+      toMessagesBody(
+        request,
+        this.model,
+        Math.min(request.maxTokens ?? this.o.maxTokens, this.o.maxTokens),
+        {
+          thinking: this.o.thinking === true,
+          ...(this.o.effort !== undefined && { effort: this.o.effort }),
+          cache: this.o.cache === true,
+          stream,
+        },
+      ),
     );
   }
 

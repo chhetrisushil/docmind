@@ -40,6 +40,16 @@ describe("AnthropicMessagesProvider over the fake server", () => {
     expect(req?.body.model).toBe("claude-haiku-5-5");
   });
 
+  it("honours a smaller request.maxTokens, and never exceeds the provider's", async () => {
+    fake.reply(() => ({ text: "x" }));
+    await provider().complete({ ...HI, maxTokens: 50 });
+    expect(fake.requests.at(-1)?.body.max_tokens).toBe(50);
+    await provider().complete({ ...HI, maxTokens: 9_999 });
+    expect(fake.requests.at(-1)?.body.max_tokens).toBe(256);
+    await provider().complete(HI);
+    expect(fake.requests.at(-1)?.body.max_tokens).toBe(256);
+  });
+
   it.each([408, 409, 429, 500, 503, 529])(
     "maps HTTP %i to LlmUnavailableError with only the status",
     async (status) => {
