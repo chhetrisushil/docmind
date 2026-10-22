@@ -15,13 +15,14 @@ export type Intent =
   | { type: "chat.delete"; id: string }
   | { type: "chats.search"; q: string }
   | { type: "chat.send"; text: string; key: string }
-  | { type: "chat.scope"; scope: "all" | "started" }
+  | { type: "chat.scope"; scope: "all" | { documentIds: string[] } }
   | { type: "chat.cite"; entryId: string; refId: string }
   | { type: "chat.older" };
 
 /** What the surface itself holds, so an action is looked up and never believed: the row keys of the table it drew, the list it published. */
 export interface Held {
   rowKeys?: readonly string[];
+  /** The list it published (a view's rows or suggestions; the chat's offered document ids). */
   list?: readonly unknown[];
   /** The reference ids the server served for each chat entry (entry id to ref ids), for `chat.cite`. */
   refs?: ReadonlyMap<string, readonly string[]>;
@@ -62,6 +63,23 @@ const heldAt = (context: unknown, list: unknown): unknown => {
 };
 const member = <T extends string>(set: readonly T[], v: unknown): T | undefined =>
   typeof v === "string" ? set.find((s) => s === v) : undefined;
+
+/** The most documents one chat may search (the server's `ChatScope` bound). */
+const MAX_SCOPE = 100;
+/** A whole new choice of documents: each value one the surface published (held spelling), repeats folded. */
+const heldIds = (raw: unknown, held: Held): string[] | undefined => {
+  if (!Array.isArray(raw) || raw.length > MAX_SCOPE || !Array.isArray(held.list)) return undefined;
+  const list = held.list as readonly unknown[];
+  const out: string[] = [];
+  for (const v of raw as readonly unknown[]) {
+    if (typeof v !== "string") return undefined;
+    const want = v.toLowerCase();
+    const found = list.find((k) => typeof k === "string" && k.toLowerCase() === want);
+    if (!isUuid(found)) return undefined;
+    if (!out.includes(found)) out.push(found);
+  }
+  return out;
+};
 
 function resolve(
   view: ViewName,
@@ -117,9 +135,11 @@ function resolve(
           ? { type: "chat.send", text, key }
           : undefined;
       }
-      if (type === "SELECT") {
-        const v = own(p, "value");
-        return v === "all" || v === "started" ? { type: "chat.scope", scope: v } : undefined;
+      if (type === "SELECT_MANY") {
+        const ids = heldIds(own(p, "values"), held);
+        return ids === undefined
+          ? undefined
+          : { type: "chat.scope", scope: ids.length === 0 ? "all" : { documentIds: ids } };
       }
       if (type === "CHAT_REF_OPEN") {
         const entryId = own(p, "entryId");

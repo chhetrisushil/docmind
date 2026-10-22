@@ -109,12 +109,25 @@ describe("intentOf: chats", () => {
     ).toBeUndefined();
   });
   it("switches the scope, cites a source, and loads older turns", () => {
-    expect(intentOf("chat", { type: "SELECT", payload: { value: "started", key: "k" } })).toEqual({
+    const SA = "00000000-0000-4000-8000-00000000000a";
+    const SB = "00000000-0000-4000-8000-00000000000b";
+    const held = { list: [SA, SB] };
+    const many = (values: unknown) =>
+      intentOf("chat", { type: "SELECT_MANY", payload: { values, key: "k" } }, held);
+    expect(many([SB.toUpperCase(), SA, SB])).toEqual({
       type: "chat.scope",
-      scope: "started",
+      scope: { documentIds: [SB, SA] },
     });
+    expect(many([])).toEqual({ type: "chat.scope", scope: "all" });
+    expect(many(["00000000-0000-4000-8000-0000000000ff"])).toBeUndefined();
+    expect(many("a")).toBeUndefined();
+    expect(many([1])).toBeUndefined();
+    expect(many(Array.from({ length: 101 }, () => SA))).toBeUndefined();
     expect(
-      intentOf("chat", { type: "SELECT", payload: { value: "everything", key: "k" } }),
+      intentOf("chat", { type: "SELECT_MANY", payload: { values: [SA], key: "k" } }),
+    ).toBeUndefined();
+    expect(
+      intentOf("chat", { type: "SELECT", payload: { value: "started", key: "k" } }),
     ).toBeUndefined();
     expect(
       intentOf(
