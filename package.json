@@ -11,7 +11,10 @@
   "scripts": {
     "build": "turbo run build",
     "start": "tsx --env-file=.env apps/server/app/main.ts",
-    "serve": "pnpm build && pnpm db:migrate && pnpm start",
+    "serve": "pnpm db:start && pnpm build && pnpm db:migrate && pnpm start",
+    "db:start": "sh infra/local-db.sh start",
+    "db:stop": "sh infra/local-db.sh stop",
+    "db:status": "sh infra/local-db.sh status",
     "db:migrate": "tsx --env-file=.env apps/server/app/db/migrate.ts",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",

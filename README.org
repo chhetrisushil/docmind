@@ -183,7 +183,13 @@ pnpm db:migrate                 # reads .env from the repo root
 pnpm start                      # the server (and the built web app when DOCMIND_WEB_DIR is set)
 #+end_src
 
-=pnpm serve= does all three: build, migrate, start. The scripts run from the repo root, so the relative
+Without Docker, run a local cluster instead, outside =/tmp= so it survives a reboot or a temp-folder clean:
+=pnpm db:start=, =pnpm db:stop= and =pnpm db:status= drive =infra/local-db.sh= (port 55432; data in
+=~/.docmind/pgdata= unless =DOCMIND_PGDATA= is set; binaries from =/Library/PostgreSQL/17/bin= unless =PG_BIN= is
+set). Create it once with =initdb= (owner role and password as in =DOCMIND_MIGRATE_URL=), then =createdb= and
+=create extension vector=, then =pnpm db:migrate=.
+
+=pnpm serve= does the rest in one go: start the local cluster (if there is one), build, migrate, start. The scripts run from the repo root, so the relative
 paths in =.env= (=./apps/web/dist=, =./data/blobs=) resolve there.
 
 Environment variables (names only; see [[file:.env.example][.env.example]] for the template and comments):
