@@ -285,3 +285,34 @@ describe("detail-source", () => {
     valid("Prose", out);
   });
 });
+
+describe("detail-type", () => {
+  it("names a known type and keeps its MIME type", () => {
+    expect(shape("detail-type", doc(1, { mime: "text/markdown" }))).toEqual({
+      badge: "Markdown · text/markdown",
+    });
+    expect(shape("detail-type", doc(1, { mime: "text/x-org" }))).toEqual({
+      badge: "Org · text/x-org",
+    });
+    expect(shape("detail-type", doc(1, { mime: "application/pdf" }))).toEqual({
+      badge: "PDF · application/pdf",
+    });
+    expect(
+      shape(
+        "detail-type",
+        doc(1, { mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }),
+      ),
+    ).toEqual({
+      badge:
+        "Word document · application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+  });
+  it("ignores parameters when naming, and shows an unknown type as it is", () => {
+    expect(shape("detail-type", doc(1, { mime: "text/plain; charset=utf-8" }))).toEqual({
+      badge: "Plain text · text/plain; charset=utf-8",
+    });
+    expect(shape("detail-type", doc(1, { mime: "application/x-unknown" }))).toEqual({
+      badge: "application/x-unknown",
+    });
+  });
+});

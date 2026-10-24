@@ -454,6 +454,18 @@ describe("dm-doc-detail: rendered content", () => {
     expect(deepText(page)).toContain("Heading");
   });
 
+  it("labels the file type above the content, for every format", async () => {
+    const t = setup({ name: "document", id: id(1) }, { ...mine, mime: "application/pdf" });
+    const page = await t.mount();
+    await vi.waitFor(() =>
+      expect(deepText(host(page, "content-type") as HTMLElement)).toContain(
+        "PDF · application/pdf",
+      ),
+    );
+    expect(deepText(host(page, "content-type") as HTMLElement)).toContain("File type");
+    expect(host(page, "content-type")?.hidden).toBe(false);
+  });
+
   it("keeps the passage list for a format it does not render", async () => {
     const t = setup({ name: "document", id: id(1) }, undefined, {
       source: async () => ({ applicable: false }),

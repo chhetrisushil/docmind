@@ -94,6 +94,7 @@ describe("the experiences", () => {
         "doc-source:P1",
         "doc-status:P0",
         "doc-summary:P0",
+        "doc-type:P1",
         "doc-words:P1",
       ]);
       expect(handlesOf("sessions")).toEqual(["chats:P0"]);
