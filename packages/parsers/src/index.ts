@@ -10,5 +10,5 @@ export { ParserRegistry } from "./registry";
 export { docParser, docxParser, mdParser, orgParser, pdfParser, txtParser };
 export { MAX_PDF_PAGES } from "./pdf";
 export { createDefaultParsers } from "./defaults";
-export { decodeText } from "./text";
+export { decodeText, decodeTextPrefix } from "./text";
 export * from "./runner/ParseRunner";

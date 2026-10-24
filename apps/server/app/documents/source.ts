@@ -2,7 +2,7 @@ import type { Identity } from "@docmind/auth";
 import type { EncryptedFsContentStore } from "@docmind/blob-store";
 import { Locator } from "@docmind/contracts";
 import type { SourceResult } from "@docmind/experiences";
-import { type ParserRegistry, decodeText } from "@docmind/parsers";
+import { type ParserRegistry, decodeTextPrefix } from "@docmind/parsers";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
 
@@ -56,17 +56,18 @@ export async function readSource(
   if (!format) return { applicable: false };
   const bytes = await deps.blobs(identity).get({ __loomContent: row.address });
   if (bytes === null) throw new Error("the document's stored content is missing");
-  let full: string;
+  // The blob is decrypted whole (the blob store has no ranged read), but only a prefix is decoded and validated.
+  let prefix: { text: string; complete: boolean };
   try {
-    full = decodeText(bytes);
+    prefix = decodeTextPrefix(bytes, SOURCE_MAX_CHARS + 1);
   } catch {
     return { applicable: false };
   }
-  let text = full;
-  let truncated = false;
-  if (full.length > SOURCE_MAX_CHARS) {
-    const cut = full.lastIndexOf("\n", SOURCE_MAX_CHARS);
-    text = full.slice(0, cut > 0 ? cut : SOURCE_MAX_CHARS);
+  let text = prefix.text;
+  let truncated = !prefix.complete;
+  if (text.length > SOURCE_MAX_CHARS) {
+    const cut = text.lastIndexOf("\n", SOURCE_MAX_CHARS);
+    text = text.slice(0, cut > 0 ? cut : SOURCE_MAX_CHARS);
     truncated = true;
   }
   const loc = Locator.safeParse(row.locator);
