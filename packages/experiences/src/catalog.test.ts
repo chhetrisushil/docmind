@@ -16,11 +16,11 @@ describe("the DocMind semantic catalogue", () => {
         ).toBe(kind);
     }
   });
-  it("lists exactly the seventeen entries, once each", () => {
+  it("lists exactly the eighteen entries, once each", () => {
     expect(DOCMIND_CATALOG.entries.map((e) => e.name).sort()).toEqual(
       Object.keys(ENTRY_KINDS).sort(),
     );
-    expect(Object.keys(ENTRY_KINDS)).toHaveLength(17);
+    expect(Object.keys(ENTRY_KINDS)).toHaveLength(18);
   });
   it("declares the same kind contracts loom-ui's renderers draw (props and binding)", () => {
     expect(KINDS.Table).toEqual({ kind: "Table", props: [], binding: "required" });

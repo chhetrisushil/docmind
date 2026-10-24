@@ -1,6 +1,6 @@
 import type { ViewName } from "@docmind/contracts";
 import type { Experience } from "@loom-ui/core";
-import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW } from "./a2ui";
+import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
 import { build, panel, tabs, widget } from "./compose";
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
 
@@ -132,6 +132,13 @@ const detail = (): Experience =>
         ]),
         panel("content", "Content", [
           widget({
+            id: "content-type",
+            type: "DocumentType",
+            handle: "doc-type",
+            priority: "P1",
+            props: { view: TYPE_VIEW },
+          }),
+          widget({
             id: "content-prose",
             type: "DocumentProse",
             handle: "doc-source",
@@ -154,6 +161,7 @@ const detail = (): Experience =>
       "doc-pages": doc("doc-pages", "detail-pages"),
       "doc-minutes": doc("doc-minutes", "detail-minutes"),
       "doc-facts": doc("doc-facts", "detail-facts"),
+      "doc-type": doc("doc-type", "detail-type"),
       "doc-source": provider("doc-source", {
         target: "document.source",
         args: { id: "", passage: "" },

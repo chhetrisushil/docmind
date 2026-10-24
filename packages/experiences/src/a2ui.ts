@@ -14,6 +14,16 @@ export const SUMMARY_VIEW = {
   ],
 } as const;
 
+/** The content tab's file type: a label and a badge. Data: `{ badge }` (`detail-type`). */
+export const TYPE_VIEW = {
+  catalogId: "docmind.v1",
+  nodes: [
+    { id: "root", component: "Row", children: ["type-h", "type-b"] },
+    { id: "type-h", component: "Text", text: "File type" },
+    { id: "type-b", component: "Badge", label: { path: "/badge" } },
+  ],
+} as const;
+
 /** The content tab: passages with where they sit, and a button for more. Data: `ContentData` (186c). */
 export const CONTENT_VIEW = {
   catalogId: "docmind.v1",

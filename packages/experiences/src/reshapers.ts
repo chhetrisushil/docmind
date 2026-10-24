@@ -28,6 +28,18 @@ const typeOf = (mime: string): string =>
             : "File";
 
 type Doc = DocumentDto;
+/** Friendly names of the types the upload sniffer stores; any other type shows as its MIME type alone. */
+const TYPE_NAMES: Record<string, string> = {
+  "text/markdown": "Markdown",
+  "text/x-org": "Org",
+  "text/plain": "Plain text",
+  "application/pdf": "PDF",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word document",
+  "application/msword": "Word 97-2003 document",
+  "image/png": "PNG image",
+  "image/jpeg": "JPEG image",
+  "image/webp": "WebP image",
+};
 
 const SHAPES: Record<string, (raw: never) => unknown> = {
   "library-total": (raw: RawDocuments) => ({
@@ -131,6 +143,10 @@ const SHAPES: Record<string, (raw: never) => unknown> = {
       ...(raw.truncated && { truncated: true, note: "Showing the first part of this document." }),
       ...(raw.focus && { focus: raw.focus }),
     };
+  },
+  "detail-type": (d: Doc) => {
+    const name = TYPE_NAMES[d.mime.split(";")[0]?.trim().toLowerCase() ?? ""];
+    return { badge: name ? `${name} · ${d.mime}` : d.mime };
   },
   "detail-content": (raw: { content: RawContent; cited: string | undefined }) => {
     const { items, more } = raw.content;

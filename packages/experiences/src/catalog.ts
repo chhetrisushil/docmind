@@ -48,6 +48,7 @@ export const ENTRY_KINDS = {
   DocumentFacts: "Table",
   DocumentSummary: "A2UIView",
   DocumentProse: "Prose",
+  DocumentType: "A2UIView",
   DocumentContent: "A2UIView",
   Transcript: "Chat",
   Composer: "TextInput",
