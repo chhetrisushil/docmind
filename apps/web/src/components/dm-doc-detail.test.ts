@@ -1,4 +1,5 @@
 import type { DocumentDto, DocumentPassage } from "@docmind/contracts";
+import type { UiReaders } from "@docmind/experiences";
 import { describe, expect, it, vi } from "vitest";
 import { Router } from "../router";
 import { createServices } from "../services";
@@ -74,6 +75,7 @@ function deepAll(root: Node | null | undefined, sel: string): Element[] {
 function setup(
   route: { name: "document"; id: string; passage?: string },
   doc: DocumentDto | null = mine,
+  readers: Partial<UiReaders> = {},
 ) {
   const content = vi.fn(async (a: { id: string; upto: number }) =>
     doc ? { items: passages.slice(0, a.upto), more: a.upto < passages.length } : null,
@@ -88,6 +90,7 @@ function setup(
     content,
     source: async () => null,
     chats: async () => [],
+    ...readers,
   });
   const win = {
     location: { pathname: `/documents/${route.id}`, search: "" },
@@ -427,5 +430,51 @@ describe("dm-doc-detail", () => {
     await vi.waitFor(() => expect(deepText(view(page))).toContain("Ready"));
     page.remove();
     expect(t.sse.close).toHaveBeenCalled();
+  });
+});
+
+describe("dm-doc-detail: rendered content", () => {
+  const host = (page: HTMLElement, wid: string) =>
+    page.shadowRoot
+      ?.querySelector("dm-view")
+      ?.shadowRoot?.querySelector(`[data-widget-id="${wid}"]`) as HTMLElement | null;
+
+  it("shows Prose and hides the passage list for a markdown document", async () => {
+    const t = setup({ name: "document", id: id(1) }, undefined, {
+      source: async () => ({
+        applicable: true,
+        format: "md",
+        text: "# Heading\n\n| a |\n|---|\n| 1 |",
+        truncated: false,
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(host(page, "content-prose")?.hidden).toBe(false));
+    expect(host(page, "content-view")?.hidden).toBe(true);
+    expect(deepText(page)).toContain("Heading");
+  });
+
+  it("keeps the passage list for a format it does not render", async () => {
+    const t = setup({ name: "document", id: id(1) }, undefined, {
+      source: async () => ({ applicable: false }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(host(page, "content-view")?.hidden).toBe(false));
+    expect(host(page, "content-prose")?.hidden).toBe(true);
+  });
+
+  it("passes the cited passage to the source reader", async () => {
+    const source = vi.fn(async (_a: { id: string; passage?: string }) => ({
+      applicable: true as const,
+      format: "md" as const,
+      text: "# a\n\nb",
+      truncated: false,
+      focus: { from: 5, to: 6 },
+    }));
+    const t = setup({ name: "document", id: id(1), passage: id(130) }, undefined, { source });
+    await t.mount();
+    await vi.waitFor(() =>
+      expect(source).toHaveBeenCalledWith(expect.objectContaining({ passage: id(130) })),
+    );
   });
 });
