@@ -2,7 +2,7 @@ import type { ChatSessionDto, DocumentDto } from "@docmind/contracts";
 import { locatorText } from "@docmind/contracts";
 import { defineReshapers } from "@loom-ui/hydration";
 import { formatBytes } from "./format";
-import type { RawContent, RawDocuments } from "./invoker";
+import type { RawContent, RawDocuments, SourceResult } from "./invoker";
 import { CONTENT_STEP, LIST_CAP } from "./providers";
 
 export const STATUS_TEXT: Record<DocumentDto["status"], string> = {
@@ -121,6 +121,17 @@ const SHAPES: Record<string, (raw: never) => unknown> = {
         ]
       : [],
   }),
+  "detail-source": (raw: SourceResult) => {
+    if (!raw.applicable) return { applicable: false, format: "plain", text: "" };
+    const format = raw.format === "md" ? "markdown" : raw.format === "org" ? "org" : "plain";
+    return {
+      applicable: true,
+      format,
+      text: raw.text,
+      ...(raw.truncated && { truncated: true, note: "Showing the first part of this document." }),
+      ...(raw.focus && { focus: raw.focus }),
+    };
+  },
   "detail-content": (raw: { content: RawContent; cited: string | undefined }) => {
     const { items, more } = raw.content;
     const first =

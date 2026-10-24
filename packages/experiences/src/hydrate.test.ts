@@ -95,6 +95,28 @@ describe("hydrate", () => {
     expect(status[0]?.state).toBe("error");
   });
 
+  it("doc-source resolves with the page's full param set (upto is ignored, not rejected)", async () => {
+    const r = readers({
+      source: vi.fn(async () => ({
+        applicable: true as const,
+        format: "md" as const,
+        text: "# a",
+        truncated: false,
+      })),
+    });
+    const [out] = await views().hydrate(
+      "detail",
+      [req("detail", "doc-source", { id: id(1), upto: 20, passage: "" })],
+      r,
+      "u",
+    );
+    expect(out).toEqual({
+      state: "ready",
+      value: { applicable: true, format: "markdown", text: "# a" },
+    });
+    expect(r.source).toHaveBeenCalledWith({ id: id(1), passage: "" });
+  });
+
   it("a document that is missing and a document that is not yours answer the same way, with a public finding that names no value", async () => {
     const r = readers({ document: vi.fn(async () => null) });
     const [a, b] = await views().hydrate(

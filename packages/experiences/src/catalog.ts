@@ -15,6 +15,7 @@ export const KINDS = {
   Table: { kind: "Table", props: [], binding: "required" },
   StatusCard: { kind: "StatusCard", props: [], binding: "required" },
   Note: { kind: "Note", props: ["text"], binding: "none" },
+  Prose: { kind: "Prose", props: [], binding: "required" },
   A2UIView: { kind: "A2UIView", props: ["view"], binding: "required" },
   Chat: { kind: "Chat", props: ["emptyText", "editable"], binding: "required" },
   TextInput: {
@@ -46,6 +47,7 @@ export const ENTRY_KINDS = {
   DocumentKpi: "Kpi",
   DocumentFacts: "Table",
   DocumentSummary: "A2UIView",
+  DocumentProse: "Prose",
   DocumentContent: "A2UIView",
   Transcript: "Chat",
   Composer: "TextInput",

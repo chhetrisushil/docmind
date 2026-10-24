@@ -248,3 +248,40 @@ describe("the sessions shape", () => {
   it("a published handle is never shaped from data", () =>
     expect(() => shape("host-published", {})).toThrow(/published/));
 });
+
+describe("detail-source", () => {
+  it("maps md/org/txt to Prose formats", () => {
+    expect(
+      shape("detail-source", { applicable: true, format: "md", text: "# a", truncated: false }),
+    ).toEqual({ applicable: true, format: "markdown", text: "# a" });
+    expect(
+      shape("detail-source", { applicable: true, format: "org", text: "* a", truncated: false }),
+    ).toMatchObject({ format: "org" });
+    expect(
+      shape("detail-source", { applicable: true, format: "txt", text: "a", truncated: false }),
+    ).toMatchObject({ format: "plain" });
+  });
+  it("notes a truncated source and passes focus", () => {
+    const out = shape("detail-source", {
+      applicable: true,
+      format: "md",
+      text: "x",
+      truncated: true,
+      focus: { from: 0, to: 1 },
+    });
+    expect(out).toEqual({
+      applicable: true,
+      format: "markdown",
+      text: "x",
+      truncated: true,
+      focus: { from: 0, to: 1 },
+      note: "Showing the first part of this document.",
+    });
+    valid("Prose", out);
+  });
+  it("is an empty plain value when the format is not rendered", () => {
+    const out = shape("detail-source", { applicable: false });
+    expect(out).toEqual({ applicable: false, format: "plain", text: "" });
+    valid("Prose", out);
+  });
+});
