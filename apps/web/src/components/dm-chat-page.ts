@@ -45,7 +45,7 @@ export class DmChatPage extends LitElement {
       h1 { font-size: 18px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       [data-problem] { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--dm-muted); }
       dm-view { min-height: 0; height: 100%; }
-      .layout { display: grid; grid-template-columns: 1fr; min-height: 0; }
+      .layout { display: grid; grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); min-height: 0; }
       .layout > .main { min-height: 0; }
       aside h2 { font-size: 15px; margin: 0; }
       aside header { padding: 0 0 8px; }
@@ -543,7 +543,7 @@ export class DmChatPage extends LitElement {
         ${st?.olderFailed ? html`<div data-older-failed role="alert" class="muted">Could not load earlier messages.<button class="btn ghost" data-older-retry @click=${() => void this.controller?.loadOlder()}>Try again</button></div>` : null}
       </div>
       <div class="layout">
-        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
+        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" fill .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
         ${
           st?.sourcesOpen
             ? html`${this.narrow ? html`<div data-backdrop @click=${() => void this.closePanel()}></div>` : null}<aside id="sources" aria-label="Sources" aria-modal=${ifDefined(this.narrow ? "true" : undefined)} @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>
