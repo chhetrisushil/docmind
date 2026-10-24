@@ -160,7 +160,7 @@ describe("the detail shapes", () => {
       rows: [
         ["Language", "en"],
         ["Date", "2026-01-01"],
-        ["Number", "30"],
+        ["Key figure", "30"],
         ["Outline", "Terms"],
       ],
     });
