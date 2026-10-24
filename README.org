@@ -225,7 +225,7 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_MAX_CONNECTIONS=                    | Most simultaneous HTTP connections (default 2000, at most 65535) |
 | =DOCMIND_CHAT_EFFORT=, =DOCMIND_CHAT_MAX_TOKENS= | Chat effort (=medium=) and the longest reply in tokens (16000) |
 | =DOCMIND_CHAT_CONTEXT_TOKENS=                | Context window used to fit a prompt (default 150000, at least twice =DOCMIND_CHAT_MAX_TOKENS= or boot refuses); older turns leave the prompt, never the history |
-| =DOCMIND_CHAT_ENVELOPE_KEY=, =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS= | Set it whenever chat is on (32 to 512 characters); unset, DocMind boots with a random per-process key and one warning, and chats written under it cannot be read after a restart. Signs chat inbox messages; the previous key is only for rotation and takes up to 4 comma-separated keys of 32 to 512 characters. Never logged |
+| =DOCMIND_CHAT_ENVELOPE_KEY=, =DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS= | Set it whenever chat is on (32 to 512 characters); unset, DocMind boots with a random per-process key and one warning, and chat messages still queued when the server restarts cannot be verified afterwards (saved chat history is unaffected). Signs chat inbox messages; the previous key is only for rotation and takes up to 4 comma-separated keys of 32 to 512 characters. Never logged |
 | =DOCMIND_CHAT_GENERAL_KNOWLEDGE=             | =true= lets the assistant answer beyond the documents (default =false=) |
 | =DOCMIND_RETRIEVAL_HOPS=                     | Link hops from each search result, 0 to 2 (default 1) |
 
