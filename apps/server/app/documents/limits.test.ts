@@ -1,4 +1,5 @@
-import { isAbsolute } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { StartupConfigError } from "../startupError";
 import { DEFAULT_LIMITS, loadBlobRoot, loadLimits } from "./limits";
@@ -55,5 +56,17 @@ describe("loadBlobRoot", () => {
     expect(isAbsolute(loadBlobRoot({}))).toBe(true);
     expect(isAbsolute(loadBlobRoot({ DOCMIND_BLOB_DIR: "relative/blobs" }))).toBe(true);
     expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "/var/lib/docmind" })).toBe("/var/lib/docmind");
+  });
+
+  it("resolves a relative directory against the repo root, not the working directory", () => {
+    const root = resolve(__dirname, "../../../..");
+    const cwd = process.cwd();
+    try {
+      process.chdir(tmpdir());
+      expect(loadBlobRoot({})).toBe(join(root, "data/blobs"));
+      expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "./data/blobs" })).toBe(join(root, "data/blobs"));
+    } finally {
+      process.chdir(cwd);
+    }
   });
 });

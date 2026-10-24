@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "start": "tsx --env-file=.env apps/server/app/main.ts",
+    "start": "turbo run build --filter=@docmind/server^... --filter=@docmind/web --output-logs=errors-only && tsx --env-file=.env apps/server/app/main.ts",
     "serve": "pnpm db:start && pnpm build && pnpm db:migrate && pnpm start",
     "db:start": "sh infra/local-db.sh start",
     "db:stop": "sh infra/local-db.sh stop",
