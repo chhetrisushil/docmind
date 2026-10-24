@@ -370,4 +370,4 @@ The backup and restore drill (restore into an empty database, verify, re-run era
 
 * License
 
-Unlicensed and private (=UNLICENSED=, =private: true= in =package.json=).
+Licensed under the [[file:LICENSE][Apache License, Version 2.0]]; see [[file:NOTICE][NOTICE]]. =private: true= in =package.json= only keeps the workspace from being published to npm.
