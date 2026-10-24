@@ -91,6 +91,7 @@ describe("the experiences", () => {
         "doc-facts:P1",
         "doc-minutes:P1",
         "doc-pages:P1",
+        "doc-source:P1",
         "doc-status:P0",
         "doc-summary:P0",
         "doc-words:P1",
@@ -110,6 +111,7 @@ describe("the experiences", () => {
     expect(params("library")["doc-total"]).toEqual([]);
     expect(params("detail")["doc-summary"]).toEqual(["id"]);
     expect(params("detail")["doc-content"]).toEqual(["id", "passage", "upto"]);
+    expect(params("detail")["doc-source"]).toEqual(["id", "passage"]);
     expect(params("sessions").chats).toEqual(["q"]);
   });
 

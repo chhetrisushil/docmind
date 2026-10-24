@@ -132,6 +132,12 @@ const detail = (): Experience =>
         ]),
         panel("content", "Content", [
           widget({
+            id: "content-prose",
+            type: "DocumentProse",
+            handle: "doc-source",
+            priority: "P1",
+          }),
+          widget({
             id: "content-view",
             type: "DocumentContent",
             handle: "doc-content",
@@ -148,6 +154,12 @@ const detail = (): Experience =>
       "doc-pages": doc("doc-pages", "detail-pages"),
       "doc-minutes": doc("doc-minutes", "detail-minutes"),
       "doc-facts": doc("doc-facts", "detail-facts"),
+      "doc-source": provider("doc-source", {
+        target: "document.source",
+        args: { id: "", passage: "" },
+        overridable: ["id", "passage"],
+        reshaper: "detail-source",
+      }),
       "doc-content": provider("doc-content", {
         target: "document.content",
         args: { id: "", upto: CONTENT_STEP, passage: "" },
