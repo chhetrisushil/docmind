@@ -38,6 +38,7 @@ async function setup(items: DocumentDto[]) {
     }),
     document: async () => null,
     content: async () => null,
+    source: async () => null,
     chats: async () => [],
   });
   const sse: {

@@ -14,6 +14,17 @@ export interface RawContent {
   more: boolean;
 }
 
+/** A document's original text for the page to render; a document that cannot be rendered is the value `{ applicable: false }`, never an error. */
+export type SourceResult =
+  | { applicable: false }
+  | {
+      applicable: true;
+      format: "md" | "org" | "txt";
+      text: string;
+      truncated: boolean;
+      focus?: { from: number; to: number };
+    };
+
 /** What the server must supply, already bound to the caller's identity. Every method is owner-scoped and tenant-scoped by its implementation. */
 export interface UiReaders {
   documents(a: {
@@ -22,6 +33,7 @@ export interface UiReaders {
   }): Promise<RawDocuments>;
   document(a: { id: string }): Promise<DocumentDto | null>;
   content(a: { id: string; upto: number; passage?: string }): Promise<RawContent | null>;
+  source(a: { id: string; passage: string }): Promise<SourceResult | null>;
   chats(a: { q: string }): Promise<ChatSessionDto[]>;
 }
 
@@ -44,6 +56,7 @@ const ARGS = {
       passage: z.union([Id, z.literal("")]).default(""),
     })
     .strict(),
+  "document.source": z.object({ id: Id, passage: Id.or(z.literal("")).default("") }).strict(),
   "chats.list": z.object({ q: z.string().max(100) }).strict(),
 } as const;
 
@@ -122,6 +135,14 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
             };
             return { content, cited: a.data.passage === "" ? undefined : a.data.passage };
           },
+        };
+      }
+      case "document.source": {
+        const a = ARGS["document.source"].safeParse(args);
+        if (!a.success) return fail("invalidArgs");
+        return {
+          key: [target, a.data],
+          exec: async () => (await readers.source(a.data)) ?? fail("notFound"),
         };
       }
       case "chats.list": {

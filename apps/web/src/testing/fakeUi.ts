@@ -11,6 +11,7 @@ export const emptyReaders = (): UiReaders => ({
   documents: async () => ({ items: [], truncated: false }),
   document: async () => null,
   content: async () => null,
+  source: async () => null,
   chats: async () => [],
 });
 

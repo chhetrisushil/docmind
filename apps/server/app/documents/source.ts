@@ -1,6 +1,7 @@
 import type { Identity } from "@docmind/auth";
 import type { EncryptedFsContentStore } from "@docmind/blob-store";
-import { type DocumentSourceResponse, Locator } from "@docmind/contracts";
+import { Locator } from "@docmind/contracts";
+import type { SourceResult } from "@docmind/experiences";
 import { type ParserRegistry, decodeText } from "@docmind/parsers";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
@@ -9,7 +10,6 @@ import { withTenant } from "../db/tenant";
 export const SOURCE_MAX_CHARS = 1_000_000;
 const FORMATS = { md: "md", org: "org", txt: "txt" } as const;
 
-export type SourceResult = { applicable: false } | ({ applicable: true } & DocumentSourceResponse);
 export interface SourceDeps {
   pool: Pool;
   blobs: (identity: Identity) => EncryptedFsContentStore;

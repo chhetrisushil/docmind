@@ -22,6 +22,7 @@ const readers = (over: Partial<UiReaders> = {}): UiReaders => ({
   documents: vi.fn(async () => ({ items: [doc(1)], truncated: false })),
   document: vi.fn(async (a) => (a.id === id(1) ? doc(1) : null)),
   content: vi.fn(async () => ({ items: [], more: false })),
+  source: vi.fn(async () => null),
   chats: vi.fn(async () => []),
   ...over,
 });
@@ -180,6 +181,32 @@ const chatDto = (n: number) => ({
 });
 const call = (r: UiReaders, target: string, args: Record<string, unknown>) =>
   createInvoker(r).invokeTransient(INVOKE_ID, { target, args });
+
+describe("document.source", () => {
+  it("reads through the source reader and maps null to notFound", async () => {
+    const source = vi.fn(async () => ({
+      applicable: true as const,
+      format: "md" as const,
+      text: "# x",
+      truncated: false,
+    }));
+    await expect(
+      call(readers({ source }), "document.source", { id: id(1), passage: "" }),
+    ).resolves.toEqual({
+      applicable: true,
+      format: "md",
+      text: "# x",
+      truncated: false,
+    });
+    expect(source).toHaveBeenCalledWith({ id: id(1), passage: "" });
+    await expect(
+      call(readers({ source: async () => null }), "document.source", { id: id(1), passage: "" }),
+    ).rejects.toMatchObject({ channel: "notFound" });
+    await expect(
+      call(readers(), "document.source", { id: id(1), passage: "x" }),
+    ).rejects.toMatchObject({ channel: "invalidArgs" });
+  });
+});
 
 describe("the invoker refuses what it did not declare", () => {
   const cases: [string, string, Record<string, unknown>][] = [

@@ -41,6 +41,7 @@ beforeAll(async () => {
           },
           document: async () => null,
           content: async () => null,
+          source: async () => null,
           chats: async () => [],
         };
       },

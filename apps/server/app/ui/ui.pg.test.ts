@@ -222,7 +222,18 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
         };
       },
     } as unknown as FieldCrypto;
-    const readers = readersFor({ pool: h.app, fields: counting, status: h.status }, ALICE);
+    const readers = readersFor(
+      {
+        pool: h.app,
+        fields: counting,
+        status: h.status,
+        blobs: () => {
+          throw new Error("unused: the documents reader reads no blobs");
+        },
+        registry: h.wiring.registry,
+      },
+      ALICE,
+    );
     expect((await readers.documents({ limit: 200, status: "processing" })).items).toEqual([]);
     expect(opened).toBe(0);
     expect((await readers.documents({ limit: 1, status: "all" })).items).toHaveLength(1);

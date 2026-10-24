@@ -7,6 +7,7 @@ import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { decodeContentCursor, readContent } from "../documents/content";
 import { getDocument, listDocuments, toDto } from "../documents/repo";
+import { type SourceDeps, readSource } from "../documents/source";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { STATUS_MESSAGES, UPLOADED } from "../status/model";
 
@@ -14,6 +15,8 @@ export interface UiReaderDeps {
   pool: Pool;
   fields: FieldCrypto;
   status: DocumentStatusReads;
+  blobs: SourceDeps["blobs"];
+  registry: SourceDeps["registry"];
 }
 
 const PAGE = 100;
@@ -113,6 +116,9 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
       const keep = citedWindow(out, upto, passage);
       return { items: out.slice(0, keep), more: more || out.length > keep };
     },
+
+    source: ({ id, passage }) =>
+      readSource(deps, identity, id, passage === "" ? undefined : passage),
 
     async chats({ q }) {
       const page = await listChatsPage(deps, identity, null, q === "" ? undefined : q);
