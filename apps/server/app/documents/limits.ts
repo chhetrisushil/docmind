@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { StartupConfigError } from "../startupError";
 
 export interface DocumentLimits {
@@ -61,7 +62,19 @@ export function loadLimits(env: NodeJS.ProcessEnv = process.env): DocumentLimits
   return limits;
 }
 
-/** Where blobs live: `DOCMIND_BLOB_DIR`, default `./data/blobs`, always absolute. */
+/**
+ * Where blobs live: `DOCMIND_BLOB_DIR`, default `data/blobs`, always absolute. A relative directory is resolved against
+ * the repo root, never the working directory: a server started from another directory must find the same uploads, not
+ * an empty store that makes every earlier document look lost.
+ */
 export function loadBlobRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(env.DOCMIND_BLOB_DIR?.trim() || "data/blobs");
+  return resolve(repoRoot(), env.DOCMIND_BLOB_DIR?.trim() || "data/blobs");
+}
+
+/** The nearest directory above this module that holds `pnpm-workspace.yaml`; the working directory if there is none. */
+function repoRoot(): string {
+  for (let dir = __dirname; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, "pnpm-workspace.yaml"))) return dir;
+    if (dirname(dir) === dir) return process.cwd();
+  }
 }

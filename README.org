@@ -183,7 +183,7 @@ pnpm build
 docker compose up -d            # Postgres (+ Ollama); binds to 127.0.0.1
 cp .env.example .env            # then edit; .env is git-ignored
 pnpm db:migrate                 # reads .env from the repo root
-pnpm start                      # the server (and the built web app when DOCMIND_WEB_DIR is set)
+pnpm start                      # rebuilds the workspace packages and web app (cached), then starts the server
 #+end_src
 
 Without Docker, run a local cluster instead, outside =/tmp= so it survives a reboot or a temp-folder clean:
@@ -209,7 +209,7 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_KEK_PREVIOUS=, =DOCMIND_KEK_PREVIOUS_ID= | Retiring key, only during rotation               |
 | =DOCMIND_COOKIE_SECURE=                      | =true= when served over HTTPS                         |
 | =DOCMIND_TRUST_PROXY=                        | =true= to trust =X-Forwarded-For= behind one proxy    |
-| =DOCMIND_BLOB_DIR=                           | Directory for encrypted blobs                         |
+| =DOCMIND_BLOB_DIR=                           | Directory for encrypted blobs (relative: from the repo root; absolute in production) |
 | =DOCMIND_MAX_UPLOAD_BYTES=, =DOCMIND_TENANT_MAX_BYTES=, =DOCMIND_TENANT_MAX_DOCUMENTS=, =DOCMIND_MAX_CONCURRENT_UPLOADS= | Upload limits and quotas |
 | =DOCMIND_PARSE_TIMEOUT_MS=, =DOCMIND_PARSE_MEMORY_MB=, =DOCMIND_PARSE_MAX_CHARS=, =DOCMIND_PARSE_CONCURRENCY= | Parser child limits (optional) |
 | =DOCMIND_INGEST_CONCURRENCY=, =DOCMIND_INGEST_TENANT_CONCURRENCY= | Ingest steps at once overall (default 4) and per tenant (default 2) |
