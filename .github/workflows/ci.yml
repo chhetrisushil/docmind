@@ -28,7 +28,7 @@ env:
   LOOM_REF: b0cb946130f9561d679138417fad877cf5347598
   # The loom-ui commit DocMind links to (core, hydration, renderer-lit, renderer-terminal, built from source).
   # Bump deliberately, like LOOM_REF.
-  LOOM_UI_REF: 26f4009e976c6254b1e52c758b6847a6ad7361a8
+  LOOM_UI_REF: 4ea5efd1ee177b68bae04c3ae53314d08c54b1f3
 
 jobs:
   gate:
