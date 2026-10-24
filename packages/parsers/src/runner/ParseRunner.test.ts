@@ -329,11 +329,14 @@ describe("ParseRunner", () => {
   });
 
   it("leaves no child behind after a success, a timeout or a crash", async () => {
-    const r = limited({ wallClockMs: 300 });
+    // Only the spin needs a short clock: a success or crash on a 300 ms budget races a child's start-up on a slow CI runner.
+    const r = runner();
+    const short = limited({ wallClockMs: 300 });
     await r.run("echo", bytes("x"));
-    await expect(r.run("spin", bytes("x"))).rejects.toBeInstanceOf(ParseTimeoutError);
+    await expect(short.run("spin", bytes("x"))).rejects.toBeInstanceOf(ParseTimeoutError);
     await expect(r.run("exit", bytes("x"))).rejects.toBeInstanceOf(ParseCrashedError);
     expect(r.active()).toBe(0);
+    expect(short.active()).toBe(0);
     expect(spawned).toHaveLength(3);
     for (const c of spawned) expect(c.exitCode !== null || c.signalCode !== null).toBe(true);
   });
