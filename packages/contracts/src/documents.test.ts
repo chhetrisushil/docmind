@@ -3,6 +3,7 @@ import {
   DocumentContentResponse,
   DocumentDto,
   DocumentProgressEvent,
+  DocumentSourceResponse,
   IngestStep,
   ListDocumentsQuery,
   Locator,
@@ -140,5 +141,22 @@ describe("document content contract", () => {
       expect(DocumentContentResponse.safeParse({ items: [bad], nextCursor: null }).success).toBe(
         false,
       );
+  });
+
+  it("DocumentSourceResponse is strict and bounds focus", () => {
+    expect(
+      DocumentSourceResponse.safeParse({ format: "md", text: "x", truncated: false }).success,
+    ).toBe(true);
+    expect(
+      DocumentSourceResponse.safeParse({ format: "pdf", text: "x", truncated: false }).success,
+    ).toBe(false);
+    expect(
+      DocumentSourceResponse.safeParse({
+        format: "md",
+        text: "x",
+        truncated: false,
+        focus: { from: -1, to: 0 },
+      }).success,
+    ).toBe(false);
   });
 });

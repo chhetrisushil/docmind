@@ -8,12 +8,14 @@ import {
 } from "@docmind/blob-store";
 import {
   type DocumentContentResponse,
+  type DocumentSourceResponse,
   ListDocumentsQuery,
   type ListDocumentsResponse,
   type RetryDocumentResponse,
   type UploadDocumentResponse,
   Uuid,
 } from "@docmind/contracts";
+import type { ParserRegistry } from "@docmind/parsers";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
@@ -43,6 +45,7 @@ import {
 } from "./repo";
 import { restartIfFailed } from "./restart";
 import { SNIFF_BYTES, type Sniffed, sanitizeFilename, sniff, titleFromFilename } from "./sniff";
+import { readSource } from "./source";
 import type { StartScheduler } from "./startScheduler";
 
 /** The route key of the streaming multipart upload; the server exempts it from the request timer. */
@@ -55,6 +58,8 @@ export interface DocumentRoutesDeps {
   /** A blob store for this user. Cheap to build: no I/O happens until it is used. */
   blobs: (identity: Identity) => EncryptedFsContentStore;
   limits: DocumentLimits;
+  /** Picks the parser by mime, as ingest does, to decide which originals the source route serves. */
+  registry: ParserRegistry;
   /** The ingest-status model: every document status the API answers comes from here. */
   status: DocumentStatusReads;
   /** Starts and cancels document ingestion. */
@@ -347,6 +352,26 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           : null;
         if (!page) return sendError(res, 404, "not_found", "document not found");
         json(res, 200, page satisfies DocumentContentResponse);
+      },
+    ),
+
+    "GET /api/documents/:id/source": requireAuth(
+      deps.authenticator,
+      async (req, res, identity, ctx) => {
+        // The original text: nothing may cache it, on any answer.
+        res.setHeader("cache-control", "no-store");
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const raw = new URL(req.url ?? "/", "http://localhost").searchParams.get("passage");
+        const passage = raw && Uuid.safeParse(raw).success ? raw.toLowerCase() : undefined;
+        // A malformed id answers exactly like a missing or foreign one.
+        const result = parsed.success
+          ? await readSource(deps, identity, parsed.data.toLowerCase(), passage)
+          : null;
+        if (!result) return sendError(res, 404, "not_found", "document not found");
+        if (!result.applicable)
+          return sendError(res, 415, "not_renderable", "this document's format is not rendered");
+        const { applicable: _, ...body } = result;
+        json(res, 200, body satisfies DocumentSourceResponse);
       },
     ),
 
