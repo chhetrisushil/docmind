@@ -196,6 +196,11 @@ Without Docker, run a local cluster instead, outside =/tmp= so it survives a reb
 =~/.docmind/pgdata= unless =DOCMIND_PGDATA= is set; binaries from =/Library/PostgreSQL/17/bin= unless =PG_BIN= is
 set). Create it once with =initdb= (owner role and password as in =DOCMIND_MIGRATE_URL=), then =createdb= and
 =create extension vector=, then =pnpm db:migrate=.
+The Postgres test suites get a cluster of their own: set =DOCMIND_TEST_PG_URL= to a port other than 55432 (for
+example =postgres://docmind:docmind@127.0.0.1:55442/postgres=) and run =pnpm db:init-test= once; it creates
+=~/.docmind/pgdata-test= (or =DOCMIND_TEST_PGDATA=) with that user and password, and =db:start=, =db:stop= and
+=db:status= then drive both clusters. The suites reset the cluster-wide =docmind_app= and =docmind_loom= passwords,
+so they refuse to run when =DOCMIND_TEST_PG_URL= points at the cluster in =DATABASE_URL=.
 
 =pnpm serve= does the rest in one go: start the local cluster (if there is one), build, migrate, start. The scripts run from the repo root, so the relative
 paths in =.env= (=./apps/web/dist=, =./data/blobs=) resolve there.
@@ -250,7 +255,8 @@ Run from the repository root:
 | =pnpm lint=            | =biome check .= (=pnpm lint:fix= writes fixes)    |
 
 Postgres-backed suites run only when =DOCMIND_TEST_PG_URL= is set; otherwise they skip. The role
-needs =CREATE DATABASE=, because each suite creates and drops its own database. Migrations are a
+needs =CREATE DATABASE=, because each suite creates and drops its own database. It must be a different
+cluster from the app's =DATABASE_URL= (see =pnpm db:init-test=). Migrations are a
 Turbo test input, so changing one reruns tests.
 
 CI (=.github/workflows/ci.yml=) checks out Loom next to this repo, builds it, then builds,
