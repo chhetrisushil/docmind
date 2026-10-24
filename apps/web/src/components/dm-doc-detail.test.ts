@@ -6,7 +6,7 @@ import { createServices } from "../services";
 import { UploadsStore } from "../state/uploads";
 import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
-import "./dm-doc-detail";
+import { contentChoice } from "./dm-doc-detail";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const summary = {
@@ -476,5 +476,37 @@ describe("dm-doc-detail: rendered content", () => {
     await vi.waitFor(() =>
       expect(source).toHaveBeenCalledWith(expect.objectContaining({ passage: id(130) })),
     );
+  });
+
+  it("marks the block holding the cited text inside the rendered Prose", async () => {
+    const paras = Array.from({ length: 6 }, (_, i) => `paragraph ${i} ${"w".repeat(40)}`);
+    const text = paras.join("\n\n");
+    const from = text.indexOf("paragraph 4");
+    Element.prototype.scrollIntoView = vi.fn();
+    const t = setup({ name: "document", id: id(1), passage: id(130) }, undefined, {
+      source: async () => ({
+        applicable: true as const,
+        format: "md" as const,
+        text,
+        truncated: false,
+        focus: { from, to: from + 20 },
+      }),
+    });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(host(page, "content-prose")?.hidden).toBe(false));
+    await vi.waitFor(() => {
+      const marked = deepAll(host(page, "content-prose"), "[data-block].focus");
+      expect(marked.length).toBeGreaterThan(0);
+      expect(marked.map((m) => m.textContent).join(" ")).toContain("paragraph 4");
+    });
+  });
+
+  it("keeps the last settled choice while doc-source is pending, and decides afresh once settled", () => {
+    expect(contentChoice("pending", false, undefined)).toBeUndefined();
+    expect(contentChoice("ready", true, undefined)).toBe("prose");
+    expect(contentChoice("pending", false, "prose")).toBe("prose");
+    expect(contentChoice(undefined, false, "list")).toBe("list");
+    expect(contentChoice("error", false, "prose")).toBe("list");
+    expect(contentChoice("ready", true, "list")).toBe("prose");
   });
 });

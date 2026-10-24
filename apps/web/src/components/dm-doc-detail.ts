@@ -10,6 +10,16 @@ import "./dm-view";
 
 type Params = Record<string, string | number>;
 
+/** Which Content-tab widget shows: once `doc-source` settled its choice holds while it refetches (pending). */
+export function contentChoice(
+  status: string | undefined,
+  applicable: boolean,
+  last: "prose" | "list" | undefined,
+): "prose" | "list" | undefined {
+  if (status === "ready" || status === "error") return applicable ? "prose" : "list";
+  return last;
+}
+
 /** One document: a header with its actions over the `detail` experience (status, then Summary / Analysis / Content tabs). It draws no data; it performs intents. */
 export class DmDocDetail extends LitElement {
   static properties = {
@@ -39,6 +49,8 @@ export class DmDocDetail extends LitElement {
   private unwatch: (() => void) | undefined;
   private upto = 20;
   private tabDone = false;
+  private choice: "prose" | "list" | undefined;
+  private choiceDoc: string | undefined;
   private params: Params | undefined;
   private paramsKey = "";
   private everServed = false;
@@ -146,9 +158,13 @@ export class DmDocDetail extends LitElement {
     const status = session.statusOf("doc-source");
     const applicable =
       (session.valueOf("doc-source") as { applicable?: boolean } | undefined)?.applicable === true;
-    const settled = status === "ready" || status === "error";
-    prose.hidden = !(settled && applicable);
-    list.hidden = !(settled && !applicable);
+    if (this.choiceDoc !== this.route?.id) {
+      this.choiceDoc = this.route?.id;
+      this.choice = undefined;
+    }
+    this.choice = contentChoice(status, applicable, this.choice);
+    prose.hidden = this.choice !== "prose";
+    list.hidden = this.choice !== "list";
   }
 
   /** A deep link to a passage opens the Content tab, once; the server marks the passage it served. */
