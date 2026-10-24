@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "DocMind: a multi-user, RAG-based document assistant built on Loom.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@12.15.0",
   "engines": {
     "node": ">=22.13.0"
