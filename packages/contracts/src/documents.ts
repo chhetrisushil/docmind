@@ -142,3 +142,17 @@ export const DocumentContentResponse = z.object({
   nextCursor: Cursor.nullable(),
 });
 export type DocumentContentResponse = z.infer<typeof DocumentContentResponse>;
+
+/** The formats whose stored original `GET /api/documents/:id/source` serves. */
+export const SourceFormat = z.enum(["md", "org", "txt"]);
+
+/** `GET /api/documents/:id/source?passage`: the original text; `focus` is the passage's character range in it. */
+export const DocumentSourceResponse = z
+  .object({
+    format: SourceFormat,
+    text: z.string(),
+    truncated: z.boolean(),
+    focus: z.object({ from: Count, to: Count }).strict().optional(),
+  })
+  .strict();
+export type DocumentSourceResponse = z.infer<typeof DocumentSourceResponse>;

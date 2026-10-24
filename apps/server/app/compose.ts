@@ -298,6 +298,7 @@ export function buildServer(options: ComposeOptions) {
         fields,
         blobs,
         limits,
+        registry: options.ingest.registry,
         ingest,
         starts,
         status,

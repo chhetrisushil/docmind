@@ -416,6 +416,7 @@ export async function startDocumentServer(
       fields,
       blobs,
       limits,
+      registry: wiring.registry,
       ingest: ingest.port,
       status: ingest.status,
       starts: new StartScheduler(ingest.port),
