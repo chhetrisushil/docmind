@@ -27,13 +27,16 @@ existing document re-ingested).
 
 ## 1. Server (DocMind)
 
-`GET /api/documents/:id/source[?passage=<id>]`, and the UI intent `document.source` over the same reader.
+`GET /api/documents/:id/source[?passage=<id>]`, and the UI read target `document.source` over the same
+reader. A UI reader's failure never reaches a reshaper, so on the UI plane a non-renderable document is
+the value `{ applicable: false }`, not an error; only the REST route answers 415.
 
 - Owner only: the same tenant and erasure checks as `document.content`; another user's document is 404.
 - Only documents whose parser is `md`, `org` or `txt`; anything else is `415 not_renderable`. The parser
-  is not stored, so the reader asks the parser registry with the document's stored `mime` and filename
-  extension, the same selection ingest made.
-- Opens the original from the blob store and decodes it with ingest's `decodeText`.
+  is not stored, so the reader asks the parser registry with the document's stored `mime`, exactly as
+  ingest's parse step does (`registry.select(mime)`, no extension).
+- Opens the original from the blob store (`documents.content_address`) and decodes it with ingest's
+  `decodeText`, newly exported from `@docmind/parsers`.
 - Response: `{ format: "md" | "org" | "txt", text, truncated, focus? }`. `text` is capped at 1 MB
   (ingest's `SCAN_CHARS`); past the cap `truncated: true`.
 - `passage`: when it names a chunk of this document with a `chars` locator, `focus` is
@@ -64,8 +67,10 @@ the browser, and a new core dependency), same bounds and source ranges, emits th
 | `-----` (5+ dashes) | rule |
 | `:PROPERTIES:`...`:END:` drawers, `SCHEDULED:` / `DEADLINE:` / `CLOSED:` lines | dropped |
 
-**C. `Prose` kind.** Props: `format` (`markdown` | `org` | `plain`), `text`, `truncated`, `focus?`
-(`{ from, to }`), `note?`.
+**C. `Prose` kind.** A bound kind (DocMind feeds it from a provider). Value, declared once in core's
+`kindValueContracts`: `{ format: "markdown" | "org" | "plain", text, truncated?, focus?: { from, to },
+note? }`. `drawMarkdown` stops silently at 4000 drawn nodes, so `Prose` draws each top-level block with
+its own call, in its own wrapper (which is also what focus scrolls to).
 - Lit: draws the first ~300 top-level blocks and a "Show more" button. With `focus`, draws up to the
   block overlapping it, scrolls it into view and marks it. `plain` is preformatted text.
 - Terminal: headings, lists and code laid out as text.
@@ -74,13 +79,12 @@ the browser, and a new core dependency), same bounds and source ranges, emits th
 ## 3. DocMind Content tab
 
 - Experiences: a `DocumentProse` entry (kind `Prose`) with provider `document.source`
-  (args `id`, `passage`; overridable) and reshaper `detail-source` ->
-  `{ format, text, truncated, focus, applicable, note }`. A truncated source notes "Showing the first
-  part of this document"; a `415` maps to `applicable: false`.
+  (args `id`, `passage`; overridable) and reshaper `detail-source` -> the `Prose` value plus
+  `applicable`. A truncated source notes "Showing the first part of this document".
 - The Content panel holds `DocumentProse` and the existing `DocumentContent`. `dm-doc-detail` shows
-  exactly one: `DocumentProse` when applicable, else the passage list (unchanged for PDF, DOCX, ...).
-  The page chooses because experiences have no conditional widgets and the page already loads the
-  document.
+  exactly one, by `hidden` on the `[data-widget-id]` host inside `dm-view` (as `selectContentTab`
+  already reaches in): `DocumentProse` when `session.valueOf("doc-source").applicable`, else the passage
+  list (unchanged for PDF, DOCX, ...). Experiences have no conditional widgets.
 - `?passage=` keeps opening the Content tab; `Prose` scrolls to and marks the focus, replacing the
   "Cited passage" header for md/org. Paging is inside `Prose` (the source arrives whole); the
   passage list keeps its server paging.
