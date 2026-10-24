@@ -54,6 +54,55 @@ export function decodeText(bytes: Uint8Array): string {
   return text;
 }
 
+/**
+ * `decodeText` for a bounded prefix: the same BOM detection, UTF-8 / UTF-16 handling, single U+FEFF strip, line-ending
+ * normalization and `assertText` validation, but only the bytes needed for `maxUnits` UTF-16 units plus a margin are
+ * decoded (UTF-8: 3 * maxUnits + 3 bytes, UTF-16: 4 * maxUnits + 4, since a CRLF is 4 bytes and one unit), cut back to a code-point boundary. `text` is a
+ * prefix of `decodeText(bytes)` (so offsets agree); it has at least `maxUnits` units unless `complete`, and may have a
+ * few more. `complete`: every byte was decoded. Invalid bytes beyond the prefix are not seen.
+ */
+export function decodeTextPrefix(
+  bytes: Uint8Array,
+  maxUnits: number,
+): { text: string; complete: boolean } {
+  const [a, b, c] = bytes;
+  let body = bytes;
+  let label: "utf-8" | "utf-16le" = "utf-8";
+  let bigEndian = false;
+  if (a === 0xff && b === 0xfe) {
+    body = bytes.subarray(2);
+    label = "utf-16le";
+  } else if (a === 0xfe && b === 0xff) {
+    body = bytes.subarray(2);
+    label = "utf-16le";
+    bigEndian = true;
+  } else if (a === 0xef && b === 0xbb && c === 0xbf) {
+    body = bytes.subarray(3);
+  }
+  const units = Math.max(0, Math.floor(maxUnits));
+  let end = body.length;
+  if (label === "utf-16le") {
+    if (body.length % 2 !== 0) reject("corrupt_content");
+    const limit = 4 * units + 4; // CRLF is 4 bytes and one unit
+    if (end > limit) {
+      end = limit;
+      const hi = body[end - (bigEndian ? 2 : 1)] as number;
+      if (hi >= 0xd8 && hi <= 0xdb) end -= 2;
+    }
+  } else {
+    const limit = 3 * units + 3;
+    if (end > limit) {
+      end = limit;
+      while (end > 0 && ((body[end] as number) & 0xc0) === 0x80) end--;
+    }
+  }
+  const part = body.subarray(0, end);
+  const decoded = label === "utf-8" ? strict("utf-8", part) : utf16(part, bigEndian);
+  const text = (decoded.startsWith("\ufeff") ? decoded.slice(1) : decoded).replace(/\r\n?/g, "\n");
+  assertText(text);
+  return { text, complete: end === body.length };
+}
+
 /** A heading title: trimmed, at most `max` UTF-16 units, never ending in half a surrogate pair. */
 export function cutHeading(s: string, max = 500): string {
   const t = s.trim();
