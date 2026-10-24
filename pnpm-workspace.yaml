@@ -1,3 +1,38 @@
 packages:
   - apps/*
   - packages/*
+
+# Dependencies allowed to run install scripts (pnpm runs none by default).
+allowBuilds:
+  '@biomejs/biome': true
+  argon2: true
+  esbuild: true
+
+# The sibling loom and loom-ui checkouts (see .github/workflows/ci.yml).
+overrides:
+  '@loom/agent': link:../loom/packages/agent
+  '@loom/app': link:../loom/packages/app
+  '@loom/classify': link:../loom/packages/classify
+  '@loom/compliance': link:../loom/packages/compliance
+  '@loom/cli': link:../loom/tools/cli
+  '@loom/conformance': link:../loom/packages/conformance
+  '@loom/conversation': link:../loom/packages/conversation
+  '@loom/core': link:../loom/packages/core
+  '@loom/effect-runtime': link:../loom/packages/effect-runtime
+  '@loom/event-runtime': link:../loom/packages/event-runtime
+  '@loom/fair-scheduler': link:../loom/packages/fair-scheduler
+  '@loom/knowledge': link:../loom/packages/knowledge
+  '@loom/llm': link:../loom/packages/llm
+  '@loom/memory': link:../loom/packages/memory
+  '@loom/plugin-content': link:../loom/plugins/content
+  '@loom/plugin-conversation-sse': link:../loom/plugins/conversation-sse
+  '@loom/plugin-crypto': link:../loom/plugins/crypto
+  '@loom/plugin-postgres': link:../loom/plugins/postgres
+  '@loom/plugin-read-model': link:../loom/plugins/read-model
+  '@loom/workflow-runtime': link:../loom/packages/workflow-runtime
+  '@loom/blueprint-runtime': link:../loom/packages/blueprint-runtime
+  '@loom/projection-runtime': link:../loom/packages/projection-runtime
+  '@loom-ui/core': link:../loom-ui/packages/core
+  '@loom-ui/hydration': link:../loom-ui/packages/hydration
+  '@loom-ui/renderer-lit': link:../loom-ui/packages/renderer-lit
+  '@loom-ui/renderer-terminal': link:../loom-ui/packages/renderer-terminal
