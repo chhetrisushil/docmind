@@ -97,6 +97,11 @@ export class FakeServer {
     );
     return release;
   }
+  /** Seeds what the `source` reader returns for a document (default: not applicable). */
+  setSource(id: string, result: SourceResult): void {
+    this.sources.set(id, result);
+  }
+
   private async held(point: string): Promise<void> {
     await this.holds.get(point);
   }

@@ -127,10 +127,29 @@ export class DmDocDetail extends LitElement {
       const status = session.valueOf("doc-status") as { level?: unknown } | undefined;
       this.failed = this.served && status?.level === "critical";
       this.selectContentTab();
+      this.syncContent(session);
     };
     this.unwatch = session.store.runtimeSubscribe(check);
     check();
   };
+
+  /**
+   * The Content tab holds Prose (md/org/txt, rendered) and the passage list (every other format); experiences have
+   * no conditional widgets, so the page shows exactly one. Until `doc-source` settles, neither shows; a failed source
+   * read falls back to the passage list.
+   */
+  private syncContent(session: ViewSession): void {
+    const root = this.renderRoot.querySelector("dm-view")?.shadowRoot;
+    const prose = root?.querySelector<HTMLElement>('[data-widget-id="content-prose"]');
+    const list = root?.querySelector<HTMLElement>('[data-widget-id="content-view"]');
+    if (!prose || !list) return;
+    const status = session.statusOf("doc-source");
+    const applicable =
+      (session.valueOf("doc-source") as { applicable?: boolean } | undefined)?.applicable === true;
+    const settled = status === "ready" || status === "error";
+    prose.hidden = !(settled && applicable);
+    list.hidden = !(settled && !applicable);
+  }
 
   /** A deep link to a passage opens the Content tab, once; the server marks the passage it served. */
   private selectContentTab(): void {
