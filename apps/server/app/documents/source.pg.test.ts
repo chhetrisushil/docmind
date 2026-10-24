@@ -7,7 +7,15 @@ import { PG_URL } from "../db/testSupport";
 import { chunkIdFor } from "../flows/ingest-document/chunker";
 import { PgChunkStore } from "../flows/ingest-document/pgChunks";
 import { insertDocument } from "./repo";
-import { ALICE, BOB, type DocumentHarness, newDocument, startDocumentServer } from "./testHarness";
+import { readSource } from "./source";
+import {
+  ALICE,
+  ALICE2,
+  BOB,
+  type DocumentHarness,
+  newDocument,
+  startDocumentServer,
+} from "./testHarness";
 
 describe.skipIf(!PG_URL)("document source (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -67,7 +75,8 @@ describe.skipIf(!PG_URL)("document source (needs DOCMIND_TEST_PG_URL)", () => {
 
   it("is 404 for a missing, malformed or someone else's document", async () => {
     const bobs = await upload(BOB, "text/markdown", "secret", "e");
-    for (const id of [randomUUID(), "not-a-uuid", bobs]) {
+    const sibling = await upload(ALICE2, "text/markdown", "sibling secret", "5");
+    for (const id of [randomUUID(), "not-a-uuid", bobs, sibling]) {
       const res = await get(`/api/documents/${id}/source`);
       expect(res.status).toBe(404);
       expect(res.headers.get("cache-control")).toBe("no-store");
@@ -109,5 +118,52 @@ describe.skipIf(!PG_URL)("document source (needs DOCMIND_TEST_PG_URL)", () => {
     const other = await upload(ALICE, "text/markdown", "x", "6");
     const body = await bodyOf(await get(`/api/documents/${other}/source?passage=${mine}`));
     expect(body.focus).toBeUndefined();
+  });
+
+  it("is 404 for another user of the same tenant, with or without a passage", async () => {
+    const id = await upload(ALICE, "text/markdown", "# T\n\nalpha beta", "4");
+    await new PgChunkStore(h.app, fields).replace(
+      { tenantId: ALICE.tenantId, userId: ALICE.userId, documentId: id },
+      [
+        {
+          ordinal: 0,
+          sectionOrdinal: 0,
+          headingPath: ["T"],
+          text: "alpha beta",
+          tokenCount: 2,
+          locator: { kind: "chars", start: 5, end: 15 },
+        },
+      ],
+    );
+    for (const q of ["", `?passage=${chunkIdFor(id, 0)}`]) {
+      const res = await get(`/api/documents/${id}/source${q}`, "alice2");
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(JSON.stringify(await bodyOf(res))).not.toContain("alpha");
+    }
+  });
+
+  it("reads nothing for a user whose erasure has begun", async () => {
+    const eve = { tenantId: ALICE.tenantId, userId: "e1e1e1e1-e1e1-4e1e-8e1e-e1e1e1e1e1e1" };
+    await h.owner.query(
+      "INSERT INTO users (id, tenant_id, email, password_hash) VALUES ($1, $2, 'eve-source@example.com', 'x')",
+      [eve.userId, eve.tenantId],
+    );
+    const id = await upload(eve, "text/markdown", "erase me", "3");
+    const deps = {
+      pool: h.app,
+      registry: h.wiring.registry,
+      blobs: () =>
+        new EncryptedFsContentStore({
+          root: h.root,
+          tenantId: eve.tenantId,
+          userId: eve.userId,
+          keys: h.keys,
+          maxBytes: 4 << 20,
+        }),
+    };
+    expect((await readSource(deps, eve, id))?.applicable).toBe(true);
+    await h.owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [eve.userId]);
+    expect(await readSource(deps, eve, id)).toBeNull();
   });
 });
