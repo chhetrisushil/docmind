@@ -8,6 +8,24 @@ export const PG_URL = process.env.DOCMIND_TEST_PG_URL;
 export const APP_PASSWORD = "docmind_app_test";
 export const LOOM_PASSWORD = "docmind_loom_test";
 
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+const clusterOf = (raw: string) => {
+  const u = new URL(raw);
+  return `${LOOPBACK.has(u.hostname) ? "loopback" : u.hostname}:${u.port || "5432"}`;
+};
+
+/**
+ * The suites set the cluster-wide `docmind_app` and `docmind_loom` passwords (`APP_PASSWORD`, `LOOM_PASSWORD`), so
+ * pointed at the cluster a dev server uses they break its login. Refuse that: the test cluster must be another one
+ * (`infra/local-db.sh init-test`). No `DATABASE_URL` (CI) passes. The message names variables, never a value.
+ */
+export function assertSeparateCluster(testUrl: string, appUrl: string | undefined): void {
+  if (appUrl && clusterOf(testUrl) === clusterOf(appUrl))
+    throw new Error(
+      "DOCMIND_TEST_PG_URL must not point at the cluster in DATABASE_URL: the Postgres suites reset its role passwords (see infra/local-db.sh init-test)",
+    );
+}
+
 export interface TestDb {
   /** Connected as the owner named in DOCMIND_TEST_PG_URL (runs migrations, seeds data). */
   owner: Pool;
@@ -21,6 +39,7 @@ export interface TestDb {
 /** An empty database of its own, so suites never see each other's tables. */
 export async function createTestDb(): Promise<TestDb> {
   if (!PG_URL) throw new Error("DOCMIND_TEST_PG_URL is not set");
+  assertSeparateCluster(PG_URL, process.env.DATABASE_URL);
   const name = `docmind_t_${randomBytes(6).toString("hex")}`;
   const admin = new Pool({ connectionString: PG_URL, max: 1 });
   await admin.query(`CREATE DATABASE ${name}`);
@@ -64,6 +83,7 @@ export const ROLE_LOCK_KEY = 727275;
  */
 export async function withRoleLock<T>(fn: () => Promise<T>, pool?: Pool): Promise<T> {
   if (!PG_URL) throw new Error("DOCMIND_TEST_PG_URL is not set");
+  assertSeparateCluster(PG_URL, process.env.DATABASE_URL);
   const own = pool ?? new Pool({ connectionString: PG_URL, max: 1 });
   try {
     const client = await own.connect();

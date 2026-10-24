@@ -18,6 +18,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # The Postgres test suites' own cluster (DOCMIND_TEST_PG_URL): they reset cluster-wide role passwords, so never
+  # the app's. No volume: every suite creates and drops its own database.
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: docmind
+      POSTGRES_PASSWORD: docmind
+      POSTGRES_DB: docmind
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docmind -d docmind"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   ollama:
     image: ollama/ollama:latest
     ports:

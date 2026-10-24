@@ -15,6 +15,7 @@
     "db:start": "sh infra/local-db.sh start",
     "db:stop": "sh infra/local-db.sh stop",
     "db:status": "sh infra/local-db.sh status",
+    "db:init-test": "sh infra/local-db.sh init-test",
     "db:migrate": "tsx --env-file=.env apps/server/app/db/migrate.ts",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
