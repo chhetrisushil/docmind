@@ -116,7 +116,7 @@ const SHAPES: Record<string, (raw: never) => unknown> = {
       ? [
           ...(d.stats.language ? [["Language", d.stats.language]] : []),
           ...d.stats.dates.map((x) => ["Date", x]),
-          ...d.stats.numbers.map((x) => ["Number", x]),
+          ...d.stats.numbers.map((x) => ["Key figure", x]),
           ...d.stats.outline.map((x) => ["Outline", x]),
         ]
       : [],
