@@ -303,7 +303,11 @@ export function buildServer(options: ComposeOptions) {
         starts,
         status,
       }),
-      ...uiRoutes({ authenticator, views, readers: { pool, fields, status } }),
+      ...uiRoutes({
+        authenticator,
+        views,
+        readers: { pool, fields, status, blobs, registry: options.ingest.registry },
+      }),
       ...(chat &&
         reasoning &&
         chatRoutes({

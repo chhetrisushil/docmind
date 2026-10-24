@@ -433,7 +433,7 @@ export async function startDocumentServer(
       ...uiRoutes({
         authenticator: testAuthenticator,
         views,
-        readers: { pool: app, fields, status: ingest.status },
+        readers: { pool: app, fields, status: ingest.status, blobs, registry: wiring.registry },
       }),
       ...events.routes,
     });

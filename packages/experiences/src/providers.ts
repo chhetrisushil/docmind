@@ -16,6 +16,7 @@ export const PINS = {
   "documents.list": "docmind:documents.list@1",
   "document.get": "docmind:document.get@1",
   "document.content": "docmind:document.content@1",
+  "document.source": "docmind:document.source@1",
   "chats.list": "docmind:chats.list@1",
   "host.published": "docmind:host.published@1",
 } as const;

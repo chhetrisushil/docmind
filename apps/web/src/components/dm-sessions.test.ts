@@ -25,6 +25,7 @@ function setup(path = "/chats") {
     documents: async () => ({ items: [], truncated: false }),
     document: async () => null,
     content: async () => null,
+    source: async () => null,
     chats: chatsReader,
   });
   const api = {

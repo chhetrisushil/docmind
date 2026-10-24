@@ -86,6 +86,7 @@ function setup(
       return live.doc && a.id === live.doc.id ? live.doc : null;
     },
     content,
+    source: async () => null,
     chats: async () => [],
   });
   const win = {

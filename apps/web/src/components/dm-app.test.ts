@@ -366,6 +366,7 @@ describe("dm-app: the sidebar", () => {
       documents: async () => ({ items: [], truncated: false }),
       document: async () => null,
       content: async () => null,
+      source: async () => null,
       chats: async () => (who.now === A ? [chat(1, "Alpha invoices")] : [chat(2, "Beta plans")]),
     });
     const uiView = vi.fn(ui.api.uiView);

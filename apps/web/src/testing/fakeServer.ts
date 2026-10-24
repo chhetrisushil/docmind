@@ -8,7 +8,7 @@ import {
   UiHydrateRequest,
   ViewName,
 } from "@docmind/contracts";
-import type { UiReaders } from "@docmind/experiences";
+import type { SourceResult, UiReaders } from "@docmind/experiences";
 import { fakeUi } from "./fakeUi";
 
 const json = (status: number, body: unknown) =>
@@ -48,6 +48,7 @@ export class FakeServer {
   readonly receipt = "R".repeat(43);
   private account: Account | undefined;
   private passages = new Map<string, DocumentPassage[]>();
+  private sources = new Map<string, SourceResult>();
   private streams: { path: string; send(chunk: string): void }[] = [];
   // Frames pushed while no stream was open on their path wait here, and go out when one opens: a live frame is never dropped.
   private buffered = new Map<string, string[]>();
@@ -276,6 +277,8 @@ export class FakeServer {
         truncated: false,
       }),
       document: async ({ id }) => this.docs.find((d) => d.id === id) ?? null,
+      source: async ({ id }) =>
+        this.docs.some((d) => d.id === id) ? (this.sources.get(id) ?? { applicable: false }) : null,
       content: async ({ id, upto, passage }) => {
         if (!this.docs.some((d) => d.id === id)) return null;
         const all = this.passages.get(id) ?? [];

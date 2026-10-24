@@ -5,7 +5,7 @@ export * from "./views";
 export * from "./a2ui";
 export * from "./payload";
 export { INVOKE_ID } from "./invoker";
-export type { RawContent, RawDocuments, UiReaders } from "./invoker";
+export type { RawContent, RawDocuments, SourceResult, UiReaders } from "./invoker";
 export * from "./reshapers";
 export * from "./format";
 export * from "./views-api";
