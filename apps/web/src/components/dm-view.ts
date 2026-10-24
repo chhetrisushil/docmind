@@ -16,6 +16,18 @@ export class DmView extends LitElement {
   static styles = [
     baseStyles,
     css`:host { display: block; } [data-loading] { padding: 16px; color: var(--dm-muted); } [role="alert"] { padding: 16px; display: grid; gap: 8px; justify-items: start; }`,
+    // `fill`: the experience takes this element's height and a Chat widget takes what the others leave,
+    // so its log scrolls and the widgets after it (the composer) stay in view at the bottom. The root
+    // layout is stacked as a column over the renderer's inline grid, which would share the height evenly.
+    css`
+      :host([fill]) { display: flex; flex-direction: column; min-height: 0; }
+      :host([fill]) #host,
+      :host([fill]) #host > [data-blueprint-id] { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+      :host([fill]) #host > [data-blueprint-id] > [data-layout] { display: flex !important; flex-direction: column !important; flex: 1; min-height: 0; }
+      :host([fill]) #host > [data-blueprint-id] > [data-layout] > :not([data-widget-kind="Chat"]) { flex: none; }
+      :host([fill]) [data-widget-kind="Chat"] { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+      :host([fill]) [data-widget-kind="Chat"] > * { flex: 1; min-height: 0; }
+    `,
   ];
   declare name: ViewName | undefined;
   declare params: Record<string, string | number> | undefined;
