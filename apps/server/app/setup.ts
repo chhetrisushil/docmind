@@ -5,7 +5,7 @@ import { createChatLlm } from "./chats/llm";
 import { loadChatSettings } from "./chats/settings";
 import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
-import { createAppPool } from "./db/pool";
+import { createAppPool, loadPoolMax } from "./db/pool";
 import { loadDeployment } from "./deployment";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createTitleLlm } from "./flows/chat-title/llm";
@@ -15,7 +15,8 @@ import { loadWebDir } from "./http/staticFiles";
 import { loadTrustProxy } from "./http/trustProxy";
 import { llmWarnings } from "./llm/roles";
 import { resolveSecretEnv } from "./secrets";
-import { loadMaxConnections } from "./server";
+import { loadHttpTimeouts, loadMaxConnections } from "./server";
+import { loadShutdownDeadlineMs } from "./shutdown";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
@@ -55,6 +56,10 @@ export async function setupServer() {
   const webDir = loadWebDir(process.env.DOCMIND_WEB_DIR); // before anything opens
   const trustProxy = loadTrustProxy(); // before anything opens
   const maxConnections = loadMaxConnections(); // before anything opens
+  const httpTimeouts = loadHttpTimeouts(); // before anything opens
+  const shutdownDeadlineMs = loadShutdownDeadlineMs(); // before anything opens
+  const appPoolMax = loadPoolMax(env, "DOCMIND_APP_POOL_MAX");
+  const loomPoolMax = loadPoolMax(env, "DOCMIND_LOOM_POOL_MAX");
   const ingest = createIngestWiring(env); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   // Role-aware boot warnings (fixed text, variable names only), here so a bad provider variable has already refused to start.
   for (const w of llmWarnings(ingest.llm.roles, env)) console.warn(w);
@@ -62,7 +67,7 @@ export async function setupServer() {
   const chatLlm = createChatLlm(env, chatSettings);
   const titleLlm = createTitleLlm(env, chatSettings);
 
-  const pool = await createAppPool(databaseUrl);
+  const pool = await createAppPool(databaseUrl, appPoolMax);
 
   // Read-only: an applied migration file that was edited since refuses the start (the file name only).
   // Any other failure of the check (an old schema without the grant) is logged by class, not fatal.
@@ -108,7 +113,7 @@ export async function setupServer() {
   );
   let durable: Awaited<ReturnType<typeof openDurableStorage>>;
   try {
-    durable = await openDurableStorage({ loomUrl, keys });
+    durable = await openDurableStorage({ loomUrl, keys, loomPoolMax });
   } catch (err) {
     await pool.end();
     throw err;
@@ -128,6 +133,7 @@ export async function setupServer() {
     publicOrigin,
     ...(webDir && { webDir }),
     maxConnections,
+    httpTimeouts,
     ingest,
     chat: {
       settings: chatSettings,
@@ -143,5 +149,5 @@ export async function setupServer() {
       userExecutions: pgUserExecutions(durable.pool),
     },
   });
-  return { built, ingest, durable, pool, port, host };
+  return { built, ingest, durable, pool, port, host, shutdownDeadlineMs };
 }

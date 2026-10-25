@@ -4,7 +4,12 @@ import { type MockInstance, afterAll, beforeAll, describe, expect, it, vi } from
 import { CHAT_STREAM_ROUTE, chatStreamRoutes } from "./chats/stream";
 import { documentEventRoutes } from "./documents/events";
 import { documentRoutes } from "./documents/routes";
-import { DEFAULT_HTTP_LIMITS, createHttpServer, loadMaxConnections } from "./server";
+import {
+  DEFAULT_HTTP_LIMITS,
+  createHttpServer,
+  loadHttpTimeouts,
+  loadMaxConnections,
+} from "./server";
 
 const server = createHttpServer();
 let base = "";
@@ -202,6 +207,37 @@ describe("server limits", () => {
       expect(() => loadMaxConnections({ DOCMIND_MAX_CONNECTIONS: bad })).toThrow(
         /DOCMIND_MAX_CONNECTIONS must be/,
       );
+    }
+  });
+
+  it("reads the keep-alive and headers timeouts, defaulting to today's values", () => {
+    expect(loadHttpTimeouts({})).toEqual({ keepAliveTimeoutMs: 5_000, headersTimeoutMs: 20_000 });
+    expect(
+      loadHttpTimeouts({
+        DOCMIND_KEEP_ALIVE_TIMEOUT_MS: "65000",
+        DOCMIND_HEADERS_TIMEOUT_MS: "66000",
+      }),
+    ).toEqual({ keepAliveTimeoutMs: 65_000, headersTimeoutMs: 66_000 });
+  });
+
+  it("raises only the keep-alive timeout past the default headers timeout: headers must still exceed it", () => {
+    // 25 s keep-alive with the default 20 s headers timeout is the mistake the rule catches.
+    expect(() => loadHttpTimeouts({ DOCMIND_KEEP_ALIVE_TIMEOUT_MS: "25000" })).toThrow(
+      "DOCMIND_HEADERS_TIMEOUT_MS must be greater than DOCMIND_KEEP_ALIVE_TIMEOUT_MS",
+    );
+    expect(() =>
+      loadHttpTimeouts({
+        DOCMIND_KEEP_ALIVE_TIMEOUT_MS: "20000",
+        DOCMIND_HEADERS_TIMEOUT_MS: "20000",
+      }),
+    ).toThrow(/must be greater than/);
+  });
+
+  it("names the variable on a bad timeout, never the value", () => {
+    for (const name of ["DOCMIND_KEEP_ALIVE_TIMEOUT_MS", "DOCMIND_HEADERS_TIMEOUT_MS"]) {
+      for (const bad of ["0", "-1", "abc", "1.5", "3600001"]) {
+        expect(() => loadHttpTimeouts({ [name]: bad })).toThrow(new RegExp(`${name} must be`));
+      }
     }
   });
 
