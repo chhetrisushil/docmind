@@ -58,6 +58,7 @@ export async function bootIngest(
     status,
     activity,
     vectors,
+    readiness,
     events,
     chatStreams,
     detachStatusFeed,
@@ -154,9 +155,11 @@ export async function bootIngest(
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
-    // Timers first, then the open event streams (they never end on their own, so the server drain would
+    // Readiness first, then timers, then the open event streams (they never end on their own, so the server drain would
     // wait on them), then the server drain, then the close sequence.
     stopping ??= (async () => {
+      // First of all, before anything is awaited: /readyz turns 503 so the balancer stops sending new requests.
+      readiness.beginShutdown();
       if (sweepTimer) clearInterval(sweepTimer);
       recovery.stop();
       const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins

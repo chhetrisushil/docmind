@@ -10,7 +10,7 @@ import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { KeyStore } from "@loom/plugin-crypto";
 import type { ReadModelStore } from "@loom/plugin-read-model";
-import { Pool } from "pg";
+import { Pool, type QueryConfig } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
@@ -40,6 +40,7 @@ import { erasureDeps, requireKeyDestroyedProof } from "./erasure/wire";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
 import { staticHandler } from "./http/staticFiles";
 import { createHttpServer } from "./server";
 import type { UserExecutionLister } from "./status/forgetUser";
@@ -285,8 +286,16 @@ export function buildServer(options: ComposeOptions) {
           },
         })
       : undefined;
+  // The probe pings the app pool with the cheapest query there is; `stop()` flips it before the drain.
+  const readiness = createReadiness({
+    // node-postgres honours `query_timeout` per query but its typings omit it; the cap frees the connection from a hung database.
+    ping: async () => {
+      await pool.query({ text: "SELECT 1", query_timeout: READY_PING_TIMEOUT_MS } as QueryConfig);
+    },
+  });
   const server = createHttpServer(
     {
+      "GET /readyz": readiness.handler,
       ...authRoutes({
         service: new AuthService(store),
         authenticator,
@@ -337,6 +346,8 @@ export function buildServer(options: ComposeOptions) {
   return {
     app,
     server,
+    /** `GET /readyz`: shutdown calls `beginShutdown()` as its first step. */
+    readiness,
     store,
     throttle,
     starts,
