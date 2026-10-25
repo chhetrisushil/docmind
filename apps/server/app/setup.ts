@@ -6,12 +6,14 @@ import { loadChatSettings } from "./chats/settings";
 import { buildServer } from "./compose";
 import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool } from "./db/pool";
+import { loadDeployment } from "./deployment";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadWebDir } from "./http/staticFiles";
 import { llmWarnings } from "./llm/roles";
+import { resolveSecretEnv } from "./secrets";
 import { loadMaxConnections } from "./server";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
@@ -29,13 +31,19 @@ const STALE_TEMP_MS = HOUR_MS;
 export async function setupServer() {
   // Configuration first, so a missing or invalid variable fails before any connection opens. The
   // errors name the variable and never include its value.
-  const databaseUrl = process.env.DATABASE_URL;
+  // The secrets may be mounted as files (`<NAME>_FILE`); resolve them once here and hand this env to every
+  // loader that reads them, so a bad file fails the boot before any connection opens.
+  const env = resolveSecretEnv(process.env);
+  loadDeployment(env); // production refuses a laptop-only setting; before anything opens
+  const databaseUrl = env.DATABASE_URL;
   if (!databaseUrl)
-    throw new StartupConfigError("DATABASE_URL is not set (the docmind_app connection string)");
-  const loomUrl = process.env.LOOM_DATABASE_URL;
+    throw new StartupConfigError(
+      "DATABASE_URL is not set (the docmind_app connection string; or DATABASE_URL_FILE)",
+    );
+  const loomUrl = env.LOOM_DATABASE_URL;
   if (!loomUrl)
     throw new StartupConfigError(
-      "LOOM_DATABASE_URL is not set (the docmind_loom connection string)",
+      "LOOM_DATABASE_URL is not set (the docmind_loom connection string; or LOOM_DATABASE_URL_FILE)",
     );
   const port = loadPort(); // before anything else opens: a bad PORT must not reach recovery
   const host = process.env.HOST ?? "127.0.0.1";
@@ -45,12 +53,12 @@ export async function setupServer() {
   const publicOrigin = parsePublicOrigin(process.env.DOCMIND_PUBLIC_ORIGIN);
   const webDir = loadWebDir(process.env.DOCMIND_WEB_DIR); // before anything opens
   const maxConnections = loadMaxConnections(); // before anything opens
-  const ingest = createIngestWiring(); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
+  const ingest = createIngestWiring(env); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   // Role-aware boot warnings (fixed text, variable names only), here so a bad provider variable has already refused to start.
-  for (const w of llmWarnings(ingest.llm.roles, process.env)) console.warn(w);
-  const chatSettings = loadChatSettings(); // before any connection opens: a bad variable must not reach recovery
-  const chatLlm = createChatLlm(process.env, chatSettings);
-  const titleLlm = createTitleLlm(process.env, chatSettings);
+  for (const w of llmWarnings(ingest.llm.roles, env)) console.warn(w);
+  const chatSettings = loadChatSettings(env); // before any connection opens: a bad variable must not reach recovery
+  const chatLlm = createChatLlm(env, chatSettings);
+  const titleLlm = createTitleLlm(env, chatSettings);
 
   const pool = await createAppPool(databaseUrl);
 
