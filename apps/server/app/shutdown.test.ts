@@ -130,7 +130,7 @@ describe("scheduleForceExit", () => {
 
 describe("the shutdown deadline", () => {
   it("exceeds the sum of the bounded close steps, so it bounds the drain and not the closing", () => {
-    expect(FORCE_EXIT_DEADLINE_MS).toBeGreaterThan(2 * SHUTDOWN_DRAIN_MS + 2 * POOL_END_MS);
+    expect(FORCE_EXIT_DEADLINE_MS).toBeGreaterThanOrEqual(CLOSE_BOUNDS_MS + FORCE_EXIT_MS);
   });
 
   it("exits with code 1 once the deadline passes, and not before", () => {
@@ -210,6 +210,6 @@ describe("shutdownDeadlineWarning", () => {
 
   it("the bounds match the close sequence's pool-end bound", () => {
     expect(POOL_END_MS).toBe(10_000);
-    expect(CLOSE_BOUNDS_MS).toBe(2 * SHUTDOWN_DRAIN_MS + 3 * POOL_END_MS + 2_000);
+    expect(CLOSE_BOUNDS_MS).toBe(3 * SHUTDOWN_DRAIN_MS + 3 * POOL_END_MS + 2_000);
   });
 });

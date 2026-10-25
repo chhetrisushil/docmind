@@ -16,8 +16,8 @@ not from a run against that platform. The image itself is built and smoke-tested
   during a rolling deploy. See [cloud-scaling.md §4](../design/cloud-scaling.md#4-required-for-n-replicas)
   (S1 to S8). Set the platform's desired count and maximum to 1.
 - **Termination grace longer than `DOCMIND_SHUTDOWN_DEADLINE_MS` plus 5 s (not possible on Cloud Run, section 8).**
-  The recommended cloud values are a deadline of 75 s and a shutdown delay of 15 s (section 8), which give a
-  **grace of at least 80 s**. The close steps are bounded at about 52 s (`apps/server/app/shutdown.ts`), and
+  The recommended cloud values are a deadline of 85 s and a shutdown delay of 15 s (section 8), which give a
+  **grace of at least 90 s**. The close steps are bounded at about 62 s (`apps/server/app/shutdown.ts`), and
   the boot refuses a delay that does not fit in the deadline next to them. A SIGKILL at a platform default of
   10 to 30 s skips the lease release, so recovery then waits out the 30 s lease TTL (cloud-scaling.md C6).
 - **Memory of at least 3 to 4 GiB, enforced by a cgroup limit** (cloud-scaling.md C12). Each parse child
@@ -187,9 +187,9 @@ providers per role.
   503 `db_unavailable` otherwise, and 503 `shutting_down` from the moment SIGTERM arrives. Point the load
   balancer's target health check at `/readyz` with a failure threshold of **3 or more**, and liveness at
   `/healthz`. Both answer `HEAD` too.
-- **Shutdown delay.** Set `DOCMIND_SHUTDOWN_DELAY_MS=15000` and `DOCMIND_SHUTDOWN_DEADLINE_MS=75000`. After
+- **Shutdown delay.** Set `DOCMIND_SHUTDOWN_DELAY_MS=15000` and `DOCMIND_SHUTDOWN_DEADLINE_MS=85000`. After
   SIGTERM the server keeps serving for the delay while `/readyz` answers 503, so the load balancer stops
-  routing before the listener closes. The delay must be smaller than the deadline minus about 52 s of close
+  routing before the listener closes. The delay must be smaller than the deadline minus about 62 s of close
   steps, or the boot refuses it.
 - **Keep-alive.** The server closes idle keep-alive sockets after **5 s** (`keepAliveTimeoutMs` in
   `apps/server/app/server.ts`). A load balancer with a longer idle timeout (ALB defaults to 60 s) reuses
@@ -212,7 +212,7 @@ providers per role.
 
 ### Kubernetes
 
-A `Deployment` with `replicas: 1` and `strategy: Recreate`, `terminationGracePeriodSeconds: 90`,
+A `Deployment` with `replicas: 1` and `strategy: Recreate`, `terminationGracePeriodSeconds: 95`,
 `securityContext.runAsUser: 1000`, `readOnlyRootFilesystem: true`, an `emptyDir` at `/tmp`, a
 `ReadWriteMany` volume claim for the blobs, a memory request equal to the limit, and the migration as a
 `Job`. The `HEALTHCHECK` in the image is ignored by Kubernetes; define a `livenessProbe` on `/healthz`
@@ -223,7 +223,7 @@ with a generous `initialDelaySeconds` (recovery and subject-index hydration run 
 
 Not recommended. The termination grace on Cloud Run is a fixed 10 seconds after SIGTERM and cannot be
 raised **(from Google's documentation; not verified here)**, so the grace rule in section 1 cannot be
-met. The server's close sequence takes about 40 s, so every stop (each deploy, each scale-in or
+met. The server's close sequence can take up to about 62 s, so every stop (each deploy, each scale-in or
 maintenance event) is cut off by SIGKILL mid-close: leases are not released and recovery then waits out
 the 30 s lease TTL before it resumes interrupted ingests and chats. Data is not lost, but work stalls after each
 restart. Use ECS/Fargate unless that is acceptable. If you still use Cloud Run:

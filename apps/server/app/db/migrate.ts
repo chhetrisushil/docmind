@@ -176,7 +176,12 @@ export function loadMigrateConfig(env: NodeJS.ProcessEnv = process.env): {
   appPassword: string | undefined;
   loomPassword: string | undefined;
 } {
-  const resolved = resolveSecretEnv(env);
+  // Only the job's own secrets: an unrelated unreadable _FILE in a shared job environment must not fail it.
+  const resolved = resolveSecretEnv(env, [
+    "DOCMIND_MIGRATE_URL",
+    "DOCMIND_APP_DB_PASSWORD",
+    "DOCMIND_LOOM_DB_PASSWORD",
+  ]);
   const url = resolved.DOCMIND_MIGRATE_URL;
   if (!url)
     throw new Error(
