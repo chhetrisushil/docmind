@@ -5,11 +5,35 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   MigrationChecksumError,
+  loadMigrateConfig,
   migrate,
   setAppRolePassword,
   verifyMigrationChecksums,
 } from "./migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
+
+describe("loadMigrateConfig", () => {
+  it("reads the three variables, each from its _FILE when given", () => {
+    const dir = mkdtempSync(join(tmpdir(), "docmind-migrate-cfg-"));
+    try {
+      writeFileSync(join(dir, "url"), "postgres://owner\n");
+      writeFileSync(join(dir, "pw"), "app-pw\n");
+      expect(
+        loadMigrateConfig({
+          DOCMIND_MIGRATE_URL_FILE: join(dir, "url"),
+          DOCMIND_APP_DB_PASSWORD_FILE: join(dir, "pw"),
+          DOCMIND_LOOM_DB_PASSWORD: "loom-pw",
+        }),
+      ).toEqual({ url: "postgres://owner", appPassword: "app-pw", loomPassword: "loom-pw" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the variable when the URL is missing", () => {
+    expect(() => loadMigrateConfig({})).toThrow(/^DOCMIND_MIGRATE_URL is not set/);
+  });
+});
 
 describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;

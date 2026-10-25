@@ -1,5 +1,6 @@
 import { type Kek, loadKeks, rotateKek, verifyKeys } from "@docmind/keystore-pg";
 import { Pool } from "pg";
+import { resolveSecretEnv } from "../secrets";
 
 /**
  * Re-wraps every data key to the current KEK, then proves they all open with that KEK alone.
@@ -30,8 +31,11 @@ export async function runRotation(
 }
 
 async function main(): Promise<void> {
-  const url = process.env.DOCMIND_MIGRATE_URL;
-  if (!url) throw new Error("DOCMIND_MIGRATE_URL is not set (the owner role's connection string)");
+  const url = resolveSecretEnv(process.env).DOCMIND_MIGRATE_URL;
+  if (!url)
+    throw new Error(
+      "DOCMIND_MIGRATE_URL is not set (the owner role's connection string; or DOCMIND_MIGRATE_URL_FILE)",
+    );
   const pool = new Pool({ connectionString: url });
   try {
     process.exitCode = await runRotation(pool, loadKeks(), {
