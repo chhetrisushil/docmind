@@ -3,14 +3,19 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { POOL_END_MS } from "./closeSequence";
 import {
+  CLOSE_BOUNDS_MS,
   FORCE_EXIT_DEADLINE_MS,
+  FORCE_EXIT_MS,
   SHUTDOWN_DRAIN_MS,
   drainWithin,
   loadShutdownDeadlineMs,
+  loadShutdownDelayMs,
   runAll,
   scheduleForceExit,
   shutdown,
+  shutdownDeadlineWarning,
 } from "./shutdown";
+import { StartupConfigError } from "./startupError";
 
 describe("shutdown", () => {
   it("lets the in-flight request finish before it closes the app", async () => {
@@ -158,5 +163,53 @@ describe("loadShutdownDeadlineMs", () => {
         /^DOCMIND_SHUTDOWN_DEADLINE_MS must be/,
       );
     }
+  });
+});
+
+describe("loadShutdownDelayMs", () => {
+  it("defaults to no delay, whatever the deadline", () => {
+    expect(loadShutdownDelayMs({})).toBe(0);
+    expect(loadShutdownDelayMs({}, 1)).toBe(0);
+    expect(loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: "0" }, 1)).toBe(0);
+  });
+
+  it("accepts a delay that leaves room for the close bounds inside the deadline", () => {
+    const deadline = CLOSE_BOUNDS_MS + 30_000;
+    expect(loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: "29999" }, deadline)).toBe(29_999);
+  });
+
+  it("refuses a delay that does not fit, naming both variables", () => {
+    const deadline = CLOSE_BOUNDS_MS + 30_000;
+    expect(() => loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: "30000" }, deadline)).toThrow(
+      /^DOCMIND_SHUTDOWN_DELAY_MS must be less than DOCMIND_SHUTDOWN_DEADLINE_MS minus/,
+    );
+    // Against the default 60 s deadline, 8 s is the longest delay that fits.
+    expect(loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: "7999" })).toBe(7_999);
+    expect(() => loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: "8000" })).toThrow(
+      /must be less/,
+    );
+  });
+
+  it("names the variable on a malformed value, never the value", () => {
+    for (const bad of ["-1", "1.5", "soon", "1e3"]) {
+      expect(() => loadShutdownDelayMs({ DOCMIND_SHUTDOWN_DELAY_MS: bad })).toThrow(
+        new StartupConfigError("DOCMIND_SHUTDOWN_DELAY_MS must be a non-negative integer"),
+      );
+    }
+  });
+});
+
+describe("shutdownDeadlineWarning", () => {
+  it("is quiet at the default and above, and speaks below the bounds plus the margin", () => {
+    expect(shutdownDeadlineWarning(FORCE_EXIT_DEADLINE_MS)).toBeUndefined();
+    expect(shutdownDeadlineWarning(CLOSE_BOUNDS_MS + FORCE_EXIT_MS)).toBeUndefined();
+    expect(shutdownDeadlineWarning(CLOSE_BOUNDS_MS + FORCE_EXIT_MS - 1)).toMatch(
+      /^DOCMIND_SHUTDOWN_DEADLINE_MS is below/,
+    );
+  });
+
+  it("the bounds match the close sequence's pool-end bound", () => {
+    expect(POOL_END_MS).toBe(10_000);
+    expect(CLOSE_BOUNDS_MS).toBe(2 * SHUTDOWN_DRAIN_MS + 3 * POOL_END_MS + 2_000);
   });
 });

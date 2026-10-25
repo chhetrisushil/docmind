@@ -30,6 +30,25 @@ describe("closeSequence", () => {
     ]);
   });
 
+  it("ends the readiness pool after the stores and just before the app pool", async () => {
+    const calls: string[] = [];
+    const note = (name: string) => async () => void calls.push(name);
+    await runAll(
+      ...closeSequence({
+        startsIdle: note("starts"),
+        closeIngest: note("closeIngest"),
+        closeHeartbeat: note("closeHeartbeat"),
+        detachStatusFeed: () => void calls.push("detach"),
+        closeStatus: note("closeStatus"),
+        closeApp: note("closeApp"),
+        closeDurable: note("closeDurable"),
+        closeReadiness: note("closeReadiness"),
+        endPool: note("endPool"),
+      }),
+    );
+    expect(calls.slice(-3)).toEqual(["closeDurable", "closeReadiness", "endPool"]);
+  });
+
   it("stops the eraser before anything it may still call is closed", async () => {
     const calls: string[] = [];
     const note = (name: string) => async () => void calls.push(name);
