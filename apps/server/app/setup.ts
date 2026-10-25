@@ -12,6 +12,7 @@ import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadWebDir } from "./http/staticFiles";
+import { loadTrustProxy } from "./http/trustProxy";
 import { llmWarnings } from "./llm/roles";
 import { resolveSecretEnv } from "./secrets";
 import { loadMaxConnections } from "./server";
@@ -52,6 +53,7 @@ export async function setupServer() {
   const blobRoot = loadBlobRoot();
   const publicOrigin = parsePublicOrigin(process.env.DOCMIND_PUBLIC_ORIGIN);
   const webDir = loadWebDir(process.env.DOCMIND_WEB_DIR); // before anything opens
+  const trustProxy = loadTrustProxy(); // before anything opens
   const maxConnections = loadMaxConnections(); // before anything opens
   const ingest = createIngestWiring(env); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   // Role-aware boot warnings (fixed text, variable names only), here so a bad provider variable has already refused to start.
@@ -121,7 +123,8 @@ export async function setupServer() {
     limits,
     blobRoot,
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",
-    trustProxy: process.env.DOCMIND_TRUST_PROXY === "true",
+    trustProxy: trustProxy.trustProxy,
+    trustProxyHops: trustProxy.hops,
     publicOrigin,
     ...(webDir && { webDir }),
     maxConnections,

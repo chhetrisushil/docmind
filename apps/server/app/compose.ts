@@ -81,6 +81,8 @@ export interface ComposeOptions {
   blobRoot: string;
   secureCookies: boolean;
   trustProxy: boolean;
+  /** `DOCMIND_TRUST_PROXY_HOPS`, already validated; the proxies between the client and this server. Default 1. */
+  trustProxyHops?: number;
   /** `DOCMIND_PUBLIC_ORIGIN`, already validated; the origin guard compares `Origin` against it. */
   publicOrigin?: string;
   /** `DOCMIND_WEB_DIR`, already validated. */
@@ -290,6 +292,7 @@ export function buildServer(options: ComposeOptions) {
         throttle,
         secureCookies: options.secureCookies,
         trustProxy: options.trustProxy,
+        ...(options.trustProxyHops !== undefined && { trustProxyHops: options.trustProxyHops }),
         ...(account && { erasure: account }),
       }),
       ...documentRoutes({
