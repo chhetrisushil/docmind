@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { StartupConfigError } from "./startupError";
 
 /** The secrets that can come from a file (`<NAME>_FILE`), for a platform that mounts them rather than sets them. */
@@ -8,7 +8,37 @@ export const SECRET_VARIABLES = [
   "DOCMIND_CHAT_ENVELOPE_KEY",
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
+  "DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS",
+  // Read by the migration job and the KEK rotation script, which resolve them the same way.
+  "DOCMIND_MIGRATE_URL",
+  "DOCMIND_APP_DB_PASSWORD",
+  "DOCMIND_LOOM_DB_PASSWORD",
 ] as const;
+
+/** A secret is a connection string or a key; a file larger than this is a mistake (or a device). */
+export const MAX_SECRET_FILE_BYTES = 64 * 1024;
+
+/**
+ * The file's text, or null when it is not a regular file of at most MAX_SECRET_FILE_BYTES. Opened
+ * non-blocking so a FIFO cannot hang the boot, and checked after opening so a device such as /dev/zero
+ * is refused before a byte is read.
+ */
+function readSmallFile(path: string): string | null {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_SECRET_FILE_BYTES) return null;
+    const buf = Buffer.alloc(MAX_SECRET_FILE_BYTES + 1);
+    let n = 0;
+    for (let r = 1; r > 0 && n <= MAX_SECRET_FILE_BYTES; ) {
+      r = readSync(fd, buf, n, buf.length - n, null);
+      n += r;
+    }
+    return n > MAX_SECRET_FILE_BYTES ? null : buf.toString("utf8", 0, n);
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * One secret: `<name>` or `<name>_FILE` (a file holding it), with the same rules as `DOCMIND_KEK_FILE`:
@@ -20,12 +50,17 @@ export function readSecret(env: NodeJS.ProcessEnv, name: string): string | undef
   const fileVar = `${name}_FILE`;
   const path = env[fileVar];
   if (!path) return env[name];
-  let content: string;
+  let raw: string | null;
   try {
-    content = readFileSync(path, "utf8").trim();
+    raw = readSmallFile(path);
   } catch {
     throw new StartupConfigError(`${fileVar} names a file that cannot be read`);
   }
+  if (raw === null)
+    throw new StartupConfigError(
+      `${fileVar} must name a regular file of at most ${MAX_SECRET_FILE_BYTES} bytes`,
+    );
+  const content = raw.trim();
   if (!content) throw new StartupConfigError(`${fileVar} names an empty file`);
   return content;
 }

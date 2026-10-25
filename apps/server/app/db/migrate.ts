@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Pool, type PoolClient } from "pg";
+import { resolveSecretEnv } from "../secrets";
 
 // Resolved from the source tree: this runs under tsx and vitest, never from `dist`.
 export const MIGRATIONS_DIR = resolve(__dirname, "../../../../infra/migrations");
@@ -169,17 +170,33 @@ export async function setRolePassword(
 export const setAppRolePassword = (pool: Pool, password: string) =>
   setRolePassword(pool, "docmind_app", password);
 
+/** The migration job's settings; each secret may be a `<NAME>_FILE` (the image's job mounts them). */
+export function loadMigrateConfig(env: NodeJS.ProcessEnv = process.env): {
+  url: string;
+  appPassword: string | undefined;
+  loomPassword: string | undefined;
+} {
+  const resolved = resolveSecretEnv(env);
+  const url = resolved.DOCMIND_MIGRATE_URL;
+  if (!url)
+    throw new Error(
+      "DOCMIND_MIGRATE_URL is not set (the owner role's connection string; or DOCMIND_MIGRATE_URL_FILE)",
+    );
+  return {
+    url,
+    appPassword: resolved.DOCMIND_APP_DB_PASSWORD,
+    loomPassword: resolved.DOCMIND_LOOM_DB_PASSWORD,
+  };
+}
+
 async function main(): Promise<void> {
-  const url = process.env.DOCMIND_MIGRATE_URL;
-  if (!url) throw new Error("DOCMIND_MIGRATE_URL is not set (the owner role's connection string)");
-  const pool = new Pool({ connectionString: url });
+  const config = loadMigrateConfig();
+  const pool = new Pool({ connectionString: config.url });
   try {
     const applied = await migrate(pool);
     console.log(applied.length > 0 ? `applied: ${applied.join(", ")}` : "schema is up to date");
-    const password = process.env.DOCMIND_APP_DB_PASSWORD;
-    if (password) await setAppRolePassword(pool, password);
-    const loomPassword = process.env.DOCMIND_LOOM_DB_PASSWORD;
-    if (loomPassword) await setRolePassword(pool, "docmind_loom", loomPassword);
+    if (config.appPassword) await setAppRolePassword(pool, config.appPassword);
+    if (config.loomPassword) await setRolePassword(pool, "docmind_loom", config.loomPassword);
   } finally {
     await pool.end();
   }

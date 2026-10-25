@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SECRET_VARIABLES, readSecret, resolveSecretEnv } from "./secrets";
+import { MAX_SECRET_FILE_BYTES, SECRET_VARIABLES, readSecret, resolveSecretEnv } from "./secrets";
 import { StartupConfigError } from "./startupError";
 
 const dir = mkdtempSync(join(tmpdir(), "docmind-secrets-"));
@@ -56,6 +57,38 @@ describe("readSecret", () => {
   });
 });
 
+describe("readSecret refuses what is not a small regular file", () => {
+  const expectRefused = (path: string) => {
+    const err = catchError(() => readSecret({ DATABASE_URL_FILE: path }, "DATABASE_URL"));
+    expect(err).toBeInstanceOf(StartupConfigError);
+    expect((err as Error).message).toMatch(/^DATABASE_URL_FILE /);
+    expect((err as Error).message).not.toContain(path);
+  };
+
+  it("a FIFO does not hang the boot", () => {
+    const path = join(dir, "fifo");
+    execFileSync("mkfifo", [path]);
+    expectRefused(path);
+  });
+
+  it("a device does not read forever", () => {
+    expectRefused("/dev/zero");
+  });
+
+  it("a directory", () => {
+    expectRefused(dir);
+  });
+
+  it("a file over the cap, but not one exactly at it", () => {
+    expectRefused(file("big", "a".repeat(MAX_SECRET_FILE_BYTES + 1)));
+    const ok = readSecret(
+      { DATABASE_URL_FILE: file("edge", "a".repeat(MAX_SECRET_FILE_BYTES)) },
+      "DATABASE_URL",
+    );
+    expect(ok).toHaveLength(MAX_SECRET_FILE_BYTES);
+  });
+});
+
 describe("resolveSecretEnv", () => {
   it("fills each secret from its file and leaves every other variable alone", () => {
     const env = {
@@ -64,6 +97,10 @@ describe("resolveSecretEnv", () => {
       DOCMIND_CHAT_ENVELOPE_KEY_FILE: file("c", "envelope\n"),
       ANTHROPIC_API_KEY_FILE: file("d", "claude\n"),
       GEMINI_API_KEY_FILE: file("e", "gemini\n"),
+      DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS_FILE: file("f", "old-key\n"),
+      DOCMIND_MIGRATE_URL_FILE: file("g", "owner\n"),
+      DOCMIND_APP_DB_PASSWORD_FILE: file("h", "app-pw\n"),
+      DOCMIND_LOOM_DB_PASSWORD_FILE: file("i", "loom-pw\n"),
       PORT: "3000",
     };
     const out = resolveSecretEnv(env);
@@ -73,9 +110,13 @@ describe("resolveSecretEnv", () => {
       DOCMIND_CHAT_ENVELOPE_KEY: "envelope",
       ANTHROPIC_API_KEY: "claude",
       GEMINI_API_KEY: "gemini",
+      DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS: "old-key",
+      DOCMIND_MIGRATE_URL: "owner",
+      DOCMIND_APP_DB_PASSWORD: "app-pw",
+      DOCMIND_LOOM_DB_PASSWORD: "loom-pw",
       PORT: "3000",
     });
-    expect(SECRET_VARIABLES).toHaveLength(5);
+    expect(SECRET_VARIABLES).toContain("DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS");
   });
 
   it("does not change the env it was given, and sets nothing that has no value", () => {
