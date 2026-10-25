@@ -15,7 +15,7 @@ not from a run against that platform. The image itself is built and smoke-tested
   in memory; blobs are on a local filesystem; an old-version node can give up a new-version execution
   during a rolling deploy. See [cloud-scaling.md §4](../design/cloud-scaling.md#4-required-for-n-replicas)
   (S1 to S8). Set the platform's desired count and maximum to 1.
-- **Termination grace of at least 65 seconds.** The server's forced-exit deadline is 60 s and its close
+- **Termination grace of at least 65 seconds (not possible on Cloud Run, section 8).** The server's forced-exit deadline is 60 s and its close
   steps take about 40 s (`apps/server/app/shutdown.ts`). A SIGKILL at a platform default of 10 to 30 s
   skips the lease release, so recovery then waits out the 30 s lease TTL (cloud-scaling.md C6).
 - **Memory of at least 3 to 4 GiB, enforced by a cgroup limit** (cloud-scaling.md C12). Each parse child
@@ -50,12 +50,19 @@ What is in the image:
   compiled build exists (`apps/server/dist`) but is not used: `db/migrate.ts` finds `infra/migrations`
   four directories above its own file, which is right in `app/db` and wrong in `dist/app/db`, and the
   boot checksum check reads the same directory. Starting costs a few seconds of transform time.
-- User `node` (uid/gid 1000), no shell wrapper: `node` is PID 1 and receives SIGTERM itself
-  (`apps/server/app/main.ts`). There is no `tini`: the parse children are killed and awaited by the
-  server, and each is `exec`ed from `sh`, so nothing is left to reap. A platform "init" flag does no harm.
+- User `node` (uid/gid 1000). `tini` is PID 1 (`ENTRYPOINT ["/usr/bin/tini", "--"]`) and runs node as its
+  only child, with no shell wrapper. The reason is boot: a process that is PID 1 gets no kernel default
+  action for a signal it has no handler for, and the server registers its SIGTERM handler only after
+  boot (`apps/server/app/main.ts`), so without tini a SIGTERM during start-up would be dropped and the
+  container would run until SIGKILL. With tini the signal reaches node, which exits (143 before the
+  handler exists, 0 after a clean shutdown). Do not also enable the platform's init flag.
 - `HOST=0.0.0.0`, `PORT=3000` (the default, `apps/server/app/boot.ts`), `NODE_ENV=production`,
   `DOCMIND_WEB_DIR=/src/docmind/apps/web/dist`, `DOCMIND_BLOB_DIR=/var/lib/docmind/blobs` (a `VOLUME`),
   `STOPSIGNAL SIGTERM` and a `HEALTHCHECK` on `/healthz`. `.env` never enters the image (`.dockerignore`).
+
+Image size: the runtime stage keeps the full installed workspaces (dev dependencies included) of docmind, loom
+and loom-ui, so the image is large. It is deliberately not pruned, because the pruned layout cannot be
+tested here. Pull time matters mostly on a cold start.
 
 Read-only root filesystem: the server writes only under `DOCMIND_BLOB_DIR`. `TSX_DISABLE_CACHE=1` stops
 `tsx` writing its transform cache to the temp directory (checked locally with an unwritable `TMPDIR`);
@@ -202,25 +209,18 @@ A `Deployment` with `replicas: 1` and `strategy: Recreate`, `terminationGracePer
 `Job`. The `HEALTHCHECK` in the image is ignored by Kubernetes; define a `livenessProbe` on `/healthz`
 with a generous `initialDelaySeconds` (recovery and subject-index hydration run at boot).
 
-### Cloud Run **(not verified)**
+### Cloud Run **(not verified here)**
 
-Workable, with caveats from the design note (cloud-scaling.md, platform notes):
+Not recommended. The termination grace on Cloud Run is a fixed 10 seconds after SIGTERM and cannot be
+raised **(from Google's documentation; not verified here)**, so the "65 seconds" rule in section 1 cannot be
+met. The server's close sequence takes about 40 s, so every stop (each deploy, each scale-in or
+maintenance event) is cut off by SIGKILL mid-close: leases are not released and recovery then waits out
+the 30 s lease TTL before it resumes interrupted ingests and chats. Data is not lost, but work stalls after each
+restart. Use ECS/Fargate unless that is acceptable. If you still use Cloud Run:
 
 - Request bodies over HTTP/1 are capped at **32 MiB**, below the 50 MiB upload default: set
   `DOCMIND_MAX_UPLOAD_BYTES` under 32 MiB (33554432).
 - Background flows need **CPU always allocated** (instance-based billing) and **minimum instances 1**,
   with maximum instances 1.
 - Mount Filestore as an NFS volume for the blobs (the in-memory volume is not durable).
-- Set the container's termination grace to the maximum (the 10 s default is far below 65 s).
 - Run migrations as a Cloud Run job.
-
-## 9. First deploy checklist
-
-1. Postgres created, `pgvector` available, owner role known; model endpoint ready and its embedding model pulled.
-2. Secrets stored: both database passwords, the KEK file, the chat envelope key, provider keys.
-3. EFS/Filestore volume created with a 1000:1000 access path.
-4. Image built and pushed (section 2); migration job succeeds.
-5. Service starts with one replica; `GET /healthz` returns 200 and `/` serves the web app.
-6. Sign up in the browser over HTTPS (the session cookie is `Secure`), upload a document, and watch it
-   reach ready. If uploads are refused with 403, check `DOCMIND_PUBLIC_ORIGIN`.
-7. Stop the task once and confirm it exits 0 within the grace (the log ends without a `shutdown failed` line).

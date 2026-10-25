@@ -20,8 +20,11 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 # ---------------------------------------------------------------- build
 FROM ${NODE_IMAGE} AS build
 # pnpm comes from each project's `packageManager` field (docmind, loom and loom-ui pin their own).
+# The pnpm store lives outside every project, so no .pnpm-store lands in a project layer; the cache
+# mounts below point at it.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    CI=true
+    CI=true \
+    npm_config_store_dir=/pnpm-store
 RUN corepack enable
 WORKDIR /src
 
@@ -31,14 +34,14 @@ COPY --from=loom . /src/loom
 RUN find /src/loom -name node_modules -type d -prune -exec rm -rf {} + \
  && rm -rf /src/loom/.git
 WORKDIR /src/loom
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile && pnpm build
 
 COPY --from=loom-ui . /src/loom-ui
 RUN find /src/loom-ui -name node_modules -type d -prune -exec rm -rf {} + \
  && rm -rf /src/loom-ui/.git
 WORKDIR /src/loom-ui
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile \
  && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
 
@@ -47,7 +50,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 # reinstalls cheap.
 COPY . /src/docmind
 WORKDIR /src/docmind
-RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile && pnpm build
 
 # Drop what the runtime never reads, so the next stage copies less. Nothing here is a link target of
@@ -58,10 +61,18 @@ RUN rm -rf /src/loom/.turbo /src/loom/.models /src/loom/.superpowers /src/loom/d
 # ---------------------------------------------------------------- runtime
 FROM ${NODE_IMAGE} AS runtime
 
+# tini is PID 1. Node as PID 1 gets no kernel default action for a signal it has no handler for yet,
+# so a SIGTERM that arrives during boot, before main.ts registers its handler, would be dropped and
+# the container would run until SIGKILL. tini forwards SIGTERM to node, whose default action then
+# ends the process. (It also reaps any orphan.)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini \
+ && rm -rf /var/lib/apt/lists/*
+
 # tsx: the server has a compiled build (apps/server/dist) but runs from source, like `pnpm start`:
 # db/migrate.ts finds infra/migrations relative to its own file (four levels up), which is right
 # for app/db but wrong for dist/app/db, and the boot checksum check reads the same directory.
-# `node --import tsx` is one process: node is PID 1 and gets SIGTERM itself.
+# `node --import tsx` is one process: tini runs it as its only child and forwards SIGTERM.
 #   - TSX_DISABLE_CACHE: tsx would otherwise cache transforms under the temp dir; with the cache off
 #     the server boots with an unwritable TMPDIR (a read-only root filesystem).
 #   - HOST: the default 127.0.0.1 is unreachable from outside the container.
@@ -92,9 +103,9 @@ STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 
-# Exec form, no shell and no tini: node is PID 1 and handles SIGTERM itself (apps/server/app/main.ts).
-# The parse children are SIGKILLed and awaited by the server before it exits, and each is one
-# `sh -c 'exec node'` process, so nothing is left to reap. (An orchestrator "init" flag is harmless.)
+# Exec form, no shell: tini (PID 1) starts node and forwards signals to it; the server handles
+# SIGTERM itself once booted (apps/server/app/main.ts) and exits with its own code, which tini passes on.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "--import", "tsx", "apps/server/app/main.ts"]
 
 # The migration job is this same image with another command (no .env file here, so
