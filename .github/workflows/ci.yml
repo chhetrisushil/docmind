@@ -105,3 +105,54 @@ jobs:
       - name: Test
         working-directory: docmind
         run: pnpm test
+
+  # The container image (Dockerfile): builds it from the same pinned loom and loom-ui checkouts as the gate, then
+  # runs infra/smoke-image.sh: migration job, read-only boot, /healthz, and a clean exit 0 on `docker stop`.
+  # Independent of the gate, so the two run in parallel. Nothing is pushed anywhere.
+  image:
+    name: container image + smoke test
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: docmind
+      - name: Checkout loom (the framework DocMind links to)
+        uses: actions/checkout@v4
+        with:
+          repository: chhetrisushil/loom
+          ref: ${{ env.LOOM_REF }}
+          token: ${{ secrets.LOOM_TOKEN }}
+          path: loom
+      - name: Checkout loom-ui (the UI library DocMind links to)
+        uses: actions/checkout@v4
+        with:
+          repository: chhetrisushil/loom-ui
+          ref: ${{ env.LOOM_UI_REF }}
+          token: ${{ secrets.LOOM_TOKEN }}
+          path: loom-ui
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        working-directory: docmind
+        run: >-
+          docker buildx build
+          --build-context loom=../loom
+          --build-context loom-ui=../loom-ui
+          --load -t docmind:ci .
+      - name: Smoke test (migrate, boot read-only, /healthz, graceful stop)
+        working-directory: docmind
+        run: sh infra/smoke-image.sh docmind:ci
