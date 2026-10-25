@@ -1,0 +1,27 @@
+# Keep secrets, local state and host-built artefacts out of the build context (and so out of the image).
+.git
+.github
+.claude
+.worktrees
+.superpowers
+.turbo
+**/.turbo
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.env
+.env.*
+**/.env
+**/.env.*
+data
+**/data
+coverage
+**/coverage
+*.log
+.DS_Store
+# Not needed to build or run.
+docs
+Dockerfile
+.dockerignore
+docker-compose.yml
