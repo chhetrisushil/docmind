@@ -240,12 +240,21 @@ Configuration is environment variables only, loaded from `.env` at the repo root
 
 | Group | Variables (examples) |
 | --- | --- |
-| Server | `HOST`, `PORT`, `DOCMIND_WEB_DIR`, `DOCMIND_PUBLIC_ORIGIN`, `DOCMIND_TRUST_PROXY`, `DOCMIND_COOKIE_SECURE` |
-| Database | `DATABASE_URL`, `LOOM_DATABASE_URL`, `DOCMIND_MIGRATE_URL`, `DOCMIND_APP_DB_PASSWORD`, `DOCMIND_LOOM_DB_PASSWORD` |
+| Server | `HOST`, `PORT`, `DOCMIND_WEB_DIR`, `DOCMIND_PUBLIC_ORIGIN`, `DOCMIND_TRUST_PROXY`, `DOCMIND_TRUST_PROXY_HOPS`, `DOCMIND_COOKIE_SECURE`, `DOCMIND_DEPLOYMENT`, `DOCMIND_KEEP_ALIVE_TIMEOUT_MS`, `DOCMIND_HEADERS_TIMEOUT_MS`, `DOCMIND_SHUTDOWN_DEADLINE_MS` |
+| Database | `DATABASE_URL`, `LOOM_DATABASE_URL`, `DOCMIND_MIGRATE_URL`, `DOCMIND_APP_DB_PASSWORD`, `DOCMIND_LOOM_DB_PASSWORD`, `DOCMIND_APP_POOL_MAX`, `DOCMIND_LOOM_POOL_MAX` |
 | Keys | `DOCMIND_KEK`, `DOCMIND_KEK_ID`, `DOCMIND_CHAT_ENVELOPE_KEY` |
 | Storage and limits | `DOCMIND_BLOB_DIR`, `DOCMIND_MAX_UPLOAD_BYTES`, `DOCMIND_TENANT_MAX_BYTES`, `DOCMIND_TENANT_MAX_DOCUMENTS`, `DOCMIND_MAX_CONCURRENT_UPLOADS` |
 | Models | `DOCMIND_OLLAMA_URL`, `DOCMIND_EMBED_MODEL`, `DOCMIND_EMBED_DIMENSIONS`, `DOCMIND_LLM_PROVIDER` and per-role `DOCMIND_*_PROVIDER` / `_MODEL`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` |
 | Tests | `DOCMIND_TEST_PG_URL` |
+
+Details of the newer server variables:
+- **`DOCMIND_DEPLOYMENT`** is `development` (the default) or `production`. Production refuses to boot unless `DOCMIND_CHAT_ENVELOPE_KEY` and `DOCMIND_PUBLIC_ORIGIN` are set and `DOCMIND_COOKIE_SECURE=true`. Development keeps its per-process envelope key, with a warning.
+- **`_FILE` secrets.** `DATABASE_URL`, `LOOM_DATABASE_URL`, `DOCMIND_CHAT_ENVELOPE_KEY`, `ANTHROPIC_API_KEY` and `GEMINI_API_KEY` each accept `<NAME>_FILE`, the path of a file holding the value (a mounted secret). The rules are those of `DOCMIND_KEK_FILE`: the file wins if both are set, its content is trimmed, and an empty or unreadable file fails the boot, naming the variable and never the path.
+- **`DOCMIND_TRUST_PROXY_HOPS`** (default 1, at most 32) is the number of your proxies between the client and the server. The client address is the `X-Forwarded-For` entry that many places from the right. A shorter header falls back to the socket address. Setting it without `DOCMIND_TRUST_PROXY=true` fails the boot.
+- **`DOCMIND_KEEP_ALIVE_TIMEOUT_MS`** (default 5000) and **`DOCMIND_HEADERS_TIMEOUT_MS`** (default 20000). Behind a load balancer, set keep-alive above its idle timeout (65000 for an ALB). The headers timeout must be greater than it, or the boot fails.
+- **`DOCMIND_SHUTDOWN_DEADLINE_MS`** (default 60000) is the forced-exit deadline after SIGTERM; match it to the platform's termination grace.
+- **`DOCMIND_APP_POOL_MAX`** and **`DOCMIND_LOOM_POOL_MAX`** (default 10 each, at most 200) size the two Postgres pools.
+- **Probes.** `GET /healthz` is liveness (static). `GET /readyz` is readiness: 200 only while the app-pool `SELECT 1` succeeds and shutdown has not begun, else 503 with `{"status":"unavailable","reason":"db_unavailable"|"shutting_down"}`. It flips at the start of shutdown, before the drain.
 
 Local development:
 - **Postgres.** Either `docker compose up -d`, or a local cluster driven by `pnpm db:start` (`infra/local-db.sh`, data in `~/.docmind/pgdata`, port 55432). Keep the cluster out of `/tmp`.
