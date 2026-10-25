@@ -255,6 +255,7 @@ Local development:
 Production:
 - Run `pnpm build`, run migrations as the owner role, then start one server process with `DOCMIND_WEB_DIR=apps/web/dist`.
 - Behind a reverse proxy, forward `Host` unchanged.
+- For a container on a cloud platform (image, migration job, environment, blob volume, platform notes) follow [operations/cloud-deploy.md](operations/cloud-deploy.md).
 - Keep database backups for at most 30 days (see below).
 
 ## 12. Key decisions and trade-offs
@@ -283,5 +284,5 @@ These are from the spec's open risks (§10):
 - Spec: `docs/specs/2026-10-18-docmind-design.md` (sections 4 data, 5 ingestion, 6 chat, 7 web UI, 8 testing)
 - Design notes: `docs/design/linked-retrieval.md`, `docs/design/m6-loom-ui-native.md`, `docs/design/cloud-scaling.md` (cloud deployment, scaling, load-test baseline)
 - Feature specs: `docs/specs/2026-10-22-multi-document-chat-scope-design.md`
-- Runbooks: `docs/operations/llm-providers.md`, `rotate-kek.md`, `backfill.md`
+- Runbooks: `docs/operations/llm-providers.md`, `rotate-kek.md`, `backfill.md`, `cloud-deploy.md` (container image and cloud deployment)
 - Reading order: [codebase-guide.md](codebase-guide.md)
