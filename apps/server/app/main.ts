@@ -3,10 +3,25 @@ import { listen } from "./boot";
 import { bootIngest } from "./bootIngest";
 import { setupServer } from "./setup";
 import { scheduleForceExit, shutdown } from "./shutdown";
+import { createStopGate } from "./signals";
 import { reportStartupFailure } from "./startupError";
 
 async function main(): Promise<void> {
-  const { built, ingest, durable, pool, port, host, shutdownDeadlineMs } = await setupServer();
+  // Registered first: a stop during a slow boot must not wait out the platform's grace for a SIGKILL
+  // (node is PID 1 in a container). What it does at each phase is in signals.ts. `once`, so a second
+  // signal from an impatient operator falls through to the default and ends the process.
+  const gate = createStopGate({
+    exit: process.exit,
+    forceExitAfter: (ms) => scheduleForceExit(process.exit, () => 1, ms),
+    log: (message) => console.error(message),
+  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, gate.onSignal);
+  }
+
+  const { built, ingest, durable, pool, port, host, shutdownDeadlineMs, shutdownDelayMs } =
+    await setupServer();
+  gate.booting(shutdownDeadlineMs);
 
   // Boot order lives in bootIngest, shared with the acceptance stack: verify, register, decoy, bind, then
   // recovery and the sweepers. The bind comes first so a failed bind does not spend recovery budget.
@@ -16,6 +31,7 @@ async function main(): Promise<void> {
     durable,
     pool,
     recoveryOwner: randomUUID(),
+    shutdownDelayMs,
     listen: async () => {
       await listen(built.server, port, host);
       console.log(`docmind server listening on http://${host}:${port}`);
@@ -38,9 +54,7 @@ async function main(): Promise<void> {
       .finally(() => scheduleForceExit(process.exit, () => process.exitCode));
   };
 
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, stop);
-  }
+  gate.running(stop);
 }
 
 main().catch((err) => {

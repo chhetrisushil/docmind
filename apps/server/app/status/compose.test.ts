@@ -31,7 +31,10 @@ class RecordingStore extends InMemoryReadModelStore {
   }
 }
 
-function compose(chat = false) {
+function compose(
+  chat = false,
+  httpTimeouts?: { keepAliveTimeoutMs: number; headersTimeoutMs: number },
+) {
   // The encrypting store the app uses in production, over an in-memory log: its sealing covers feed the map.
   const events = new EncryptingEventStore(new InMemoryAsyncEventStore(), new InMemoryKeyStore(), {
     sensitive: { ...SENSITIVE_EVENT_PATHS },
@@ -47,6 +50,7 @@ function compose(chat = false) {
     blobRoot: loadBlobRoot({ DOCMIND_BLOB_DIR: root }),
     secureCookies: false,
     trustProxy: false,
+    ...(httpTimeouts && { httpTimeouts }),
     ingest: { ...createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" }), sleep: async () => {} }, // no real backoff on the failing guard
     status: { writer: store, readerFor: () => store, source: events },
     ...(chat && {
@@ -75,6 +79,26 @@ async function runFailingIngest(composed: ReturnType<typeof compose>["composed"]
   await expect(handle.waitForCompletion()).rejects.toBeInstanceOf(Error);
   return { identity, documentId };
 }
+
+describe("buildServer HTTP settings", () => {
+  it("applies the configured keep-alive and headers timeouts to the server it returns", async () => {
+    const { composed } = compose(false, { keepAliveTimeoutMs: 65_000, headersTimeoutMs: 66_000 });
+    expect([composed.server.keepAliveTimeout, composed.server.headersTimeout]).toEqual([
+      65_000, 66_000,
+    ]);
+    await composed.readiness.close();
+    await composed.app.close();
+  });
+
+  it("keeps the defaults when none are configured", async () => {
+    const { composed } = compose();
+    expect([composed.server.keepAliveTimeout, composed.server.headersTimeout]).toEqual([
+      5_000, 20_000,
+    ]);
+    await composed.readiness.close();
+    await composed.app.close();
+  });
+});
 
 describe("buildServer and the ingest-status model", () => {
   it("mounts the chat routes when chat is configured, and not otherwise", async () => {
