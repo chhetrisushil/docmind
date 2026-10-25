@@ -281,7 +281,7 @@ These are from the spec's open risks (§10):
 ## 14. References
 
 - Spec: `docs/specs/2026-10-18-docmind-design.md` (sections 4 data, 5 ingestion, 6 chat, 7 web UI, 8 testing)
-- Design notes: `docs/design/linked-retrieval.md`, `docs/design/m6-loom-ui-native.md`
+- Design notes: `docs/design/linked-retrieval.md`, `docs/design/m6-loom-ui-native.md`, `docs/design/cloud-scaling.md` (cloud deployment, scaling, load-test baseline)
 - Feature specs: `docs/specs/2026-10-22-multi-document-chat-scope-design.md`
 - Runbooks: `docs/operations/llm-providers.md`, `rotate-kek.md`, `backfill.md`
 - Reading order: [codebase-guide.md](codebase-guide.md)
