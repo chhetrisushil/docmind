@@ -63,7 +63,10 @@ function parts(
       close: async () => void calls.push("closeActivity"),
     },
     vectors: {},
-    readiness: { beginShutdown: note("readiness.beginShutdown") },
+    readiness: {
+      beginShutdown: note("readiness.beginShutdown"),
+      close: async () => void calls.push("closeReadiness"),
+    },
     events: { closeAll: note("events.closeAll") },
     titles: { idle: async () => void calls.push("titlesIdle") },
     chatStreams: { closeAll: note("chatStreams.closeAll") },
@@ -226,8 +229,42 @@ describe("bootIngest", () => {
       "closeActivity",
       "closeApp",
       "closeDurable",
+      "closeReadiness",
       "endPool",
     ]);
+  });
+
+  it("with a shutdown delay it flips readiness at once and serves on, then drains only after the delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = await bootIngest(
+        parts({
+          shutdownDelayMs: 5_000,
+          drainServer: async (then) => {
+            calls.push("drainServer");
+            await then();
+          },
+        }),
+      );
+      calls.length = 0;
+      const stopped = handle.stop();
+      await vi.advanceTimersByTimeAsync(4_999);
+      // Readiness is already 503, but nothing else has begun: the listener, streams and sweepers are untouched.
+      expect(calls).toEqual(["readiness.beginShutdown"]);
+      await vi.advanceTimersByTimeAsync(1);
+      await stopped;
+      expect(calls.slice(0, 6)).toEqual([
+        "readiness.beginShutdown",
+        "recovery.stop",
+        "sweeper.stop",
+        "events.closeAll",
+        "chatStreams.closeAll",
+        "drainServer",
+      ]);
+      expect(calls.at(-1)).toBe("endPool");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recovery owns ingest and chat executions (conversation, title) and nothing else", async () => {

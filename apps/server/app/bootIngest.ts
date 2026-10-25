@@ -35,6 +35,11 @@ export interface BootIngestParts {
    * Stops the server accepting requests, runs `then` once it is drained (even if the drain fails), and
    * propagates a drain failure. Default: no server, so `then` runs at once.
    */
+  /**
+   * After SIGTERM, how long to keep serving normally, with `/readyz` at 503, before the drain starts
+   * (`DOCMIND_SHUTDOWN_DELAY_MS`, default 0). It counts inside the caller's forced-exit deadline.
+   */
+  shutdownDelayMs?: number;
   drainServer?: (then: () => Promise<void>) => Promise<void>;
 }
 
@@ -49,7 +54,16 @@ export interface BootIngestParts {
 export async function bootIngest(
   parts: BootIngestParts,
 ): Promise<{ stop(): Promise<void>; recoveryIdle(): Promise<void> }> {
-  const { built, ingest, durable, pool, listen, recoveryOwner, background = true } = parts;
+  const {
+    built,
+    ingest,
+    durable,
+    pool,
+    listen,
+    recoveryOwner,
+    background = true,
+    shutdownDelayMs = 0,
+  } = parts;
   const {
     app,
     store,
@@ -155,11 +169,15 @@ export async function bootIngest(
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
-    // Readiness first, then timers, then the open event streams (they never end on their own, so the server drain would
+    // Readiness first (and the optional delay), then timers, then the open event streams (they never end on their own, so the server drain would
     // wait on them), then the server drain, then the close sequence.
     stopping ??= (async () => {
-      // First of all, before anything is awaited: /readyz turns 503 so the balancer stops sending new requests.
+      // First of all: /readyz turns 503. Then, if a delay is set, everything else keeps running as normal
+      // (the listener, the streams, the timers) so a balancer's next probes can see the 503 and stop routing;
+      // only after that does the drain close the listener.
       readiness.beginShutdown();
+      if (shutdownDelayMs > 0)
+        await new Promise<void>((resolve) => setTimeout(resolve, shutdownDelayMs));
       if (sweepTimer) clearInterval(sweepTimer);
       recovery.stop();
       const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins
@@ -188,6 +206,7 @@ export async function bootIngest(
               ),
             closeApp: () => app.close(),
             closeDurable: () => durable.close(),
+            closeReadiness: () => readiness.close(),
             endPool: () => pool.end(),
           }),
         );

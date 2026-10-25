@@ -14,7 +14,7 @@ afterEach(async () => {
 const PASSWORD = "correct horse battery";
 
 /** A fresh server, store and throttle per test. The clock is fixed, so a lock never runs out. */
-async function start(trustProxy = false, secureCookies = false) {
+async function start(trustProxy = false, secureCookies = false, trustProxyHops?: number) {
   const store = new MemoryAuthStore();
   const throttle = new MemoryThrottle();
   throttle.now = () => 1_000_000;
@@ -27,6 +27,7 @@ async function start(trustProxy = false, secureCookies = false) {
       throttle,
       secureCookies,
       trustProxy,
+      ...(trustProxyHops !== undefined && { trustProxyHops }),
     }),
   );
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -149,6 +150,37 @@ describe("sign-up", () => {
       });
       expect(res.status).toBe(202);
     }
+  });
+});
+
+describe("trusted proxy hops", () => {
+  // client -> CDN -> balancer -> app: the entry two from the right is the client, the last is the CDN.
+  const chain = (client: string) => ({ "x-forwarded-for": `${client}, 10.1.1.1` });
+
+  it("with two hops the throttle key is the client, not the last proxy", async () => {
+    const api = await start(true, false, 2);
+    for (let i = 0; i < POLICIES.signUpIp.free + 2; i++) {
+      const res = await api.signUp(`u${i}@example.com`, PASSWORD, chain(`198.51.100.${i}`));
+      expect(res.status).toBe(202);
+    }
+    // The same client is still limited.
+    let limited = false;
+    for (let i = 0; i < POLICIES.signUpIp.free + 2 && !limited; i++) {
+      limited =
+        (await api.signUp(`s${i}@example.com`, PASSWORD, chain("203.0.113.5"))).status === 429;
+    }
+    expect(limited).toBe(true);
+  });
+
+  it("with the default one hop the same chain keys everyone on the last proxy", async () => {
+    const api = await start(true);
+    const statuses: number[] = [];
+    for (let i = 0; i < POLICIES.signUpIp.free + 2; i++) {
+      statuses.push(
+        (await api.signUp(`u${i}@example.com`, PASSWORD, chain(`198.51.100.${i}`))).status,
+      );
+    }
+    expect(statuses).toContain(429);
   });
 });
 
