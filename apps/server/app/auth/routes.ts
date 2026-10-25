@@ -35,8 +35,10 @@ export interface AuthRoutesDeps {
   throttle: Throttle;
   /** Mark the session cookie Secure: set it for any deployment served over HTTPS. */
   secureCookies: boolean;
-  /** Believe X-Forwarded-For (its last entry) for the client address. Only behind one proxy of yours. */
+  /** Believe X-Forwarded-For for the client address (the entry `trustProxyHops` from the right). Only behind proxies of yours. */
   trustProxy: boolean;
+  /** Trusted proxies in front of the server (`DOCMIND_TRUST_PROXY_HOPS`); only read with `trustProxy`. Default 1. */
+  trustProxyHops?: number;
   /** Absent: `DELETE /api/me` is not a route. */
   erasure?: AccountErasure;
 }
@@ -49,7 +51,16 @@ function tooMany(res: Parameters<Handler>[1], seconds: number): void {
 
 /** Sign-up, login, logout and `GET /api/me`. Every route gets its identity from the session. */
 export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
-  const { service, authenticator, store, throttle, secureCookies, trustProxy, erasure } = deps;
+  const {
+    service,
+    authenticator,
+    store,
+    throttle,
+    secureCookies,
+    trustProxy,
+    trustProxyHops,
+    erasure,
+  } = deps;
 
   return {
     // Answers the same 202 whether or not the email is registered, and never sets a cookie, so the
@@ -57,7 +68,7 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
     "POST /api/auth/sign-up": async (req, res) => {
       const body = await readJson(req, res, SignUpRequest);
       if (!body) return;
-      const ip = ipKey("signup", clientIp(req, trustProxy));
+      const ip = ipKey("signup", clientIp(req, trustProxy, trustProxyHops));
       const account = accountKey("signup", body.email);
       // Count, then check (before any argon2): a check-then-count lets a parallel burst all pass.
       await throttle.fail(ip, POLICIES.signUpIp);
@@ -74,7 +85,7 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
     "POST /api/auth/login": async (req, res) => {
       const body = await readJson(req, res, LoginRequest);
       if (!body) return;
-      const ip = ipKey("login", clientIp(req, trustProxy));
+      const ip = ipKey("login", clientIp(req, trustProxy, trustProxyHops));
       const account = accountKey("login", body.email);
       await throttle.fail(account, POLICIES.loginAccount);
       const wait = await throttle.retryAfter([ip, account]);
@@ -116,7 +127,7 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
         if (!body) return;
         const email = await store.findEmail(identity);
         if (!email) return sendError(res, 401, "unauthorized", "authentication required");
-        const ip = ipKey("login", clientIp(req, trustProxy));
+        const ip = ipKey("login", clientIp(req, trustProxy, trustProxyHops));
         const account = accountKey("login", email);
         await throttle.fail(account, POLICIES.loginAccount);
         const wait = await throttle.retryAfter([ip, account]);
@@ -147,7 +158,7 @@ export function authRoutes(deps: AuthRoutesDeps): Record<string, Handler> {
       // database, and looks exactly like an unknown one. Nothing about the answer is cacheable.
       "GET /api/erasure/:receipt": async (req, res, { params }) => {
         res.setHeader("cache-control", "no-store");
-        const ip = ipKey("erasure", clientIp(req, trustProxy));
+        const ip = ipKey("erasure", clientIp(req, trustProxy, trustProxyHops));
         await throttle.fail(ip, POLICIES.erasureStatusIp);
         const wait = await throttle.retryAfter([ip]);
         if (wait > 0) return tooMany(res, wait);
