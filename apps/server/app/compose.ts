@@ -286,16 +286,34 @@ export function buildServer(options: ComposeOptions) {
           },
         })
       : undefined;
-  // The probe pings the app pool with the cheapest query there is; `stop()` flips it before the drain.
+  // The probe pings over a connection of its own (same settings as the app pool, one client): on the shared
+  // pool it would queue behind requests under load and report the database down while it is healthy.
+  // `stop()` flips it; the close sequence ends this pool. A pool opens no connection until the first probe.
+  const readyPool = new Pool({
+    ...pool.options,
+    max: 1,
+    connectionTimeoutMillis: READY_PING_TIMEOUT_MS,
+  });
+  readyPool.on("error", (err) =>
+    console.error(
+      "idle readiness database connection failed",
+      err instanceof Error ? err.constructor.name : typeof err,
+    ),
+  );
   const readiness = createReadiness({
     // node-postgres honours `query_timeout` per query but its typings omit it; the cap frees the connection from a hung database.
     ping: async () => {
-      await pool.query({ text: "SELECT 1", query_timeout: READY_PING_TIMEOUT_MS } as QueryConfig);
+      await readyPool.query({
+        text: "SELECT 1",
+        query_timeout: READY_PING_TIMEOUT_MS,
+      } as QueryConfig);
     },
+    closePing: () => readyPool.end(),
   });
   const server = createHttpServer(
     {
       "GET /readyz": readiness.handler,
+      "HEAD /readyz": readiness.handler,
       ...authRoutes({
         service: new AuthService(store),
         authenticator,

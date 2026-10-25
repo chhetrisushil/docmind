@@ -3,35 +3,50 @@ import { type Handler, json } from "./respond";
 /** How long a probe waits for the database before it answers 503; a balancer's own timeout is longer. */
 export const READY_PING_TIMEOUT_MS = 1_000;
 
+/** A ping this many timeouts old is not reused: a probe starts a fresh one instead of waiting on it forever. */
+const STALE_PING_TIMEOUTS = 3;
+
 /**
- * The readiness probe behind `GET /readyz` (`/healthz` stays the static liveness check). It is 200 only
- * while the process is not shutting down and `ping` (a trivial query on the app pool) succeeds within
- * `timeoutMs`; otherwise 503 with a fixed reason code, never error text. `beginShutdown()` flips it at
- * the very start of shutdown, so a balancer stops routing before the drain begins.
+ * The readiness probe behind `GET /readyz` and `HEAD /readyz` (`/healthz` stays the static liveness check).
+ * It is 200 only while the process is not shutting down and `ping` (a trivial query) succeeds within
+ * `timeoutMs`; otherwise 503 with a fixed reason code, never error text. `beginShutdown()` flips it to
+ * 503 `shutting_down`; the caller keeps serving for a while after that, so a balancer's next probe can
+ * see it (see `DOCMIND_SHUTDOWN_DELAY_MS`).
+ *
+ * `ping` must not use the request pool: a probe queued behind a saturated pool would report the
+ * database down while it is healthy, and every replica would be ejected at peak. `compose.ts` gives it
+ * a connection of its own, and `close()` ends whatever `closePing` ends.
  *
  * The probe is unauthenticated, so it must not amplify: concurrent probes share the one ping in flight,
- * and a new one starts only after it settles. At most one pool connection is ever spent on probes.
+ * and a new one starts only after it settles (or goes stale). A failed ping is not remembered.
  */
 export function createReadiness(opts: {
   ping: () => Promise<unknown>;
+  closePing?: () => Promise<unknown>;
   timeoutMs?: number;
-}): { handler: Handler; beginShutdown(): void } {
+  now?: () => number;
+}): { handler: Handler; beginShutdown(): void; close(): Promise<void> } {
   const timeoutMs = opts.timeoutMs ?? READY_PING_TIMEOUT_MS;
+  const now = opts.now ?? Date.now;
   let shuttingDown = false;
-  let inflight: Promise<boolean> | undefined;
+  let inflight: { done: Promise<boolean>; startedAt: number } | undefined;
 
   const ping = (): Promise<boolean> => {
-    if (!inflight) {
-      const p: Promise<boolean> = opts.ping().then(
-        () => true,
-        () => false,
-      );
-      inflight = p;
-      void p.then(() => {
-        if (inflight === p) inflight = undefined;
+    if (!inflight || now() - inflight.startedAt > STALE_PING_TIMEOUTS * timeoutMs) {
+      // `Promise.resolve().then` turns a synchronous throw from `ping` into a rejection, so it is a 503 too.
+      const done: Promise<boolean> = Promise.resolve()
+        .then(opts.ping)
+        .then(
+          () => true,
+          () => false,
+        );
+      const entry = { done, startedAt: now() };
+      inflight = entry;
+      void done.then(() => {
+        if (inflight === entry) inflight = undefined;
       });
     }
-    return inflight;
+    return inflight.done;
   };
 
   const unavailable = (reason: "db_unavailable" | "shutting_down") => ({
@@ -42,6 +57,10 @@ export function createReadiness(opts: {
   return {
     beginShutdown: () => {
       shuttingDown = true;
+    },
+    close: async () => {
+      shuttingDown = true;
+      await opts.closePing?.();
     },
     handler: async (_req, res) => {
       res.setHeader("cache-control", "no-store");

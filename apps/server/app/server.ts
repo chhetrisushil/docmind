@@ -9,6 +9,8 @@ import { StartupConfigError } from "./startupError";
 
 const baseRoutes: Record<string, Handler> = {
   "GET /healthz": (_req, res) => json(res, 200, { status: "ok" }),
+  // A balancer may probe with HEAD; without a route it would fall through to the web app's static fallback.
+  "HEAD /healthz": (_req, res) => json(res, 200, { status: "ok" }),
 };
 
 interface Pattern {

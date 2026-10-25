@@ -30,6 +30,20 @@ describe("http server", () => {
     expect(await res.json()).toEqual({ status: "ok" });
   });
 
+  it("HEAD /healthz returns 200 with no body, even with a web fallback mounted", async () => {
+    const res = await fetch(`${base}/healthz`, { method: "HEAD" });
+    expect([res.status, await res.text()]).toEqual([200, ""]);
+    const withWeb = createHttpServer({}, { secure: false }, {}, (_req, res) => {
+      res.writeHead(200).end("spa");
+    });
+    await new Promise<void>((r) => withWeb.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(withWeb.address() as AddressInfo).port}`;
+    expect((await fetch(`${url}/healthz`, { method: "HEAD" })).headers.get("content-type")).toBe(
+      "application/json",
+    );
+    await new Promise<void>((r) => withWeb.close(() => r()));
+  });
+
   it("answers an unknown route with a JSON 404", async () => {
     const res = await fetch(`${base}/nope`);
     expect(res.status).toBe(404);

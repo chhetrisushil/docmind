@@ -1,4 +1,4 @@
-import { SHUTDOWN_DRAIN_MS, drainWithin } from "./shutdown";
+import { READINESS_END_MS, SHUTDOWN_DRAIN_MS, drainWithin } from "./shutdown";
 
 /**
  * How long shutdown waits for a pool to end. `pool.end()` waits for checked-out clients, so a query
@@ -45,6 +45,8 @@ export interface CloseDeps {
   closeStatus(): Promise<unknown>;
   closeApp(): Promise<unknown>;
   closeDurable(): Promise<unknown>;
+  /** The readiness probe's own pool; absent in a build without one. */
+  closeReadiness?(): Promise<unknown>;
   endPool(): Promise<unknown>;
 }
 
@@ -59,8 +61,8 @@ export interface CloseDeps {
  *  3. release this node's execution leases, so the next boot recovers what was interrupted at once
  *     instead of waiting out the lease (after the steps are interrupted, before the stores close);
  *  4. stop feeding the status model (a step still running must not fold onto stores about to close), close it;
- *  5. close the app (Loom's stores), then the Loom pool, then the pool the key store reads from, each pool
- *     bounded by POOL_END_MS.
+ *  5. close the app (Loom's stores), then the Loom pool, then the readiness probe's pool, then the pool the
+ *     key store reads from, each pool bounded (POOL_END_MS; READINESS_END_MS for the probe's).
  */
 export const closeSequence = (
   d: CloseDeps,
@@ -69,6 +71,7 @@ export const closeSequence = (
   const closeChat = d.closeChat?.bind(d);
   const stopErasure = d.stopErasure?.bind(d);
   const closeErasureLocks = d.closeErasureLocks?.bind(d);
+  const closeReadiness = d.closeReadiness?.bind(d);
   return [
     ...(stopErasure ? [() => stopErasure()] : []),
     ...(closeErasureLocks
@@ -84,6 +87,9 @@ export const closeSequence = (
     },
     () => d.closeApp(),
     () => bounded(d.closeDurable(), poolEndMs, "closeDurable"),
+    ...(closeReadiness
+      ? [() => bounded(closeReadiness(), READINESS_END_MS, "closeReadiness")]
+      : []),
     () => bounded(d.endPool(), poolEndMs, "endPool"),
   ];
 };

@@ -94,6 +94,85 @@ describe("readiness", () => {
     expect(pings).toBe(2);
   });
 
+  it("treats a synchronous throw from the ping as a 503", async () => {
+    const base = await serve(
+      createReadiness({
+        ping: () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    const res = await fetch(`${base}/readyz`);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ status: "unavailable", reason: "db_unavailable" });
+  });
+
+  it("does not cache a rejected ping: the next probe pings again and can succeed", async () => {
+    let pings = 0;
+    const base = await serve(
+      createReadiness({
+        ping: async () => {
+          pings += 1;
+          if (pings === 1) throw new Error("down");
+        },
+      }),
+    );
+    expect((await fetch(`${base}/readyz`)).status).toBe(503);
+    expect((await fetch(`${base}/readyz`)).status).toBe(200);
+    expect(pings).toBe(2);
+  });
+
+  it("does not reuse a ping that has outlived a few timeouts", async () => {
+    let t = 0;
+    let pings = 0;
+    const hang = deferred();
+    const base = await serve(
+      createReadiness({
+        ping: () => {
+          pings += 1;
+          return pings === 1 ? hang.promise : Promise.resolve();
+        },
+        timeoutMs: 20,
+        now: () => t,
+      }),
+    );
+    expect((await fetch(`${base}/readyz`)).status).toBe(503); // the first ping hangs
+    t = 40; // within three timeouts: the hung ping is shared, not repeated
+    expect((await fetch(`${base}/readyz`)).status).toBe(503);
+    expect(pings).toBe(1);
+    t = 61; // past three timeouts: a fresh ping
+    expect((await fetch(`${base}/readyz`)).status).toBe(200);
+    expect(pings).toBe(2);
+    hang.resolve();
+  });
+
+  it("answers HEAD like GET, with no body", async () => {
+    const readiness = createReadiness({ ping: async () => {} });
+    server = createHttpServer({
+      "GET /readyz": readiness.handler,
+      "HEAD /readyz": readiness.handler,
+    });
+    await new Promise<void>((r) => server?.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const ok = await fetch(`${base}/readyz`, { method: "HEAD" });
+    expect([ok.status, await ok.text()]).toEqual([200, ""]);
+    readiness.beginShutdown();
+    const down = await fetch(`${base}/readyz`, { method: "HEAD" });
+    expect([down.status, await down.text()]).toEqual([503, ""]);
+  });
+
+  it("close() ends the ping's own resource and turns the probe off", async () => {
+    let closed = 0;
+    const readiness = createReadiness({
+      ping: async () => {},
+      closePing: async () => {
+        closed += 1;
+      },
+    });
+    await readiness.close();
+    expect(closed).toBe(1);
+  });
+
   it("needs no session and no Origin or Fetch Metadata, like /healthz", async () => {
     const base = await serve(createReadiness({ ping: async () => {} }), true);
     const res = await fetch(`${base}/readyz`, { headers: { origin: "https://evil.example" } });
