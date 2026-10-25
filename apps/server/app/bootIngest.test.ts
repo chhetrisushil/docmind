@@ -63,6 +63,7 @@ function parts(
       close: async () => void calls.push("closeActivity"),
     },
     vectors: {},
+    readiness: { beginShutdown: note("readiness.beginShutdown") },
     events: { closeAll: note("events.closeAll") },
     titles: { idle: async () => void calls.push("titlesIdle") },
     chatStreams: { closeAll: note("chatStreams.closeAll") },
@@ -210,6 +211,7 @@ describe("bootIngest", () => {
     calls.length = 0;
     await Promise.all([handle.stop(), handle.stop()]);
     expect(calls).toEqual([
+      "readiness.beginShutdown",
       "recovery.stop",
       "sweeper.stop",
       "events.closeAll",
