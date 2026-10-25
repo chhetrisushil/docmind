@@ -33,6 +33,15 @@ describe("loadMigrateConfig", () => {
   it("names the variable when the URL is missing", () => {
     expect(() => loadMigrateConfig({})).toThrow(/^DOCMIND_MIGRATE_URL is not set/);
   });
+
+  it("ignores another secret's unreadable _FILE: the job resolves only its own", () => {
+    expect(
+      loadMigrateConfig({
+        DOCMIND_MIGRATE_URL: "postgres://owner",
+        ANTHROPIC_API_KEY_FILE: "/nonexistent/key",
+      }).url,
+    ).toBe("postgres://owner");
+  });
 });
 
 describe.skipIf(!PG_URL)("migration runner (needs DOCMIND_TEST_PG_URL)", () => {

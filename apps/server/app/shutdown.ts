@@ -59,23 +59,23 @@ export const FORCE_EXIT_MS = 5_000;
 export const READINESS_END_MS = 2_000;
 
 /**
- * The worst case of the close sequence when every bounded step hits its bound: two SHUTDOWN_DRAIN_MS waits
- * (the sweeper, the fired starts) and three 10 s pool ends (the eraser's locks, the Loom pool, the app
- * pool; closeSequence.test pins that 10 s is POOL_END_MS), plus the readiness pool.
+ * The worst case of the close sequence when every bounded step hits its bound: three SHUTDOWN_DRAIN_MS waits
+ * (the sweeper, the eraser's running step, the fired starts) and three 10 s pool ends (the eraser's locks,
+ * the Loom pool, the app pool; closeSequence.test pins that 10 s is POOL_END_MS), plus the readiness pool.
  */
-export const CLOSE_BOUNDS_MS = 2 * SHUTDOWN_DRAIN_MS + 3 * 10_000 + READINESS_END_MS;
+export const CLOSE_BOUNDS_MS = 3 * SHUTDOWN_DRAIN_MS + 3 * 10_000 + READINESS_END_MS;
 
 /**
  * The overall deadline of a shutdown, armed when the signal arrives. It must exceed the sum of the
- * bounded close steps (CLOSE_BOUNDS_MS, 52 s) and any DOCMIND_SHUTDOWN_DELAY_MS, and stay under a
+ * bounded close steps (CLOSE_BOUNDS_MS, 62 s) plus the forced-exit margin, and stay under a
  * supervisor's kill timeout (systemd defaults to 90 s), so a slow in-flight request (the per-route request
  * timeout is 60 s) cannot hold the process until SIGKILL, which would skip the lease release.
  */
-export const FORCE_EXIT_DEADLINE_MS = 60_000;
+export const FORCE_EXIT_DEADLINE_MS = 70_000;
 
 /**
  * `DOCMIND_SHUTDOWN_DEADLINE_MS` (default FORCE_EXIT_DEADLINE_MS, at most an hour): the overall shutdown deadline.
- * Set it to the platform's termination grace minus a few seconds; below the close steps' 40 s it ends
+ * Set it to the platform's termination grace minus a few seconds; below the close steps' bounds it can end
  * the process before the leases are released. A bad value fails the boot.
  */
 export function loadShutdownDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -102,7 +102,7 @@ export function scheduleForceExit(
  */
 export function shutdownDeadlineWarning(deadlineMs: number): string | undefined {
   return deadlineMs < CLOSE_BOUNDS_MS + FORCE_EXIT_MS
-    ? "DOCMIND_SHUTDOWN_DEADLINE_MS is below the close sequence's worst case plus the forced-exit margin (57000): a slow shutdown may be cut off before the execution leases are released"
+    ? `DOCMIND_SHUTDOWN_DEADLINE_MS is below the close sequence's worst case plus the forced-exit margin (${CLOSE_BOUNDS_MS + FORCE_EXIT_MS}): a slow shutdown may be cut off before the execution leases are released`
     : undefined;
 }
 

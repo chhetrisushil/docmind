@@ -70,9 +70,12 @@ export function readSecret(env: NodeJS.ProcessEnv, name: string): string | undef
  * hands it to every loader that reads those names (chat settings, the LLM factory, the warnings), so
  * none of them needs to know about files and a bad file fails the boot before a connection opens.
  */
-export function resolveSecretEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function resolveSecretEnv(
+  env: NodeJS.ProcessEnv,
+  names: readonly (typeof SECRET_VARIABLES)[number][] = SECRET_VARIABLES,
+): NodeJS.ProcessEnv {
   const out = { ...env };
-  for (const name of SECRET_VARIABLES) {
+  for (const name of names) {
     const value = readSecret(env, name);
     if (value !== undefined) out[name] = value;
   }

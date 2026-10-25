@@ -31,7 +31,7 @@ export async function runRotation(
 }
 
 async function main(): Promise<void> {
-  const url = resolveSecretEnv(process.env).DOCMIND_MIGRATE_URL;
+  const url = resolveSecretEnv(process.env, ["DOCMIND_MIGRATE_URL"]).DOCMIND_MIGRATE_URL;
   if (!url)
     throw new Error(
       "DOCMIND_MIGRATE_URL is not set (the owner role's connection string; or DOCMIND_MIGRATE_URL_FILE)",

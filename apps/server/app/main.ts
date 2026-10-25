@@ -39,8 +39,10 @@ async function main(): Promise<void> {
     drainServer: (then) => shutdown(built.server, { close: then }),
   });
 
-  // One shutdown, shared by every signal: a second signal reuses the same promise (bootIngest's stop is
-  // idempotent, and a second server.close() would reject with ERR_SERVER_NOT_RUNNING).
+  // One shutdown, shared by SIGTERM and SIGINT: the other signal reuses the same promise (bootIngest's stop is
+  // idempotent, and a second server.close() would reject with ERR_SERVER_NOT_RUNNING). The handlers are
+  // `once`, so a repeat of the same signal takes the default action and kills the process: the operator's
+  // way out of a slow shutdown, at the cost of the lease release.
   // The deadline starts at the first signal, so a drain that never ends (a slow upload) cannot outlive it: exit 1.
   let closing: Promise<void> | undefined;
   const stop = () => {
