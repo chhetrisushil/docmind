@@ -15,9 +15,11 @@ not from a run against that platform. The image itself is built and smoke-tested
   in memory; blobs are on a local filesystem; an old-version node can give up a new-version execution
   during a rolling deploy. See [cloud-scaling.md §4](../design/cloud-scaling.md#4-required-for-n-replicas)
   (S1 to S8). Set the platform's desired count and maximum to 1.
-- **Termination grace of at least 65 seconds (not possible on Cloud Run, section 8).** The server's forced-exit deadline is 60 s and its close
-  steps take about 40 s (`apps/server/app/shutdown.ts`). A SIGKILL at a platform default of 10 to 30 s
-  skips the lease release, so recovery then waits out the 30 s lease TTL (cloud-scaling.md C6).
+- **Termination grace longer than `DOCMIND_SHUTDOWN_DEADLINE_MS` plus 5 s (not possible on Cloud Run, section 8).**
+  The recommended cloud values are a deadline of 75 s and a shutdown delay of 15 s (section 8), which give a
+  **grace of at least 80 s**. The close steps are bounded at about 52 s (`apps/server/app/shutdown.ts`), and
+  the boot refuses a delay that does not fit in the deadline next to them. A SIGKILL at a platform default of
+  10 to 30 s skips the lease release, so recovery then waits out the 30 s lease TTL (cloud-scaling.md C6).
 - **Memory of at least 3 to 4 GiB, enforced by a cgroup limit** (cloud-scaling.md C12). Each parse child
   has a 512 MiB V8 heap, but Buffer memory is not bounded by it (`packages/parsers/src/runner/ParseRunner.ts`),
   and up to four ingest steps each buffer a whole file. The recommended instance is 2 to 4 vCPU and 8 GiB.
@@ -98,15 +100,17 @@ Set these on the service. Variables not listed keep their defaults (see `.env.ex
 
 | Group | Variable | Cloud value |
 | --- | --- | --- |
-| Server | `HOST` | `0.0.0.0` (set in the image; the code default `127.0.0.1` is unreachable from a load balancer) |
+| Server | `DOCMIND_DEPLOYMENT` | `production`. The boot then refuses a missing `DOCMIND_CHAT_ENVELOPE_KEY`, a missing or non-`https:` `DOCMIND_PUBLIC_ORIGIN` and `DOCMIND_COOKIE_SECURE` other than `true`, and it warns when `DOCMIND_TRUST_PROXY` is off. |
+| | `HOST` | `0.0.0.0` (set in the image; the code default `127.0.0.1` is unreachable from a load balancer) |
 | | `PORT` | `3000` (image default) |
 | | `DOCMIND_PUBLIC_ORIGIN` | The browser-visible origin, such as `https://docmind.example.com` (no path; default port omitted). Set it: the write-origin check then no longer depends on the proxy forwarding `Host` unchanged. |
 | | `DOCMIND_COOKIE_SECURE` | `true` (the site is served over HTTPS) |
-| | `DOCMIND_TRUST_PROXY` | `true` **only** with exactly one proxy of yours in front. The client IP is the last `X-Forwarded-For` entry (`packages/auth/src/clientIp.ts`); with a CDN in front of the load balancer every user then shares one login-throttle key (cloud-scaling.md C7). |
+| | `DOCMIND_TRUST_PROXY` and `DOCMIND_TRUST_PROXY_HOPS` | `true`, and the hop count is the number of proxies of yours in front (default 1: the load balancer; 2 for a CDN in front of the load balancer). The client IP is the entry that many places from the right of `X-Forwarded-For` (`packages/auth/src/clientIp.ts`). **The origin must accept traffic only from the outermost proxy** (security group, or a CDN-only origin): a direct request with a forged header would otherwise pick its own login-throttle key. |
 | Database | `DATABASE_URL` | `docmind_app` URL, password auth (section 6) |
 | | `LOOM_DATABASE_URL` | `docmind_loom` URL, direct or session mode (section 6) |
 | Keys | `DOCMIND_KEK_FILE` and `DOCMIND_KEK_ID` | Path of a file holding the base64 of 32 random bytes, mounted from the secret manager (`DOCMIND_KEK` itself also works but puts the key in the environment; `packages/keystore-pg/src/kek.ts`). `DOCMIND_KEK_ID` defaults to `kek-1`. **Losing the KEK makes every encrypted byte unreadable**: back it up separately from the database. Rotation: [rotate-kek.md](rotate-kek.md). |
-| | `DOCMIND_CHAT_ENVELOPE_KEY` | **Required in practice.** 32 to 512 characters, for example `openssl rand -base64 32`. Unset, it is random per process: queued chat envelopes fail verification after every restart (`apps/server/app/chats/settings.ts`). Only `DOCMIND_KEK` has a `_FILE` variant today (cloud-scaling.md C9), so this one goes through the platform's secret injection as an environment variable. |
+| | `DOCMIND_CHAT_ENVELOPE_KEY_FILE` | **Required** (production refuses to boot without the key). 32 to 512 characters, for example `openssl rand -base64 32`. Unset in development, it is random per process: queued chat envelopes fail verification after every restart (`apps/server/app/chats/settings.ts`). |
+| | Other secrets as files | `DATABASE_URL_FILE`, `LOOM_DATABASE_URL_FILE`, `ANTHROPIC_API_KEY_FILE`, `GEMINI_API_KEY_FILE`, `DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS_FILE`; for the migration job, `DOCMIND_MIGRATE_URL_FILE`, `DOCMIND_APP_DB_PASSWORD_FILE` and `DOCMIND_LOOM_DB_PASSWORD_FILE`. A non-empty `_FILE` wins over the plain variable; the file must be a regular file of at most 64 KiB, and its content is trimmed (`apps/server/app/secrets.ts`). |
 | Storage | `DOCMIND_BLOB_DIR` | `/var/lib/docmind/blobs`, a shared volume (section 5) |
 | | `DOCMIND_MAX_UPLOAD_BYTES` and the tenant limits | Defaults are 50 MiB per file; the maximum is 256 MiB. On Cloud Run keep it under 32 MiB (section 8). |
 | Models | `DOCMIND_OLLAMA_URL`, `DOCMIND_EMBED_*`, per-role `DOCMIND_*_PROVIDER` / `_MODEL`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | Section 7 |
@@ -178,15 +182,20 @@ providers per role.
 
 ## 8. Load balancer, health checks and platforms
 
-- **Health check**: `GET /healthz` returns 200. It is liveness only: static, it also answers 200 during
-  shutdown and with the database down. A readiness endpoint is coming in a parallel change; until it
-  lands use `/healthz` and treat deploys as a brief outage.
+- **Health checks.** `GET /healthz` is **liveness**: it is static and always answers 200 while the process
+  runs. `GET /readyz` is **readiness**: 200 when a database ping on its own connection succeeds within 1 s,
+  503 `db_unavailable` otherwise, and 503 `shutting_down` from the moment SIGTERM arrives. Point the load
+  balancer's target health check at `/readyz` with a failure threshold of **3 or more**, and liveness at
+  `/healthz`. Both answer `HEAD` too.
+- **Shutdown delay.** Set `DOCMIND_SHUTDOWN_DELAY_MS=15000` and `DOCMIND_SHUTDOWN_DEADLINE_MS=75000`. After
+  SIGTERM the server keeps serving for the delay while `/readyz` answers 503, so the load balancer stops
+  routing before the listener closes. The delay must be smaller than the deadline minus about 52 s of close
+  steps, or the boot refuses it.
 - **Keep-alive.** The server closes idle keep-alive sockets after **5 s** (`keepAliveTimeoutMs` in
   `apps/server/app/server.ts`). A load balancer with a longer idle timeout (ALB defaults to 60 s) reuses
-  sockets Node already closed and returns intermittent 502s. A setting is coming:
-  `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` (cloud-scaling.md C4); set it above the load balancer's idle timeout
-  (for example 65 s against 60 s). **Until it ships, expect those 502s or lower the load balancer's idle
-  timeout below 5 s where the service allows it.**
+  sockets Node already closed and returns intermittent 502s. Set `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` above the
+  load balancer's idle timeout (for example `65000` against ALB's 60 s) and `DOCMIND_HEADERS_TIMEOUT_MS`
+  above that (`66000`); the boot refuses a headers timeout that is not greater.
 - **Server-sent events**: the stream sends a heartbeat every 15 s and `x-accel-buffering: no`; the load
   balancer's idle timeout must exceed 15 s and responses must not be buffered. The per-request timeout is 60 s.
 - **Affinity** is not needed with one replica.
@@ -197,7 +206,7 @@ providers per role.
   a `tmpfs`-style scratch volume at `/tmp`, an EFS volume (access point 1000:1000) at
   `/var/lib/docmind/blobs`, `stopTimeout: 120` (the Fargate maximum), secrets from Secrets Manager.
 - Service: desired and maximum count 1, deployment type `recreate` (minimum healthy 0 %, maximum 100 %),
-  an ALB target group with health check `/healthz` and a deregistration delay of a few seconds. Run the
+  an ALB target group with health check `/readyz` (unhealthy threshold 3) and a deregistration delay of about 15 s. Run the
   migration as a one-off task (`RunTask`) before updating the service.
 - Fargate platform 1.4 or later is required for EFS.
 
@@ -207,12 +216,13 @@ A `Deployment` with `replicas: 1` and `strategy: Recreate`, `terminationGracePer
 `securityContext.runAsUser: 1000`, `readOnlyRootFilesystem: true`, an `emptyDir` at `/tmp`, a
 `ReadWriteMany` volume claim for the blobs, a memory request equal to the limit, and the migration as a
 `Job`. The `HEALTHCHECK` in the image is ignored by Kubernetes; define a `livenessProbe` on `/healthz`
-with a generous `initialDelaySeconds` (recovery and subject-index hydration run at boot).
+with a generous `initialDelaySeconds` (recovery and subject-index hydration run at boot), and a
+`readinessProbe` on `/readyz` with `failureThreshold: 3`.
 
 ### Cloud Run **(not verified here)**
 
 Not recommended. The termination grace on Cloud Run is a fixed 10 seconds after SIGTERM and cannot be
-raised **(from Google's documentation; not verified here)**, so the "65 seconds" rule in section 1 cannot be
+raised **(from Google's documentation; not verified here)**, so the grace rule in section 1 cannot be
 met. The server's close sequence takes about 40 s, so every stop (each deploy, each scale-in or
 maintenance event) is cut off by SIGKILL mid-close: leases are not released and recovery then waits out
 the 30 s lease TTL before it resumes interrupted ingests and chats. Data is not lost, but work stalls after each
