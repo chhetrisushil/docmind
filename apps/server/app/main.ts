@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import { listen } from "./boot";
 import { bootIngest } from "./bootIngest";
 import { setupServer } from "./setup";
-import { FORCE_EXIT_DEADLINE_MS, scheduleForceExit, shutdown } from "./shutdown";
+import { scheduleForceExit, shutdown } from "./shutdown";
 import { reportStartupFailure } from "./startupError";
 
 async function main(): Promise<void> {
-  const { built, ingest, durable, pool, port, host } = await setupServer();
+  const { built, ingest, durable, pool, port, host, shutdownDeadlineMs } = await setupServer();
 
   // Boot order lives in bootIngest, shared with the acceptance stack: verify, register, decoy, bind, then
   // recovery and the sweepers. The bind comes first so a failed bind does not spend recovery budget.
@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   // The deadline starts at the first signal, so a drain that never ends (a slow upload) cannot outlive it: exit 1.
   let closing: Promise<void> | undefined;
   const stop = () => {
-    if (!closing) scheduleForceExit(process.exit, () => 1, FORCE_EXIT_DEADLINE_MS);
+    if (!closing) scheduleForceExit(process.exit, () => 1, shutdownDeadlineMs);
     closing ??= ingestBoot
       .stop()
       .catch((err: unknown) => {

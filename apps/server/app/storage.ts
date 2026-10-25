@@ -8,13 +8,18 @@ import { subjectOfExecution } from "./subject";
 type CustomStorage = Extract<StorageConfig, { kind: "custom" }>;
 
 /** Pool config for docmind_loom; `search_path` keeps Loom's tables in schema `loom`. */
-export function loomPoolConfig(loomUrl: string): { connectionString: string; options: string } {
-  return { connectionString: loomUrl, options: "-c search_path=loom" };
+export function loomPoolConfig(
+  loomUrl: string,
+  max?: number,
+): { connectionString: string; options: string; max?: number } {
+  return { connectionString: loomUrl, options: "-c search_path=loom", ...(max && { max }) };
 }
 
 export interface DurableStorageOptions {
   loomUrl: string;
   keys: KeyStore;
+  /** Size of the Loom pool (`DOCMIND_LOOM_POOL_MAX`); node-postgres's default of 10 when omitted. */
+  loomPoolMax?: number;
   /** Event paths to seal, per event type. Defaults to `SENSITIVE_EVENT_PATHS`. */
   sensitive?: Readonly<Record<string, readonly string[]>>;
 }
@@ -55,11 +60,12 @@ export interface DurableStorage {
 export function createDurableStorage({
   loomUrl,
   keys,
+  loomPoolMax,
   sensitive = SENSITIVE_EVENT_PATHS,
 }: DurableStorageOptions): DurableStorage {
   // Built here, not by the preset, so a dropped idle connection is logged instead of crashing the
   // process. The stores borrow it; `close()` ends it.
-  const pool = new Pool(loomPoolConfig(loomUrl));
+  const pool = new Pool(loomPoolConfig(loomUrl, loomPoolMax));
   pool.on("error", (err) =>
     console.error(
       "idle Loom database connection failed",

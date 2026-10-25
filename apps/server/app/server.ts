@@ -5,6 +5,7 @@ import { positiveInt } from "./documents/limits";
 import { UPLOAD_ROUTE } from "./documents/routes";
 import { type OriginGuardOptions, isSameOriginRequest, refusalLogger } from "./http/originGuard";
 import { type Handler, type RouteContext, json, sendError } from "./http/respond";
+import { StartupConfigError } from "./startupError";
 
 const baseRoutes: Record<string, Handler> = {
   "GET /healthz": (_req, res) => json(res, 200, { status: "ok" }),
@@ -89,6 +90,39 @@ export const DEFAULT_HTTP_LIMITS: HttpLimits = {
 /** `DOCMIND_MAX_CONNECTIONS` (default 2000, at most 65535); a bad value fails the boot. */
 export function loadMaxConnections(env: NodeJS.ProcessEnv = process.env): number {
   return positiveInt(env, "DOCMIND_MAX_CONNECTIONS", DEFAULT_MAX_CONNECTIONS, 65_535);
+}
+
+const MAX_TIMEOUT_MS = 3_600_000;
+
+/**
+ * `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` (default 5000) and `DOCMIND_HEADERS_TIMEOUT_MS` (default 20000). Behind a
+ * load balancer the keep-alive timeout must be above the balancer's idle timeout (an ALB's is 60 s, so
+ * 65000): otherwise Node closes a socket the balancer is about to reuse, and the client sees a 502.
+ * The headers timeout must stay above the keep-alive timeout, as Node's own guidance says, so a reused
+ * idle socket is not cut by the headers timer while its next request's headers arrive.
+ * A bad value, or a headers timeout not above the keep-alive one, fails the boot.
+ */
+export function loadHttpTimeouts(env: NodeJS.ProcessEnv = process.env): {
+  keepAliveTimeoutMs: number;
+  headersTimeoutMs: number;
+} {
+  const keepAliveTimeoutMs = positiveInt(
+    env,
+    "DOCMIND_KEEP_ALIVE_TIMEOUT_MS",
+    DEFAULT_HTTP_LIMITS.keepAliveTimeoutMs,
+    MAX_TIMEOUT_MS,
+  );
+  const headersTimeoutMs = positiveInt(
+    env,
+    "DOCMIND_HEADERS_TIMEOUT_MS",
+    DEFAULT_HTTP_LIMITS.headersTimeoutMs,
+    MAX_TIMEOUT_MS,
+  );
+  if (headersTimeoutMs <= keepAliveTimeoutMs)
+    throw new StartupConfigError(
+      "DOCMIND_HEADERS_TIMEOUT_MS must be greater than DOCMIND_KEEP_ALIVE_TIMEOUT_MS",
+    );
+  return { keepAliveTimeoutMs, headersTimeoutMs };
 }
 
 /** The HTTP edge. Routes are keyed "METHOD /path"; unknown routes are a JSON 404. */

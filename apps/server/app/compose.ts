@@ -89,6 +89,8 @@ export interface ComposeOptions {
   webDir?: string;
   /** `DOCMIND_MAX_CONNECTIONS`, already validated. */
   maxConnections?: number;
+  /** `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` and `DOCMIND_HEADERS_TIMEOUT_MS`, already validated. */
+  httpTimeouts?: { keepAliveTimeoutMs: number; headersTimeoutMs: number };
   /** Parser registry, runner and progress bus; the runner and registry reach the parse ports through pgIngestDeps. */
   ingest: IngestWiring;
   /** The ingest-status model's stores. */
@@ -326,7 +328,10 @@ export function buildServer(options: ComposeOptions) {
       ...(chatStreams?.routes ?? {}),
     },
     { secure: options.secureCookies, publicOrigin: options.publicOrigin },
-    options.maxConnections === undefined ? {} : { maxConnections: options.maxConnections },
+    {
+      ...(options.maxConnections !== undefined && { maxConnections: options.maxConnections }),
+      ...options.httpTimeouts,
+    },
     options.webDir ? staticHandler(options.webDir) : undefined,
   );
   return {

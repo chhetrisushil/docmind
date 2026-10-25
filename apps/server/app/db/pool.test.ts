@@ -1,8 +1,27 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrate, setAppRolePassword } from "./migrate";
-import { createAppPool } from "./pool";
+import { createAppPool, loadPoolMax } from "./pool";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
+
+describe("loadPoolMax", () => {
+  it("defaults to 10, the node-postgres default, so nothing changes unless it is set", () => {
+    expect(loadPoolMax({}, "DOCMIND_APP_POOL_MAX")).toBe(10);
+  });
+
+  it("reads the named variable", () => {
+    expect(loadPoolMax({ DOCMIND_LOOM_POOL_MAX: "40" }, "DOCMIND_LOOM_POOL_MAX")).toBe(40);
+    expect(loadPoolMax({ DOCMIND_APP_POOL_MAX: "200" }, "DOCMIND_APP_POOL_MAX")).toBe(200);
+  });
+
+  it("names the variable on a bad value, never the value", () => {
+    for (const bad of ["0", "-1", "ten", "1.5", "201"]) {
+      expect(() => loadPoolMax({ DOCMIND_APP_POOL_MAX: bad }, "DOCMIND_APP_POOL_MAX")).toThrow(
+        /^DOCMIND_APP_POOL_MAX must be/,
+      );
+    }
+  });
+});
 
 describe.skipIf(!PG_URL)("createAppPool (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
@@ -15,6 +34,15 @@ describe.skipIf(!PG_URL)("createAppPool (needs DOCMIND_TEST_PG_URL)", () => {
 
   afterAll(async () => {
     await db?.drop();
+  });
+
+  it("sizes the pool from the max argument, 10 when omitted", async () => {
+    const sized = await createAppPool(db.appUrl, 3);
+    expect((sized as unknown as { options: { max: number } }).options.max).toBe(3);
+    await sized.end();
+    const dflt = await createAppPool(db.appUrl);
+    expect((dflt as unknown as { options: { max: number } }).options.max).toBe(10);
+    await dflt.end();
   });
 
   it("accepts the app role", async () => {

@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { positiveInt } from "./documents/limits";
 
 /**
  * Stops accepting requests, lets in-flight ones finish, and only then closes the app.
@@ -60,6 +61,15 @@ export const FORCE_EXIT_MS = 5_000;
  * timeout is 60 s) cannot hold the process until SIGKILL, which would skip the lease release.
  */
 export const FORCE_EXIT_DEADLINE_MS = 60_000;
+
+/**
+ * `DOCMIND_SHUTDOWN_DEADLINE_MS` (default FORCE_EXIT_DEADLINE_MS, at most an hour): the overall shutdown deadline.
+ * Set it to the platform's termination grace minus a few seconds; below the close steps' 40 s it ends
+ * the process before the leases are released. A bad value fails the boot.
+ */
+export function loadShutdownDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
+  return positiveInt(env, "DOCMIND_SHUTDOWN_DEADLINE_MS", FORCE_EXIT_DEADLINE_MS, 3_600_000);
+}
 
 /**
  * Schedules an unref'd forced exit: it never keeps a cleanly stopped process alive, and it ends one

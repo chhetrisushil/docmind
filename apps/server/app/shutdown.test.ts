@@ -6,6 +6,7 @@ import {
   FORCE_EXIT_DEADLINE_MS,
   SHUTDOWN_DRAIN_MS,
   drainWithin,
+  loadShutdownDeadlineMs,
   runAll,
   scheduleForceExit,
   shutdown,
@@ -138,6 +139,24 @@ describe("the shutdown deadline", () => {
       expect(exit.mock.calls).toEqual([[1]]);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("loadShutdownDeadlineMs", () => {
+  it("defaults to the 60 s deadline", () => {
+    expect(loadShutdownDeadlineMs({})).toBe(FORCE_EXIT_DEADLINE_MS);
+  });
+
+  it("reads DOCMIND_SHUTDOWN_DEADLINE_MS", () => {
+    expect(loadShutdownDeadlineMs({ DOCMIND_SHUTDOWN_DEADLINE_MS: "90000" })).toBe(90_000);
+  });
+
+  it("names the variable on a bad value, never the value", () => {
+    for (const bad of ["0", "-5", "soon", "1.5", "3600001"]) {
+      expect(() => loadShutdownDeadlineMs({ DOCMIND_SHUTDOWN_DEADLINE_MS: bad })).toThrow(
+        /^DOCMIND_SHUTDOWN_DEADLINE_MS must be/,
+      );
     }
   });
 });

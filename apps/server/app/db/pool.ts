@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { positiveInt } from "../documents/limits";
 
 /**
  * Refuses a connection that can see past row-level security. No migration uses FORCE ROW LEVEL
@@ -36,9 +37,20 @@ export async function assertUnprivilegedRole(pool: Pool): Promise<void> {
   }
 }
 
+/** node-postgres's own default, so a pool is the size it always was unless the operator sets one. */
+export const DEFAULT_POOL_MAX = 10;
+
+/** A pool size from `name` (`DOCMIND_APP_POOL_MAX`, `DOCMIND_LOOM_POOL_MAX`): 1 to 200, default 10. */
+export function loadPoolMax(env: NodeJS.ProcessEnv, name: string): number {
+  return positiveInt(env, name, DEFAULT_POOL_MAX, 200);
+}
+
 /** The pool the server uses for tenant data: connected as docmind_app, or it does not start. */
-export async function createAppPool(connectionString: string): Promise<Pool> {
-  const pool = new Pool({ connectionString });
+export async function createAppPool(
+  connectionString: string,
+  max = DEFAULT_POOL_MAX,
+): Promise<Pool> {
+  const pool = new Pool({ connectionString, max });
   // An idle connection dropped by the server must not crash the process.
   // The class only: a driver error message can carry a host or a user name.
   pool.on("error", (err) =>

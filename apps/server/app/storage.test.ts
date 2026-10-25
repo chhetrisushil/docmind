@@ -14,6 +14,16 @@ import {
 } from "./storage";
 import { executionIdFor } from "./subject";
 
+describe("loomPoolConfig", () => {
+  it("keeps Loom's search_path and sizes the pool only when asked", () => {
+    expect(loomPoolConfig("postgres://x")).toEqual({
+      connectionString: "postgres://x",
+      options: "-c search_path=loom",
+    });
+    expect(loomPoolConfig("postgres://x", 25).max).toBe(25);
+  });
+});
+
 describe.skipIf(!PG_URL)("durable, encrypted Loom storage (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
   let app: Pool;
