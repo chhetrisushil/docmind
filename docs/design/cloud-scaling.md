@@ -118,8 +118,11 @@ after every deploy.
   and `DOCMIND_COOKIE_SECURE=true`.
 - C4: `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` and `DOCMIND_HEADERS_TIMEOUT_MS`, with the headers timeout required to
   exceed keep-alive.
-- C5: `GET /readyz` (DB ping, 503 from the start of shutdown). `DOCMIND_SHUTDOWN_DEADLINE_MS` makes the forced
-  exit configurable, which helps C6; the grace period itself is still set on the platform.
+- C5: `GET /readyz` (DB ping, 503 from the start of shutdown). The ping uses a dedicated connection, so a
+  saturated request pool cannot fail readiness. `DOCMIND_SHUTDOWN_DELAY_MS` keeps the server serving, with
+  `/readyz` at 503, before it drains, so the balancer sees the 503 before connections are refused. Configure
+  the balancer with a failure threshold of 3 or more, and `/healthz` as liveness. `DOCMIND_SHUTDOWN_DEADLINE_MS`
+  makes the forced exit configurable, which helps C6; the grace period itself is still set on the platform.
 - C7: `DOCMIND_TRUST_PROXY_HOPS`; the client is the entry that many places from the right.
 - C9: `_FILE` variants for `DATABASE_URL`, `LOOM_DATABASE_URL`, `DOCMIND_CHAT_ENVELOPE_KEY`, `ANTHROPIC_API_KEY`
   and `GEMINI_API_KEY`.
