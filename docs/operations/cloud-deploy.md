@@ -153,11 +153,15 @@ This is a stopgap until an object-store `ContentStore` exists (cloud-scaling.md 
 The image contains no model. Choose per role; the full list of roles, providers and what leaves the
 network is in [llm-providers.md](llm-providers.md).
 
+**Decided route (2026-10-25): a private Ollama service for embeddings.** Document text stays inside the
+cloud account, and no code change or re-embed is needed. Chat and the other roles may still use hosted
+providers per role.
+
 - **Hosted providers** (nothing to run): set `DOCMIND_LLM_PROVIDER` or the per-role variables to `gemini`
   or `anthropic` with the key. **Embeddings are Ollama-only today** (`DOCMIND_OLLAMA_URL`; `vector(768)`
   in migration `0014`), so a fully managed setup is not possible until a hosted `EmbeddingProvider` exists
   (cloud-scaling.md C10). Changing the dimension needs a new migration and a re-embed.
-- **A private Ollama** service on the private network (a second ECS service, a GPU instance or pool),
+- **A private Ollama** service (the decided route for embeddings) on the private network (a second ECS service, a GPU instance or pool),
   `DOCMIND_OLLAMA_URL=http://ollama.internal:11434`. Ollama has **no authentication**: reach it only over
   the private network and never expose it. DocMind rejects credentials embedded in the URL. Pull the
   embedding model (`nomic-embed-text` by default) and any local chat model before starting DocMind.
