@@ -113,6 +113,18 @@ after every deploy.
 | C11 | **Managed Postgres fit.** pgvector ≥ 0.8.0 (the boot check enforces it; verify per service, region and PG major version), password auth for `docmind_app` (IAM auth adds role membership, which the boot check refuses), and TLS via `sslmode` in the URLs. | | `packages/vector-pg/src/pg.ts:263-270`, `apps/server/app/db/pool.ts:27-29` |
 | C12 | Size memory at **≥ 3–4 GiB per replica** and enforce it with a cgroup limit. | Two parser children at 512 MiB heap each, but external (Buffer) memory is unbounded, plus up to 4 ingest steps each buffering a whole blob. | `packages/parsers/src/runner/ParseRunner.ts:89-93` |
 
+**Status (2026-10-25).** C2, C4, C5, C7 and C9 are implemented, as are the two pool-size knobs.
+- C2: `DOCMIND_DEPLOYMENT=production` refuses to boot without `DOCMIND_CHAT_ENVELOPE_KEY`, `DOCMIND_PUBLIC_ORIGIN`
+  and `DOCMIND_COOKIE_SECURE=true`.
+- C4: `DOCMIND_KEEP_ALIVE_TIMEOUT_MS` and `DOCMIND_HEADERS_TIMEOUT_MS`, with the headers timeout required to
+  exceed keep-alive.
+- C5: `GET /readyz` (DB ping, 503 from the start of shutdown). `DOCMIND_SHUTDOWN_DEADLINE_MS` makes the forced
+  exit configurable, which helps C6; the grace period itself is still set on the platform.
+- C7: `DOCMIND_TRUST_PROXY_HOPS`; the client is the entry that many places from the right.
+- C9: `_FILE` variants for `DATABASE_URL`, `LOOM_DATABASE_URL`, `DOCMIND_CHAT_ENVELOPE_KEY`, `ANTHROPIC_API_KEY`
+  and `GEMINI_API_KEY`.
+- Pools: `DOCMIND_APP_POOL_MAX` and `DOCMIND_LOOM_POOL_MAX` (default 10).
+
 Platform notes:
 - **Cloud Run.** HTTP/1 bodies are capped at 32 MiB (the upload default is 50 MiB). Background flows need
   "CPU always allocated" and `min-instances ≥ 1`. Don't scale to zero: recovery, sweeps and parked
