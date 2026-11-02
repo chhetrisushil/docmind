@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import { ChatSessionDto, type UploadDocumentResponse } from "@docmind/contracts";
-import { afterAll, describe, expect, it } from "vitest";
+import { LogLifecycle } from "@loom/workflow-runtime";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { DOC, collectUntil, isReply, scriptChat } from "../chats/e2eSupport";
 import { chatConversationId } from "../chats/ids";
 import { pgSessionLock } from "../db/sessionLock";
@@ -125,10 +126,16 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
         )
       ).rows,
     ).toEqual(ingestBefore);
-    // a second sweep has nothing left to do
-    expect(await sweepChatSnapshots(snapshotPruneDeps(first.durable))).toMatchObject({
-      deleted: 0,
-    });
+    // a second sweep has nothing left to do, and a chat left with one snapshot never reaches LogLifecycle
+    const spy = vi.spyOn(LogLifecycle.prototype, "pruneSnapshots");
+    try {
+      expect(await sweepChatSnapshots(snapshotPruneDeps(first.durable))).toMatchObject({
+        deleted: 0,
+      });
+      expect(spy.mock.calls.map(([id]) => id)).not.toContain(ada.conversation);
+    } finally {
+      spy.mockRestore();
+    }
 
     // The chat resumes from the one snapshot left: a restart, then another turn, with the history intact.
     await first.close({ keepDb: true });

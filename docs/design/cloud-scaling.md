@@ -160,15 +160,17 @@ Things that change meaning, but don't break, with N replicas:
 - **Per-process caps become N×.** These include ingest concurrency (and per-tenant fairness), parse
   concurrency, concurrent uploads per user, SSE streams per user, and `DOCMIND_MAX_CONNECTIONS`. Either
   divide by N in config or move the user-facing ones (uploads, streams) into Postgres.
-- **Connections.** Each replica holds about 24 connections (app 10, Loom 10, erasure 3, plus 1 `LISTEN`).
+- **Connections.** Each replica holds about 24 connections (app 10, Loom 10, erasure 3, plus 1 `LISTEN`); while a snapshot-prune sweep runs it holds one extra Loom connection.
   Add env knobs for pool `max`, and keep N × per-replica connections under the server's `max_connections`
   (or put the app pool behind a transaction pooler).
 - **Boot and hourly scans are O(total executions) per replica:** recovery, read-model catch-up and the
-  subject index. Boot time grows with history, and N replicas repeat the work. This is acceptable at
+  subject index. The snapshot pruner also pages every `u_` execution each sweep (with its pre-filter, a
+  chat with one snapshot costs one index-only read). Boot time grows with history, and N replicas repeat the work. This is acceptable at
   first; later, give the scans to one leader or a lease.
 - **Sweeps run on every replica and are safe** (idempotent SQL; duplicate starts are refused). The only
-  cost is N× query load.
-- **Snapshots, not events, dominate the Loom database:** on a dev database `loom.snapshots` was 657 MB against 86 MB of `loom.events` (206 chats, up to 51 snapshots each, the largest 3 MB), and 91% of it was superseded. Since the snapshot pruner (`DOCMIND_SNAPSHOT_PRUNE_INTERVAL_MS`), snapshot storage is about one snapshot per conversation generation, so it grows with the number of chats, not with turns × state size.
+  cost is N× query load. The exception is the snapshot pruner, which runs on one replica at a time
+  (advisory lock).
+- **Snapshots, not events, dominate the Loom database:** on a dev database `loom.snapshots` was 657 MB against 86 MB of `loom.events` (206 chats, up to 51 snapshots each, the largest 3 MB), and 91% of it was superseded. Since the snapshot pruner (`DOCMIND_SNAPSHOT_PRUNE_INTERVAL_MS`), snapshot storage is about one snapshot per chat conversation (ingest keeps its snapshots), so it grows with the number of chats, not with turns × state size.
 
 Already scale-friendly: sessions and the login throttle live in Postgres, quotas are enforced under a tenant
 advisory transaction lock, erasure uses a per-user advisory lock with a rescan for dead holders, migrations
