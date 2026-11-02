@@ -90,6 +90,10 @@ export function createDurableStorage({
       eventStore: events,
       snapshotStore: snapshots,
       leaseStore: pg.leaseStore,
+      // Loom moves a trimmed or deleted inbox's envelopes here first and refuses to boot a chat app
+      // without one (ADR 0139). Passed raw: `defineConfig` seals it under the event store's KeyStore
+      // and subject mapping, so erasing a user also makes their archived envelopes unreadable.
+      archiveStore: pg.archiveStore,
     },
     crypto: { events, snapshots },
     pool,
@@ -109,11 +113,12 @@ export function createDurableStorage({
 export async function openDurableStorage(options: DurableStorageOptions): Promise<DurableStorage> {
   const durable = createDurableStorage(options);
   try {
-    // Each store runs its own migration from its constructor; await all three so none is left
+    // Each store runs its own migration from its constructor; await them all so none is left
     // rejecting unobserved, then report the first failure.
     const results = await Promise.allSettled([
       durable.raw.eventStore.read("boot-probe"),
       durable.raw.snapshotStore.loadLatest("boot-probe"),
+      durable.storage.archiveStore?.headers("boot-probe"),
       durable.lease.get?.("boot-probe"),
       durable.timers.due(0, 1),
     ]);

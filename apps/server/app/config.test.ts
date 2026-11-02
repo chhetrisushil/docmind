@@ -9,7 +9,7 @@ import { buildApp } from "./config";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
 import { noSnapshots } from "./erasure/testing";
-import { createDurableStorage } from "./storage";
+import { openDurableStorage } from "./storage";
 
 describe("buildApp", () => {
   it("composes under strict mode on in-memory storage", async () => {
@@ -135,7 +135,9 @@ describe.skipIf(!PG_URL)("buildApp on durable storage (needs DOCMIND_TEST_PG_URL
     const keys = new PostgresKeyStore(pool, [
       { id: "kek-1", key: createSecretKey(randomBytes(32)) },
     ]);
-    const durable = createDurableStorage({ loomUrl: db.loomUrl, keys });
+    // Opened, not just created: the stores' boot work (migrations, the snapshot codec probe) must finish before
+    // `durable.close()` ends the pool, or it rejects unobserved after the test.
+    const durable = await openDurableStorage({ loomUrl: db.loomUrl, keys });
     const { storage, crypto } = durable;
     const app = buildApp(storage, crypto);
     expect(app.stores.eventStore).toBe(storage.eventStore);
