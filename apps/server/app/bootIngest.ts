@@ -54,7 +54,7 @@ export interface BootIngestParts {
 /**
  * The one boot order for `main` and the acceptance stack: verify the schema fits the embedder, boot the
  * status model, hash the decoy, bind (when `listen` is given), and only then start recovery, the session
- * sweep and the upload sweeper (a failed bind must not spend recovery budget). A failure before that
+ * sweep, the upload sweeper and the snapshot pruner (a failed bind must not spend recovery budget). A failure before that
  * cleans up what the caller opened and rethrows. `stop()` runs the shutdown in the order that keeps it
  * safe and is idempotent; it does not close what `bootIngest` did not open the caller's way
  * (the blob root, the temp dir, the test database).
