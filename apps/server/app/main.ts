@@ -19,8 +19,17 @@ async function main(): Promise<void> {
     process.once(signal, gate.onSignal);
   }
 
-  const { built, ingest, durable, pool, port, host, shutdownDeadlineMs, shutdownDelayMs } =
-    await setupServer();
+  const {
+    built,
+    ingest,
+    durable,
+    pool,
+    port,
+    host,
+    shutdownDeadlineMs,
+    shutdownDelayMs,
+    snapshotPruneIntervalMs,
+  } = await setupServer();
   gate.booting(shutdownDeadlineMs);
 
   // Boot order lives in bootIngest, shared with the acceptance stack: verify, register, decoy, bind, then
@@ -32,6 +41,7 @@ async function main(): Promise<void> {
     pool,
     recoveryOwner: randomUUID(),
     shutdownDelayMs,
+    snapshotPruneIntervalMs,
     listen: async () => {
       await listen(built.server, port, host);
       console.log(`docmind server listening on http://${host}:${port}`);

@@ -17,6 +17,7 @@ import { llmWarnings } from "./llm/roles";
 import { resolveSecretEnv } from "./secrets";
 import { loadHttpTimeouts, loadMaxConnections } from "./server";
 import { loadShutdownDeadlineMs, loadShutdownDelayMs, shutdownDeadlineWarning } from "./shutdown";
+import { loadSnapshotPruneIntervalMs } from "./snapshots/pruner";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
@@ -59,6 +60,7 @@ export async function setupServer() {
   const httpTimeouts = loadHttpTimeouts(); // before anything opens
   const shutdownDeadlineMs = loadShutdownDeadlineMs(); // before anything opens
   const shutdownDelayMs = loadShutdownDelayMs(env, shutdownDeadlineMs); // must fit inside the deadline
+  const snapshotPruneIntervalMs = loadSnapshotPruneIntervalMs(env); // before anything opens
   const deadlineWarning = shutdownDeadlineWarning(shutdownDeadlineMs);
   if (deadlineWarning) console.warn(deadlineWarning);
   const appPoolMax = loadPoolMax(env, "DOCMIND_APP_POOL_MAX");
@@ -152,5 +154,15 @@ export async function setupServer() {
       userExecutions: pgUserExecutions(durable.pool),
     },
   });
-  return { built, ingest, durable, pool, port, host, shutdownDeadlineMs, shutdownDelayMs };
+  return {
+    built,
+    ingest,
+    durable,
+    pool,
+    port,
+    host,
+    shutdownDeadlineMs,
+    shutdownDelayMs,
+    snapshotPruneIntervalMs,
+  };
 }

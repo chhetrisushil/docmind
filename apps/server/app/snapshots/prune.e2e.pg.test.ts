@@ -168,7 +168,7 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
       claude2.requests.filter((r) => r.body.model !== "title-model").at(0)?.body.messages,
     );
     expect(lastRequest).toContain("Question 2: when is payment due?");
-  });
+  }, 40_000);
 
   it("prunes an erased user's chat without opening it", async () => {
     const st = track(await startIngestStack({ chat: true }));
@@ -182,5 +182,18 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
     expect(report.failed).toBe(0);
     expect(report.deleted).toBeGreaterThanOrEqual(left.length - 1);
     expect(await snapshots(st, bob.conversation)).toEqual([left.at(-1)]);
-  });
+  }, 40_000);
+
+  it("runs on its interval inside the server and stops with it", async () => {
+    const st = track(await startIngestStack({ chat: true, snapshotPruneIntervalMs: 300 }));
+    const cy = await chatTurns(st, "cy@example.com", 3);
+    await expect
+      .poll(async () => (await snapshots(st, cy.conversation)).length, {
+        timeout: 15_000,
+        interval: 100,
+      })
+      .toBe(1);
+    await st.close({ keepDb: true }); // stop() drains the pruner with the upload sweeper; no unhandled rejection
+    stacks.splice(stacks.indexOf(st), 1);
+  }, 40_000);
 });
