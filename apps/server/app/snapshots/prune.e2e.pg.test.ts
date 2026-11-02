@@ -34,6 +34,19 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
       )
     ).rows as { sequence: string; h: string }[];
 
+  /** The snapshot rows once the runtime has stopped writing them: the same list on three reads 150 ms apart. */
+  async function settled(st: IngestStack, executionId: string) {
+    let last = JSON.stringify(await snapshots(st, executionId));
+    let same = 0;
+    for (let i = 0; i < 100 && same < 3; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      const now = JSON.stringify(await snapshots(st, executionId));
+      same = now === last ? same + 1 : 0;
+      last = now;
+    }
+    expect(same).toBe(3);
+  }
+
   /** One user, one ready document, one chat answered `turns` times; returns the conversation id. */
   async function chatTurns(st: IngestStack, email: string, turns: number) {
     const claude = st.claude;
@@ -75,7 +88,9 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
     } finally {
       stream.close();
     }
-    return { user, chat, conversation: chatConversationId(user.userId, chat.id) as string };
+    const conversation = chatConversationId(user.userId, chat.id) as string;
+    await settled(st, conversation); // the park after the last turn has committed its snapshot
+    return { user, chat, conversation };
   }
 
   it("keeps the latest snapshot of a chat, deletes the rest, and the chat answers after a restart", async () => {
@@ -162,8 +177,10 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
     expect((await eraseMe(st, bob.user.cookie)).status).toBe(202);
     await waitErased(st, bob.user.userId);
     const left = await snapshots(st, bob.conversation);
+    expect(left.length).toBeGreaterThan(1); // erasure leaves the snapshots; the sweep has real work
     const report = await sweepChatSnapshots(snapshotPruneDeps(st.durable));
     expect(report.failed).toBe(0);
-    expect((await snapshots(st, bob.conversation)).length).toBe(Math.min(left.length, 1));
+    expect(report.deleted).toBeGreaterThanOrEqual(left.length - 1);
+    expect(await snapshots(st, bob.conversation)).toEqual([left.at(-1)]);
   });
 });
