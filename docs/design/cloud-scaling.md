@@ -168,6 +168,7 @@ Things that change meaning, but don't break, with N replicas:
   first; later, give the scans to one leader or a lease.
 - **Sweeps run on every replica and are safe** (idempotent SQL; duplicate starts are refused). The only
   cost is N× query load.
+- **Snapshots, not events, dominate the Loom database:** on a dev database `loom.snapshots` was 657 MB against 86 MB of `loom.events` (206 chats, up to 51 snapshots each, the largest 3 MB), and 91% of it was superseded. Since the snapshot pruner (`DOCMIND_SNAPSHOT_PRUNE_INTERVAL_MS`), snapshot storage is about one snapshot per conversation generation, so it grows with the number of chats, not with turns × state size.
 
 Already scale-friendly: sessions and the login throttle live in Postgres, quotas are enforced under a tenant
 advisory transaction lock, erasure uses a per-user advisory lock with a rescan for dead holders, migrations

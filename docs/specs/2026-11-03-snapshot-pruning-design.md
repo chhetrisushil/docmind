@@ -72,7 +72,8 @@ with chat turns for the Loom pool.
 ### When: one sweep per interval, one replica at a time
 
 - `DOCMIND_SNAPSHOT_PRUNE_INTERVAL_MS`, default 3,600,000 (1 h); `0` disables the pruner. Parsed like
-  the other server variables (a non-integer or negative value fails the boot with a named error).
+  the other server variables: `0` disables; otherwise 60,000 to 604,800,000; anything else fails the boot
+  with a `StartupConfigError` naming the variable only.
 - The first sweep starts one interval after boot, never during it, so it never competes with recovery
   and `bootIngest`.
 - ADR 0134 D6: two processes must not prune (or compact) one execution at once. Each sweep first takes
@@ -86,10 +87,7 @@ with chat turns for the Loom pool.
 
 ### Shutdown
 
-`closeSequence` gains `stopPruner` before the eraser stops: it stops the timer and waits for the
-current execution's prune to finish (one DELETE), bounded by `POOL_END_MS`, then releases the lock.
-The lock connection goes back to the Loom pool before `endPool`. The forced-exit deadline counts this
-bound the way `ce1ec3e` counts the eraser's drain.
+`bootIngest`'s `stop()` stops the pruner with the upload sweeper: the timer is cleared, a sweep in progress finishes its current execution (one DELETE) and releases its lock connection back to the Loom pool, and both are drained together inside the existing `SHUTDOWN_DRAIN_MS` bound before the close sequence runs. The close sequence and the forced-exit deadline are unchanged.
 
 ### Observability
 
@@ -116,7 +114,7 @@ sweep (the listing failed, the lock connection was lost) is logged the same way.
   connections delete each snapshot once and the loser reports `skipped`; an ingest execution's
   snapshots are untouched; an erased user's chat can be pruned and stays unreadable (the erasure
   residue scan, `e2eSupport.ts`, still passes).
-- `closeSequence.test.ts`: the new step's order and bound.
+- The wiring: a stack with a short interval prunes a chat down to one snapshot on its own and shuts down cleanly.
 
 ## Decided not to adopt: claim-checking tool outputs (ADR 0140/0143)
 
