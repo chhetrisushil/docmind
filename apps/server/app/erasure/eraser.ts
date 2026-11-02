@@ -1,4 +1,5 @@
 import type { Identity } from "@docmind/auth";
+import type { SessionLock } from "../db/sessionLock";
 import { SHUTDOWN_DRAIN_MS, drainWithin } from "../shutdown";
 import { ERASURE_STEPS, type ErasureRequest, type ErasureStep, type ErasureStore } from "./types";
 
@@ -52,7 +53,7 @@ export class KeyNotDestroyedError extends Error {
 }
 
 /** The release function of a held lock. `lost` aborts when the lock's connection failed: the lock is gone. */
-export type ErasureLock = (() => Promise<void>) & { lost?: AbortSignal };
+export type ErasureLock = SessionLock;
 
 /** What the user owns that the `stop` step must wind down. Ids only. */
 export interface ErasureWork {

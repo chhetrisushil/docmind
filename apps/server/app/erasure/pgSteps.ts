@@ -1,7 +1,8 @@
 import { eraseUserBlobs } from "@docmind/blob-store";
 import type { Pool } from "pg";
+import { pgSessionLock } from "../db/sessionLock";
 import { withTenant } from "../db/tenant";
-import type { ErasureDeps, ErasureLock } from "./eraser";
+import type { ErasureDeps } from "./eraser";
 import type { ErasureRequest } from "./types";
 
 export interface PgErasureOptions {
@@ -29,50 +30,7 @@ export function pgErasureLock(pool: Pool): ErasureDeps["lock"] {
       err instanceof Error ? err.constructor.name : typeof err,
     ),
   );
-  return async (userId) => {
-    const key = `erasure:${userId}`;
-    const client = await pool.connect();
-    // A held connection that drops loses the lock: tell the eraser (`lost`) instead of crashing the process.
-    const gone = new AbortController();
-    const onError = (err: unknown) => {
-      console.error(
-        "erasure lock connection failed",
-        err instanceof Error ? err.constructor.name : typeof err,
-      );
-      gone.abort();
-    };
-    client.on("error", onError);
-    const done = (destroy?: Error) => {
-      client.removeListener("error", onError);
-      client.release(
-        destroy ?? (gone.signal.aborted ? new Error("lock connection lost") : undefined),
-      );
-    };
-    try {
-      const { rows } = await client.query(
-        "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS held",
-        [key],
-      );
-      if (!rows[0].held) {
-        done();
-        return null;
-      }
-    } catch (err) {
-      done(err instanceof Error ? err : new Error("lock failed"));
-      throw err;
-    }
-    const release: ErasureLock = async () => {
-      try {
-        if (gone.signal.aborted) return done(); // the lock went with the connection
-        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [key]);
-        done();
-      } catch (err) {
-        done(err instanceof Error ? err : new Error("unlock failed")); // destroys the connection, and the lock with it
-      }
-    };
-    release.lost = gone.signal;
-    return release;
-  };
+  return (userId) => pgSessionLock(pool, `erasure:${userId}`, "erasure lock");
 }
 
 export function pgErasureSql(
