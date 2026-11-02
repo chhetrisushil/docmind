@@ -11,6 +11,8 @@ import { type IngestWiring, closeIngest } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
+import { snapshotPruneDeps } from "./snapshots/pgPruner";
+import { startSnapshotPruner } from "./snapshots/pruner";
 import { bootStatus } from "./status/boot";
 import { isIngestExecution } from "./status/model";
 import type { DurableStorage } from "./storage";
@@ -40,6 +42,12 @@ export interface BootIngestParts {
    * (`DOCMIND_SHUTDOWN_DELAY_MS`, default 0). It counts inside the caller's forced-exit deadline.
    */
   shutdownDelayMs?: number;
+  /**
+   * How often to prune the chat conversations' superseded snapshots (`DOCMIND_SNAPSHOT_PRUNE_INTERVAL_MS`,
+   * loaded by `setupServer`). Default 0: off, so a script or a test stack that does not ask runs no pruner.
+   * Only with `background`.
+   */
+  snapshotPruneIntervalMs?: number;
   drainServer?: (then: () => Promise<void>) => Promise<void>;
 }
 
@@ -63,6 +71,7 @@ export async function bootIngest(
     recoveryOwner,
     background = true,
     shutdownDelayMs = 0,
+    snapshotPruneIntervalMs = 0,
   } = parts;
   const {
     app,
@@ -126,6 +135,7 @@ export async function bootIngest(
   let recovery!: ReturnType<typeof startRecovery>;
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
   let uploadSweeper: ReturnType<typeof startSweeper> | undefined;
+  let snapshotPruner: ReturnType<typeof startSnapshotPruner> | undefined;
   const afterListen = () => {
     // Resume what the last process left running, then keep looking. Not awaited: the server must not wait to listen.
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
@@ -159,6 +169,9 @@ export async function bootIngest(
       lookbackMs: SWEEP_LOOKBACK_MS,
       limit: SWEEP_BATCH,
     });
+    // The first sweep runs one interval from now, never during the boot (recovery and the index come first).
+    if (snapshotPruneIntervalMs > 0)
+      snapshotPruner = startSnapshotPruner(snapshotPruneDeps(durable), snapshotPruneIntervalMs);
   };
 
   if (listen) {
@@ -169,7 +182,7 @@ export async function bootIngest(
 
   let stopping: Promise<void> | undefined;
   const stop = () => {
-    // Readiness first (and the optional delay), then timers, then the open event streams (they never end on their own, so the server drain would
+    // Readiness first (and the optional delay), then timers (sweepers and the snapshot pruner), then the open event streams (they never end on their own, so the server drain would
     // wait on them), then the server drain, then the close sequence.
     stopping ??= (async () => {
       // First of all: /readyz turns 503. Then, if a delay is set, everything else keeps running as normal
@@ -181,11 +194,14 @@ export async function bootIngest(
       if (sweepTimer) clearInterval(sweepTimer);
       recovery.stop();
       const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins
+      // A prune in progress finishes its current execution (one DELETE) and releases its lock connection to the
+      // Loom pool, which closes later; it shares the sweeper's drain bound, so the deadline is unchanged.
+      const prunerStopped = snapshotPruner?.stop() ?? Promise.resolve();
       events.closeAll();
       chatStreams?.closeAll();
       const close = async () => {
         // Let a sweep that is already running finish.
-        await drainWithin(sweeperStopped, SHUTDOWN_DRAIN_MS);
+        await drainWithin(Promise.all([sweeperStopped, prunerStopped]), SHUTDOWN_DRAIN_MS);
         // The server has stopped accepting uploads; let every fired flow start settle, then close everything.
         await runAll(
           ...closeSequence({

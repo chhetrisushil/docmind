@@ -31,6 +31,8 @@ const PASSWORD = "correct horse battery";
 export const CHAT_TEST_ENVELOPE_KEY = "chat-envelope-key-for-tests-0123456789"; // a test value, not a secret
 
 export interface IngestStackOptions {
+  /** Runs the snapshot pruner every this many ms (the production default is an hour; omitted: off). */
+  snapshotPruneIntervalMs?: number;
   /** A Claude key and a FakeAnthropic for the chat only; ingest stays keyless. */
   chat?: boolean;
   /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
@@ -181,6 +183,9 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
 
     // The same boot function main uses; the stack binds an ephemeral port.
     const boot = await bootIngest({
+      ...(options.snapshotPruneIntervalMs !== undefined && {
+        snapshotPruneIntervalMs: options.snapshotPruneIntervalMs,
+      }),
       built: composed,
       ingest: wiring,
       durable,
