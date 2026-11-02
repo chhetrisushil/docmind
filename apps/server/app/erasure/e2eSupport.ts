@@ -8,7 +8,7 @@ import {
   type UploadDocumentResponse,
 } from "@docmind/contracts";
 import type { EventEnvelope } from "@loom/core";
-import { isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
+import { archiveChainOf, isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
 import type { Pool } from "pg";
 import { expect, vi } from "vitest";
 import { DOC_ASSISTANT_GK_PROMPT, DOC_ASSISTANT_PROMPT } from "../chats/agent";
@@ -536,6 +536,26 @@ const ALLOWED: Allowed[] = [
     reason:
       "D7: a checkpoint of the user's own execution, its state a sealed envelope under the destroyed key",
     ok: (row, who) => ownExecution(row, who) && sealed(row.state) && noContent(row, who),
+  },
+  {
+    table: "loom.archive_segments",
+    column: "execution_id",
+    reason:
+      "D7: an archived segment of the user's own inbox (ADR 0139; Loom moves trimmed and deleted envelopes here), its envelopes one sealed box under the destroyed key",
+    ok: (row, who) => {
+      const body = JSON.parse(String(row.body)) as {
+        envelopes?: unknown;
+        sealed?: { box?: unknown };
+      };
+      // Keyed by the inbox stream (or a late run split from it), not the execution: its chain is the user's own.
+      return (
+        isUserExecution(archiveChainOf(String(row.execution_id)), who) &&
+        Array.isArray(body.envelopes) &&
+        body.envelopes.length === 0 &&
+        sealed(body.sealed?.box) &&
+        noContent(row, who)
+      );
+    },
   },
   {
     table: "public.data_keys",

@@ -137,8 +137,14 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
     // Loom stores an envelope {e: executionId, t: text}; the text is what the owner reads back.
     const opened = texts.map((t) => (JSON.parse(t) as { e: string; t: string }).t);
     expect(opened.sort()).toEqual([THINKING, THINK2].sort());
-    // Only the owner's key was used.
-    expect([...stack.subjects]).toEqual([U]);
+    // Only the owner's key sealed the conversation. Loom also seals each inbox message's sender under an opaque
+    // per-sender handle (ADR 0139 N6, on by default): its master, marker and seed keys, and the handle's own
+    // `sbj-…` subject. Those are erased with the user by `app.eraseSubject`; no other user's key is touched.
+    const loomSender = (s: string) =>
+      s.startsWith("__loom_sender_") || /^sbj-[0-9a-f]{32}$/.test(s);
+    expect([...stack.subjects].filter((s) => !loomSender(s))).toEqual([U]);
+    // And the sender sealing really ran (one sender: the owner), so the filter above is not hiding a new subject.
+    expect([...stack.subjects].filter((s) => /^sbj-/.test(s))).toHaveLength(1);
     // The same log, read through the decrypting store, is the conversation.
     const history = await stack.chat.reader.read(CONV, { limit: 50 });
     expect(history.entries.map((e) => e.role)).toEqual([

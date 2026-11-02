@@ -25,7 +25,7 @@ concurrency:
 env:
   # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
   # new commit, re-run the whole gate, then change this line.
-  LOOM_REF: b0cb946130f9561d679138417fad877cf5347598
+  LOOM_REF: 252cf91498cbf4ff8255a5c2b3585184c52206ee
   # The loom-ui commit DocMind links to (core, hydration, renderer-lit, renderer-terminal, built from source).
   # Bump deliberately, like LOOM_REF.
   LOOM_UI_REF: 4ea5efd1ee177b68bae04c3ae53314d08c54b1f3

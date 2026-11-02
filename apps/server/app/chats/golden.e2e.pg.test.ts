@@ -231,16 +231,20 @@ describe.skipIf(!PG_URL)(
           ]),
         );
         // The owner subject, on the production key store: every execution in the log belongs to ada (`u_<ada>...`; an inbox stream is keyed by its chain id, as Loom's EncryptingEventStore does),
-        // and the only data key that exists is hers, so nothing here was sealed under bob's or any other tenant's key.
+        // and the only user data key that exists is hers, so nothing here was sealed under bob's or any other tenant's key.
+        // Loom also keeps the keys that seal each inbox message's sender under an opaque handle (ADR 0139 N6, on by
+        // default): the sender master, marker and seed, and the handle's `sbj-…` subject; one sender here, ada.
         // Reading the sealed log back through the decrypting store with her key finds the question: it was her key.
         expect([
           ...new Set(ids.map((id) => subjectOfExecution({ executionId: inboxChainOf(id) ?? id }))),
         ]).toEqual([ada.userId]);
-        expect(
-          (await st.db.owner.query("SELECT subject_id FROM data_keys")).rows.map(
-            (r) => r.subject_id,
-          ),
-        ).toEqual([ada.userId]);
+        const keySubjects: string[] = (
+          await st.db.owner.query("SELECT subject_id FROM data_keys")
+        ).rows.map((r) => r.subject_id);
+        const loomSender = (s: string) =>
+          s.startsWith("__loom_sender_") || /^sbj-[0-9a-f]{32}$/.test(s);
+        expect(keySubjects.filter((s) => !loomSender(s))).toEqual([ada.userId]);
+        expect(keySubjects.filter((s) => /^sbj-/.test(s))).toHaveLength(1);
         expect(await st.keys.get(bob.userId)).toBeNull();
         const opened = JSON.stringify(
           await st.durable.sealed.eventStore.read(chatConversationId(ada.userId, chat.id)),
