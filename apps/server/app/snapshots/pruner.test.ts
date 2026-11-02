@@ -77,6 +77,7 @@ describe("sweepChatSnapshots", () => {
       executions: 2,
       deleted: 4,
       failed: 0,
+      failedByClass: {},
       skipped: false,
       stopped: false,
     });
@@ -91,17 +92,23 @@ describe("sweepChatSnapshots", () => {
     expect(d.prune).not.toHaveBeenCalled();
   });
 
-  it("counts a failure on one execution, logs its class only, and carries on", async () => {
+  it("counts failures by class, logs nothing per execution, and carries on", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const prune = vi
       .fn()
       .mockRejectedValueOnce(new RangeError(`secret ${CHAT}`))
+      .mockRejectedValueOnce(new RangeError(`secret ${CHAT_GEN2}`))
       .mockResolvedValueOnce(3);
-    const { d, release } = deps([[CHAT, CHAT_GEN2]], { prune });
+    const { d, release } = deps([[CHAT, CHAT_GEN2, `${CHAT}~3`]], { prune });
     const report = await sweepChatSnapshots(d);
-    expect(report).toMatchObject({ executions: 2, deleted: 3, failed: 1 });
-    expect(JSON.stringify(error.mock.calls)).toContain("RangeError");
-    expect(JSON.stringify(error.mock.calls)).not.toContain(U);
+    expect(report).toMatchObject({
+      executions: 3,
+      deleted: 3,
+      failed: 2,
+      failedByClass: { RangeError: 2 },
+    });
+    expect(JSON.stringify(report)).not.toContain(U);
+    expect(error).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
     error.mockRestore();
   });
@@ -157,6 +164,28 @@ describe("startSnapshotPruner", () => {
     expect(JSON.stringify(info.mock.calls)).not.toContain(U);
     await pruner.stop();
     info.mockRestore();
+  });
+
+  it("logs a store-wide failure as one line carrying the class counts", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { d } = deps([[CHAT, CHAT_GEN2]], {
+      prune: vi.fn(async () => {
+        throw new TypeError(`down ${CHAT}`);
+      }),
+    });
+    const pruner = startSnapshotPruner(d, 60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(error).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith(
+      "snapshot prune",
+      expect.objectContaining({ failed: 2, failedByClass: { TypeError: 2 } }),
+    );
+    expect(JSON.stringify(info.mock.calls)).not.toContain(U);
+    await pruner.stop();
+    info.mockRestore();
+    error.mockRestore();
   });
 
   it("never overlaps sweeps", async () => {

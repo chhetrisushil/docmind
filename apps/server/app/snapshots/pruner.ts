@@ -46,6 +46,8 @@ export interface SweepReport {
   executions: number;
   deleted: number;
   failed: number;
+  /** Failures by error class name (never a message or an id), so a store-wide fault is one entry, not N log lines. */
+  failedByClass: Record<string, number>;
   /** Another replica held the lock: nothing was looked at. */
   skipped: boolean;
   /** Aborted, or the lock was lost, before the last execution. */
@@ -56,7 +58,7 @@ const className = (err: unknown) => (err instanceof Error ? err.constructor.name
 
 /**
  * One sweep: under the lock, page the `u_` executions and prune each chat conversation, one at a time. A failure
- * on one execution is counted and logged by class; the sweep carries on. A failed listing ends the sweep (rethrown).
+ * on one execution is counted by error class (the caller logs one line per sweep); the sweep carries on. A failed listing ends the sweep (rethrown).
  */
 export async function sweepChatSnapshots(
   deps: SnapshotPruneDeps,
@@ -67,6 +69,7 @@ export async function sweepChatSnapshots(
     executions: 0,
     deleted: 0,
     failed: 0,
+    failedByClass: {},
     skipped: false,
     stopped: false,
   };
@@ -88,7 +91,8 @@ export async function sweepChatSnapshots(
           report.deleted += await deps.prune(executionId);
         } catch (err) {
           report.failed += 1;
-          console.error("snapshot prune failed for one execution", className(err));
+          const cls = className(err);
+          report.failedByClass[cls] = (report.failedByClass[cls] ?? 0) + 1;
         }
       }
       if (page.nextCursor === undefined) return report;
@@ -119,6 +123,7 @@ export function startSnapshotPruner(deps: SnapshotPruneDeps, everyMs: number): S
             executions: r.executions,
             deleted: r.deleted,
             failed: r.failed,
+            failedByClass: r.failedByClass,
             stopped: r.stopped,
             ms: Date.now() - started,
           });
