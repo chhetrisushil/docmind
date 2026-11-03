@@ -152,7 +152,9 @@ What stays where: `createDurableStorage` returns the decorator as `storage.event
   try/catch, so a summarizer error would end the whole conversation, not fail one turn. DocMind wraps the effect
   (`tolerantSummarizer`, `apps/server/app/chats/summarizer.ts`): a provider error yields no summary, Loom keeps the
   previous summary, and the turn completes with the turns evicted as on 1.0.0. The error is logged by class only;
-  a cancel rethrows and a shutdown never settles (see below). A fix has been requested upstream in Loom; the wrapper can go once Loom handles it.
+  a cancel rethrows and a shutdown never settles (see below). Loom fixed this upstream (PR #761, `2fabaf3e`, DocMind's `LOOM_REF` since this branch):
+  a failed summarize step now degrades the same way, its outcome recorded as the `conv#o<ord>:summarize:outcome` decision
+  (`{ ok }` / `{ failed }`, no content). The wrapper stays for its retries and its class-only log line.
 - **Retry and the cost of a failure**: Loom slices the evicted turns off BEFORE it calls `summarize`, so a failed fold
   is not retried by a later turn: the next fold gets only the turns evicted after it, plus the previous summary. The
   span evicted on the failing turn is therefore missing from the summary for good. To make that rare the wrapper
