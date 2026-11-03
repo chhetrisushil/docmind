@@ -144,6 +144,23 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     // the summary is not streamed, and it is in no event row in the clear
     expect(JSON.stringify(allFrames)).not.toContain("Rolling-summary-sentinel");
     expect(await eventsMentioning(first, "Rolling-summary-sentinel")).toBe(0);
+    // the read path: the sealed store hands Loom the plain string back, the stored row is the sealed object form
+    const conversationId = chatConversationId(user.userId, chat.id) as string;
+    const events = await first.durable.sealed.eventStore.read(conversationId);
+    const fit = events.find(
+      (e) =>
+        e.eventType === "DECISION_RECORDED" &&
+        String((e.payload as { decisionId?: unknown }).decisionId).endsWith("summary-fit"),
+    );
+    expect((fit?.payload as { choice?: unknown } | undefined)?.choice).toBe(SUMMARY);
+    const stored = await first.db.owner.query(
+      "SELECT payload FROM loom.events WHERE execution_id = $1 AND event_type = 'DECISION_RECORDED' AND payload->>'decisionId' LIKE '%summary-fit' LIMIT 1",
+      [conversationId],
+    );
+    const choice = stored.rows[0]?.payload.choice as { docmindSummary?: unknown; text?: unknown };
+    expect(choice.docmindSummary).toBe(1);
+    expect(choice.text).toBeDefined();
+    expect(JSON.stringify(choice)).not.toContain("Rolling-summary-sentinel");
 
     await first.close({ keepDb: true });
     untrack(first);

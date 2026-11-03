@@ -96,6 +96,28 @@ describe("SummaryChoiceEventStore", () => {
     await store.close();
   });
 
+  it("appendIfUnchanged stores the object form in the inner store and reads back the string", async () => {
+    const inner = new InMemoryAsyncEventStore();
+    const store = new SummaryChoiceEventStore(inner);
+    const first = fit("first", "conv#o1:summary-fit");
+    first.sequence = 0;
+    await store.append(first);
+    const tip = await store.appendIfUnchanged?.("u_x.c-y", null);
+    expect(tip).toMatchObject({ appended: false, reason: "observed", head: 0 });
+    const { head, fence, anchor } = tip as { head: number; fence: number; anchor: string };
+    const next = { ...fit("second summary"), id: "e2", sequence: 1 };
+    expect(await store.appendIfUnchanged?.("u_x.c-y", next, { head, fence, anchor })).toEqual({
+      appended: true,
+    });
+    const stored = await inner.read("u_x.c-y");
+    expect((stored[1]?.payload as { choice: unknown }).choice).toEqual({
+      docmindSummary: 1,
+      text: "second summary",
+    });
+    expect((await store.read("u_x.c-y"))[1]).toEqual(next);
+    await store.close();
+  });
+
   it("carries the sealing store's keys, subjectOf and senderSubjectOf", () => {
     const keys = { getOrCreate: async () => Buffer.alloc(32) };
     const subjectOf = () => "s";
