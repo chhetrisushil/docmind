@@ -224,42 +224,38 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     );
   }, 90_000);
 
-  // FINDING (reported for a ruling): the spec says a summarizer error fails only that turn. Loom runs `summarize`
-  // outside the turn's try/catch (conversation.ts, before "the turn"), so the failed `conv#oN:summarize` step ends the
-  // whole conversation execution with EXECUTION_FAILED and no reply is ever recorded. `it.fails` keeps the suite green
-  // and flips red the day Loom (or the effect) honors the spec, which is the signal to turn it into a plain `it`.
-  it.fails(
-    "a summarizer failure fails only that turn",
-    async () => {
-      const st = track(await startIngestStack({ chat: true, env: SMALL_WINDOW }));
-      let failing = true;
-      script(st, () => (failing ? { status: 400 } : summarizes()));
-      const user = await signUpWithDocument(st, "bob@example.com");
-      const chat = await newChat(st, user);
-      const seen = new Set<string>();
-      let failed: ChatMessageDto | undefined;
-      for (let n = 1; n <= 8 && !failed; n++) {
-        const { reply } = await Promise.race([
-          turn(st, user, chat.id, long(n), seen),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`turn ${n} got no reply in 10 s`)), 10_000),
-          ),
-        ]);
-        if (reply.status === "failed") failed = reply;
-        else expect(summarizerRequests(st)).toHaveLength(0);
-      }
-      expect(failed).toBeDefined();
-      expect(summarizerRequests(st).length).toBeGreaterThan(0);
-      failing = false;
-      const next = await turn(st, user, chat.id, "A turn after the failure", seen);
-      expect(next.reply).toMatchObject({ status: "complete", text: "Noted." });
-      const history = ListMessagesResponse.parse(
-        await (await st.chatReq(user.cookie, "GET", `/api/chats/${chat.id}/messages`)).json(),
-      );
-      expect(history.items.at(-1)?.status).toBe("complete");
-    },
-    40_000,
-  );
+  it("a failing summarizer does not fail the turn or the conversation: the turn completes, the next one carries a summary", async () => {
+    const st = track(await startIngestStack({ chat: true, env: SMALL_WINDOW }));
+    let failing = true;
+    script(st, () => (failing ? { status: 400 } : summarizes()));
+    const user = await signUpWithDocument(st, "bob@example.com");
+    const chat = await newChat(st, user);
+    const conversation = chatConversationId(user.userId, chat.id) as string;
+    const seen = new Set<string>();
+    for (let n = 1; n <= 8 && summarizerRequests(st).length === 0; n++) {
+      const { reply } = await turn(st, user, chat.id, long(n), seen);
+      expect(reply.status).toBe("complete"); // including the evicting turn whose summarizer failed
+    }
+    expect(summarizerRequests(st).length).toBeGreaterThan(0);
+    const fits = async () =>
+      (
+        await st.db.owner.query(
+          "SELECT 1 FROM loom.events WHERE execution_id = $1 AND event_type = 'DECISION_RECORDED' AND payload->>'decisionId' LIKE '%summary-fit'",
+          [conversation],
+        )
+      ).rowCount;
+    expect(await fits()).toBe(0); // no summary was recorded for the failed fold
+    const failed = await st.db.owner.query(
+      "SELECT 1 FROM loom.events WHERE execution_id = $1 AND event_type = 'EXECUTION_FAILED'",
+      [conversation],
+    );
+    expect(failed.rowCount).toBe(0); // the conversation is alive
+    failing = false;
+    const next = await turn(st, user, chat.id, long(99), seen);
+    expect(next.reply).toMatchObject({ status: "complete", text: "Noted." });
+    expect(await fits()).toBeGreaterThan(0); // the next evicting turn recorded a summary
+    expect(JSON.stringify(chatRequests(st).at(-1)?.body)).toContain("Rolling-summary-sentinel");
+  }, 40_000);
 
   it("rollout: a chat begun before the summary resumes on 1.0.0, a new chat summarizes, the rotation successor is 1.1.0", async () => {
     const old = track(
