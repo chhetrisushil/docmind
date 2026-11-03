@@ -86,6 +86,14 @@ describe("prepareChat", () => {
     );
   });
 
+  it("registers 1.1.0 after 1.0.0 of the same flow id: Loom starts and rotates onto the last registered version", () => {
+    const flows = prepare().prepared.deps.flows.map((f) => f.definition);
+    for (const id of [CHAT_FLOW_ID, CHAT_GK_FLOW_ID]) {
+      const versions = flows.filter((d) => d.id === id).map((d) => d.version);
+      expect(versions).toEqual(["1.0.0", "1.1.0"]);
+    }
+  });
+
   it("legacyOnly registers just the 1.0.0 flows and starts chats on 1.0.0", () => {
     const { prepared } = prepare({}, true, true);
     expect(prepared.deps.flows.map((f) => `${f.definition.id}@${f.definition.version}`)).toEqual([

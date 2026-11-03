@@ -62,7 +62,7 @@ describe.skipIf(!PG_URL)(
         status: { writer: store, readerFor: () => store, source: events },
         chat: {
           settings: loadChatSettings({ DOCMIND_LLM_PROVIDER: "off" }),
-          llm: { provider: stub, observer: {} },
+          llm: { provider: stub, summaryProvider: stub, observer: {} },
           ...(titleLlm && { titleLlm: stub }),
           timers: new InMemoryTimerStore(),
         },
