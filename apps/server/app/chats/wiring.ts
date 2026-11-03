@@ -22,6 +22,7 @@ import type { ChatReasoningStore } from "./reasoningStore";
 import type { PassageReader, Retriever } from "./retrieval";
 import type { ChatSettings } from "./settings";
 import { StopRegistry, stoppableBargeIn } from "./stop";
+import { tolerantSummarizer } from "./summarizer";
 import { chatTools } from "./tools";
 import type { DocumentReads } from "./tools/documents";
 import type { ChatLookup } from "./tools/harness";
@@ -124,9 +125,10 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
       { items: c.items, bus, shutdown: shutdown.signal },
     );
     // The BARE provider: the hub would stream the summary into the chat's live view as if it were the answer.
-    effects[CHAT_SUMMARIZER_TOOL_ID] = createSummarizerEffect(o.llm.provider, {
-      maxTokens: SUMMARY_MAX_TOKENS,
-    });
+    effects[CHAT_SUMMARIZER_TOOL_ID] = tolerantSummarizer(
+      createSummarizerEffect(o.llm.provider, { maxTokens: SUMMARY_MAX_TOKENS }),
+      { shutdown: shutdown.signal },
+    );
   }
   return {
     hub,
