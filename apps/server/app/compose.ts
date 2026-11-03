@@ -196,6 +196,8 @@ export function buildServer(options: ComposeOptions) {
   const sensitive = statusSensitive(flowSteps(), options.status.source);
   // The models fold through a source that reads an erased user's log as placeholders instead of throwing (E5). The
   // runtime, the chat reads and every authoritative read keep the strict `options.status.source`.
+  // Catch-up and rebuild read the stored form here, not through the summary-choice decorator (live folds see the
+  // string): the chat-activity fold ignores the summary-fit decision either way (not a conversation record).
   const foldSource = options.erasure
     ? tolerantSource({ raw: options.erasure.raw.eventStore, keys, strict: options.status.source })
     : options.status.source;

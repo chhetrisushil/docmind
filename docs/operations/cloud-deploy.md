@@ -23,6 +23,10 @@ not from a run against that platform. The image itself is built and smoke-tested
 - **Memory of at least 3 to 4 GiB, enforced by a cgroup limit** (cloud-scaling.md C12). Each parse child
   has a 512 MiB V8 heap, but Buffer memory is not bounded by it (`packages/parsers/src/runner/ParseRunner.ts`),
   and up to four ingest steps each buffer a whole file. The recommended instance is 2 to 4 vCPU and 8 GiB.
+- **Do not roll back past the rolling-summary release (chat flow 1.1.0).** A build without 1.1.0 registered cannot
+  resume any chat that started or rotated onto it (`FlowCodeMismatchError`). Roll forward.
+- **The first boot of that release rebuilds the ingest-status and chat-activity read models** (the sensitive-map
+  digest changed). It runs once, automatically; expect a slower first start on a large log.
 - **Never scale to zero.** Recovery, sweeps and parked chat turns run outside requests.
 
 ## 2. Build the image
