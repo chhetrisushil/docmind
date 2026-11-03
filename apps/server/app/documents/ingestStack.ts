@@ -38,6 +38,12 @@ export interface IngestStackOptions {
   /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
   resume?: { db: TestDb; kek: KeyObject; root?: string };
   /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
+  /** Merged over the stack's env (e.g. a small DOCMIND_CHAT_CONTEXT_TOKENS so chat turns are evicted). */
+  env?: Record<string, string>;
+  /** Compose the chat as a server from before the rolling summary did: only the 1.0.0 flows (rollout test). */
+  chatLegacyOnly?: boolean;
+  /** Turns per conversation generation (production: 50), so a test can reach a rotation. */
+  chatRotateEveryTurns?: number;
   wrapErasure?: (deps: ErasureDeps) => ErasureDeps;
 }
 
@@ -130,6 +136,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
           DOCMIND_TITLE_MODEL: "title-model",
         }
       : { DOCMIND_LLM_PROVIDER: "off" };
+    Object.assign(chatEnv, options.env);
     const settings = loadChatSettings(chatEnv);
     const llm = createChatLlm(chatEnv, settings);
     const titleLlm = createTitleLlm(chatEnv, settings);
@@ -173,6 +180,10 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
         ...(llm && { llm }),
         ...(titleLlm && { titleLlm }),
         timers: durable.timers,
+        ...(options.chatRotateEveryTurns !== undefined && {
+          rotateEveryTurns: options.chatRotateEveryTurns,
+        }),
+        ...(options.chatLegacyOnly && { legacyOnly: true }),
       },
       // no `vectors`: the production PgChunkVectorStore over the real chunks table
     });
