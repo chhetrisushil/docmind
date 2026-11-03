@@ -2,6 +2,7 @@ import type { CallObserver } from "@docmind/llm-anthropic";
 import type { LlmProvider } from "@loom/llm";
 import { createRoleProvider } from "../llm/factory";
 import { loadLlmRoles } from "../llm/roles";
+import { SUMMARY_MAX_TOKENS } from "./agent";
 import type { ChatSettings } from "./settings";
 
 /** One request's bound (180 s; ruling P3). It covers the whole stream. The chat flow has no turn timer: this provider timeout is what bounds each attempt. */
@@ -9,6 +10,11 @@ export const CHAT_REQUEST_TIMEOUT_MS = 180_000;
 
 export interface ChatLlm {
   provider: LlmProvider;
+  /**
+   * The same role and model for the rolling summary, built WITHOUT thinking, effort or observer: thinking tokens
+   * count against the summary's small max_tokens and would truncate it. Bare: never wrap it in the hub.
+   */
+  summaryProvider: LlmProvider;
   /** Filled by `prepareChat` once the item store exists; read once per request. Only the Anthropic provider consults it. */
   observer: { current?: () => CallObserver | undefined };
 }
@@ -21,5 +27,9 @@ export function createChatLlm(env: NodeJS.ProcessEnv, settings: ChatSettings): C
     timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
     chat: { effort: settings.effort, observer: () => observer.current?.() },
   });
-  return provider && { provider, observer };
+  const summaryProvider = createRoleProvider("chat", loadLlmRoles(env), env, {
+    maxTokens: SUMMARY_MAX_TOKENS,
+    timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+  });
+  return provider && summaryProvider && { provider, summaryProvider, observer };
 }

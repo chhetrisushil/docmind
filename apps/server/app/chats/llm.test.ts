@@ -51,6 +51,21 @@ describe("createChatLlm", () => {
     expect(body).not.toHaveProperty("temperature");
   });
 
+  it("builds the summary provider without thinking or effort, on the same model, capped at the summary's max_tokens", async () => {
+    const e = env({ ANTHROPIC_BASE_URL: fake.url, DOCMIND_CHAT_EFFORT: "high" });
+    const llm = createChatLlm(e, loadChatSettings(e));
+    fake.reply(() => ({ stream: { steps: [{ text: "S" }, { stop: "end_turn" }] } }));
+    for await (const _ of llm?.summaryProvider.stream?.({
+      messages: [{ role: "user", content: "hello" }],
+      maxTokens: 1_024,
+    }) ?? [])
+      void _;
+    const body = fake.requests.at(-1)?.body as unknown as Record<string, unknown>;
+    expect(body).toMatchObject({ model: "claude-opus-5-5", max_tokens: 1_024 });
+    expect(body).not.toHaveProperty("thinking");
+    expect(body).not.toHaveProperty("output_config");
+  });
+
   it("asks the observer slot per request, so the stores can be attached after construction", async () => {
     const e = env({ ANTHROPIC_BASE_URL: fake.url });
     const llm = createChatLlm(e, loadChatSettings(e));

@@ -95,6 +95,8 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
   const withSummary = { ...flowConfig, summarizerToolId: CHAT_SUMMARIZER_TOOL_ID };
   const strict = o.legacyOnly ? legacy : chatFlow(withSummary);
   const gk = o.legacyOnly ? legacyGk : chatFlow({ ...withSummary, generalKnowledge: true });
+  // ORDER MATTERS: Loom treats the last-registered version of a flow id as current (WorkflowRuntime; start() and the
+  // rotation successor use it, ADR 0109 D3), so 1.1.0 must be registered after 1.0.0.
   // 1.0.0 stays registered: Loom resumes each conversation on the version it started on (ADR 0023), so a chat begun
   // before the summary keeps its code until its next rotation starts the successor on 1.1.0 (ADR 0109 D3).
   const flows = o.legacyOnly ? [legacy, legacyGk] : [legacy, legacyGk, strict, gk];
@@ -124,9 +126,10 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
       }),
       { items: c.items, bus, shutdown: shutdown.signal },
     );
-    // The BARE provider: the hub would stream the summary into the chat's live view as if it were the answer.
+    // The BARE summary provider (no thinking): the hub would stream the summary into the chat's live view as if it
+    // were the answer, and thinking tokens would eat the summary's small max_tokens.
     effects[CHAT_SUMMARIZER_TOOL_ID] = tolerantSummarizer(
-      createSummarizerEffect(o.llm.provider, { maxTokens: SUMMARY_MAX_TOKENS }),
+      createSummarizerEffect(o.llm.summaryProvider, { maxTokens: SUMMARY_MAX_TOKENS }),
       { shutdown: shutdown.signal },
     );
   }
