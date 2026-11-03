@@ -101,7 +101,15 @@ export interface ComposeOptions {
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
   /** M4 chat: the settings, the chat LLM provider (absent when chat is off) and the timer store. Absent: no chat (the CLI, most tests). */
-  chat?: { settings: ChatSettings; llm?: ChatLlm; titleLlm?: LlmProvider; timers: TimerStore };
+  chat?: {
+    settings: ChatSettings;
+    llm?: ChatLlm;
+    titleLlm?: LlmProvider;
+    timers: TimerStore;
+    /** Test seams passed to `prepareChat`: how many turns make a generation, and a server from before the rolling summary. */
+    rotateEveryTurns?: number;
+    legacyOnly?: boolean;
+  };
 }
 
 /**
@@ -142,6 +150,10 @@ export function buildServer(options: ComposeOptions) {
         settings: options.chat.settings,
         ...(options.chat.llm && { llm: options.chat.llm }),
         timers: options.chat.timers,
+        ...(options.chat.rotateEveryTurns !== undefined && {
+          rotateEveryTurns: options.chat.rotateEveryTurns,
+        }),
+        ...(options.chat.legacyOnly && { legacyOnly: true }),
         eventStore: options.status.source,
         collaborators: pgCollaborators({
           pool,
