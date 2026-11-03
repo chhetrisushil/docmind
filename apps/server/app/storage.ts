@@ -2,6 +2,7 @@ import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
 import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loom/plugin-crypto";
 import { PostgresTimerStore, postgresStorage } from "@loom/plugin-postgres";
 import { Pool } from "pg";
+import { SummaryChoiceEventStore } from "./chats/summaryChoice";
 import { SENSITIVE_EVENT_PATHS } from "./sensitive";
 import { subjectOfExecution } from "./subject";
 
@@ -34,6 +35,7 @@ export interface DurableStorage {
   crypto: PrincipalCryptoOptions;
   /** The Loom pool (docmind_loom); the status writer shares it. `close()` ends it. */
   pool: Pool;
+  /** The sealing pair as Loom sees it: the event store is the summary-choice decorator over `EncryptingEventStore`. */
   sealed: StorePair;
   raw: StorePair;
   lease: { get?(executionId: string): Promise<unknown> };
@@ -77,6 +79,10 @@ export function createDurableStorage({
     sensitive: { ...sensitive },
     subjectOf: subjectOfExecution,
   });
+  // The rolling summary's `summary-fit` decision carries the summary as a bare string choice; the decorator stores it
+  // as `choice.text` (sealed) and gives Loom the string back (chats/summaryChoice.ts). Loom's principal sealing
+  // (`crypto.events`) and erasure (`raw`) keep the undecorated stores.
+  const decorated = new SummaryChoiceEventStore(events);
   const snapshots = new EncryptingSnapshotStore(pg.snapshotStore, keys, {
     sealState: true,
     legacyPlaintext: "refuse",
@@ -87,7 +93,7 @@ export function createDurableStorage({
   return {
     storage: {
       kind: "custom",
-      eventStore: events,
+      eventStore: decorated,
       snapshotStore: snapshots,
       leaseStore: pg.leaseStore,
       // Loom moves a trimmed or deleted inbox's envelopes here first and refuses to boot a chat app
@@ -97,7 +103,7 @@ export function createDurableStorage({
     },
     crypto: { events, snapshots },
     pool,
-    sealed: { eventStore: events, snapshotStore: snapshots },
+    sealed: { eventStore: decorated, snapshotStore: snapshots },
     raw: { eventStore: pg.eventStore, snapshotStore: pg.snapshotStore },
     lease: pg.leaseStore,
     timers,

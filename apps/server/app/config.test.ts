@@ -1,10 +1,11 @@
 import { createSecretKey, randomBytes } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { TimerService } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { SummaryChoiceEventStore } from "./chats/summaryChoice";
 import { buildApp } from "./config";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
@@ -139,6 +140,15 @@ describe.skipIf(!PG_URL)("buildApp on durable storage (needs DOCMIND_TEST_PG_URL
     // `durable.close()` ends the pool, or it rejects unobserved after the test.
     const durable = await openDurableStorage({ loomUrl: db.loomUrl, keys });
     const { storage, crypto } = durable;
+    // The rolling summary's decision is sealable only through this decorator; Loom must still see a sealing store.
+    expect(storage.eventStore).toBeInstanceOf(SummaryChoiceEventStore);
+    expect(durable.sealed.eventStore).toBe(storage.eventStore);
+    expect(crypto.events).toBeInstanceOf(EncryptingEventStore);
+    const shape = storage.eventStore as unknown as Record<string, unknown>;
+    const sealing = crypto.events as unknown as Record<string, unknown>;
+    expect(shape.keys).toBe(sealing.keys);
+    expect(shape.subjectOf).toBe(sealing.subjectOf);
+    expect(shape.senderSubjectOf).toBe(sealing.senderSubjectOf);
     const app = buildApp(storage, crypto);
     expect(app.stores.eventStore).toBe(storage.eventStore);
     expect(app.security?.crypto).toEqual({ allowPlaintextCheckpoints: false });
