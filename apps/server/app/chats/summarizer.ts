@@ -38,10 +38,10 @@ const retryable = (err: unknown): boolean =>
   (err as { retryable?: unknown } | null)?.retryable !== false;
 
 /**
- * The summarizer effect, made unable to fail the conversation. Loom runs the summarize step outside the turn's
- * try/catch, so a model error would end the whole conversation execution; and it records a summary only when the
- * output's `summary` is a string, otherwise it keeps the previous summary and the turn goes on with the turns
- * evicted. So a failed call returns `{}`. A retryable failure is first retried twice with backoff (in memory, so
+ * The summarizer effect, retried and made to degrade on its own. Loom records a summary only when the output's
+ * `summary` is a string; otherwise it keeps the previous summary and the turn goes on with the turns evicted. So a
+ * failed call returns `{}`. (Since Loom 2fabaf3e, PR #761, Loom also degrades a failed summarize step itself; this
+ * wrapper adds the retries and the class-only log line Loom does not give, and predates that fix.) A retryable failure is first retried twice with backoff (in memory, so
  * replay is unchanged). The cost of a failure that outlasts the retries: Loom slices the evicted turns off BEFORE it
  * calls summarize, so those turns are missing from the summary for good; later folds see only newer evictions.
  * An aborted call (the call's own signal: cancel or lost lease) is rethrown. A shutdown never settles the call, so
