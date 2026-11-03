@@ -116,8 +116,9 @@ integer counts once the records' numbers became sealed. Loom's `ctx.decide` has 
 
 Why this is safe: Loom computes no digest over decision payloads in DocMind's configuration (the audit-chain plugin is
 not used; the inbox hash chain covers inbox messages only), and every reader of the decision goes through the
-decorator, so the round trip is invisible to Loom. The read models fold their masked copy through the same stack; for
-them the summary decision is not a conversation record and is ignored either way. Logs written before this change
+decorator, so the round trip is invisible to Loom. The read models' live folds go through the same stack and see the string; their catch-up and rebuild read the
+stored (object) form through the tolerant source (`foldSource` in `compose.ts`), which is not wrapped. Either way the
+chat-activity fold ignores it: the summary decision is not a conversation record (`recordOf` filters on its source). Logs written before this change
 hold no `summary-fit` decision, so there is nothing to migrate.
 
 What stays where: `createDurableStorage` returns the decorator as `storage.eventStore` and `sealed.eventStore`;
@@ -151,7 +152,43 @@ What stays where: `createDurableStorage` returns the decorator as `storage.event
   try/catch, so a summarizer error would end the whole conversation, not fail one turn. DocMind wraps the effect
   (`tolerantSummarizer`, `apps/server/app/chats/summarizer.ts`): a provider error yields no summary, Loom keeps the
   previous summary, and the turn completes with the turns evicted as on 1.0.0. The error is logged by class only;
-  aborts and shutdown rethrow. A fix has been requested upstream in Loom; the wrapper can go once Loom handles it.
+  a cancel rethrows and a shutdown never settles (see below). A fix has been requested upstream in Loom; the wrapper can go once Loom handles it.
+- **Retry and the cost of a failure**: Loom slices the evicted turns off BEFORE it calls `summarize`, so a failed fold
+  is not retried by a later turn: the next fold gets only the turns evicted after it, plus the previous summary. The
+  span evicted on the failing turn is therefore missing from the summary for good. To make that rare the wrapper
+  retries retryable errors (`retryable !== false`, e.g. 429, 5xx, network) twice in memory, after 0.5 s and 2 s, with
+  no durable event so replay is unchanged. Non-retryable errors (auth, 4xx) give no summary at once. A cancel or lost
+  lease (the call's signal) rethrows; a shutdown cuts the request and never settles, leaving the step un-completed as
+  after a crash (the `INTERRUPTED` pattern of `chats/model.ts`).
+- **The summarizer has its own provider**: `createChatLlm` builds `summaryProvider` for the chat role and model
+  without thinking, effort or observer (thinking tokens count against the 1,024 max_tokens and would truncate the
+  summary). It is bare: never wrapped by the hub. This also keeps Loom's boot warning about reasoning without a
+  reasoning store away from `chat-summarize`.
+- **Registration order**: Loom treats the last-registered version of a flow id as current (`WorkflowRuntime`, used by
+  `start()` and the rotation successor, ADR 0109 D3), so `prepareChat` registers 1.1.0 after 1.0.0 (a unit test
+  asserts the order).
+- **Do not roll back past this release**: a build without 1.1.0 registered throws `FlowCodeMismatchError` for every
+  conversation that started or rotated onto 1.1.0, so those chats cannot be resumed. Roll forward instead.
+- **One-time read-model rebuild**: adding `STEP_COMPLETED.output.summary` to the sensitive map changes its digest
+  (`ReadModelService`), so the ingest-status and chat-activity read models rebuild at the first boot of this release.
+  Expect a longer first start on a large log; it is automatic and runs once.
+- **Census for removing 1.0.0**: a chat chain is on 1.0.0 while its newest, non-terminal execution started with the
+  1.0.0 flow hash. Take the hashes from an execution of each version (`SELECT DISTINCT payload->>'flowHash'` per
+  version, e.g. from the rollout test's fixtures) and count the live chain heads on the 1.0.0 hash:
+
+  ```sql
+  SELECT s.execution_id
+  FROM loom.events s
+  WHERE s.event_type = 'EXECUTION_STARTED'
+    AND s.payload->>'flowHash' = ANY (:old_hashes)      -- the doc-chat and doc-chat-gk 1.0.0 hashes
+    AND NOT EXISTS (SELECT 1 FROM loom.events t
+                    WHERE t.execution_id = s.execution_id
+                      AND t.event_type IN ('EXECUTION_COMPLETED', 'EXECUTION_FAILED'));
+  ```
+
+  Rotation completes the predecessor and starts the successor on 1.1.0, so only live generations remain. An idle
+  1.0.0 chat never rotates, so "no live 1.0.0" can take a long time (possibly never for abandoned chats); decide a
+  cut-off, or end the leftovers, before removing 1.0.0. Verify the column names against `loom.events` first.
 - **Test seams**: `prepareChat({ legacyOnly, rotateEveryTurns })`, `ComposeOptions.chat`, and the ingest stack options
   `env`, `chatLegacyOnly`, `chatRotateEveryTurns` (tests only).
 
