@@ -3,26 +3,57 @@ import type { Effect, EffectContext } from "@loom/effect-runtime";
 type SummarizerInput = { messages: { role: string; content?: unknown }[] };
 type SummarizerOutput = { summary?: string };
 
+/** Never settles: a shutdown must leave the step un-completed, as after a crash (cf. model.ts, stepEffect.ts INTERRUPTED). */
+const INTERRUPTED: Promise<never> = new Promise<never>(() => {});
+
+/** Waits before the 1st and 2nd retry. In memory only: no durable event, so replay stays deterministic. */
+const RETRY_DELAYS_MS = [500, 2_000];
+
 export interface TolerantSummarizerDeps {
-  /** Aborted by `ChatWiring.close()`: a shutdown must not be recorded as an empty summary. */
+  /** Aborted by `ChatWiring.close()`: cuts the in-flight request, and the step is left un-completed (never recorded as empty). */
   shutdown?: AbortSignal;
   /** One line per swallowed failure: the error class name only (a message can carry the user's text). */
   log?: (line: string) => void;
+  /** Test seams: the waits before each retry, and how to wait (must reject when `signal` aborts). */
+  retryDelaysMs?: number[];
+  sleep?: (ms: number, signal: AbortSignal | undefined) => Promise<void>;
 }
+
+const sleepFor = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
+/** Retryable unless the error says otherwise (`retryable: false`: auth, 4xx, refusal). */
+const retryable = (err: unknown): boolean =>
+  (err as { retryable?: unknown } | null)?.retryable !== false;
 
 /**
  * The summarizer effect, made unable to fail the conversation. Loom runs the summarize step outside the turn's
  * try/catch, so a model error would end the whole conversation execution; and it records a summary only when the
  * output's `summary` is a string, otherwise it keeps the previous summary and the turn goes on with the turns
- * evicted. So a failed call returns `{}`: that turn is answered without a fresh summary and the next evicting turn
- * folds the older turns in again. An aborted call (shutdown or the call's own signal) is rethrown, so it is never
- * journaled as an empty output.
+ * evicted. So a failed call returns `{}`. A retryable failure is first retried twice with backoff (in memory, so
+ * replay is unchanged). The cost of a failure that outlasts the retries: Loom slices the evicted turns off BEFORE it
+ * calls summarize, so those turns are missing from the summary for good; later folds see only newer evictions.
+ * An aborted call (the call's own signal: cancel or lost lease) is rethrown. A shutdown never settles the call, so
+ * the step is left un-completed as after a crash (model.ts), and the request is cut with the shutdown signal.
  */
 export function tolerantSummarizer(
   inner: Effect<SummarizerInput, SummarizerOutput>,
   deps: TolerantSummarizerDeps = {},
 ): Effect<SummarizerInput, SummarizerOutput> {
   const log = deps.log ?? ((line: string) => console.error(line));
+  const delays = deps.retryDelaysMs ?? RETRY_DELAYS_MS;
+  const sleep = deps.sleep ?? sleepFor;
   const wrapper: Record<string, unknown> = {};
   for (let o: object | null = inner; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
     for (const key of Object.getOwnPropertyNames(o)) {
@@ -33,12 +64,30 @@ export function tolerantSummarizer(
   }
   return Object.assign(wrapper, {
     async execute(input: SummarizerInput, ctx: EffectContext): Promise<SummarizerOutput> {
-      try {
-        return await inner.execute(input, ctx);
-      } catch (err) {
-        if (ctx.signal?.aborted === true || deps.shutdown?.aborted === true) throw err;
-        log(`chat summary failed: ${err instanceof Error ? err.constructor.name : typeof err}`);
-        return {};
+      const signal = deps.shutdown
+        ? ctx.signal
+          ? AbortSignal.any([ctx.signal, deps.shutdown])
+          : deps.shutdown
+        : ctx.signal;
+      const call = { ...ctx, signal } as EffectContext;
+      const shuttingDown = (): boolean => deps.shutdown?.aborted === true;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await inner.execute(input, call);
+        } catch (err) {
+          if (shuttingDown()) return INTERRUPTED;
+          if (ctx.signal?.aborted === true) throw err;
+          if (attempt >= delays.length || !retryable(err)) {
+            log(`chat summary failed: ${err instanceof Error ? err.constructor.name : typeof err}`);
+            return {};
+          }
+          try {
+            await sleep(delays[attempt] as number, signal);
+          } catch {
+            if (shuttingDown()) return INTERRUPTED;
+            throw err;
+          }
+        }
       }
     },
   }) as unknown as Effect<SummarizerInput, SummarizerOutput>;
