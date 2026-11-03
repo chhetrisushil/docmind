@@ -24,6 +24,8 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
     "output.content",
     "output.toolCalls[].input",
     "output.value",
+    // The rolling summary of evicted turns (`conv#o<ord>:summarize`, `createSummarizerEffect` → `{ summary }`).
+    "output.summary",
     // ADR 0133: the reasoning parts of a model frame (signature, textRef with its size, digest) and the vendor's
     // block order (text lengths). A signature carries the model's encrypted reasoning; the digest of a short
     // summary would let a reader of the log guess it. `STEP_STARTED.input.messages` above already seals the

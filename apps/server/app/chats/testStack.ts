@@ -16,6 +16,7 @@ import { createChatLlm } from "./llm";
 import { ChatReasoningStore } from "./reasoningStore";
 import type { Passage } from "./retrieval";
 import { loadChatSettings } from "./settings";
+import { SummaryChoiceEventStore } from "./summaryChoice";
 import { C, FakeItems, MemoryReasoningRows, T, U } from "./testing";
 import { FakeChats } from "./tools/testing";
 import { type ChatWiring, connectChat, prepareChat } from "./wiring";
@@ -28,7 +29,7 @@ export interface ChatStack<F = FakeAnthropic> {
   raw: InMemoryAsyncEventStore;
   items: FakeItems;
   /** The decrypting view of the log (what a route reads reasoning through). */
-  events: EncryptingEventStore;
+  events: SummaryChoiceEventStore;
   reasoning: ChatReasoningStore;
   /** The sealed rows the reasoning store wrote. */
   reasoningRows: MemoryReasoningRows;
@@ -58,6 +59,8 @@ interface StackOptions {
   generalKnowledge?: boolean;
   /** Makes retrieval throw this (to prove a collaborator's message never reaches the log). */
   searchError?: Error;
+  /** Merged over the stack's env (e.g. a small DOCMIND_CHAT_CONTEXT_TOKENS so turns are evicted). */
+  env?: Record<string, string>;
 }
 
 export async function startChatStack(
@@ -72,6 +75,7 @@ export async function startChatStack(
     ANTHROPIC_BASE_URL: fake.url,
     DOCMIND_CHAT_ENVELOPE_KEY: "e".repeat(32),
     ...(o.generalKnowledge && { DOCMIND_CHAT_GENERAL_KNOWLEDGE: "true" }),
+    ...o.env,
   };
   return buildChatStack(fake, env, o);
 }
@@ -88,6 +92,7 @@ export async function startOllamaChatStack(
     DOCMIND_OLLAMA_URL: fake.url,
     DOCMIND_CHAT_ENVELOPE_KEY: "e".repeat(32),
     ...(o.generalKnowledge && { DOCMIND_CHAT_GENERAL_KNOWLEDGE: "true" }),
+    ...o.env,
   };
   return buildChatStack(fake, env, o);
 }
@@ -117,13 +122,14 @@ async function buildChatStack<F extends { close(): Promise<void> }>(
     sensitive: { ...SENSITIVE_EVENT_PATHS },
     subjectOf: subjectOfExecution,
   });
+  const store = new SummaryChoiceEventStore(events);
   const items = new FakeItems();
   const reasoningRows = new MemoryReasoningRows();
   const reasoning = new ChatReasoningStore(reasoningRows, new FieldCrypto(recording));
   const prepared = prepareChat({
     settings,
     ...(llm && { llm }),
-    eventStore: events,
+    eventStore: store,
     timers: new InMemoryTimerStore(),
     ...(o.rotateEveryTurns !== undefined && { rotateEveryTurns: o.rotateEveryTurns }),
     collaborators: {
@@ -141,15 +147,15 @@ async function buildChatStack<F extends { close(): Promise<void> }>(
       documents: { summary: async () => null, list: async () => [] },
     },
   });
-  const app = buildApp({ kind: "custom", eventStore: events }, { events }, { chat: prepared.deps });
-  const chat = connectChat(prepared, app.runtime, events);
+  const app = buildApp({ kind: "custom", eventStore: store }, { events }, { chat: prepared.deps });
+  const chat = connectChat(prepared, app.runtime, store);
   return {
     app,
     chat,
     fake,
     raw,
     items,
-    events,
+    events: store,
     reasoning,
     reasoningRows,
     subjects,
@@ -167,7 +173,7 @@ async function buildChatStack<F extends { close(): Promise<void> }>(
       const stop = new AbortController();
       const out: { text: string; status: string; reason?: string }[] = [];
       for await (const item of followConversation(
-        { reader: chat.reader, eventStore: events },
+        { reader: chat.reader, eventStore: store },
         conversationId,
         {
           signal: stop.signal,
