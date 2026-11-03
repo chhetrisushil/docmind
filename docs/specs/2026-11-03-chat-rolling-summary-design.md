@@ -183,10 +183,12 @@ What stays where: `createDurableStorage` returns the decorator as `storage.event
     AND s.payload->>'flowHash' = ANY (:old_hashes)      -- the doc-chat and doc-chat-gk 1.0.0 hashes
     AND NOT EXISTS (SELECT 1 FROM loom.events t
                     WHERE t.execution_id = s.execution_id
-                      AND t.event_type IN ('EXECUTION_COMPLETED', 'EXECUTION_FAILED'));
+                      AND t.event_type IN ('EXECUTION_COMPLETED', 'EXECUTION_FAILED',
+                                           'EXECUTION_CANCELLED', 'EXECUTION_CONTINUED'));
   ```
 
-  Rotation completes the predecessor and starts the successor on 1.1.0, so only live generations remain. An idle
+  A rotation ends the predecessor with `EXECUTION_CONTINUED` (ADR 0109 D2) and starts the successor on 1.1.0, so
+  only live generations remain. An idle
   1.0.0 chat never rotates, so "no live 1.0.0" can take a long time (possibly never for abandoned chats); decide a
   cut-off, or end the leftovers, before removing 1.0.0. Verify the column names against `loom.events` first.
 - **Test seams**: `prepareChat({ legacyOnly, rotateEveryTurns })`, `ComposeOptions.chat`, and the ingest stack options
