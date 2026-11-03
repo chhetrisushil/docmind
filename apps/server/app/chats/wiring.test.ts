@@ -35,7 +35,7 @@ const env = {
   DOCMIND_CHAT_ENVELOPE_KEY: KEY,
 };
 
-function prepare(over: Record<string, string> = {}, withLlm = true) {
+function prepare(over: Record<string, string> = {}, withLlm = true, legacyOnly = false) {
   const e = { ...env, ...over };
   const settings = loadChatSettings(withLlm ? e : { DOCMIND_LLM_PROVIDER: "off" });
   const store = new InMemoryAsyncEventStore();
@@ -46,6 +46,7 @@ function prepare(over: Record<string, string> = {}, withLlm = true) {
     collaborators: collaborators(),
     eventStore: store,
     timers: new InMemoryTimerStore(),
+    ...(legacyOnly && { legacyOnly }),
   });
   return { prepared, store, llm };
 }
@@ -70,11 +71,28 @@ describe("prepareChat", () => {
 
   it("builds both flows and chats start under the strict one unless general knowledge is on", () => {
     const strict = prepare().prepared;
-    expect(strict.deps.flows.map((f) => f.definition.id)).toEqual([CHAT_FLOW_ID, CHAT_GK_FLOW_ID]);
+    expect(strict.deps.flows.map((f) => `${f.definition.id}@${f.definition.version}`)).toEqual([
+      `${CHAT_FLOW_ID}@1.0.0`,
+      `${CHAT_GK_FLOW_ID}@1.0.0`,
+      `${CHAT_FLOW_ID}@1.1.0`,
+      `${CHAT_GK_FLOW_ID}@1.1.0`,
+    ]);
+    expect(strict.active.definition.version).toBe("1.1.0");
+    expect(prepare({}, false).prepared.deps.effects["chat-summarize"]).toBeUndefined();
+    expect(prepare().prepared.deps.effects["chat-summarize"]).toBeDefined();
     expect(strict.active.definition.id).toBe(CHAT_FLOW_ID);
     expect(prepare({ DOCMIND_CHAT_GENERAL_KNOWLEDGE: "true" }).prepared.active.definition.id).toBe(
       CHAT_GK_FLOW_ID,
     );
+  });
+
+  it("legacyOnly registers just the 1.0.0 flows and starts chats on 1.0.0", () => {
+    const { prepared } = prepare({}, true, true);
+    expect(prepared.deps.flows.map((f) => `${f.definition.id}@${f.definition.version}`)).toEqual([
+      `${CHAT_FLOW_ID}@1.0.0`,
+      `${CHAT_GK_FLOW_ID}@1.0.0`,
+    ]);
+    expect(prepared.active.definition.version).toBe("1.0.0");
   });
 
   it("fills the provider's observer slot, and reports chat unavailable without a key", () => {

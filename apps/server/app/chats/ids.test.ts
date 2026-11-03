@@ -71,7 +71,7 @@ describe("isChatTitleExecution and isRecoverableChatExecution", () => {
 });
 
 describe("chat ids and grants", () => {
-  it("lists the model effect and the five tools", () => {
+  it("lists the model effect, the summarizer and the five tools", () => {
     expect(CHAT_TOOL_IDS).toEqual([
       "search_docs",
       "related",
@@ -79,7 +79,7 @@ describe("chat ids and grants", () => {
       "get_summary",
       "list_documents",
     ]);
-    expect(CHAT_EFFECT_IDS).toEqual(["chat-model", ...CHAT_TOOL_IDS]);
+    expect(CHAT_EFFECT_IDS).toEqual(["chat-model", "chat-summarize", ...CHAT_TOOL_IDS]);
   });
 
   it("knows the two chat flow ids and nothing else", () => {

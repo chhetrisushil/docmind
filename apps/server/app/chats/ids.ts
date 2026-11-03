@@ -12,6 +12,8 @@ export const CHAT_FLOW_ID = "doc-chat";
 export const CHAT_GK_FLOW_ID = "doc-chat-gk";
 export const CHAT_TITLE_FLOW_ID = "chat-title";
 export const CHAT_MODEL_TOOL_ID = "chat-model";
+/** The rolling summary of evicted turns (`@loom/conversation` `budget.summarizerToolId`, Loom's `createSummarizerEffect`). */
+export const CHAT_SUMMARIZER_TOOL_ID = "chat-summarize";
 export const CHAT_TOOL_IDS = [
   "search_docs",
   "related",
@@ -20,7 +22,11 @@ export const CHAT_TOOL_IDS = [
   "list_documents",
 ] as const;
 /** Every effect id a chat conversation may invoke: the grant list of both chat flows. */
-export const CHAT_EFFECT_IDS: readonly string[] = [CHAT_MODEL_TOOL_ID, ...CHAT_TOOL_IDS];
+export const CHAT_EFFECT_IDS: readonly string[] = [
+  CHAT_MODEL_TOOL_ID,
+  CHAT_SUMMARIZER_TOOL_ID,
+  ...CHAT_TOOL_IDS,
+];
 
 export const isChatFlowId = (id: string): boolean => id === CHAT_FLOW_ID || id === CHAT_GK_FLOW_ID;
 

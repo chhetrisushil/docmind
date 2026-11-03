@@ -73,7 +73,16 @@ export interface ChatFlowConfig {
   onError?: (errorId: string, err: unknown, info: { conversationId: string; turn: number }) => void;
   /** Turns per generation (default 50). A seam for tests that need a rotation. */
   rotateEveryTurns?: number;
+  /**
+   * The summarizer effect: set, the flow is version 1.1.0 and folds turns evicted from the window into a sealed rolling
+   * summary the model keeps seeing; unset, it is 1.0.0, exactly the flow conversations started on before the summary
+   * existed (kept registered so Loom resumes them on it; spec 2026-11-03-chat-rolling-summary §3).
+   */
+  summarizerToolId?: string;
 }
+
+/** The most tokens the rolling summary of evicted turns may take. */
+export const SUMMARY_MAX_TOKENS = 1024;
 
 /**
  * The chat's conversation flow (D11). One flow per system prompt, because Loom's `systemPrompt` is per
@@ -107,10 +116,15 @@ export function chatFlow(config: ChatFlowConfig): ConversationFlow {
         // A tool timeout is fed back to the model (toolErrors "feedback": StepTimeoutError is not terminal), so it stays.
         toolTimeoutMs: 30_000,
       },
-      // No summarizer: turns that fall out of the window leave the prompt but stay in history.
+      // 1.0.0: turns that fall out of the window leave the prompt but stay in history. 1.1.0: they are folded into a
+      // rolling summary (at most 1,024 tokens) that the prompt keeps; the summary is sealed (sensitive.ts, summaryChoice.ts).
       budget: {
         contextWindow: config.contextTokens,
         reserveOutputTokens: Math.min(config.maxTokens, Math.floor(config.contextTokens / 4)),
+        ...(config.summarizerToolId !== undefined && {
+          summarizerToolId: config.summarizerToolId,
+          maxSummaryTokens: SUMMARY_MAX_TOKENS,
+        }),
       },
       rotateEveryTurns: config.rotateEveryTurns ?? 50,
       maxTurnChars: 8_000,
@@ -123,7 +137,7 @@ export function chatFlow(config: ChatFlowConfig): ConversationFlow {
     {
       id: gk ? CHAT_GK_FLOW_ID : CHAT_FLOW_ID,
       name: gk ? "Document chat (general knowledge)" : "Document chat",
-      version: "1.0.0",
+      version: config.summarizerToolId !== undefined ? "1.1.0" : "1.0.0",
     },
   );
 }

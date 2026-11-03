@@ -1,4 +1,4 @@
-import { createAgentModelEffect } from "@loom/agent";
+import { createAgentModelEffect, createSummarizerEffect } from "@loom/agent";
 import {
   type ConversationFlow,
   ConversationHub,
@@ -12,9 +12,9 @@ import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { RegisteredFlow, WorkflowRuntime } from "@loom/workflow-runtime";
 import type { ChatDeps } from "../config";
 import { executionAuthorizer } from "../security";
-import { type ChatFlowConfig, chatFlow } from "./agent";
+import { type ChatFlowConfig, SUMMARY_MAX_TOKENS, chatFlow } from "./agent";
 import { ChatBus } from "./bus";
-import { CHAT_MODEL_TOOL_ID } from "./ids";
+import { CHAT_MODEL_TOOL_ID, CHAT_SUMMARIZER_TOOL_ID } from "./ids";
 import type { ChatLlm } from "./llm";
 import { chatModelEffect } from "./model";
 import { chatObserver } from "./observer";
@@ -46,6 +46,8 @@ export interface PrepareChatOptions {
   timers: TimerStore;
   onError?: ChatFlowConfig["onError"];
   rotateEveryTurns?: number;
+  /** Test seam: register and start only the 1.0.0 flows (a server from before the summary). */
+  legacyOnly?: boolean;
 }
 
 export interface PreparedChat {
@@ -87,8 +89,14 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
     onError: o.onError ?? logTurnError,
     ...(o.rotateEveryTurns !== undefined && { rotateEveryTurns: o.rotateEveryTurns }),
   };
-  const strict = chatFlow(flowConfig);
-  const gk = chatFlow({ ...flowConfig, generalKnowledge: true });
+  const legacy = chatFlow(flowConfig);
+  const legacyGk = chatFlow({ ...flowConfig, generalKnowledge: true });
+  const withSummary = { ...flowConfig, summarizerToolId: CHAT_SUMMARIZER_TOOL_ID };
+  const strict = o.legacyOnly ? legacy : chatFlow(withSummary);
+  const gk = o.legacyOnly ? legacyGk : chatFlow({ ...withSummary, generalKnowledge: true });
+  // 1.0.0 stays registered: Loom resumes each conversation on the version it started on (ADR 0023), so a chat begun
+  // before the summary keeps its code until its next rotation starts the successor on 1.1.0 (ADR 0109 D3).
+  const flows = o.legacyOnly ? [legacy, legacyGk] : [legacy, legacyGk, strict, gk];
   const effects: Record<string, Effect> = chatTools({
     chats: c.chats,
     items: c.items,
@@ -115,6 +123,10 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
       }),
       { items: c.items, bus, shutdown: shutdown.signal },
     );
+    // The BARE provider: the hub would stream the summary into the chat's live view as if it were the answer.
+    effects[CHAT_SUMMARIZER_TOOL_ID] = createSummarizerEffect(o.llm.provider, {
+      maxTokens: SUMMARY_MAX_TOKENS,
+    });
   }
   return {
     hub,
@@ -126,7 +138,7 @@ export function prepareChat(o: PrepareChatOptions): PreparedChat {
     available: o.llm !== undefined,
     active: settings.generalKnowledge ? gk : strict,
     // Conversation flows are typed by their carry; `flows` takes them untyped (Conversations does the same cast).
-    deps: { flows: [strict, gk] as unknown as RegisteredFlow[], effects, timers: o.timers },
+    deps: { flows: flows as unknown as RegisteredFlow[], effects, timers: o.timers },
   };
 }
 
