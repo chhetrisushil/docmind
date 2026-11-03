@@ -341,4 +341,49 @@ describe("the raw event log of a full chat holds no content (spec 4.4)", () => {
     expect(raw.some((e) => e.eventType === "LLM_REASONING_CAPTURED")).toBe(false);
     assertNoPlaintext(raw, [THINKING, SIG1]);
   });
+
+  it("a chat long enough to evict turns: the rolling summary is sealed wherever it lands", async () => {
+    const SUMMARY = "Rolling-summary-sentinel: the user asked about Nocturne payment terms.";
+    stack = await startChatStack({
+      scripts: [],
+      env: { DOCMIND_CHAT_CONTEXT_TOKENS: "4000", DOCMIND_CHAT_MAX_TOKENS: "1000" },
+    });
+    const summarizerCalls: unknown[] = [];
+    stack.fake.reply((body) => {
+      if (JSON.stringify(body.system ?? "").includes("You compress an earlier part")) {
+        summarizerCalls.push(body);
+        return { stream: { steps: [{ text: SUMMARY }, { stop: "end_turn" }] } };
+      }
+      return { stream: { steps: [{ text: "Noted." }, { stop: "end_turn" }] } };
+    });
+    const id = await stack.start();
+    const long = (n: number) => `${QUESTION} ${"detail ".repeat(400)} (${n})`;
+    for (let i = 1; i <= 4; i++) {
+      await stack.send(id, long(i));
+      await stack.replies(id, i);
+    }
+    expect(summarizerCalls.length).toBeGreaterThan(0); // a turn really was evicted
+
+    const raw = await rawLog(stack);
+    assertNoPlaintext(raw, [...SECRETS, SUMMARY, "Rolling-summary-sentinel"]);
+    const paths = sealedPaths(raw);
+    expect([...paths]).toEqual(
+      expect.arrayContaining(["STEP_COMPLETED:output.summary", "DECISION_RECORDED:choice.text"]),
+    );
+    const fits = raw.filter(
+      (e) =>
+        e.eventType === "DECISION_RECORDED" &&
+        /:summary-fit$/.test(String((e.payload as { decisionId?: unknown }).decisionId)),
+    );
+    expect(fits.length).toBeGreaterThan(0);
+    for (const e of fits) {
+      const choice = (
+        e.payload as { choice: { docmindSummary?: unknown; text?: { __loomEnc?: unknown } } }
+      ).choice;
+      expect(choice.docmindSummary).toBe(1);
+      expect(choice.text?.__loomEnc).toBe("loom/aes-256-gcm");
+    }
+    const lastChatRequest = JSON.stringify(stack.fake.requests.at(-1)?.body);
+    expect(lastChatRequest).toContain("Rolling-summary-sentinel");
+  });
 });
