@@ -1,7 +1,7 @@
 # Rolling conversation summary: design
 
-Date: 2026-11-03. Status: design approved in conversation (summarizer; DocMind-only sealing via an event-store
-decorator), awaiting spec review.
+Date: 2026-11-03. Status: implemented on feat/chat-rolling-summary (summarizer; DocMind-only sealing via an event-store
+decorator). One deviation, see Implementation notes.
 Loom: `252cf914` (`@loom/conversation` `budget.summarizerToolId`, `@loom/agent` `createSummarizerEffect`, ADR 0137).
 
 ## Problem
@@ -144,6 +144,16 @@ What stays where: `createDurableStorage` returns the decorator as `storage.event
   and 1.1.0, answers its next turn on 1.0.0 with no `summarize` step even when it evicts; a new chat starts on 1.1.0;
   and a rotation of the 1.0.0 conversation starts its successor on 1.1.0 (see §3).
 - **Failure**: a summarizer error fails that turn (reply status `failed`, error logged by class), the next turn works.
+
+## Implementation notes
+
+- **Failure (supersedes the Failure bullet above)**: Loom's `conversation$` calls `summarize()` outside the turn's
+  try/catch, so a summarizer error would end the whole conversation, not fail one turn. DocMind wraps the effect
+  (`tolerantSummarizer`, `apps/server/app/chats/summarizer.ts`): a provider error yields no summary, Loom keeps the
+  previous summary, and the turn completes with the turns evicted as on 1.0.0. The error is logged by class only;
+  aborts and shutdown rethrow. A fix has been requested upstream in Loom; the wrapper can go once Loom handles it.
+- **Test seams**: `prepareChat({ legacyOnly, rotateEveryTurns })`, `ComposeOptions.chat`, and the ingest stack options
+  `env`, `chatLegacyOnly`, `chatRotateEveryTurns` (tests only).
 
 ## Decided not to do
 

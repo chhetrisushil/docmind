@@ -188,6 +188,7 @@ sequenceDiagram
 ```
 
 - **A chat.** A chat is a Loom conversation with the id `u_<user>.c-<chat>`. Its `chat_sessions` row holds the sealed title and the `scope`: `"all"` or a list of document ids. Reopening a chat continues the same conversation, and long chats rotate their token window.
+- **Rolling summary.** A chat's prompt holds the newest turns that fit `DOCMIND_CHAT_CONTEXT_TOKENS`; turns that no longer fit are folded into a rolling summary (Loom's conversation budget, at most 1,024 tokens, written by the chat model through the `chat-summarize` effect, which is never streamed to the live view) that the prompt keeps. The summary is sealed under the owner's key wherever it lands; its `summary-fit` decision goes through `SummaryChoiceEventStore` (`chats/summaryChoice.ts`), which stores the bare string Loom records as `choice.text` in a sealed form. A summarizer error yields no summary rather than ending the conversation (`tolerantSummarizer`, `chats/summarizer.ts`): the turn completes with the turns evicted, as before. New chats start on flow 1.1.0; chats started before the summary existed run on 1.0.0 until their next rotation (every 50 turns), whose successor starts on 1.1.0. 1.0.0 can be removed once no 1.0.0 execution is live.
 - **Tools.**
     - `search_docs` embeds the query, takes the pgvector top-k within the scope and re-ranks with MMR. It then follows links (`DOCMIND_RETRIEVAL_HOPS`, default 1; see `docs/design/linked-retrieval.md`).
     - `related`, `read_section`, `get_summary` and `list_documents` give deliberate hops and context.

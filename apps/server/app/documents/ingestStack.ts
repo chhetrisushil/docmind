@@ -37,13 +37,13 @@ export interface IngestStackOptions {
   chat?: boolean;
   /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
   resume?: { db: TestDb; kek: KeyObject; root?: string };
-  /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
   /** Merged over the stack's env (e.g. a small DOCMIND_CHAT_CONTEXT_TOKENS so chat turns are evicted). */
   env?: Record<string, string>;
   /** Compose the chat as a server from before the rolling summary did: only the 1.0.0 flows (rollout test). */
   chatLegacyOnly?: boolean;
   /** Turns per conversation generation (production: 50), so a test can reach a rotation. */
   chatRotateEveryTurns?: number;
+  /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
   wrapErasure?: (deps: ErasureDeps) => ErasureDeps;
 }
 
