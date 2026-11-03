@@ -33,7 +33,7 @@ const sleepFor = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 
-/** Retryable unless the error says otherwise (`retryable: false`: auth, 4xx, refusal). */
+/** Retryable unless the error says otherwise (`retryable: false`, e.g. a refusal); an HTTP 4xx or auth error is still retried, at most twice. */
 const retryable = (err: unknown): boolean =>
   (err as { retryable?: unknown } | null)?.retryable !== false;
 

@@ -157,7 +157,7 @@ What stays where: `createDurableStorage` returns the decorator as `storage.event
   is not retried by a later turn: the next fold gets only the turns evicted after it, plus the previous summary. The
   span evicted on the failing turn is therefore missing from the summary for good. To make that rare the wrapper
   retries retryable errors (`retryable !== false`, e.g. 429, 5xx, network) twice in memory, after 0.5 s and 2 s, with
-  no durable event so replay is unchanged. Non-retryable errors (auth, 4xx) give no summary at once. A cancel or lost
+  no durable event so replay is unchanged. Errors marked `retryable: false` (e.g. a refusal) give no summary at once; others, HTTP 4xx and auth included, are retried. A cancel or lost
   lease (the call's signal) rethrows; a shutdown cuts the request and never settles, leaving the step un-completed as
   after a crash (the `INTERRUPTED` pattern of `chats/model.ts`).
 - **The summarizer has its own provider**: `createChatLlm` builds `summaryProvider` for the chat role and model
