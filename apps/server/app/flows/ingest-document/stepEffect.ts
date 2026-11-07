@@ -1,4 +1,3 @@
-import type { IngestStep } from "@docmind/contracts";
 import { ParseAbortedError } from "@docmind/parsers";
 import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
@@ -34,7 +33,7 @@ export type StepResult = z.infer<typeof StepResult>;
  * superseded execution must not write (D1).
  */
 export interface StepGuard {
-  begin(ref: IngestStartInput, step: IngestStep, generation?: number): Promise<void>;
+  begin(ref: IngestStartInput, step: string, generation?: number): Promise<void>;
 }
 
 /**
@@ -104,6 +103,8 @@ export interface StepOptions {
   maxAttemptsTotal?: number;
   /** Test seam: the settle wait after a timed-out attempt (default ATTEMPT_SETTLE_MS). */
   settleMs?: number;
+  /** Reads the generation from an execution id (default: the ingest one); a flow with another id shape supplies its own. */
+  generationOf?: (executionId: string) => number | undefined;
   retry?: RetryPolicy;
   /** The longest single wait between attempts (default: uncapped). */
   maxBackoffMs?: number;
@@ -167,7 +168,7 @@ export const ingestStepOptions = (
 });
 
 export function stepEffect(
-  step: IngestStep,
+  step: string,
   guard: StepGuard,
   work: (
     ref: IngestStartInput,
@@ -222,7 +223,9 @@ export function stepEffect(
       const waitSignals = [ctx?.signal, options.shutdown].filter((x): x is AbortSignal => !!x);
       const waitSignal = waitSignals.length ? AbortSignal.any(waitSignals) : undefined;
       const ceiling = options.maxAttemptsTotal ?? MAX_ATTEMPTS_TOTAL;
-      const generation = ctx?.executionId ? generationOf(ctx.executionId) : undefined;
+      const generation = ctx?.executionId
+        ? (options.generationOf ?? generationOf)(ctx.executionId)
+        : undefined;
       let total = 0;
       for (let attempt = 1; ; attempt++) {
         total++;
@@ -304,7 +307,7 @@ async function settledWithin(
 }
 
 /** A step failure's message is written to the event log: fixed text; only the class goes to the process log. */
-function failure(step: IngestStep, cause: unknown, cancelled = false): Error {
+function failure(step: string, cause: unknown, cancelled = false): Error {
   // A cancellation (a delete aborting the runner) is expected, so it is not logged.
   if (!cancelled && !isAbort(cause)) {
     console.error(

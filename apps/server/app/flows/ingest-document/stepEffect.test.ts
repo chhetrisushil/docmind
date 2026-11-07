@@ -648,6 +648,19 @@ describe("stepEffect generation", () => {
     expect(seen).toEqual([3, undefined]);
   });
 
+  it("runs under a non-ingest step label with a caller-supplied generation reader", async () => {
+    const seen: { step: string; generation?: number }[] = [];
+    const port: StepGuard = {
+      begin: async (_r, step, generation) => void seen.push({ step, generation }),
+    };
+    const effect = stepEffect("visualize-extract", port, async () => ({ count: 3 }), {
+      generationOf: () => 7,
+    });
+    const out = await effect.execute(ref(), { executionId: "u_x:visualize-y" } as never);
+    expect(out).toEqual({ outcome: "done", count: 3 });
+    expect(seen).toEqual([{ step: "visualize-extract", generation: 7 }]);
+  });
+
   it("ends as document_gone when the guard reports a superseded generation", async () => {
     const port: StepGuard = {
       begin: async () => {
