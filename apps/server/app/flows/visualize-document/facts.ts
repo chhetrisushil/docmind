@@ -90,6 +90,14 @@ function sourcePool(text: string): { value: number; percent: boolean }[] {
 
 const NUMERIC_VALUES = (s: string): number[] => readNumbers(s).map((r) => r.canonical);
 
+// An ISO date (YYYY-MM or YYYY-MM-DD, optional time) grounds on its year alone.
+const ISO_DATE = /^(\d{4})-(\d{2})(?:-(\d{2}))?(?:[T ].*)?$/;
+/** The numbers a series x value asserts. A date's month and day are not checked, only its year. */
+const xNumbers = (x: string): number[] => {
+  const iso = ISO_DATE.exec(x);
+  return iso ? [Number(iso[1])] : NUMERIC_VALUES(x);
+};
+
 /** The numeric data of a fact: figure values, series y, and every number in table cells. */
 export function numbersOf(f: DraftFact): number[] {
   switch (f.kind) {
@@ -109,7 +117,7 @@ export function numbersInFact(f: DraftFact): number[] {
       return [
         ...numbersOf(f),
         ...NUMERIC_VALUES(f.label),
-        ...f.points.flatMap((p) => NUMERIC_VALUES(p.x)),
+        ...f.points.flatMap((p) => xNumbers(p.x)),
       ];
     case "figure":
       return [

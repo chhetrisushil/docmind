@@ -170,6 +170,36 @@ describe("grounding covers every number in a fact (V4)", () => {
     expect(grounded(s, one("2024: 3, 2025: 4"))).toBe(true);
     expect(grounded(s, one("2025: 3, 2026: 4"))).toBe(false);
   });
+  it("grounds an ISO-date x on its year, not its month or day", () => {
+    const s = {
+      kind: "series",
+      label: "sales",
+      points: [
+        { x: "2024-01-05", y: 3 },
+        { x: "2024-02-05", y: 4 },
+      ],
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
+    expect(grounded(s, one("In January 2024 sales were 3 and in February 2024 they were 4"))).toBe(
+      true,
+    );
+    expect(grounded(s, one("In January sales were 3 and in February they were 4"))).toBe(false);
+  });
+  it("still requires every number of a non-date x such as Q3 2031", () => {
+    const s = {
+      kind: "series",
+      label: "sales",
+      points: [
+        { x: "Q3 2031", y: 4 },
+        { x: "Q4 2031", y: 5 },
+      ],
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
+    expect(grounded(s, one("Q3 2031 sales were 4 and Q4 2031 were 5"))).toBe(true);
+    expect(grounded(s, one("in 2031 sales were 4 and 5"))).toBe(false);
+  });
   it("does not ground a unitless 0.12 from 12%, but a % unit does", () => {
     const bare = { kind: "figure", label: "m", value: 0.12, chunkIds: [C1], ordinal: 0 } as const;
     const pct = { ...bare, unit: "%" } as const;
