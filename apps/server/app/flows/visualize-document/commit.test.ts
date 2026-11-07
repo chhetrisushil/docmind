@@ -9,7 +9,7 @@ import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
 import { experienceIdOf } from "./lineage";
-import { aPlan } from "./testing";
+import { aPlan, childrenOf } from "./testing";
 
 const SECRET_LABEL = "Zebra-Secret-Label";
 const SECRET_SUMMARY = "Zebra-Secret-Summary";
@@ -41,7 +41,7 @@ describe("the commit step", () => {
     const out = await effect.execute(input, undefined as never);
     expect(out).toEqual({ outcome: "done", count: input.ops.length });
     const latest = await lineage.resolveLatest(experienceIdOf(r));
-    expect(latest.ok && latest.value.root.children.map((c) => c.id)).toEqual(["revenue"]);
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
   });
 
   it("seals the planned ops, summary and report of its start event in the raw log", async () => {

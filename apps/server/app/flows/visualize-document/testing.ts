@@ -59,3 +59,7 @@ export async function aPlan(
   const model = scriptedPlannerModel([JSON.stringify({ summary, nodes: [node] })]);
   return planVisuals(new ReferencePlanner({ model, modelId: "test" }), [fact], recording());
 }
+
+/** A node's children (the experience root is a container; its static type is the wider ExperienceNode). */
+export const childrenOf = (root: unknown) =>
+  (root as { children: readonly { id: string }[] }).children;

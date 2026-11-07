@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { subjectOfExecution } from "../../subject";
 import { HeadMovedError, commitPlan, experienceIdOf, visualsLineage } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
-import { aPlan } from "./testing";
+import { aPlan, childrenOf } from "./testing";
 
 const ref = (): VisualizeRef => ({
   tenantId: randomUUID(),
@@ -33,7 +33,7 @@ const startOf = (state: Awaited<ReturnType<Lineage["state"]>>): string => {
 const childIds = async (lineage: Lineage, r: VisualizeRef) => {
   const latest = await lineage.resolveLatest(experienceIdOf(r));
   if (!latest.ok) throw new Error("no head");
-  return latest.value.root.children.map((c) => c.id);
+  return childrenOf(latest.value.root).map((c) => c.id);
 };
 
 describe("commitPlan", () => {
@@ -56,7 +56,7 @@ describe("commitPlan", () => {
     if (!genesisOnly.ok) throw new Error("no genesis");
     const replayed = replay(genesisOnly.value, plan.ops);
     if (!replayed.ok) throw new Error("replay failed");
-    expect(latest.value.root.children).toEqual(replayed.value.root.children);
+    expect(childrenOf(latest.value.root)).toEqual(childrenOf(replayed.value.root));
     expect(await childIds(lineage, r)).toEqual(["revenue"]);
   });
 
@@ -80,7 +80,7 @@ describe("commitPlan", () => {
     await commitPlan(lineage, r, await aPlan("revenue", "New label"), now);
     const latest = await lineage.resolveLatest(experienceIdOf(r));
     if (!latest.ok) throw new Error("no head");
-    expect(latest.value.root.children.map((c) => c.id)).toEqual(["revenue"]);
+    expect(childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
     const json = JSON.stringify(latest.value.root);
     expect(json).toContain("New label");
     expect(json).not.toContain("Old label");
