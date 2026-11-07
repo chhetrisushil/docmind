@@ -65,14 +65,17 @@ function readNumbers(text: string): Read[] {
     // A sign glued to a word or number ("2019-2020") is a separator, not a minus.
     const before = m.index > 0 ? text.charAt(m.index - 1) : "";
     const signed = m[2] !== undefined && !/[\p{L}\p{N}]/u.test(before);
-    const negative = signed || (m[1] !== undefined && m[8] !== undefined);
-    const sign = negative ? -1 : 1;
+    // "(n)" is ambiguous, so it grounds both n and -n. A leading minus means negative only.
+    const parenthesised = m[1] !== undefined && m[8] !== undefined && m[2] === undefined;
+    const signs = signed ? [-1] : parenthesised ? [1, -1] : [1];
     const scale = m[6] ? (SUFFIX[m[6].toLowerCase()] ?? 1) : 1;
-    out.push({
-      raw: sign * magnitude,
-      canonical: sign * magnitude * scale,
-      percent: m[7] !== undefined,
-    });
+    for (const sign of signs) {
+      out.push({
+        raw: sign * magnitude,
+        canonical: sign * magnitude * scale,
+        percent: m[7] !== undefined,
+      });
+    }
   }
   return out;
 }
