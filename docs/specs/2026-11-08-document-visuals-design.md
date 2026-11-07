@@ -83,10 +83,15 @@ Fact kinds (schema version 1):
 Every fact carries `chunkIds: string[]` (at least one, each a chunk of this document) and an
 `ordinal`. At most 16 facts per document; extras are dropped in order.
 
-**Grounding check (V4).** For each number in a fact (`y`, `value`, `compare.value`, and numeric
-cells), the step looks for it in the text of the cited chunks after normalising: digit grouping
-(`1,200`, `1 200`, `1.200` by locale), suffixes (`1.2k`, `3M`), percent forms (`12 %`, `12%`,
-`0.12` when the unit is `%`), and leading currency signs. A fact with any number not found is
+**Grounding check (V4).** The check covers every number in a fact: `y`, `value` and
+`compare.value`, plus every number written inside `label`, `title`, `columns`, `compare.label`,
+series `x` and table cells. `unit` is excluded. Fact and text go through one normaliser before the
+step looks for the number in the cited chunks' text. It handles:
+- digit grouping (`1,200`, `1 200`; `1.200` reads as 1200);
+- suffixes (`1.2k` grounds both 1.2 and 1200);
+- percent forms (`12 %`, `12%`; `0.12` only when the fact's unit is `%`);
+- leading currency signs;
+- sign (a leading `-` or `−`, or parentheses, is negative; unsigned text grounds only non-negative values). A fact with any number not found is
 dropped, and the drop is counted, never logged with its content.
 
 **Storage.** Table `visual_facts`:
