@@ -46,7 +46,7 @@ interface Group {
 }
 
 /** Owner-scoped FOR KEY SHARE: a concurrent DELETE waits, then cascades our rows. Not found is gone. */
-async function lockDocument(tx: PoolClient, ref: IngestStartInput) {
+export async function lockDocument(tx: PoolClient, ref: IngestStartInput) {
   const { rowCount } = await tx.query(
     "SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2 FOR KEY SHARE",
     [ref.documentId, ref.userId],

@@ -40,6 +40,13 @@ const FactTable = z
 export const DraftFact = z.discriminatedUnion("kind", [Series, Figure, FactTable]);
 export type DraftFact = z.infer<typeof DraftFact>;
 export type Fact = DraftFact & { ordinal: number };
+const Ordinal = z.object({ ordinal: z.number().int().min(0).max(15) });
+/** A fact as stored: a draft plus its ordinal. Each member stays strict, so it is built per member, not with `.and`. */
+export const StoredFact = z.discriminatedUnion("kind", [
+  Series.extend(Ordinal.shape),
+  Figure.extend(Ordinal.shape),
+  FactTable.extend(Ordinal.shape),
+]);
 export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).strict();
 
 const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };

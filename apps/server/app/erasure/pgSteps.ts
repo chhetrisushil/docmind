@@ -62,7 +62,7 @@ export function pgErasureSql(
     async rows(req: ErasureRequest) {
       // The throttle counters are not touched here: they are keyed by a hash of the email, which the request
       // transaction already replaced, so the route clears them (Task 170a).
-      // 1. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities)
+      // 1. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities, visual facts)
       //    and chats (turn items, reasoning texts).
       await withTenant(app, req.tenantId, (tx) =>
         tx.query("DELETE FROM users WHERE id = $1 AND tenant_id = $2", [req.userId, req.tenantId]),
