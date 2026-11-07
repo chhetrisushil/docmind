@@ -19,7 +19,16 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
   // MESSAGE_CONSUMED.payload. These are the rest. They name content fields only, so ingest events (ids,
   // counts, codes) are untouched and a fold can still read `choice.role|turn|ord|status`. The tool
   // schemas are strict, so a tool frame's `input` holds only the declared keys, and the text ones are here.
-  STEP_STARTED: ["input.messages", "input.query", "input.titleContains"],
+  STEP_STARTED: [
+    "input.messages",
+    "input.query",
+    "input.titleContains",
+    // The visualize commit step (`visualize-commit`): the planned ops (labels, bindings), the model's summary and the
+    // planner's report (findings quoting model output and fact paths).
+    "input.ops",
+    "input.summary",
+    "input.report",
+  ],
   STEP_COMPLETED: [
     "output.content",
     "output.toolCalls[].input",

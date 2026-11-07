@@ -94,3 +94,26 @@ describe("executionIdFor", () => {
     }
   });
 });
+
+describe("erasure subject of a visuals lineage line", () => {
+  const DOC = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4";
+  const P = "__loom_ui_lineage__:";
+
+  it("is the owning user", () => {
+    expect(subjectOfExecution({ executionId: `${P}visuals-${USER}-${DOC}` })).toBe(USER);
+  });
+
+  it("is no subject for any other lineage id", () => {
+    for (const id of [
+      "foo",
+      `visuals-${USER}`,
+      `visuals-${USER}-${DOC}x`,
+      `visuals-${USER}-${DOC}:b`,
+      `visuals-${USER.toUpperCase()}-${DOC}`,
+      `xvisuals-${USER}-${DOC}`,
+      `u_${USER}:visuals-${USER}-${DOC}`,
+    ]) {
+      expect(subjectOfExecution({ executionId: `${P}${id}` })).toBe("");
+    }
+  });
+});

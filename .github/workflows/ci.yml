@@ -25,10 +25,12 @@ concurrency:
 env:
   # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
   # new commit, re-run the whole gate, then change this line.
-  LOOM_REF: 2fabaf3ef2a5f90ce6871fd790f0b0011277b983
-  # The loom-ui commit DocMind links to (core, hydration, renderer-lit, renderer-terminal, built from source).
+  # db28b1b: EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned.
+  LOOM_REF: db28b1b4e76ae749b382f4a34c66ee158ffcb1a7
+  # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
+  # 280dc3f: erasable lineage (registerLineageSensitivePaths, confirmErased); its own CI builds against the LOOM_REF above.
   # Bump deliberately, like LOOM_REF.
-  LOOM_UI_REF: 4ea5efd1ee177b68bae04c3ae53314d08c54b1f3
+  LOOM_UI_REF: 280dc3f773cc499d65abbfcc020a78e8af993ee1
 
 jobs:
   gate:
@@ -86,7 +88,7 @@ jobs:
           path: loom-ui
       - name: Install and build loom-ui
         working-directory: loom-ui
-        run: pnpm install --frozen-lockfile && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
+        run: pnpm install --frozen-lockfile && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
       - name: Install DocMind
         working-directory: docmind
         run: pnpm install --frozen-lockfile

@@ -43,7 +43,7 @@ RUN find /src/loom-ui -name node_modules -type d -prune -exec rm -rf {} + \
 WORKDIR /src/loom-ui
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile \
- && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
+ && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
 
 # The whole tree is copied before the install (no manifests-first layer): the link: targets above must
 # already be in place, and pnpm needs every workspace package.json. The pnpm store cache mount keeps
