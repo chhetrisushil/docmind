@@ -91,8 +91,11 @@ step looks for the number in the cited chunks' text. It handles:
 - suffixes (`1.2k` grounds both 1.2 and 1200);
 - percent forms (`12 %`, `12%`; `0.12` only when the fact's unit is `%`);
 - leading currency signs;
-- sign (a leading `-` or `−`, or parentheses, is negative; unsigned text grounds only non-negative values). A fact with any number not found is
-dropped, and the drop is counted, never logged with its content.
+- sign (a leading `-` or `−` is negative, a parenthesised number grounds either sign, and unsigned text grounds only non-negative values);
+- an ISO-date series `x` grounds on its year alone.
+
+A fact with any number not found is dropped, and the drop is counted, never logged with its
+content.
 
 **Storage.** Table `visual_facts`:
 
