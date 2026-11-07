@@ -29,7 +29,10 @@ Sub-project 1 ships in three steps on one design:
 | V4 | Every fact cites at least one chunk of its document, and every number in it must appear in a cited chunk's text. A fact that fails is dropped. |
 | V5 | A separate, closed catalogue `docmind.visuals.v1`; the M6 catalogue is untouched. |
 | V6 | Everything stored is per-user sealed: `visual_facts.fact_enc` under `FieldCrypto`, the lineage on the sealed event store. Erasure shreds it with the user's key. |
-| V7 | Gaps in loom-ui are closed generically in loom-ui first (M6 D11). Step (c) needs one. |
+| V7 | Gaps in loom-ui are closed generically in loom-ui first (M6 D11). Step (a) needs one (V8); step (c) needs another. |
+| V8 | **Prerequisite.** `@loom-ui/lineage` streams (`__loom_ui_lineage__:*`) sit in loom's reserved namespace, which `shredSubject` refuses, and lineage stores artifacts in the content store without per-subject access. Step (a) waits for a generic loom / loom-ui change that makes a lineage line erasable with its subject: events sealed under the subject's key and artifacts stored under the subject's content access. It has its own spec. |
+| V9 | The Visuals tab is part of a per-document detail experience: the static detail view plus a "Visuals" panel holding the planner's nodes and providers, compiled per (document, visuals head) and cached. loom-ui has no experience-in-experience embedding. |
+| V10 | `visualize-document` starts when the ingest-status fold turns a document `ready`, plus a boot sweep for ready documents without a visualize execution. The start is idempotent through its execution id. |
 
 Approaches considered and rejected: the planner writing data inline into node props (charts require
 a binding; data would sit outside per-user sealing; no drift detection), and fixed rules with no
@@ -37,8 +40,15 @@ planner (cannot judge what is worth showing; kept as a possible fallback, not bu
 
 ## 3. Trigger and flow
 
-- `ingest-finalize` marks the document `ready`. After that commits, the server starts
-  `visualize-document` the way the upload route starts `ingest-document`.
+- Ingest has no commit point for `ready`: the `ingest-status` read model folds it from the
+  `STEP_COMPLETED` event of `ingest-finalize`, and executions resumed by boot recovery have no
+  scheduler completion handle. So a `VisualsStarter` subscribes to the status fold and starts
+  `visualize-document` when a document turns `ready` (V10). At boot, after recovery starts, it sweeps
+  ready documents that have no visualize execution. `ExecutionAlreadyExistsError` means "already
+  started" and is ignored, as `chat-title/start.ts` does. Its `idle()` joins the shutdown
+  `startsIdle`.
+- `stepEffect` is generalised from ingest's steps (its step label, start input and generation
+  guard become parameters) so both flows share one retry and failure policy.
 - Input is ids only and strict: `{ tenantId, userId, documentId }`. The execution id is
   `executionIdFor(userId, "visualize-" + documentId)`, which is also the idempotency key.
 - Steps: `visualize-extract` then `visualize-plan`, each with `LLM_RETRY`, granted in `security.ts`
@@ -100,16 +110,20 @@ facts by hand.
 
 | Entry | Kind | Binds |
 |---|---|---|
-| `FigureChart` | `BarChart` | a `series` fact |
-| `FigureTrend` | `Timeseries` | a `series` fact whose `x` values are dates |
-| `KeyFigure` | `MetricCard` | a `figure` fact |
-| `FactTable` | `DataTable` | a `factTable` fact |
+| `FigureChart` | `BarChart` (`{ unit?, format?, bars: [{ label, value }] }`) | a `series` fact |
+| `FigureTrend` | `TimeSeries` (`{ series: [{ label, unit?, points: [{ timestamp, value }] }] }`) | a `series` fact whose `x` values are dates |
+| `KeyFigure` | `Kpi` (`{ value, unit?, label?, deltaPct? }`, `deltaPct` a fraction) | a `figure` fact |
+| `FactTable` | `Table` (`{ columns, rows }`) | a `factTable` fact |
 
-Offered containers: `section` and `grid`. The terminal's gaps for charts are accepted as M6 accepted
-its renderer's gaps.
+These are loom-ui framework kinds (`FRAMEWORK_KINDS`); the terminal renderer draws all four.
+Offered containers: `section` and `grid` (`PLAIN_CONTAINERS`).
 
-**Capabilities.** One `CapabilityRef` per surviving fact: handle `fact:<ordinal>`, `kind: "docmind"`,
-tool `visual.fact` version `1.0.0`, `toolSchemaHash` `docmind:visual.fact@1` (added to `PINS`),
+**Capabilities.** One `CapabilityRef` per surviving fact: handle `fact-<ordinal>`, `kind: "docmind"`,
+tool `visual.facts` version `1.0.0`, `toolSchemaHash` `docmind:visual.facts@1` (added to `PINS`).
+All handles read the same target with the same arguments (`{ id }`), so the invoker's memo makes
+one read per hydrate however many facts there are (the budget is 8 distinct reads per POST); each
+handle's Named reshaper `visual-fact-<ordinal>` (0 to 15) picks its fact and maps it to the kind's
+value contract. The capability's
 `sampleOutput` the decrypted fact, and `sensitivity: "sensitive"` (Loom's `DataClass`; DocMind has
 no per-document class, and all user content is treated alike). Declaring it keeps the planner's
 summary from being withheld. The host's read floor is `declaredToolClassesFrom(capabilities)`.
@@ -124,24 +138,35 @@ widget binds a fact. Fact values reach the model only as fenced, untrusted data,
 the plan is one recorded `ctx.decide`. Error findings fail the attempt (planner's two attempts, then
 the step's `LLM_RETRY`). Zero nodes is a valid plan: the flow ends `empty`.
 
-**Lineage.** `@loom-ui/lineage` with `eventStoreLineageStore` over DocMind's sealed Postgres event
-store. Experience id `visuals:<documentId>`. The plan's ops are replayed onto `genesis`, sealed, and
-written with compare-and-set; provenance from `plannerProvenance(plan, { agentId:
-"docmind-visualizer" })`. If the head moved underneath, retry once, then fail.
+**Decision sealing.** The plan is recorded as a `DECISION_RECORDED` event in the visualize
+execution's log; the paths of the planner's recorded choice that hold ops and summary are added to
+`SENSITIVE_EVENT_PATHS` in the same PR, and the raw-event content proof covers the new flow.
+
+**Lineage** (after V8). `@loom-ui/lineage` with `eventStoreLineageStore` over DocMind's sealed
+Postgres event store, and the erasable-line mechanism V8 delivers. Experience id
+`visuals-<userId>-<documentId>` (ids only). First version: `start(genesis, by)` then `compose({
+expectedHead, ops, by, summary, summaryClass })`, each op wrapped as a `RecordedOperation { op, by, at
+}`; provenance from `plannerProvenance(plan, { agentId: "docmind-visualizer" })`. On `head-moved`,
+retry once, then fail.
 
 ## 7. Serving and change delivery
 
-- The detail experience's `tabs` container gains a fourth panel, "Visuals", an embedded slot present
-  only when a head exists for the document.
-- `GET /api/ui/views/detail` returns the head's blueprint and inventory, compiled per surface, with
-  the static ones.
-- Each `fact:N` handle hydrates through `POST /api/ui/hydrate`. A new reader target `visual.fact`
-  decrypts one row for the session's user, under RLS, inside the existing per-request read limits
-  (8 distinct reads, 4 concurrent).
+- V9: `@docmind/experiences` gains `detailWithVisuals(visuals: Experience): Experience`, which
+  builds the static detail view with a fourth `panel("visuals", "Visuals", …)` in its `tabs`
+  holding the head's root children and providers. Without a head, the static detail is served.
+- A new route `GET /api/ui/documents/:id/detail` returns that experience compiled for the surface,
+  cached per (surface, visuals head hash); `POST /api/ui/hydrate` accepts `{ document: id }` in
+  place of a view name to hydrate against it. `ViewSession` and the API client learn this second
+  source; the web detail page uses it.
+- The `fact-N` handles hydrate through the new invoker target `visual.facts`: one owner-scoped read
+  under RLS that decrypts the document's facts, inside the existing limits (8 distinct reads, 4
+  concurrent).
 - Each widget's caption carries its citations as reference markers (the generic loom-ui support from
   Task 176b); a marker opens the passage in the Sources view.
-- The document status poll gains `visualsHead` (the head's hash). When it changes while the detail
-  view is open, the browser re-fetches the view. `@loom-ui/changes` is deferred to step (b).
+- Status reaches the browser over SSE (`GET /api/documents/events`), not a poll.
+  `DocumentProgressEvent` gains an optional `visuals: "ready"`; when `visualize-document` commits a
+  head, the server sends it, and the open detail page calls `ViewSession.reload()` (which re-GETs
+  the view), not `invalidate()`. `@loom-ui/changes` is deferred to step (b).
 
 ## 8. Failure, erasure, testing
 
@@ -154,10 +179,11 @@ written with compare-and-set; provenance from `plannerProvenance(plan, { agentId
 | A fact row gone at read time | per-widget error placeholder |
 | Pin mismatch (`schemaDrift`) | server re-runs `visualize-document` for that document |
 
-**Delete and erasure.** Deleting a document cancels the flow, deletes its `visual_facts` rows and
-tombstones the lineage head. Erasure shreds `fact_enc`, the sealed lineage events and the sealed
-experience through the user's key; the `Eraser` adds `visual_facts` to the tables it clears. New
-sensitive event paths are registered in `apps/server/app/sensitive.ts`.
+**Delete and erasure.** Deleting a document cancels the flow (both cancel points of the delete
+route) and its `visual_facts` rows go with the document by FK cascade; the lineage line is left to
+the mechanism V8 delivers. Erasure deletes rows by cascade from `users` (`visual_facts` FK-cascades,
+and the comment in `erasure/pgSteps.ts` is updated), `erasure/wire.ts` gains `cancelVisualize`, and
+the user's key destruction shreds `fact_enc`, the sealed decision and (after V8) the lineage line.
 
 **Tests.**
 
@@ -169,7 +195,7 @@ sensitive event paths are registered in `apps/server/app/sensitive.ts`.
 - Postgres: RLS on `visual_facts`, encryption round trip, replace in one transaction, the head's
   compare-and-set race.
 - End to end (`*.e2e.pg.test.ts`, stub model): upload a document with a figures table; the flow ends
-  `done`; the detail view lists a Visuals panel; hydrating `fact:0` returns the series; citations
+  `done`; the detail view lists a Visuals panel; hydrating `fact-0` returns the series; citations
   resolve. Then delete, and erase: every read fails closed.
 - M7 retrieval-eval fixture: documents with known figures, measuring surviving and wrong facts.
 
