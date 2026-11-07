@@ -116,6 +116,16 @@ describe("grounding covers every number in a fact (V4)", () => {
     expect(grounded(s(-5), one("a loss of −5"))).toBe(true);
     expect(grounded(s(-5), one("a gain of 5"))).toBe(false);
   });
+  it("grounds a parenthesised year, (2024), as 2024", () => {
+    const fig = { kind: "figure", label: "x", value: 2024, chunkIds: [C1], ordinal: 0 } as const;
+    expect(grounded(fig, one("in (2024)"))).toBe(true);
+  });
+  it("grounds a parenthesised -5 from (5) and still refuses +5 from a leading minus", () => {
+    const fig = (value: number) =>
+      ({ kind: "figure", label: "x", value, chunkIds: [C1], ordinal: 0 }) as const;
+    expect(grounded(fig(-5), one("a loss of (5)"))).toBe(true);
+    expect(grounded(fig(5), one("a change of -5"))).toBe(false);
+  });
   it("does not ground +5 from the text -5", () => {
     const fig = { kind: "figure", label: "x", value: 5, chunkIds: [C1], ordinal: 0 } as const;
     expect(grounded(fig, one("change of -5"))).toBe(false);
