@@ -5,7 +5,7 @@ export * from "./views";
 export * from "./a2ui";
 export * from "./payload";
 export { INVOKE_ID } from "./invoker";
-export { VISUALS_CATALOG, capabilitiesOf } from "./visuals";
+export { VISUALS_CATALOG, capabilitiesOf, mergedCatalog } from "./visuals";
 export type { VisualFactRaw } from "./visuals";
 export type { RawContent, RawDocuments, SourceResult, UiReaders } from "./invoker";
 export * from "./reshapers";
