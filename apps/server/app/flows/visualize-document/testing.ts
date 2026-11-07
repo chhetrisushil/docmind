@@ -1,4 +1,8 @@
-import type { DecideContext, PlannerModel } from "@loom-ui/planner";
+import { randomUUID } from "node:crypto";
+import { ReferencePlanner } from "@loom-ui/planner";
+import type { DecideContext, PlanResult, PlannerModel } from "@loom-ui/planner";
+import type { Fact } from "./facts";
+import { planVisuals } from "./plan";
 
 /** A planner model that replies with `replies` in order, repeating the last, and counts its calls. */
 export function scriptedPlannerModel(replies: string[]) {
@@ -28,4 +32,30 @@ export function recording() {
     },
   };
   return ctx;
+}
+
+/** A real `PlanResult` (one KeyFigure tile `nodeId`, labelled `label`, binding one fact), made by the reference planner on a scripted model. */
+export async function aPlan(
+  nodeId: string,
+  label: string,
+  summary = "A headline figure",
+): Promise<PlanResult> {
+  const fact: Fact = {
+    kind: "figure",
+    label,
+    value: 4242,
+    unit: "USD",
+    chunkIds: [randomUUID()],
+    ordinal: 0,
+  };
+  const node = {
+    id: nodeId,
+    type: "KeyFigure",
+    label,
+    span: 4,
+    props: {},
+    binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" },
+  };
+  const model = scriptedPlannerModel([JSON.stringify({ summary, nodes: [node] })]);
+  return planVisuals(new ReferencePlanner({ model, modelId: "test" }), [fact], recording());
 }

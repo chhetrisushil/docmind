@@ -187,6 +187,7 @@ overrides:
   '@loom/projection-runtime': link:../loom/packages/projection-runtime
   '@loom-ui/core': link:../loom-ui/packages/core
   '@loom-ui/hydration': link:../loom-ui/packages/hydration
+  '@loom-ui/lineage': link:../loom-ui/packages/lineage
   '@loom-ui/planner': link:../loom-ui/packages/planner
   '@loom-ui/renderer-lit': link:../loom-ui/packages/renderer-lit
   '@loom-ui/renderer-terminal': link:../loom-ui/packages/renderer-terminal
@@ -256,6 +257,9 @@ importers:
       '@loom-ui/core':
         specifier: link:../../../loom-ui/packages/core
         version: link:../../../loom-ui/packages/core
+      '@loom-ui/lineage':
+        specifier: link:../../../loom-ui/packages/lineage
+        version: link:../../../loom-ui/packages/lineage
       '@loom-ui/planner':
         specifier: link:../../../loom-ui/packages/planner
         version: link:../../../loom-ui/packages/planner
@@ -292,6 +296,9 @@ importers:
       '@loom/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
+      '@loom/plugin-content':
+        specifier: link:../../../loom/plugins/content
+        version: link:../../../loom/plugins/content
       '@loom/plugin-conversation-sse':
         specifier: link:../../../loom/plugins/conversation-sse
         version: link:../../../loom/plugins/conversation-sse

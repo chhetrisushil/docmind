@@ -1,5 +1,12 @@
+import { registerLineageSensitivePaths } from "@loom-ui/lineage";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
-import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loom/plugin-crypto";
+import type { ContentStore } from "@loom/plugin-content";
+import {
+  EncryptingContentStore,
+  EncryptingEventStore,
+  EncryptingSnapshotStore,
+  type KeyStore,
+} from "@loom/plugin-crypto";
 import { PostgresTimerStore, postgresStorage } from "@loom/plugin-postgres";
 import { Pool } from "pg";
 import { SummaryChoiceEventStore } from "./chats/summaryChoice";
@@ -79,6 +86,9 @@ export function createDurableStorage({
     sensitive: { ...sensitive },
     subjectOf: subjectOfExecution,
   });
+  // The visuals lineage (`__loom_ui_lineage__:visuals-<userId>-<documentId>`, owned by `subjectOfExecution`): its composed ops,
+  // summary and provenance are sealed under the user's key from the first write, so destroying the key erases the line.
+  registerLineageSensitivePaths(events);
   // The rolling summary's `summary-fit` decision carries the summary as a bare string choice; the decorator stores it
   // as `choice.text` (sealed) and gives Loom the string back (chats/summaryChoice.ts). Loom's principal sealing
   // (`crypto.events`) and erasure (`raw`) keep the undecorated stores.
@@ -109,6 +119,14 @@ export function createDurableStorage({
     timers,
     close: () => pool.end(),
   };
+}
+
+/**
+ * A lineage's artifact store: `inner` sealed under the same KeyStore and subject mapping as the event store, so the
+ * blobs of a visuals line are erased with the user's key like its events. Build the `Lineage` over this, never over `inner`.
+ */
+export function sealedLineageContent(inner: ContentStore, keys: KeyStore): EncryptingContentStore {
+  return new EncryptingContentStore(inner, keys, { subjectOf: subjectOfExecution });
 }
 
 /**

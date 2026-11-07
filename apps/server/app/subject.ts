@@ -1,8 +1,11 @@
+import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
 import { UUID_PATTERN } from "./chats/ids";
 
 const UUID = UUID_PATTERN;
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
+/** The visuals lineage line of one document: `__loom_ui_lineage__:visuals-<userId>-<documentId>` (ids only). */
+const VISUALS_LINEAGE = new RegExp(`^${LINEAGE_STREAM_PREFIX}visuals-(${UUID})-${UUID}$`);
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
 
 export { chatConversationId, chatIdOfConversation } from "./chats/ids";
@@ -43,8 +46,15 @@ export function executionIdFor(userId: string, name: string): UserExecutionId {
  * other id is an execution no user owns; it is keyed as `x:<id>`, outside the bare-UUID user
  * namespace, and survives user erasure, so every user-owned execution must be started with
  * `executionIdFor`.
+ *
+ * A lineage line (`__loom_ui_lineage__:visuals-<userId>-<documentId>`) is owned by its user, so its events and
+ * artifact blobs go under the user's key. Any other id under the lineage prefix resolves to "" (no subject): the
+ * encrypting stores refuse to write under it, never seal it under a key erasure would miss.
  */
 export function subjectOfExecution(e: { executionId: string }): string {
+  if (e.executionId.startsWith(LINEAGE_STREAM_PREFIX)) {
+    return VISUALS_LINEAGE.exec(e.executionId)?.[1] ?? "";
+  }
   const match = USER_EXECUTION.exec(e.executionId);
   return match?.[1] ?? `x:${e.executionId}`;
 }
