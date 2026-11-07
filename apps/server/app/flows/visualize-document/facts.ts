@@ -42,7 +42,52 @@ export type DraftFact = z.infer<typeof DraftFact>;
 export type Fact = DraftFact & { ordinal: number };
 export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).strict();
 
-const NUMERIC = /^[-+]?\d+(?:[.,]\d+)?$/;
+const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };
+// Groups: 1 "(" open, 2 sign, 3 currency, 4 whole part, 5 decimals, 6 suffix, 7 "%", 8 ")" close.
+const NUMBER =
+  /(\()?([-−]\s?)?([$€£¥]\s?)?(\d{1,3}(?:[ ,.]\d{3})+|\d+)(?:[.,](\d+))?\s?(k|m|bn|b)?\b\s?(%)?(\))?/gi;
+
+interface Read {
+  /** The number as written, sign applied, before any suffix. */
+  raw: number;
+  /** The number with its k/m/bn/b suffix applied. */
+  canonical: number;
+  percent: boolean;
+}
+
+/** Every number written in `text`, signed by a leading `-`/`−` or by `(n)`, with suffixes and percent read. */
+function readNumbers(text: string): Read[] {
+  const out: Read[] = [];
+  for (const m of text.matchAll(NUMBER)) {
+    const whole = (m[4] ?? "").replace(/[ ,.]/g, "");
+    const magnitude = Number(m[5] === undefined ? whole : `${whole}.${m[5]}`);
+    if (!Number.isFinite(magnitude)) continue;
+    // A sign glued to a word or number ("2019-2020") is a separator, not a minus.
+    const before = m.index > 0 ? text.charAt(m.index - 1) : "";
+    const signed = m[2] !== undefined && !/[\p{L}\p{N}]/u.test(before);
+    const negative = signed || (m[1] !== undefined && m[8] !== undefined);
+    const sign = negative ? -1 : 1;
+    const scale = m[6] ? (SUFFIX[m[6].toLowerCase()] ?? 1) : 1;
+    out.push({
+      raw: sign * magnitude,
+      canonical: sign * magnitude * scale,
+      percent: m[7] !== undefined,
+    });
+  }
+  return out;
+}
+
+/** What a source text can ground: raw and suffix-applied values, each flagged if it was a percentage. */
+function sourcePool(text: string): { value: number; percent: boolean }[] {
+  return readNumbers(text).flatMap((r) => [
+    { value: r.raw, percent: r.percent },
+    { value: r.canonical, percent: r.percent },
+  ]);
+}
+
+const NUMERIC_VALUES = (s: string): number[] => readNumbers(s).map((r) => r.canonical);
+
+/** The numeric data of a fact: figure values, series y, and every number in table cells. */
 export function numbersOf(f: DraftFact): number[] {
   switch (f.kind) {
     case "series":
@@ -50,35 +95,39 @@ export function numbersOf(f: DraftFact): number[] {
     case "figure":
       return f.compare ? [f.value, f.compare.value] : [f.value];
     case "factTable":
-      return f.rows
-        .flat()
-        .map((c) => c.trim())
-        .filter((c) => NUMERIC.test(c))
-        .map((c) => Number(c.replace(",", ".")));
+      return f.rows.flat().flatMap(NUMERIC_VALUES);
   }
 }
 
-const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };
-/** Every number written in `text`, normalised: grouping (`1,200` `1 200` `1.200`), suffixes, currency, percent. */
-function numbersIn(text: string): number[] {
-  const out: number[] = [];
-  const re = /[$€£¥]?\s?(\d{1,3}(?:[ ,. ]\d{3})+|\d+)(?:[.,](\d+))?\s?(k|m|bn|b)?\b\s?(%)?/gi;
-  for (const m of text.matchAll(re)) {
-    const whole = (m[1] ?? "").replace(/[ ,. ]/g, "");
-    const n = Number(m[2] === undefined ? whole : `${whole}.${m[2]}`);
-    if (!Number.isFinite(n)) continue;
-    const mult = m[3] ? (SUFFIX[m[3].toLowerCase()] ?? 1) : 1;
-    out.push(n * mult);
-    if (m[4]) out.push((n * mult) / 100); // 12% also grounds 0.12
+/** Every number the fact asserts: its data plus any number written in its label, title, columns, or x values. */
+export function numbersInFact(f: DraftFact): number[] {
+  switch (f.kind) {
+    case "series":
+      return [
+        ...numbersOf(f),
+        ...NUMERIC_VALUES(f.label),
+        ...f.points.flatMap((p) => NUMERIC_VALUES(p.x)),
+      ];
+    case "figure":
+      return [
+        ...numbersOf(f),
+        ...NUMERIC_VALUES(f.label),
+        ...(f.compare ? NUMERIC_VALUES(f.compare.label) : []),
+      ];
+    case "factTable":
+      return [...numbersOf(f), ...NUMERIC_VALUES(f.title), ...f.columns.flatMap(NUMERIC_VALUES)];
   }
-  return out;
 }
 
 const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-6);
 
+/** A fact is grounded only if every number it asserts appears in the text of the chunks it cites. */
 export function grounded(f: DraftFact, chunkTexts: ReadonlyMap<string, string>): boolean {
-  const pool = f.chunkIds.flatMap((id) => numbersIn(chunkTexts.get(id) ?? ""));
-  return numbersOf(f).every((n) => pool.some((p) => close(p, n)));
+  const pool = f.chunkIds.flatMap((id) => sourcePool(chunkTexts.get(id) ?? ""));
+  const percentUnit = f.kind !== "factTable" && f.unit === "%";
+  return numbersInFact(f).every((n) =>
+    pool.some((p) => close(p.value, n) || (percentUnit && p.percent && close(p.value / 100, n))),
+  );
 }
 
 export function admit(
