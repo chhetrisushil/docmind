@@ -40,6 +40,7 @@ import { erasureDeps, requireKeyDestroyedProof } from "./erasure/wire";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
 import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
 import { staticHandler } from "./http/staticFiles";
 import { createHttpServer } from "./server";
@@ -352,7 +353,14 @@ export function buildServer(options: ComposeOptions) {
       ...uiRoutes({
         authenticator,
         views,
-        readers: { pool, fields, status, blobs, registry: options.ingest.registry },
+        readers: {
+          pool,
+          fields,
+          status,
+          blobs,
+          registry: options.ingest.registry,
+          visualFacts: new PgVisualFacts(pool, fields),
+        },
       }),
       ...(chat &&
         reasoning &&

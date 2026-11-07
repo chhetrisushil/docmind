@@ -90,6 +90,7 @@ function setup(
     content,
     source: async () => null,
     chats: async () => [],
+    visualFacts: async () => null,
     ...readers,
   });
   const win = {

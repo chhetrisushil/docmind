@@ -4,6 +4,7 @@ import type { TransientInvoker } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { z } from "zod";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP, citedWindow } from "./providers";
+import type { VisualFactRaw } from "./visuals";
 
 export interface RawDocuments {
   items: DocumentDto[];
@@ -35,6 +36,7 @@ export interface UiReaders {
   content(a: { id: string; upto: number; passage?: string }): Promise<RawContent | null>;
   source(a: { id: string; passage: string }): Promise<SourceResult | null>;
   chats(a: { q: string }): Promise<ChatSessionDto[]>;
+  visualFacts(a: { id: string }): Promise<VisualFactRaw[] | null>;
 }
 
 /** The tool id the data provider calls through the transient invoker. */
@@ -58,6 +60,7 @@ const ARGS = {
     .strict(),
   "document.source": z.object({ id: Id, passage: Id.or(z.literal("")).default("") }).strict(),
   "chats.list": z.object({ q: z.string().max(100) }).strict(),
+  "visual.facts": z.object({ id: Id }).strict(),
 } as const;
 
 /** Distinct reads one invoker (one hydrate POST) may start; identical reads share one and cost nothing. The rest are refused. */
@@ -151,6 +154,14 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
         return {
           key: [target, a.data],
           exec: async () => (await readers.chats({ q: a.data.q })).slice(0, CHAT_LIST_CAP),
+        };
+      }
+      case "visual.facts": {
+        const a = ARGS["visual.facts"].safeParse(args);
+        if (!a.success) return fail("invalidArgs");
+        return {
+          key: [target, a.data],
+          exec: async () => (await readers.visualFacts({ id: a.data.id })) ?? fail("notFound"),
         };
       }
       default:

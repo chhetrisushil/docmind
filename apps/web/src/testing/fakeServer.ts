@@ -297,6 +297,7 @@ export class FakeServer {
         [...this.chats]
           .reverse()
           .filter((c) => (c.title ?? "New chat").toLowerCase().includes(q.toLowerCase())),
+      visualFacts: async () => null,
     };
   }
 

@@ -13,6 +13,33 @@ describe("the error a document shows to the UI", () => {
   });
 });
 
+describe("the visualFacts reader", () => {
+  it("returns null for a document the identity does not own, and the facts otherwise", async () => {
+    const { DocumentGoneError } = await import("../flows/ingest-document/errors");
+    const { readersFor } = await import("./readers");
+    const identity = { userId: "u", tenantId: "t" } as never;
+    const list = vi.fn(async (ref: { documentId: string }) => {
+      if (ref.documentId === "mine") return [];
+      throw new DocumentGoneError();
+    });
+    const r = readersFor({ visualFacts: { list } } as never, identity);
+    await expect(r.visualFacts({ id: "theirs" })).resolves.toBeNull();
+    await expect(r.visualFacts({ id: "mine" })).resolves.toEqual([]);
+    expect(list).toHaveBeenLastCalledWith({ tenantId: "t", userId: "u", documentId: "mine" });
+  });
+  it("rethrows any other failure", async () => {
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const r = readersFor(
+      { visualFacts: { list } } as never,
+      { userId: "u", tenantId: "t" } as never,
+    );
+    await expect(r.visualFacts({ id: "x" })).rejects.toThrow("boom");
+  });
+});
+
 describe("the source reader", () => {
   it("delegates to readSource, turning an empty passage into undefined", async () => {
     vi.resetModules();

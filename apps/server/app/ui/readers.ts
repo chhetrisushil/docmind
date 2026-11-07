@@ -8,6 +8,8 @@ import { withTenant } from "../db/tenant";
 import { decodeContentCursor, readContent } from "../documents/content";
 import { getDocument, listDocuments, toDto } from "../documents/repo";
 import { type SourceDeps, readSource } from "../documents/source";
+import { isDocumentGone } from "../flows/ingest-document/errors";
+import type { VisualFactStore } from "../flows/visualize-document/pgFacts";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { STATUS_MESSAGES, UPLOADED } from "../status/model";
 
@@ -17,6 +19,7 @@ export interface UiReaderDeps {
   status: DocumentStatusReads;
   blobs: SourceDeps["blobs"];
   registry: SourceDeps["registry"];
+  visualFacts: VisualFactStore;
 }
 
 const PAGE = 100;
@@ -123,6 +126,19 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
     async chats({ q }) {
       const page = await listChatsPage(deps, identity, null, q === "" ? undefined : q);
       return page.items.slice(0, CHAT_LIST_CAP);
+    },
+
+    async visualFacts({ id }) {
+      try {
+        return await deps.visualFacts.list({
+          tenantId: identity.tenantId,
+          userId: identity.userId,
+          documentId: id,
+        });
+      } catch (err) {
+        if (isDocumentGone(err)) return null;
+        throw err;
+      }
     },
   };
 }
