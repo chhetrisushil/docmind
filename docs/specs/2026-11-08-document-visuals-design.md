@@ -101,7 +101,7 @@ content.
 
 ```
 id uuid primary key, tenant_id uuid, owner_id uuid, document_id uuid,
-kind text, ordinal int, fact_enc bytea, chunk_ids uuid[], schema_version int
+kind text, ordinal int, fact_enc jsonb, chunk_ids uuid[], schema_version int
 ```
 
 Under row-level security like `entities`; `fact_enc` is `FieldCrypto`-encrypted under the user's
