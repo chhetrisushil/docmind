@@ -3,7 +3,7 @@ import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loo
 import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
 import { type Child, build, panel, tabs, widget } from "./compose";
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
-import { type VisualEntry, factProvider } from "./visuals";
+import { MAX_VISUAL_FACTS, type VisualEntry, factProvider } from "./visuals";
 
 const published = (handle: string) =>
   provider(handle, { target: "host.published", args: {}, reshaper: "host-published" });
@@ -185,47 +185,51 @@ const detail = (): Experience =>
   });
 
 const VISUAL_ENTRIES = new Set<string>(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
+const MAX_SIBLINGS = 26;
 const FACT_HANDLE = /^fact-(\d+)$/;
 
 /**
  * The per-document detail: the static detail plus a Visuals tab holding a planner-composed
  * visuals experience's nodes. Providers are always generated here from each node's entry and the
  * real document id; any the planner declared are ignored. Two nodes binding one fact with
- * different entries get separate providers (the second as `fact-n-b`).
+ * different entries get separate providers (`fact-n-b`, `-c`, ...). Malformed nodes are dropped,
+ * never thrown on: this runs on every detail page load.
  */
 export function detailWithVisuals(visuals: Experience | null, documentId: string): Experience {
   if (visuals === null) return EXPERIENCES.detail;
   const providers: Record<string, ProviderSpec> = detailProviders();
   const entryOf = new Map<string, VisualEntry>();
-  const copy = (n: Child): Child => {
-    if (n.kind === "container")
-      return { ...n, id: `v-${n.id}`, children: (n.children as Child[]).map(copy) };
-    const node: SemanticNode = { ...n, id: `v-${n.id}` };
-    if (!n.binding) return node;
-    const m = FACT_HANDLE.exec(n.binding.handle);
-    if (!m || !VISUAL_ENTRIES.has(n.type))
-      throw new Error(`visuals node "${n.id}" is not a fact-bound visuals widget`);
+  const copy = (n: Child): Child | null => {
+    if (n.kind === "container") {
+      const children = (n.children as Child[])
+        .slice(0, MAX_SIBLINGS)
+        .map(copy)
+        .filter((c): c is Child => c !== null);
+      return children.length === 0 ? null : { ...n, id: `v-${n.id}`, children };
+    }
+    const m = n.binding && FACT_HANDLE.exec(n.binding.handle);
+    if (!n.binding || !m || Number(m[1]) >= MAX_VISUAL_FACTS || !VISUAL_ENTRIES.has(n.type))
+      return null;
     const entry = n.type as VisualEntry;
     const base = n.binding.handle;
-    const handle = [base, `${base}-b`].find((h) => (entryOf.get(h) ?? entry) === entry);
-    if (handle === undefined)
-      throw new Error(`visuals node "${n.id}": fact bound by more than two different entries`);
+    let handle = base;
+    for (let i = 0; (entryOf.get(handle) ?? entry) !== entry; i++)
+      handle = `${base}-${String.fromCharCode(0x62 + i)}`;
     if (!entryOf.has(handle)) {
       entryOf.set(handle, entry);
       providers[handle] = { ...factProvider(Number(m[1]), documentId, entry), handle };
     }
-    return { ...node, binding: { ...n.binding, handle } };
+    return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle } };
   };
+  const kept = (visuals.root as ContainerNode).children
+    .slice(0, MAX_SIBLINGS)
+    .map((c) => copy(c as Child))
+    .filter((c): c is Child => c !== null);
+  if (kept.length === 0) return EXPERIENCES.detail;
   return build({
     id: "docmind.detail",
     objective: "Document",
-    children: detailChildren([
-      panel(
-        "visuals",
-        "Visuals",
-        (visuals.root as ContainerNode).children.map((c) => copy(c as Child)),
-      ),
-    ]),
+    children: detailChildren([panel("visuals", "Visuals", kept)]),
     providers,
   });
 }
