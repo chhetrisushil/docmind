@@ -45,7 +45,7 @@ export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).str
 const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };
 // Groups: 1 "(" open, 2 sign, 3 currency, 4 whole part, 5 decimals, 6 suffix, 7 "%", 8 ")" close.
 const NUMBER =
-  /(\()?([-−]\s?)?([$€£¥]\s?)?(\d{1,3}(?:[ ,.]\d{3})+|\d+)(?:[.,](\d+))?\s?(k|m|bn|b)?\b\s?(%)?(\))?/gi;
+  /(\()?([-−]\s?)?([$€£¥]\s?)?([1-9]\d{0,2}(?:[ ,.]\d{3})+|\d+)(?:[.,](\d+))?\s?(k|m|bn|b)?\b\s?(%)?(\))?/gi;
 
 interface Read {
   /** The number as written, sign applied, before any suffix. */
@@ -90,8 +90,9 @@ function sourcePool(text: string): { value: number; percent: boolean }[] {
 
 const NUMERIC_VALUES = (s: string): number[] => readNumbers(s).map((r) => r.canonical);
 
-// An ISO date (YYYY-MM or YYYY-MM-DD, optional time) grounds on its year alone.
-const ISO_DATE = /^(\d{4})-(\d{2})(?:-(\d{2}))?(?:[T ].*)?$/;
+// An ISO date (YYYY-MM or YYYY-MM-DD, optional time only) grounds on its year alone.
+const ISO_DATE =
+  /^(\d{4})-(\d{2})(?:-(\d{2}))?(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 /** The numbers a series x value asserts. A date's month and day are not checked, only its year. */
 const xNumbers = (x: string): number[] => {
   const iso = ISO_DATE.exec(x);

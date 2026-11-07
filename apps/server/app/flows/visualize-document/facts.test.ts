@@ -186,6 +186,40 @@ describe("grounding covers every number in a fact (V4)", () => {
     );
     expect(grounded(s, one("In January sales were 3 and in February they were 4"))).toBe(false);
   });
+  it("does not let trailing text hide numbers after an ISO date", () => {
+    const series = (x: string) =>
+      ({
+        kind: "series",
+        label: "sales",
+        points: [
+          { x, y: 4 },
+          { x: "2025", y: 5 },
+        ],
+        chunkIds: [C1],
+        ordinal: 0,
+      }) as const;
+    // "2024-01 Q3 2031" is not a date with a time, so every number in it is checked: 2024, 1, 3, 2031.
+    const q3 = series("2024-01 Q3 2031");
+    expect(grounded(q3, one("2024, month 1 of 2031, Q3, 2025: 4 and 5"))).toBe(true);
+    expect(grounded(q3, one("2024, month 1 of 2031, 2025: 4 and 5"))).toBe(false);
+    // "2024-01-05 999" is checked for 2024, 1, 5, 999.
+    const day = series("2024-01-05 999");
+    expect(grounded(day, one("2024, 2025, month 1, day 5, 999: 4 and 5"))).toBe(true);
+    expect(grounded(day, one("2024, 2025, month 1, day 5: 4 and 5"))).toBe(false);
+  });
+  it("grounds an ISO timestamp on its year alone", () => {
+    const s = {
+      kind: "series",
+      label: "sales",
+      points: [
+        { x: "2024-01-05T10:30:00Z", y: 4 },
+        { x: "2025", y: 5 },
+      ],
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
+    expect(grounded(s, one("2024 and 2025 sales were 4 and 5"))).toBe(true);
+  });
   it("still requires every number of a non-date x such as Q3 2031", () => {
     const s = {
       kind: "series",
