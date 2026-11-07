@@ -4,6 +4,7 @@ import { defineReshapers } from "@loom-ui/hydration";
 import { formatBytes } from "./format";
 import type { RawContent, RawDocuments, SourceResult } from "./invoker";
 import { CONTENT_STEP, LIST_CAP } from "./providers";
+import { VISUAL_SHAPES, type VisualFactRaw } from "./visuals";
 
 export const STATUS_TEXT: Record<DocumentDto["status"], string> = {
   uploaded: "Queued",
@@ -42,6 +43,7 @@ const TYPE_NAMES: Record<string, string> = {
 };
 
 const SHAPES: Record<string, (raw: never) => unknown> = {
+  ...VISUAL_SHAPES,
   "library-total": (raw: RawDocuments) => ({
     value: raw.items.length,
     label: raw.truncated ? `Newest ${LIST_CAP} shown` : "in your library",
