@@ -1,9 +1,22 @@
-import { CHAT_TYPE_VERSION, chatCatalogEntries } from "@loom-ui/core";
+import {
+  CHAT_TYPE_VERSION,
+  type ContainerNode,
+  type Experience,
+  type ExperienceNode,
+  type Operation,
+  type SemanticNode,
+  chatCatalogEntries,
+  compile,
+  genesis,
+  replay,
+} from "@loom-ui/core";
+import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loom-ui/hydration";
 import { describe, expect, it } from "vitest";
 import { SOURCES_VIEW } from "./a2ui";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
-import { EXPERIENCES } from "./views";
+import { EXPERIENCES, detailWithVisuals } from "./views";
+import { factProvider, mergedCatalog } from "./visuals";
 
 const NAMES = ["library", "library-empty", "detail", "sessions", "chat", "sources"] as const;
 const views = createViewPayloads({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
@@ -188,5 +201,140 @@ describe("the experiences", () => {
       }
       expect(seen).toBeGreaterThanOrEqual(5);
     });
+  });
+});
+
+describe("detailWithVisuals", () => {
+  const DOC = "doc-1";
+  const KEY = "k".repeat(32);
+  const kf = (
+    id: string,
+    type: string,
+    handle: string,
+    extra?: Partial<SemanticNode>,
+  ): SemanticNode =>
+    ({
+      id,
+      order: id,
+      kind: "semantic",
+      type,
+      typeVersion: "1.0.0",
+      span: 6,
+      props: {},
+      binding: { handle, priority: "P0" },
+      ...extra,
+    }) as SemanticNode;
+  const visualsOf = (nodes: SemanticNode[], wrap = false): Experience => {
+    const g = genesis({
+      experienceId: "docmind.visuals",
+      intent: { objective: "Visuals", source: "user" },
+      meta: { author: "planner", createdAt: "2026-11-08T00:00:00Z", sourceKind: "code" },
+    });
+    const ops: Operation[] = [];
+    const parent = wrap ? "sec" : g.root.id;
+    if (wrap)
+      ops.push({
+        type: "insertNode",
+        parentId: g.root.id,
+        node: {
+          id: "sec",
+          order: "a",
+          kind: "container",
+          direction: "grid",
+          span: 12,
+          children: [],
+        },
+      });
+    const handles = [...new Set(nodes.map((n) => n.binding?.handle as string))];
+    for (const h of handles)
+      ops.push({
+        type: "remapProvider",
+        handle: h,
+        spec: { ...factProvider(0, "planner-guess", "KeyFigure"), handle: h },
+      });
+    nodes.forEach((n, i) =>
+      ops.push({
+        type: "insertNode",
+        parentId: parent,
+        node: { ...n, order: String.fromCharCode(0x61 + i), binding: undefined },
+      }),
+    );
+    for (const n of nodes)
+      ops.push({ type: "bindProvider", nodeId: n.id, handle: n.binding?.handle as string });
+    const r = replay(g, ops);
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    return r.value;
+  };
+  const sampleVisuals = () => visualsOf([kf("kf", "KeyFigure", "fact-0")]);
+  const find = (n: ExperienceNode, id: string): ExperienceNode | undefined =>
+    n.id === id
+      ? n
+      : n.kind === "container"
+        ? n.children.map((c) => find(c, id)).find((x) => x)
+        : undefined;
+  const node = (e: Experience, id: string) => find(e.root, id) as ContainerNode;
+
+  it("without visuals it is the static detail", () => {
+    expect(detailWithVisuals(null, DOC).versionHash).toBe(EXPERIENCES.detail.versionHash);
+  });
+
+  it("adds a Visuals panel after Content with prefixed ids and a generated provider per fact", () => {
+    const exp = detailWithVisuals(sampleVisuals(), DOC);
+    expect(node(exp, "tabs").children.map((c) => c.id)).toEqual([
+      "summary",
+      "analysis",
+      "content",
+      "visuals",
+    ]);
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-kf"]);
+    expect(exp.providers["fact-0"]).toEqual(factProvider(0, DOC, "KeyFigure"));
+    expect(exp.providers["fact-0"]?.executionGraph[0]?.arguments).toEqual({ id: DOC });
+    expect(Object.keys(exp.providers)).toContain("doc-status");
+  });
+
+  it("copies nested containers with prefixed ids", () => {
+    const exp = detailWithVisuals(visualsOf([kf("kf", "KeyFigure", "fact-0")], true), DOC);
+    const sec = node(exp, "visuals").children[0] as ContainerNode;
+    expect(sec.id).toBe("v-sec");
+    expect(sec.children.map((c) => c.id)).toEqual(["v-kf"]);
+  });
+
+  it("gives a second entry on the same fact its own fact-n-b handle and provider", () => {
+    const exp = detailWithVisuals(
+      visualsOf([kf("a", "KeyFigure", "fact-1"), kf("b", "FigureChart", "fact-1")]),
+      DOC,
+    );
+    const [a, b] = node(exp, "visuals").children as unknown as SemanticNode[];
+    expect(a?.binding?.handle).toBe("fact-1");
+    expect(b?.binding?.handle).toBe("fact-1-b");
+    expect(exp.providers["fact-1"]).toEqual(factProvider(1, DOC, "KeyFigure"));
+    expect(exp.providers["fact-1-b"]).toEqual({
+      ...factProvider(1, DOC, "FigureChart"),
+      handle: "fact-1-b",
+    });
+    expect(exp.providers["fact-1-b"]?.reshaping).toEqual({
+      engine: "Named",
+      scriptRef: "visual-bar-1",
+    });
+  });
+
+  it("compiles for web and terminal with no findings", () => {
+    for (const surface of ["web", "terminal"] as const) {
+      const r = compile(
+        detailWithVisuals(
+          visualsOf([kf("a", "KeyFigure", "fact-1"), kf("b", "FigureChart", "fact-1")]),
+          DOC,
+        ),
+        {
+          surface,
+          catalog: mergedCatalog(),
+          hydrationProjectionId: HYDRATION_PROJECTION_ID,
+          hydrationProjectionVersion: HYDRATION_PROJECTION_VERSION,
+          viewer: {},
+          placeholderKey: KEY,
+        },
+      );
+      expect(r.findings).toEqual([]);
+    }
   });
 });
