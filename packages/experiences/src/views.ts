@@ -1,8 +1,9 @@
 import type { ViewName } from "@docmind/contracts";
-import type { Experience } from "@loom-ui/core";
+import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loom-ui/core";
 import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
-import { build, panel, tabs, widget } from "./compose";
+import { type Child, build, panel, tabs, widget } from "./compose";
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
+import { type VisualEntry, factProvider } from "./visuals";
 
 const published = (handle: string) =>
   provider(handle, { target: "host.published", args: {}, reshaper: "host-published" });
@@ -75,107 +76,159 @@ const libraryEmpty = (): Experience =>
     ],
   });
 
+/** The static detail's children; `extraPanels` are appended to its tab set after Content. */
+const detailChildren = (extraPanels: ContainerNode[] = []): Child[] => [
+  widget({
+    id: "status",
+    type: "DocumentHealth",
+    span: 12,
+    handle: "doc-status",
+    title: "Status",
+  }),
+  tabs("tabs", [
+    panel("summary", "Summary", [
+      widget({
+        id: "summary-view",
+        type: "DocumentSummary",
+        handle: "doc-summary",
+        props: { view: SUMMARY_VIEW },
+      }),
+    ]),
+    panel("analysis", "Analysis", [
+      widget({
+        id: "words",
+        type: "DocumentKpi",
+        span: 4,
+        handle: "doc-words",
+        priority: "P1",
+        title: "Words",
+      }),
+      widget({
+        id: "pages",
+        type: "DocumentKpi",
+        span: 4,
+        handle: "doc-pages",
+        priority: "P1",
+        title: "Pages",
+      }),
+      widget({
+        id: "minutes",
+        type: "DocumentKpi",
+        span: 4,
+        handle: "doc-minutes",
+        priority: "P1",
+        title: "Reading time",
+      }),
+      widget({
+        id: "facts",
+        type: "DocumentFacts",
+        span: 12,
+        handle: "doc-facts",
+        priority: "P1",
+        title: "Facts",
+      }),
+    ]),
+    panel("content", "Content", [
+      widget({
+        id: "content-type",
+        type: "DocumentType",
+        handle: "doc-type",
+        priority: "P1",
+        props: { view: TYPE_VIEW },
+      }),
+      widget({
+        id: "content-prose",
+        type: "DocumentProse",
+        handle: "doc-source",
+        priority: "P1",
+      }),
+      widget({
+        id: "content-view",
+        type: "DocumentContent",
+        handle: "doc-content",
+        priority: "P1",
+        props: { view: CONTENT_VIEW },
+      }),
+    ]),
+    ...extraPanels,
+  ]),
+];
+
+const detailProviders = (): Record<string, ProviderSpec> => ({
+  "doc-status": doc("doc-status", "detail-status"),
+  "doc-summary": doc("doc-summary", "detail-summary"),
+  "doc-words": doc("doc-words", "detail-words"),
+  "doc-pages": doc("doc-pages", "detail-pages"),
+  "doc-minutes": doc("doc-minutes", "detail-minutes"),
+  "doc-facts": doc("doc-facts", "detail-facts"),
+  "doc-type": doc("doc-type", "detail-type"),
+  "doc-source": provider("doc-source", {
+    target: "document.source",
+    args: { id: "", passage: "" },
+    overridable: ["id", "passage"],
+    reshaper: "detail-source",
+  }),
+  "doc-content": provider("doc-content", {
+    target: "document.content",
+    args: { id: "", upto: CONTENT_STEP, passage: "" },
+    overridable: ["id", "upto", "passage"],
+    reshaper: "detail-content",
+  }),
+});
+
 const detail = (): Experience =>
   build({
     id: "docmind.detail",
     objective: "Document",
-    children: [
-      widget({
-        id: "status",
-        type: "DocumentHealth",
-        span: 12,
-        handle: "doc-status",
-        title: "Status",
-      }),
-      tabs("tabs", [
-        panel("summary", "Summary", [
-          widget({
-            id: "summary-view",
-            type: "DocumentSummary",
-            handle: "doc-summary",
-            props: { view: SUMMARY_VIEW },
-          }),
-        ]),
-        panel("analysis", "Analysis", [
-          widget({
-            id: "words",
-            type: "DocumentKpi",
-            span: 4,
-            handle: "doc-words",
-            priority: "P1",
-            title: "Words",
-          }),
-          widget({
-            id: "pages",
-            type: "DocumentKpi",
-            span: 4,
-            handle: "doc-pages",
-            priority: "P1",
-            title: "Pages",
-          }),
-          widget({
-            id: "minutes",
-            type: "DocumentKpi",
-            span: 4,
-            handle: "doc-minutes",
-            priority: "P1",
-            title: "Reading time",
-          }),
-          widget({
-            id: "facts",
-            type: "DocumentFacts",
-            span: 12,
-            handle: "doc-facts",
-            priority: "P1",
-            title: "Facts",
-          }),
-        ]),
-        panel("content", "Content", [
-          widget({
-            id: "content-type",
-            type: "DocumentType",
-            handle: "doc-type",
-            priority: "P1",
-            props: { view: TYPE_VIEW },
-          }),
-          widget({
-            id: "content-prose",
-            type: "DocumentProse",
-            handle: "doc-source",
-            priority: "P1",
-          }),
-          widget({
-            id: "content-view",
-            type: "DocumentContent",
-            handle: "doc-content",
-            priority: "P1",
-            props: { view: CONTENT_VIEW },
-          }),
-        ]),
-      ]),
-    ],
-    providers: {
-      "doc-status": doc("doc-status", "detail-status"),
-      "doc-summary": doc("doc-summary", "detail-summary"),
-      "doc-words": doc("doc-words", "detail-words"),
-      "doc-pages": doc("doc-pages", "detail-pages"),
-      "doc-minutes": doc("doc-minutes", "detail-minutes"),
-      "doc-facts": doc("doc-facts", "detail-facts"),
-      "doc-type": doc("doc-type", "detail-type"),
-      "doc-source": provider("doc-source", {
-        target: "document.source",
-        args: { id: "", passage: "" },
-        overridable: ["id", "passage"],
-        reshaper: "detail-source",
-      }),
-      "doc-content": provider("doc-content", {
-        target: "document.content",
-        args: { id: "", upto: CONTENT_STEP, passage: "" },
-        overridable: ["id", "upto", "passage"],
-        reshaper: "detail-content",
-      }),
-    },
+    children: detailChildren(),
+    providers: detailProviders(),
   });
+
+const VISUAL_ENTRIES = new Set<string>(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
+const FACT_HANDLE = /^fact-(\d+)$/;
+
+/**
+ * The per-document detail: the static detail plus a Visuals tab holding a planner-composed
+ * visuals experience's nodes. Providers are always generated here from each node's entry and the
+ * real document id; any the planner declared are ignored. Two nodes binding one fact with
+ * different entries get separate providers (the second as `fact-n-b`).
+ */
+export function detailWithVisuals(visuals: Experience | null, documentId: string): Experience {
+  if (visuals === null) return EXPERIENCES.detail;
+  const providers: Record<string, ProviderSpec> = detailProviders();
+  const entryOf = new Map<string, VisualEntry>();
+  const copy = (n: Child): Child => {
+    if (n.kind === "container")
+      return { ...n, id: `v-${n.id}`, children: (n.children as Child[]).map(copy) };
+    const node: SemanticNode = { ...n, id: `v-${n.id}` };
+    if (!n.binding) return node;
+    const m = FACT_HANDLE.exec(n.binding.handle);
+    if (!m || !VISUAL_ENTRIES.has(n.type))
+      throw new Error(`visuals node "${n.id}" is not a fact-bound visuals widget`);
+    const entry = n.type as VisualEntry;
+    const base = n.binding.handle;
+    const handle = [base, `${base}-b`].find((h) => (entryOf.get(h) ?? entry) === entry);
+    if (handle === undefined)
+      throw new Error(`visuals node "${n.id}": fact bound by more than two different entries`);
+    if (!entryOf.has(handle)) {
+      entryOf.set(handle, entry);
+      providers[handle] = { ...factProvider(Number(m[1]), documentId, entry), handle };
+    }
+    return { ...node, binding: { ...n.binding, handle } };
+  };
+  return build({
+    id: "docmind.detail",
+    objective: "Document",
+    children: detailChildren([
+      panel(
+        "visuals",
+        "Visuals",
+        (visuals.root as ContainerNode).children.map((c) => copy(c as Child)),
+      ),
+    ]),
+    providers,
+  });
+}
 
 const sessions = (): Experience =>
   build({

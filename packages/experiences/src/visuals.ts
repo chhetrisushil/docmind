@@ -1,6 +1,6 @@
 import { type ProviderSpec, type SemanticCatalog, defineSemanticCatalog } from "@loom-ui/core";
 import type { CapabilityRef } from "@loom-ui/planner";
-import { SURFACES } from "./catalog";
+import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { KIND, PINS, provider } from "./providers";
 
 /** A fact the visualize step extracted from a document; structurally the server's `Fact`, which experiences does not depend on. */
@@ -60,6 +60,13 @@ export const VISUALS_CATALOG: SemanticCatalog = defineSemanticCatalog({
     ),
   })),
 });
+
+/** The static detail's catalogue plus the visuals entries, for the per-document detail. */
+export const mergedCatalog = (): SemanticCatalog =>
+  defineSemanticCatalog({
+    id: "docmind.detail+visuals.v1",
+    entries: [...DOCMIND_CATALOG.entries, ...VISUALS_CATALOG.entries],
+  });
 
 export const MAX_VISUAL_FACTS = 16;
 const TOOL = "visual.facts" as const;
