@@ -1,4 +1,4 @@
-import { genesis } from "@loom-ui/core";
+import { type Experience, genesis, replay } from "@loom-ui/core";
 import {
   type Committed,
   LineErasedError,
@@ -76,10 +76,24 @@ function unwrap<T>(experienceId: string, result: LineageResult<T>): T | "head-mo
   throw new LineageRefusedError(code);
 }
 
+/** JSON with sorted keys: two structurally equal values give the same text whatever their key order. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 /**
- * Commits the plan's ops as one composed version: starts the line when it has no head, then composes on the head
- * it read. A head that moved in between is re-read once; moving again throws `HeadMovedError`. A line whose owner
- * was erased throws `LineErasedError` (the commit step reports it as `document_gone`).
+ * Commits the plan as the document's visuals: the head's content becomes exactly the plan's nodes (R18). A plan's
+ * ops are relative to an empty experience, so a later commit first removes every root child of the head, then adds
+ * the plan's. A head that already equals the plan's replay (a step retry or a resume after a commit) is returned
+ * as it is, with nothing written. A head that moved in between is re-read once; moving again throws
+ * `HeadMovedError`. A line whose owner was erased throws `LineErasedError` (the commit step reports `document_gone`).
  */
 export async function commitPlan(
   lineage: Lineage,
@@ -89,32 +103,38 @@ export async function commitPlan(
 ): Promise<{ head: string }> {
   const experienceId = experienceIdOf(ref);
   const by = plannerProvenance(plan, { agentId: VISUALIZER_AGENT_ID });
+  const emptyGenesis = () =>
+    genesis({
+      experienceId,
+      intent: VISUALS_INTENT,
+      // No content: the author and source are fixed labels, the time is the commit's.
+      meta: { author: VISUALIZER_AGENT_ID, createdAt: now(), sourceKind: "document-visuals" },
+    });
+  const wanted = replay(emptyGenesis(), plan.ops);
+  if (!wanted.ok) throw new LineageRefusedError(wanted.finding.code);
+  const wantedRoot = canonical(wanted.value.root);
   for (let attempt = 0; attempt < 2; attempt++) {
     const read = unwrap(experienceId, await lineage.head(experienceId));
     if (read === "head-moved") continue;
-    let head: string | undefined = read ?? undefined;
-    if (head === undefined) {
-      const started = unwrap(
-        experienceId,
-        await lineage.start(
-          genesis({
-            experienceId,
-            intent: VISUALS_INTENT,
-            // No content: the author and source are fixed labels, the time is the commit's.
-            meta: { author: VISUALIZER_AGENT_ID, createdAt: now(), sourceKind: "document-visuals" },
-          }),
-          by,
-        ),
-      );
-      if (started === "head-moved") continue; // a concurrent start won; compose on its head
-      head = (started as Committed).version.versionHash;
+    let current: Experience;
+    if (read === null) {
+      const started = unwrap(experienceId, await lineage.start(emptyGenesis(), by));
+      if (started === "head-moved") continue; // a concurrent start won; read its head
+      current = (started as Committed).experience;
+    } else {
+      const latest = unwrap(experienceId, await lineage.resolveLatest(experienceId));
+      if (latest === "head-moved") continue;
+      current = latest;
     }
+    if (canonical(current.root) === wantedRoot) return { head: current.versionHash };
+    const children = (current.root as { children?: readonly { id: string }[] }).children ?? [];
+    const clear = children.map((c) => ({ type: "removeNode" as const, nodeId: c.id }));
     const composed = unwrap(
       experienceId,
       await lineage.compose({
         experienceId,
-        expectedHead: head,
-        ops: plan.ops.map((op) => ({ op, by, at: now() })),
+        expectedHead: current.versionHash,
+        ops: [...clear, ...plan.ops].map((op) => ({ op, by, at: now() })),
         by,
         ...(plan.summary !== undefined && { summary: plan.summary }),
         ...(plan.summaryClass !== undefined && { summaryClass: plan.summaryClass }),

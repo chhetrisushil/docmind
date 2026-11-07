@@ -1,8 +1,8 @@
 import type { Operation } from "@loom-ui/core";
-import { LineErasedError, type Lineage } from "@loom-ui/lineage";
+import { LineErasedError, LineUnreadableError, type Lineage } from "@loom-ui/lineage";
 import type { PlanReport, PlanResult } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
-import { DocumentGoneError } from "../ingest-document/errors";
+import { DocumentGoneError, VisualsLineageError } from "../ingest-document/errors";
 import {
   type StepGuard,
   StepResult,
@@ -10,7 +10,7 @@ import {
   ingestStepOptions,
   stepEffectOf,
 } from "../ingest-document/stepEffect";
-import { commitPlan } from "./lineage";
+import { LineageRefusedError, commitPlan } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 
 /**
@@ -41,6 +41,9 @@ export function commitEffect(
         await commitPlan(deps.lineage, input, input, deps.now);
       } catch (err) {
         if (err instanceof LineErasedError) throw new DocumentGoneError();
+        // Neither is transient: a refusal repeats, and an unreadable line (key not on this node, not a confirmed erasure) fails closed.
+        if (err instanceof LineageRefusedError || err instanceof LineUnreadableError)
+          throw new VisualsLineageError();
         throw err;
       }
       return { count: input.ops.length };
