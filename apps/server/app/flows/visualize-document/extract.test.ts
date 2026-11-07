@@ -41,8 +41,10 @@ function setup(
   };
   const store = {
     writes: [] as Fact[][],
+    held: [] as Fact[],
     replace: async (_r: VisualizeRef, facts: readonly Fact[]) => {
       store.writes.push([...facts]);
+      store.held = [...facts];
       return facts.length;
     },
     list: async () => [] as Fact[],
@@ -98,7 +100,7 @@ describe("visualize-extract step", () => {
     expect(s.store.writes).toEqual([]);
   });
 
-  it("a refusal is no facts, not a failure", async () => {
+  it("a refusal clears facts a previous run stored, and is not a failure", async () => {
     const llm = Object.assign(
       {
         complete: async () => {
@@ -108,8 +110,9 @@ describe("visualize-extract step", () => {
       { model: "claude-test" },
     );
     const s = setup({ llm });
+    s.store.held = [{ ...GOOD, ordinal: 0 } as Fact];
     expect(await run(s)).toEqual({ outcome: "done", count: 0, model: "claude-test" });
-    expect(s.store.writes).toEqual([]);
+    expect(s.store.held).toEqual([]);
   });
 
   it("windows 3 chunks of 10,000 characters into 2 calls without splitting a chunk", async () => {
