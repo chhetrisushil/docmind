@@ -32,6 +32,7 @@ export interface IngestWiring {
     summary?: LlmProvider;
     vision?: LlmProvider;
     visionPdf?: LlmProvider;
+    visuals?: LlmProvider;
     roles: LlmRoleSettings;
     config: LlmSettings;
   };
@@ -104,6 +105,7 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
 const MAX_LLM_TIMEOUT_MS = 300_000;
 const MAX_VISION_TIMEOUT_MS = 600_000;
 const SUMMARY_MAX_TOKENS = 2_048;
+export const VISUALS_MAX_TOKENS = 4096;
 const VISION_MAX_TOKENS = 16_000;
 
 /** Timeouts for the LLM steps. It never holds a key (R10): keys live only inside the providers. */
@@ -133,12 +135,14 @@ function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
   const summary = make("summary", SUMMARY_MAX_TOKENS, config.timeoutMs);
   const vision = make("vision", VISION_MAX_TOKENS, config.visionTimeoutMs);
   const visionPdf = make("visionPdf", VISION_MAX_TOKENS, config.visionTimeoutMs);
+  const visuals = make("visuals", VISUALS_MAX_TOKENS, config.timeoutMs);
   return {
     roles,
     config,
     ...(summary && { summary }),
     ...(vision && { vision }),
     ...(visionPdf && { visionPdf }),
+    ...(visuals && { visuals }),
   };
 }
 
