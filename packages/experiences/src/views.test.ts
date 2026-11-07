@@ -318,6 +318,50 @@ describe("detailWithVisuals", () => {
     });
   });
 
+  it("drops a node with an unknown handle and keeps its sibling", () => {
+    const exp = detailWithVisuals(
+      visualsOf([kf("bad", "KeyFigure", "weird"), kf("ok", "KeyFigure", "fact-0")]),
+      DOC,
+    );
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-ok"]);
+    expect(exp.providers.weird).toBeUndefined();
+  });
+
+  it("drops a node whose type is not a visuals entry", () => {
+    const exp = detailWithVisuals(
+      visualsOf([kf("bad", "DocumentKpi", "fact-0"), kf("ok", "KeyFigure", "fact-1")]),
+      DOC,
+    );
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-ok"]);
+    expect(exp.providers["fact-0"]).toBeUndefined();
+  });
+
+  it("suffixes a third distinct entry on one fact with -c", () => {
+    const exp = detailWithVisuals(
+      visualsOf([
+        kf("a", "KeyFigure", "fact-0"),
+        kf("b", "FigureChart", "fact-0"),
+        kf("c", "FigureTrend", "fact-0"),
+        kf("d", "KeyFigure", "fact-0"),
+      ]),
+      DOC,
+    );
+    const handles = (node(exp, "visuals").children as unknown as SemanticNode[]).map(
+      (c) => c.binding?.handle,
+    );
+    expect(handles).toEqual(["fact-0", "fact-0-b", "fact-0-c", "fact-0"]);
+    expect(Object.keys(exp.providers).filter((h) => h.startsWith("fact-"))).toEqual([
+      "fact-0",
+      "fact-0-b",
+      "fact-0-c",
+    ]);
+  });
+
+  it("returns the static detail when every node is dropped", () => {
+    const exp = detailWithVisuals(visualsOf([kf("bad", "KeyFigure", "fact-99")], true), DOC);
+    expect(exp.versionHash).toBe(EXPERIENCES.detail.versionHash);
+  });
+
   it("compiles for web and terminal with no findings", () => {
     for (const surface of ["web", "terminal"] as const) {
       const r = compile(
