@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { admit, grounded, numbersOf } from "./facts";
+import { StoredFact, admit, grounded, numbersOf } from "./facts";
 
 const C1 = "11111111-1111-4111-8111-111111111111";
 const text = (s: string) => new Map([[C1, s]]);
@@ -247,5 +247,38 @@ describe("grounding covers every number in a fact (V4)", () => {
       [C2, "seven is 7"],
     ]);
     expect(grounded(fig, texts)).toBe(true);
+  });
+});
+
+describe("StoredFact", () => {
+  const C = "11111111-1111-4111-8111-111111111111";
+  it("round-trips every kind of stored fact, keeping its ordinal", () => {
+    const facts = [
+      {
+        kind: "series",
+        label: "s",
+        points: [
+          { x: "a", y: 1 },
+          { x: "b", y: 2 },
+        ],
+        chunkIds: [C],
+        ordinal: 0,
+      },
+      {
+        kind: "figure",
+        label: "f",
+        value: 3,
+        compare: { label: "p", value: 2 },
+        chunkIds: [C],
+        ordinal: 1,
+      },
+      { kind: "factTable", title: "t", columns: ["a"], rows: [["1"]], chunkIds: [C], ordinal: 15 },
+    ];
+    for (const f of facts) expect(StoredFact.parse(f)).toEqual(f);
+  });
+  it("rejects an unknown key and an out-of-range ordinal", () => {
+    const f = { kind: "figure", label: "f", value: 3, chunkIds: [C], ordinal: 0 };
+    expect(StoredFact.safeParse({ ...f, extra: 1 }).success).toBe(false);
+    expect(StoredFact.safeParse({ ...f, ordinal: 16 }).success).toBe(false);
   });
 });
