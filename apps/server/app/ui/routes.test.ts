@@ -43,6 +43,7 @@ beforeAll(async () => {
           content: async () => null,
           source: async () => null,
           chats: async () => [],
+          visualFacts: async () => [],
         };
       },
     }),

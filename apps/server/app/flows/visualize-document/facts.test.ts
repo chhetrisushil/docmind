@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { StoredFact, admit, grounded, numbersOf } from "./facts";
+import { type DraftFact, StoredFact, admit, grounded as groundedDraft, numbersOf } from "./facts";
 
 const C1 = "11111111-1111-4111-8111-111111111111";
 const text = (s: string) => new Map([[C1, s]]);
+// The fixtures are readonly literals that also carry an ordinal; `grounded` only reads the draft part.
+const grounded = (f: unknown, texts: ReadonlyMap<string, string>) =>
+  groundedDraft(f as DraftFact, texts);
 
 describe("grounded", () => {
   it.each([
@@ -50,7 +53,6 @@ describe("admit", () => {
         columns: ["a"],
         rows: [["7"], ["n/a"]],
         chunkIds: [C1],
-        ordinal: 0,
       }),
     ).toEqual([7]);
   });

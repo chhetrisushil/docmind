@@ -16,6 +16,7 @@ import {
 } from "../documents/testHarness";
 import type { Chunk } from "../flows/ingest-document/chunker";
 import { PgChunkStore } from "../flows/ingest-document/pgChunks";
+import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { ingestRun } from "../status/testing";
 import { readersFor } from "./readers";
 
@@ -231,6 +232,7 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
           throw new Error("unused: the documents reader reads no blobs");
         },
         registry: h.wiring.registry,
+        visualFacts: new PgVisualFacts(h.app, fields),
       },
       ALICE,
     );

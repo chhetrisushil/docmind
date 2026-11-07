@@ -27,6 +27,7 @@ import {
   createIngestWiring,
 } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
+import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import {
   type FakeGemini,
   type FakeOpenAiCompat,
@@ -433,7 +434,14 @@ export async function startDocumentServer(
       ...uiRoutes({
         authenticator: testAuthenticator,
         views,
-        readers: { pool: app, fields, status: ingest.status, blobs, registry: wiring.registry },
+        readers: {
+          pool: app,
+          fields,
+          status: ingest.status,
+          blobs,
+          registry: wiring.registry,
+          visualFacts: new PgVisualFacts(app, fields),
+        },
       }),
       ...events.routes,
     });

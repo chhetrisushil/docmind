@@ -3,7 +3,6 @@ import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { LINEAGE_STREAM_PREFIX, LINEAGE_WORKFLOW_ID } from "@loom-ui/lineage";
 import type { EventEnvelope } from "@loom/core";
 import { isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
-import { InMemoryContentStore } from "@loom/plugin-content";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../../db/migrate";
@@ -15,6 +14,7 @@ import {
   createTestDb,
 } from "../../db/testSupport";
 import { type DurableStorage, createDurableStorage, sealedLineageContent } from "../../storage";
+import { PgContentStore } from "../../storage/pgContentStore";
 import { subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
 import { commitPlan, experienceIdOf, visualsLineage } from "./lineage";
@@ -29,7 +29,7 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
   let app: Pool;
   let keys: PostgresKeyStore;
   let stores: DurableStorage;
-  let inner: InMemoryContentStore;
+  let inner: PgContentStore;
   let lineage: ReturnType<typeof visualsLineage>;
 
   beforeAll(async () => {
@@ -41,9 +41,9 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
     keys = new PostgresKeyStore(app, [{ id: "kek-1", key: createSecretKey(randomBytes(32)) }]);
     // The real storage wiring: the encrypting event store with the lineage paths registered.
     stores = createDurableStorage({ loomUrl: db.loomUrl, keys });
-    inner = new InMemoryContentStore();
+    inner = new PgContentStore(app);
     lineage = visualsLineage({
-      events: stores.crypto.events,
+      events: stores.sealed.eventStore,
       content: sealedLineageContent(inner, keys),
       keys,
       subjectOf: subjectOfExecution,
@@ -97,6 +97,8 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
       ok: false,
       refusal: { kind: "refused", finding: { code: "line-erased" } },
     });
+    // The blob rows outlive the key (only ciphertext remains), but nothing can open them.
+    for (const ref of refs) expect(await inner.get(ref as never)).not.toBeNull();
     const sealedContent = sealedLineageContent(inner, keys);
     const access = { executionId: streamOf(r1), workflowId: LINEAGE_WORKFLOW_ID };
     const opened = await sealedContent.get(refs[0] as never, access).then(
@@ -130,7 +132,7 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
       timestamp: 1,
       payload: { ops: [], by: {} },
     } as unknown as EventEnvelope;
-    await expect(stores.crypto.events.append(event)).rejects.toThrow(/resolved to ""/);
+    await expect(stores.sealed.eventStore.append(event)).rejects.toThrow(/resolved to ""/);
     await expect(
       sealedLineageContent(inner, keys).put(new Uint8Array([1, 2, 3]), {
         executionId: `${LINEAGE_STREAM_PREFIX}foo`,

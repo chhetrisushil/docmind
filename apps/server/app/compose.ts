@@ -47,6 +47,8 @@ import { createHttpServer } from "./server";
 import type { UserExecutionLister } from "./status/forgetUser";
 import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
+import { sealedLineageContent } from "./storage";
+import { PgContentStore } from "./storage/pgContentStore";
 import { uiRoutes } from "./ui/routes";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
@@ -386,6 +388,11 @@ export function buildServer(options: ComposeOptions) {
   return {
     app,
     server,
+    /**
+     * The visuals lineage's artifact store: Postgres under the per-user sealing wrapper, built once. Task 9 builds
+     * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.
+     */
+    lineageContent: sealedLineageContent(new PgContentStore(pool), keys),
     /** `GET /readyz`: shutdown calls `beginShutdown()` as its first step. */
     readiness,
     store,
