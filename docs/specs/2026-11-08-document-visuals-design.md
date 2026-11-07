@@ -123,8 +123,7 @@ tool `visual.facts` version `1.0.0`, `toolSchemaHash` `docmind:visual.facts@1` (
 All handles read the same target with the same arguments (`{ id }`), so the invoker's memo makes
 one read per hydrate however many facts there are (the budget is 8 distinct reads per POST); each
 handle's Named reshaper `visual-fact-<ordinal>` (0 to 15) picks its fact and maps it to the kind's
-value contract. The capability's
-`sampleOutput` the decrypted fact, and `sensitivity: "sensitive"` (Loom's `DataClass`; DocMind has
+value contract. Each capability's `sampleOutput` is its decrypted fact, and its `sensitivity` is `"sensitive"` (Loom's `DataClass`; DocMind has
 no per-document class, and all user content is treated alike). Declaring it keeps the planner's
 summary from being withheld. The host's read floor is `declaredToolClassesFrom(capabilities)`.
 
