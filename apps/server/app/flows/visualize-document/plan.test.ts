@@ -155,4 +155,50 @@ describe("sealing", () => {
       expect(raw, secret).not.toContain(secret);
     expect(JSON.stringify(await store.read(executionId))).toContain("Zebra Revenue");
   });
+
+  it("seals the findings and report of a plan whose first reply was invalid (model text in the attempts)", async () => {
+    const SECRET = "Zebra-Secret";
+    const bad = draft([
+      {
+        ...NODE,
+        id: SECRET,
+        label: SECRET,
+        binding: { ...NODE.binding, capability: `${SECRET}-cap` },
+      },
+    ]);
+    const ctx = recording();
+    const plan = await planVisuals(
+      new ReferencePlanner({ model: scriptedPlannerModel([bad, PLAN_JSON]), modelId: "t" }),
+      [FIGURE],
+      ctx,
+    );
+    expect(JSON.stringify(plan.report.attempts)).toContain(SECRET);
+    const [decisionId] = [...ctx.decisions.keys()] as [string];
+    const executionId = executionIdFor(randomUUID(), "visualize-test");
+    const inner = new InMemoryAsyncEventStore();
+    const store = new EncryptingEventStore(inner, new InMemoryKeyStore(), {
+      sensitive: { ...SENSITIVE_EVENT_PATHS },
+      subjectOf: subjectOfExecution,
+    });
+    await store.append({
+      executionId,
+      workflowId: "visualize-document",
+      timestamp: 0,
+      id: "e0",
+      sequence: 0,
+      eventType: "DECISION_RECORDED",
+      payload: { decisionId, choice: plan },
+    } as EventEnvelope);
+    const [rawEvent] = await inner.read(executionId);
+    expect(JSON.stringify(rawEvent)).not.toContain(SECRET);
+    expect(JSON.stringify(await store.read(executionId))).toContain(SECRET);
+    // Every field of the recorded choice but the class enum is a sealed envelope, so a PlanResult
+    // field added later cannot leak unnoticed.
+    const choice = (rawEvent?.payload as { choice: Record<string, unknown> }).choice;
+    for (const [key, value] of Object.entries(choice))
+      if (key !== "summaryClass")
+        expect((value as { __loomEnc?: string } | undefined)?.__loomEnc, `choice.${key}`).toBe(
+          "loom/aes-256-gcm",
+        );
+  });
 });
