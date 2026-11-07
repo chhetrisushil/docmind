@@ -4,8 +4,11 @@ import { UUID_PATTERN } from "./chats/ids";
 
 const UUID = UUID_PATTERN;
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** The visuals lineage line of one document: `__loom_ui_lineage__:visuals-<userId>-<documentId>` (ids only). */
-const VISUALS_LINEAGE = new RegExp(`^${LINEAGE_STREAM_PREFIX}visuals-(${UUID})-${UUID}$`);
+const VISUALS_LINEAGE = new RegExp(
+  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}visuals-(${UUID})-${UUID}$`,
+);
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
 
 export { chatConversationId, chatIdOfConversation } from "./chats/ids";

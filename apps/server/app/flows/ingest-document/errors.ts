@@ -95,6 +95,17 @@ export class StepResultError extends Error {
   }
 }
 
+/**
+ * The visuals lineage refused the commit (a finding no retry fixes) or the line cannot be read (key unavailable,
+ * not a confirmed erasure). Fatal: the step fails at once. The message is fixed (it is logged).
+ */
+export class VisualsLineageError extends Error {
+  constructor() {
+    super("the visuals lineage cannot take the commit");
+    this.name = "VisualsLineageError";
+  }
+}
+
 export class IngestConfigError extends Error {
   constructor() {
     super("embedder and vector store modelId/dimensions differ");
@@ -109,6 +120,7 @@ export class IngestConfigError extends Error {
  */
 export const isFatal = (err: unknown): boolean =>
   err instanceof IngestConfigError ||
+  err instanceof VisualsLineageError ||
   err instanceof StepResultError ||
   err instanceof BlobMissingError ||
   // a deployment fault (bad key, unknown model) or a model refusal: retrying the same request cannot
