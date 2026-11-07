@@ -6,6 +6,7 @@ import { generationOf } from "../../status/model";
 import {
   BlobMissingError,
   FAILURE_CODES,
+  type FailureCode,
   StepResultError,
   isAbort,
   isDocumentGone,
@@ -167,6 +168,20 @@ export const ingestStepOptions = (
   ...(deps.gate && { gate: deps.gate }),
 });
 
+/** A step's non-done outcomes, as the plain fields every output shape mirrors. */
+export type StepEnd = { outcome: "document_gone" } | { outcome: "failed"; code: FailureCode };
+
+/**
+ * How `stepEffectOf` builds a step's output: `schema` validates what the work returned (merged over
+ * `outcome: "done"`), and `ended` shapes a document-gone or permanent-failure outcome into that same output.
+ */
+export interface StepOutputSpec<O> {
+  schema: z.ZodType<O>;
+  ended(end: StepEnd): O;
+}
+
+const STEP_RESULT_SPEC: StepOutputSpec<StepResult> = { schema: StepResult, ended: (end) => end };
+
 export function stepEffect(
   step: string,
   guard: StepGuard,
@@ -177,6 +192,25 @@ export function stepEffect(
   ) => Promise<{ count?: number; model?: string } | undefined>,
   options: StepOptions = {},
 ): Effect<IngestStartInput, StepResult> {
+  return stepEffectOf(step, guard, work, STEP_RESULT_SPEC, options);
+}
+
+/**
+ * `stepEffect` for a step whose output is not a `StepResult` (the visualize load step returns the facts).
+ * Same retry, timeout, gate and failure behaviour; the output is validated by `spec.schema`, and nothing
+ * outside it reaches the event log. The work returns the output's fields apart from `outcome`.
+ */
+export function stepEffectOf<O>(
+  step: string,
+  guard: StepGuard,
+  work: (
+    ref: IngestStartInput,
+    signal?: AbortSignal,
+    progress?: () => void,
+  ) => Promise<object | undefined>,
+  spec: StepOutputSpec<O>,
+  options: StepOptions = {},
+): Effect<IngestStartInput, O> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const sleep = options.sleep ?? defaultSleep;
   const settleMs = options.settleMs ?? ATTEMPT_SETTLE_MS;
@@ -185,12 +219,12 @@ export function stepEffect(
     signal: AbortSignal | undefined,
     progress: () => void,
     generation: number | undefined,
-  ): Promise<StepResult> => {
+  ): Promise<O> => {
     const bound = options.timeoutMs;
-    const run = async (inner: AbortSignal | undefined): Promise<StepResult> => {
+    const run = async (inner: AbortSignal | undefined): Promise<O> => {
       await guard.begin(ref, step, generation);
-      // The result is written to the event log: nothing outside StepResult may reach it.
-      const parsed = StepResult.safeParse({
+      // The result is written to the event log: nothing outside the output schema may reach it.
+      const parsed = spec.schema.safeParse({
         outcome: "done",
         ...((await work(ref, inner, progress)) ?? {}),
       });
@@ -246,9 +280,9 @@ export function stepEffect(
             : attemptNow());
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
-          if (isDocumentGone(err)) return { outcome: "document_gone" };
+          if (isDocumentGone(err)) return spec.ended({ outcome: "document_gone" });
           const code = permanentCode(err);
-          if (code) return { outcome: "failed", code };
+          if (code) return spec.ended({ outcome: "failed", code });
           // Progress-aware budget: a timeout after the work reported progress is not a failed attempt
           // (the committed units stay and the next attempt resumes), so the count restarts. Bound: each
           // progressing attempt commits at least one unit that the work will not redo, so a step of n units

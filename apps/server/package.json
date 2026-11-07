@@ -23,6 +23,8 @@
     "@docmind/llm-anthropic": "workspace:*",
     "@docmind/parsers": "workspace:*",
     "@docmind/vector-pg": "workspace:*",
+    "@loom-ui/core": "*",
+    "@loom-ui/planner": "*",
     "@loom/agent": "*",
     "@loom/app": "*",
     "@loom/conversation": "*",
