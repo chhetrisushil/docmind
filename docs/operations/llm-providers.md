@@ -21,6 +21,7 @@ Unset variables mean Ollama. An `ANTHROPIC_API_KEY` alone enables nothing: to us
 | `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `title` | The name of a chat | `DOCMIND_TITLE_PROVIDER` | `DOCMIND_TITLE_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `summary` | Document summaries | `DOCMIND_SUMMARY_PROVIDER` | `DOCMIND_SUMMARY_MODEL` | `ollama`, `gemma4:31b-cloud` |
+| `visuals` | Extracts facts and plans document visuals; `off` hides the Visuals tab | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `vision` | Text and description of images | `DOCMIND_VISION_PROVIDER` | `DOCMIND_VISION_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `vision_pdf` | Scanned PDF pages (no text layer) | `DOCMIND_VISION_PDF_PROVIDER` | `DOCMIND_VISION_PDF_MODEL` | `gemini`, `gemini-3.5-flash` when `GEMINI_API_KEY` is set, else `off` |
 
@@ -28,7 +29,7 @@ Unset variables mean Ollama. An `ANTHROPIC_API_KEY` alone enables nothing: to us
 `vision_pdf` takes the shared value only if that provider reads PDFs (`anthropic`, `gemini`, or `off`).
 
 When a role uses Claude the model defaults are `claude-opus-5-5` (chat), `claude-haiku-5-5` (title,
-summary) and `claude-sonnet-5-5` (vision, vision_pdf). Gemini defaults to `gemini-3.5-flash`. When
+summary, visuals) and `claude-sonnet-5-5` (vision, vision_pdf). Gemini defaults to `gemini-3.5-flash`. When
 `vision_pdf` and `vision` use the same provider, `vision_pdf` inherits `DOCMIND_VISION_MODEL` if
 `DOCMIND_VISION_PDF_MODEL` is unset.
 

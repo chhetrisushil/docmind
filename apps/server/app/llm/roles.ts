@@ -1,7 +1,7 @@
 import { StartupConfigError } from "../startupError";
 import { envModelId } from "./modelId";
 
-export const LLM_ROLES = ["chat", "title", "summary", "vision", "visionPdf"] as const;
+export const LLM_ROLES = ["chat", "title", "summary", "vision", "visionPdf", "visuals"] as const;
 export type LlmRole = (typeof LLM_ROLES)[number];
 export const PROVIDERS = ["anthropic", "ollama", "gemini"] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
@@ -27,6 +27,7 @@ const PREFIX: Record<LlmRole, string> = {
   summary: "DOCMIND_SUMMARY",
   vision: "DOCMIND_VISION",
   visionPdf: "DOCMIND_VISION_PDF",
+  visuals: "DOCMIND_VISUALS",
 };
 
 const MIB = 1024 * 1024;
@@ -45,6 +46,7 @@ const DEFAULT_MODEL: Record<ProviderName, Record<LlmRole, string>> = {
     summary: "claude-haiku-5-5",
     vision: "claude-sonnet-5-5",
     visionPdf: "claude-sonnet-5-5",
+    visuals: "claude-haiku-5-5",
   },
   ollama: Object.fromEntries(LLM_ROLES.map((r) => [r, "gemma4:31b-cloud"])) as Record<
     LlmRole,
@@ -217,6 +219,7 @@ export function llmWarnings(s: LlmRoleSettings, env: NodeJS.ProcessEnv = process
     ["summary", "summaries are off: DOCMIND_SUMMARY_PROVIDER is off"],
     ["vision", "image reading is off: DOCMIND_VISION_PROVIDER is off"],
     ["visionPdf", "scanned PDF pages are not read: DOCMIND_VISION_PDF_PROVIDER is off"],
+    ["visuals", "visuals are off: DOCMIND_VISUALS_PROVIDER is off"],
   ];
   for (const [role, text] of off) if (s.roles[role].provider === "off") out.push(text);
   return out;
