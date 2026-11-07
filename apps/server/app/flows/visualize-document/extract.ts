@@ -99,8 +99,10 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResul
           drafts.push(...jsonAnswer(res.content, ExtractAnswer).facts);
         }
       } catch (err) {
-        if (err instanceof LlmRefusalError) return { count: 0, model }; // as summarize: a refusal is no facts
-        throw err;
+        if (!(err instanceof LlmRefusalError)) throw err;
+        // A refusal is no facts, not a failure; the stored facts must reflect this run, so clear them.
+        await deps.facts.replace(ref, [], signal);
+        return { count: 0, model };
       }
       const { facts } = admit(drafts, texts, new Set(ids));
       const count = await deps.facts.replace(ref, facts, signal);
