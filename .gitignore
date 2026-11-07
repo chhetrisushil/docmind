@@ -4,3 +4,7 @@ dist
 .turbo
 .env
 data/
+
+# local agent workspaces
+.worktrees/
+.superpowers/
