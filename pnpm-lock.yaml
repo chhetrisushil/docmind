@@ -253,6 +253,12 @@ importers:
       '@docmind/vector-pg':
         specifier: workspace:*
         version: link:../../packages/vector-pg
+      '@loom-ui/core':
+        specifier: link:../../../loom-ui/packages/core
+        version: link:../../../loom-ui/packages/core
+      '@loom-ui/planner':
+        specifier: link:../../../loom-ui/packages/planner
+        version: link:../../../loom-ui/packages/planner
       '@loom/agent':
         specifier: link:../../../loom/packages/agent
         version: link:../../../loom/packages/agent

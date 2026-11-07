@@ -33,8 +33,22 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
     "output.reasoning",
     "output.layout",
     "output.toolCalls[].signature",
+    // The visualize load step (`visualize-load`): the document's extracted facts (labels, values, table cells).
+    "output.facts",
   ],
-  DECISION_RECORDED: ["choice.text", "choice.partial", "choice.failed", "choice.error"],
+  DECISION_RECORDED: [
+    "choice.text",
+    "choice.partial",
+    "choice.failed",
+    "choice.error",
+    // The visuals planner's decision (loom-ui ReferencePlanner.compose records its whole PlanResult as the
+    // choice): the ops carry labels and bindings made from document facts, `summary` is model text, and
+    // `findings` and the report's per-attempt findings quote model output and fact paths.
+    "choice.ops",
+    "choice.summary",
+    "choice.findings",
+    "choice.report",
+  ],
   // Loom writes String(err) here; a tool's collaborator error could carry a query or passage text.
   STEP_FAILED: ["error"],
   EXECUTION_FAILED: ["error"],
