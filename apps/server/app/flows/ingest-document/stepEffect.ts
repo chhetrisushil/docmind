@@ -250,6 +250,12 @@ export function stepEffectOf<O>(
       clearTimeout(timer);
     }
   };
+  // An ended output is written to the event log too: it passes the same schema as a done one.
+  const endedOutput = (end: StepEnd): O => {
+    const parsed = spec.schema.safeParse(spec.ended(end));
+    if (!parsed.success) throw new StepResultError();
+    return parsed.data;
+  };
   return {
     kind: "tool",
     execute: async (ref, ctx) => {
@@ -280,9 +286,9 @@ export function stepEffectOf<O>(
             : attemptNow());
         } catch (err) {
           if (interrupted()) return INTERRUPTED;
-          if (isDocumentGone(err)) return spec.ended({ outcome: "document_gone" });
+          if (isDocumentGone(err)) return endedOutput({ outcome: "document_gone" });
           const code = permanentCode(err);
-          if (code) return spec.ended({ outcome: "failed", code });
+          if (code) return endedOutput({ outcome: "failed", code });
           // Progress-aware budget: a timeout after the work reported progress is not a failed attempt
           // (the committed units stay and the next attempt resumes), so the count restarts. Bound: each
           // progressing attempt commits at least one unit that the work will not redo, so a step of n units
