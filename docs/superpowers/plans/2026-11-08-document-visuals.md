@@ -837,7 +837,19 @@ export function commitEffect(deps: { guard; lineage: Lineage; bus: ProgressBus; 
     3. Check that `lineage.resolveLatest` gives the typed refusal V8 delivers, that the raw events hold no plaintext label, and that the artifact blob can't be opened.
   - Add the new step input paths to `STEP_STARTED` in `sensitive.ts`. The raw-event proof must pass.
 
-- [ ] **Step 2: Run them and check they fail.** Then implement against the V8 API, which isn't known yet. Write the resolver as `(streamId) => subjectOf the userId embedded in experienceIdOf`. Run the tests and check they pass.
+- [ ] **Step 2: Run them and check they fail.** Then implement against the V8 API. The loom session confirmed it on 2026-11-08: loom branch `feat/reserved-stream-subjects`, commit `23a71dcf`, and a loom-ui lineage change in progress. Pin the merged SHAs, not these.
+  - **Events and blobs share one mapping.**
+    - loom's `EncryptingEventStore` already calls the host's `subjectOf` with the stream id `__loom_ui_lineage__:<experienceId>`.
+    - `EncryptingContentStore` calls it with the `ContentAccess` that `Lineage` now passes for each line. That access's `executionId` is the line's stream id.
+    - In `S/storage.ts`, extend DocMind's `subjectOfExecution`: for `__loom_ui_lineage__:visuals-<userId>-<documentId>`, return the subject of `userId`. The user id is inside the experience id, so no lookup is needed.
+    - Anything else under `__loom_ui_lineage__:` returns no subject. The store then refuses the write, which is the fail-closed behaviour we want.
+  - **Content store.** Wrap DocMind's content store for lineage artifacts in `EncryptingContentStore` over the same `KeyStore` and `subjectOf`.
+  - **Sensitive paths.** Call `registerLineageSensitivePaths(events)` from `@loom-ui/lineage` on the encrypting event store. It seals COMPOSED `ops`, `summary` and `by`, and the `by` of every other lineage event.
+  - **Erasure.** DocMind's existing key destruction (`keys.destroy(subject)`) is the erasure, so the Eraser needs no change for lineage. A reserved stream is never tombstoned. `shredSubject(..., { executionIds: [] })` also works now.
+  - **After erasure,** reads fail with the finding `line-erased` (`LineErasedError`). The commit step maps it to `document_gone`, and the detail route treats it as "no visuals".
+  - **The erasure test** asserts `line-erased` on `resolveLatest`, `isKeyUnavailable` on the raw blob, and no plaintext label in the raw events.
+
+  Run the tests and check they pass.
 
 - [ ] **Step 3: Commit**
 
