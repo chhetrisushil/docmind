@@ -87,7 +87,9 @@ export class DmDocDetail extends LitElement {
   }
   private onProgress(e: DocumentProgressEvent | "resync"): void {
     if (e !== "resync" && e.documentId !== this.route?.id) return;
-    this.session?.invalidate();
+    // The visuals were committed: the document's experience itself changed, so fetch it again (not just its data).
+    if (e !== "resync" && e.visuals === "ready") void this.session?.reload();
+    else this.session?.invalidate();
   }
   disconnectedCallback(): void {
     this.leaving.abort();
@@ -279,7 +281,7 @@ export class DmDocDetail extends LitElement {
           ? html`<div data-not-found><h1>Document not found.</h1><p class="muted">It may have been deleted, or the read failed.</p><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
           : this.broken
             ? html`<div data-load-failed><h1>Couldn't load this document.</h1><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
-            : html`<dm-view name="detail" .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
+            : html`<dm-view .document=${route.id} .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
       }`;
   }
 }

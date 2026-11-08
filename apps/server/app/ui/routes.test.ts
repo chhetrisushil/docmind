@@ -3,7 +3,12 @@ import type { AddressInfo } from "node:net";
 import type { Authenticator } from "@docmind/auth";
 import { UiViewResponse } from "@docmind/contracts";
 import { createViews } from "@docmind/experiences";
+import { factProvider } from "@docmind/experiences";
+import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
+import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { commitPlan } from "../flows/visualize-document/lineage";
+import { aPlan } from "../flows/visualize-document/testing";
 import { createHttpServer } from "../server";
 import { uiRoutes } from "./routes";
 
@@ -15,6 +20,14 @@ const authenticator: Authenticator = {
   authenticate: async (req: IncomingMessage) =>
     req.headers["x-test-user"] === "alice" ? ID : null,
 } as never;
+const MINE = "00000000-0000-4000-8000-0000000000a1";
+const MINE_EMPTY = "00000000-0000-4000-8000-0000000000a2";
+const THEIRS = "00000000-0000-4000-8000-0000000000b1";
+const lineage = new Lineage({
+  events: new InMemoryLineageStore(),
+  content: new InMemoryContentStore(),
+});
+const visualFactCalls: unknown[] = [];
 const readerCalls: unknown[] = [];
 const builtFor: unknown[] = [];
 let base = "";
@@ -32,6 +45,8 @@ beforeAll(async () => {
       authenticator,
       views,
       readers: {} as never,
+      lineage,
+      owns: async (_identity, id) => id === MINE || id === MINE_EMPTY,
       readersFor: (identity) => {
         builtFor.push(identity);
         return {
@@ -43,7 +58,19 @@ beforeAll(async () => {
           content: async () => null,
           source: async () => null,
           chats: async () => [],
-          visualFacts: async () => [],
+          visualFacts: async (a) => {
+            visualFactCalls.push(a);
+            return [
+              {
+                kind: "figure",
+                label: "Revenue",
+                value: 4242,
+                unit: "USD",
+                chunkIds: [],
+                ordinal: 0,
+              },
+            ];
+          },
         };
       },
     }),
@@ -185,5 +212,147 @@ describe("POST /api/ui/hydrate", () => {
       expect(JSON.stringify(call)).not.toMatch(/sentinel|doc-status/);
     }
     error.mockRestore();
+  });
+});
+
+describe("GET /api/ui/documents/:id/detail", () => {
+  const detail = async (id: string, query = "", user = "alice") =>
+    get(`/api/ui/documents/${id}/detail${query}`, user);
+  // The head as detailWithVisuals reads it: a KeyFigure bound to the `fact-0` handle. (The scripted planner mints
+  // `p-<hash>` handles instead, which the per-document detail does not recognise: see the task report.)
+  const commit = async (id: string) => {
+    const ops = [
+      {
+        type: "remapProvider",
+        handle: "fact-0",
+        spec: { ...factProvider(0, "planner-guess", "KeyFigure"), handle: "fact-0" },
+      },
+      {
+        type: "insertNode",
+        parentId: "root",
+        node: {
+          id: "revenue",
+          order: "a",
+          kind: "semantic",
+          type: "KeyFigure",
+          typeVersion: "1.0.0",
+          span: 4,
+          label: { key: "revenue.label", fallback: "Revenue" },
+          props: {},
+        },
+      },
+      { type: "bindProvider", nodeId: "revenue", handle: "fact-0" },
+    ];
+    const real = await aPlan("revenue", "Revenue");
+    await commitPlan(
+      lineage,
+      { tenantId: ID.tenantId, userId: ID.userId, documentId: id },
+      { ...real, ops } as never,
+      () => "2026-11-08T10:00:00.000Z",
+    );
+  };
+
+  it("answers 404 (never 403) for a document that is not the caller's, a missing one and a malformed id", async () => {
+    for (const id of [THEIRS, "00000000-0000-4000-8000-0000000000ff", "nope"]) {
+      const res = await detail(id);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("private, no-store");
+    }
+    expect((await detail(MINE, "", "")).status).toBe(401);
+  });
+
+  it("serves the static detail's blueprint when the document has no visuals", async () => {
+    const stat = UiViewResponse.parse(await (await get("/api/ui/views/detail")).json());
+    const res = await detail(MINE_EMPTY);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const body = UiViewResponse.parse(await res.json());
+    expect(body.blueprint).toEqual(stat.blueprint);
+    expect(body.versionHash).toBe(stat.versionHash);
+  });
+
+  it("adds the Visuals panel once the lineage has a head, on both surfaces", async () => {
+    await commit(MINE);
+    const stat = UiViewResponse.parse(await (await get("/api/ui/views/detail")).json());
+    for (const query of ["", "?surface=terminal"]) {
+      const body = UiViewResponse.parse(await (await detail(MINE, query)).json());
+      expect(body.versionHash).not.toBe(stat.versionHash);
+      expect(JSON.stringify(body.blueprint)).toContain("v-revenue");
+      expect(body.inventory.handles.map((h) => h.handle)).toContain("fact-0");
+    }
+    expect((await detail(MINE, "?surface=hologram")).status).toBe(400);
+  });
+
+  it("falls back to the static detail when the line is erased or unreadable", async () => {
+    const erased = {
+      resolveLatest: async () => ({ ok: false, refusal: { kind: "line-erased" } }),
+    } as never;
+    const stat = UiViewResponse.parse(await (await get("/api/ui/views/detail")).json());
+    const server = createHttpServer(
+      uiRoutes({
+        authenticator,
+        views: createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) }),
+        readers: {} as never,
+        lineage: erased,
+        owns: async () => true,
+      }),
+    );
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/ui/documents/${MINE}/detail`;
+      const body = UiViewResponse.parse(
+        await (await fetch(url, { headers: { "x-test-user": "alice" } })).json(),
+      );
+      expect(body.versionHash).toBe(stat.versionHash);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("hydrates fact-0 through the document, reshaped, with one visualFacts read", async () => {
+    const served = UiViewResponse.parse(await (await detail(MINE)).json());
+    visualFactCalls.length = 0;
+    const res = await post({
+      document: MINE,
+      requests: [
+        {
+          experienceId: served.experienceId,
+          versionHash: served.versionHash,
+          handle: "fact-0",
+          params: {},
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as { results: { state: string; value: unknown }[] };
+    expect(results[0]?.state).toBe("ready");
+    expect(JSON.stringify(results[0]?.value)).toContain("4242");
+    expect(visualFactCalls).toEqual([{ id: MINE }]);
+  });
+
+  it("refuses to hydrate another user's document (404), and a stale version hash is a finding, not data", async () => {
+    const other = await post({
+      document: THEIRS,
+      requests: [
+        { experienceId: "docmind.detail", versionHash: "x", handle: "fact-0", params: {} },
+      ],
+    });
+    expect(other.status).toBe(404);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stale = await post({
+      document: MINE,
+      requests: [
+        {
+          experienceId: "docmind.detail",
+          versionHash: "sha256:stale",
+          handle: "fact-0",
+          params: {},
+        },
+      ],
+    });
+    const { results } = (await stale.json()) as { results: { state: string }[] };
+    expect(results[0]?.state).toBe("error");
+    expect(log).toHaveBeenCalledWith("ui finding version-mismatch");
+    log.mockRestore();
   });
 });

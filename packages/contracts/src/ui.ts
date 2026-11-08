@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Uuid } from "./common";
 
 /** The experiences DocMind composes (Task 186b). */
 export const ViewName = z.enum([
@@ -48,21 +49,26 @@ export const UiViewResponse = z.object({
 });
 export type UiViewResponse = z.infer<typeof UiViewResponse>;
 
-/** `POST /api/ui/hydrate`: loom-ui `HandleLoadRequest`s for one view (1 to 32 per call). */
-export const UiHydrateRequest = z.object({
-  view: ViewName,
-  requests: z
-    .array(
-      z.object({
-        experienceId: z.string(),
-        versionHash: z.string(),
-        handle: z.string(),
-        params: z.record(Scalar),
-      }),
-    )
-    .min(1)
-    .max(32),
-});
+const HandleRequests = z
+  .array(
+    z.object({
+      experienceId: z.string(),
+      versionHash: z.string(),
+      handle: z.string(),
+      params: z.record(Scalar),
+    }),
+  )
+  .min(1)
+  .max(32);
+
+/**
+ * `POST /api/ui/hydrate`: loom-ui `HandleLoadRequest`s (1 to 32 per call) for one view, or for one document's detail
+ * (`document`: the static detail plus that document's visuals).
+ */
+export const UiHydrateRequest = z.union([
+  z.object({ view: ViewName, requests: HandleRequests }),
+  z.object({ document: Uuid, requests: HandleRequests }),
+]);
 export type UiHydrateRequest = z.infer<typeof UiHydrateRequest>;
 
 /** One loom-ui `HandleLoadResult` per request, in order. The browser's split controller validates each result itself. */

@@ -2,6 +2,7 @@ import type { Operation } from "@loom-ui/core";
 import { LineErasedError, LineUnreadableError, type Lineage } from "@loom-ui/lineage";
 import type { PlanReport, PlanResult } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
+import type { ProgressBus } from "../../documents/progress";
 import { DocumentGoneError, VisualsLineageError } from "../ingest-document/errors";
 import {
   type StepGuard,
@@ -27,10 +28,11 @@ export type CommitInput = VisualizeRef & {
 /**
  * Commits the plan to the document's lineage line (sealed under the user's key). The output is a content-free
  * `StepResult` (the number of ops committed). A line whose owner was erased is `document_gone`.
- * It publishes nothing: the "visuals ready" event is the runner's (a later task), so these deps carry no bus.
+ * After a commit (an idempotent no-write one too) it tells the owner's open browsers the visuals are ready; a bus that
+ * fails is reported (class only) and never fails the step.
  */
 export function commitEffect(
-  deps: { guard: StepGuard; lineage: Lineage; now: () => string } & StepSeams,
+  deps: { guard: StepGuard; lineage: Lineage; now: () => string; bus: ProgressBus } & StepSeams,
 ): Effect<CommitInput, StepResult> {
   return stepEffectOf(
     "visualize-commit",
@@ -45,6 +47,17 @@ export function commitEffect(
         if (err instanceof LineageRefusedError || err instanceof LineUnreadableError)
           throw new VisualsLineageError();
         throw err;
+      }
+      try {
+        deps.bus.publish(
+          { userId: input.userId },
+          { documentId: input.documentId, status: "ready", step: "finalize", visuals: "ready" },
+        );
+      } catch (err) {
+        console.error(
+          "visuals ready event not published",
+          err instanceof Error ? err.constructor.name : typeof err,
+        );
       }
       return { count: input.ops.length };
     },

@@ -51,6 +51,16 @@ describe("document contracts", () => {
     expect(ListDocumentsQuery.safeParse({ limit: "500" }).success).toBe(false);
   });
 
+  it("accepts the visuals-ready event, and still refuses a stepless one unless failed", () => {
+    const ready = { documentId: ID, status: "ready", step: "finalize", visuals: "ready" };
+    expect(DocumentProgressEvent.parse(ready)).toEqual(ready);
+    expect(DocumentProgressEvent.safeParse({ ...ready, visuals: "other" }).success).toBe(false);
+    expect(
+      DocumentProgressEvent.safeParse({ documentId: ID, status: "ready", visuals: "ready" })
+        .success,
+    ).toBe(false);
+  });
+
   it("only accepts known ingest steps in progress events", () => {
     const event = { documentId: ID, step: "embed", status: "embedding" };
     expect(DocumentProgressEvent.parse(event)).toEqual(event);

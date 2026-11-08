@@ -23,6 +23,7 @@ const readers = (items: DocumentDto[]) => ({
   document: vi.fn(async (a: { id: string }) => items.find((d) => d.id === a.id) ?? null),
   content: vi.fn(async () => ({ items: [], more: false })),
   source: vi.fn(async () => null),
+  visualFacts: async () => null,
   chats: vi.fn(async () => []),
 });
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -34,7 +35,7 @@ async function open(
   const r = readers(items);
   const ui = fakeUi(r);
   const onStale = vi.fn();
-  const session = await ViewSession.open(ui.api, name, { onStale });
+  const session = await ViewSession.open(ui.api, { view: name }, { onStale });
   const host = document.createElement("div");
   document.body.append(host);
   const seen: unknown[] = [];
@@ -128,6 +129,21 @@ describe("ViewSession", () => {
     expect(t.seen).toEqual([]);
   });
 
+  it("opens a document source: fetches its detail, hydrates through it, and reload re-fetches it", async () => {
+    const r = readers([doc(1)]);
+    const ui = fakeUi(r);
+    const s = await ViewSession.open(ui.api, { document: id(1) }, {});
+    expect(ui.calls.documents).toEqual([id(1)]);
+    expect(ui.calls.views).toEqual([]);
+    expect(s.name).toBe("detail");
+    s.start({ id: id(1), upto: 20 });
+    await vi.waitFor(() => expect(s.statusOf("doc-status")).toBe("ready"));
+    expect(ui.calls.hydrate[0]?.source).toEqual({ document: id(1) });
+    await s.reload();
+    expect(ui.calls.documents).toEqual([id(1), id(1)]);
+    s.dispose();
+  });
+
   it("refuses an action that carries no stamp at all", async () => {
     const t = await open("library");
     t.session.start();
@@ -150,7 +166,7 @@ describe("ViewSession", () => {
         }));
       }),
     };
-    const s = await ViewSession.open(api as never, "library", {});
+    const s = await ViewSession.open(api as never, { view: "library" }, {});
     s.start();
     s.mount(t.host, () => undefined);
     await vi.waitFor(() => expect(s.statusOf("documents")).toBe("ready"));
@@ -207,7 +223,7 @@ describe("ViewSession: bounds and teardown", () => {
       uiHydrate: vi.fn(async (_view: unknown, requests: readonly unknown[]) => mismatch(requests)),
     };
     const onFailed = vi.fn();
-    const s = await ViewSession.open(api as never, "library", { onFailed });
+    const s = await ViewSession.open(api as never, { view: "library" }, { onFailed });
     s.start();
     s.mount(t.host, () => undefined);
     await vi.waitFor(() => expect(onFailed).toHaveBeenCalledTimes(1));
@@ -233,7 +249,7 @@ describe("ViewSession: bounds and teardown", () => {
       }),
     };
     const onFailed = vi.fn();
-    const s = await ViewSession.open(api as never, "library", { onFailed });
+    const s = await ViewSession.open(api as never, { view: "library" }, { onFailed });
     s.start();
     s.mount(t.host, () => undefined);
     await vi.waitFor(() => expect(s.statusOf("documents")).toBe("ready"));
@@ -285,7 +301,7 @@ describe("ViewSession: bounds and teardown", () => {
     };
     const s = await ViewSession.open(
       { ...t.ui.api, uiView: t.ui.api.uiView } as never,
-      "library",
+      { view: "library" },
       {},
     );
     (s as unknown as { api: unknown }).api = api;

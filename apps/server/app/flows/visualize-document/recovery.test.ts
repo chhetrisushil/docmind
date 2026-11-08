@@ -9,6 +9,7 @@ import { recoveryOwns } from "../../bootIngest";
 import { chatConversationId } from "../../chats/ids";
 import { buildApp } from "../../config";
 import { ingestExecutionId } from "../../documents/ingest";
+import { InMemoryProgressBus } from "../../documents/progress";
 import { foldIngestStatus } from "../../status/model";
 import { startRecovery } from "../ingest-document/recovery";
 import type { VisualizeDeps } from "./deps";
@@ -88,6 +89,7 @@ describe("recovering an interrupted visualize execution", () => {
         },
         list: async () => held,
       },
+      bus: new InMemoryProgressBus(),
       lineage,
       now: () => "2026-11-08T10:00:00.000Z",
       sleep: async () => {},

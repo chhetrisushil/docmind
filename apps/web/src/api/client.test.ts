@@ -102,11 +102,13 @@ describe("createApi", () => {
       fingerprint: { restrictedHandles: [], restrictedProjectionNodes: [], placeholderNodes: [] },
     };
     const { api, calls } = apiWith((url) =>
-      url.startsWith("/api/ui/views") ? ok(view) : ok({ results: [{ state: "ready", value: 1 }] }),
+      url.startsWith("/api/ui/views") || url.includes("/detail")
+        ? ok(view)
+        : ok({ results: [{ state: "ready", value: 1 }] }),
     );
     expect((await api.uiView("library")).view).toBe("library");
     expect(
-      await api.uiHydrate("library", [
+      await api.uiHydrate({ view: "library" }, [
         { experienceId: "e", versionHash: "v", handle: "h", params: {} },
       ]),
     ).toEqual([{ state: "ready", value: 1 }]);
@@ -114,6 +116,15 @@ describe("createApi", () => {
       "GET /api/ui/views/library?surface=web",
       "POST /api/ui/hydrate",
     ]);
+    expect(await api.uiDocumentDetail("d 1")).toMatchObject({ view: "library" });
+    expect(calls[2]?.url).toBe("/api/ui/documents/d%201/detail?surface=web");
+    await api.uiHydrate({ document: "d1" }, [
+      { experienceId: "e", versionHash: "v", handle: "h", params: {} },
+    ]);
+    expect(calls[3]?.body).toEqual({
+      document: "d1",
+      requests: [{ experienceId: "e", versionHash: "v", handle: "h", params: {} }],
+    });
     expect(calls[1]?.body).toEqual({
       view: "library",
       requests: [{ experienceId: "e", versionHash: "v", handle: "h", params: {} }],

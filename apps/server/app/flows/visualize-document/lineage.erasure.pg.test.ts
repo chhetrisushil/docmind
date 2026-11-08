@@ -13,6 +13,7 @@ import {
   type TestDb,
   createTestDb,
 } from "../../db/testSupport";
+import { InMemoryProgressBus } from "../../documents/progress";
 import { type DurableStorage, createDurableStorage, sealedLineageContent } from "../../storage";
 import { PgContentStore } from "../../storage/pgContentStore";
 import { subjectOfExecution } from "../../subject";
@@ -114,7 +115,12 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
       ops: [...plan.ops],
       report: plan.report,
     };
-    const effect = commitEffect({ guard: { begin: async () => {} }, lineage, now: () => NOW });
+    const effect = commitEffect({
+      guard: { begin: async () => {} },
+      lineage,
+      bus: new InMemoryProgressBus(),
+      now: () => NOW,
+    });
     expect(await effect.execute(input, undefined as never)).toEqual({ outcome: "document_gone" });
 
     // Another user's line is untouched.

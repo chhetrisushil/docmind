@@ -336,6 +336,7 @@ describe("a start still pending when the cancel runs", () => {
           guard: { begin: () => hang },
           chunks: { sectionsOf: async () => [], read: async () => [] },
           facts: { replace: async () => 0, list: async () => [] },
+          bus: new InMemoryProgressBus(),
           lineage: new Lineage({
             events: new InMemoryLineageStore(),
             content: new InMemoryContentStore(),
