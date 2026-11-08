@@ -7,12 +7,14 @@ import {
   ViewName,
 } from "@docmind/contracts";
 import { Uuid } from "@docmind/contracts";
-import type { UiReaders, Views } from "@docmind/experiences";
+import { type UiReaders, type Views, documentsOfVisuals } from "@docmind/experiences";
 import type { Experience } from "@loom-ui/core";
 import type { Lineage } from "@loom-ui/lineage";
+import { getChat } from "../chats/sessions";
 import { withTenant } from "../db/tenant";
 import { getDocument } from "../documents/repo";
 import { experienceIdOf } from "../flows/visualize-document/lineage";
+import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -26,6 +28,10 @@ export interface UiRouteDeps {
   lineage: Lineage;
   /** Test seam: replaces the owner check (default: the document is the caller's, tenant-scoped, as `GET /api/documents/:id`). */
   owns?: (identity: Identity, documentId: string) => Promise<boolean>;
+  /** Test seam: replaces the chat owner check (default: the chat is the caller's and not soft-deleted). */
+  ownsChat?: (identity: Identity, chatId: string) => Promise<boolean>;
+  /** Test seam: the ids among `ids` that are the caller's documents (default: one owner-scoped query). */
+  ownedDocuments?: (identity: Identity, ids: string[]) => Promise<Set<string>>;
   /** Test seam: replaces the identity-bound readers. */
   readersFor?: (identity: Identity) => UiReaders;
 }
@@ -65,6 +71,51 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
       return null;
     }
   };
+  const ownsChat =
+    deps.ownsChat ??
+    (async (identity: Identity, id: string) =>
+      Boolean(
+        await withTenant(deps.readers.pool, identity.tenantId, (tx) =>
+          getChat(tx, identity.userId, id),
+        ),
+      ));
+  const ownedDocuments =
+    deps.ownedDocuments ??
+    (async (identity: Identity, ids: string[]) => {
+      if (ids.length === 0) return new Set<string>();
+      const { rows } = await withTenant(deps.readers.pool, identity.tenantId, (tx) =>
+        tx.query<{ id: string }>(
+          "SELECT id FROM documents WHERE owner_id = $1 AND id = ANY($2::uuid[])",
+          [identity.userId, ids],
+        ),
+      );
+      return new Set(rows.map((r) => r.id));
+    });
+  const ORD = /^[1-9][0-9]{0,14}$/; // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
+  /** The turn's visuals head and the documents of it that are still the caller's; null when there is no head. */
+  const turnHead = async (identity: Identity, chatId: string, ord: number) => {
+    try {
+      const latest = await deps.lineage.resolveLatest(
+        turnExperienceId({ userId: identity.userId, chatId, ord }),
+      );
+      if (!latest.ok) return null;
+      return {
+        visuals: latest.value,
+        // the pins name documents in lowercase; so does the set they are looked up in
+        live: new Set(
+          [...(await ownedDocuments(identity, documentsOfVisuals(latest.value)))].map((d) =>
+            d.toLowerCase(),
+          ),
+        ),
+      };
+    } catch (err) {
+      console.error(
+        "turn visuals head unavailable",
+        err instanceof Error ? err.constructor.name : typeof err,
+      );
+      return null;
+    }
+  };
   const surfaceOf = (req: { url?: string }) =>
     SurfaceName.safeParse(
       new URL(req.url ?? "/", "http://localhost").searchParams.get("surface") ?? "web",
@@ -81,6 +132,25 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
         const surface = surfaceOf(req);
         if (!surface.success) return sendError(res, 400, "invalid_request", "unknown surface");
         const payload = deps.views.documentPayload(id, await headOf(identity, id), surface.data);
+        json(res, 200, payload as unknown as UiViewResponse);
+      }),
+    ),
+
+    "GET /api/ui/chats/:id/turns/:ord/visuals": noStore(
+      "private, no-store",
+      requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const ordText = ctx.params.ord ?? "";
+        const chatId = parsed.success ? parsed.data.toLowerCase() : null;
+        // A malformed id or ord answers exactly like a missing or foreign one; the owner is checked before anything else.
+        if (!chatId || !ORD.test(ordText) || !(await ownsChat(identity, chatId)))
+          return sendError(res, 404, "not_found", "visuals not found");
+        const surface = surfaceOf(req);
+        if (!surface.success) return sendError(res, 400, "invalid_request", "unknown surface");
+        const turn = { chatId, ord: Number(ordText) };
+        const head = await turnHead(identity, chatId, turn.ord);
+        const payload = head && deps.views.turnPayload(turn, head.visuals, head.live, surface.data);
+        if (!payload) return sendError(res, 404, "not_found", "visuals not found");
         json(res, 200, payload as unknown as UiViewResponse);
       }),
     ),
@@ -110,8 +180,21 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
             identity.userId,
           );
         } else if ("turn" in body) {
-          // Task 10 serves a turn's visuals here; until then no turn has any.
-          return sendError(res, 404, "not_found", "turn not found");
+          const chatId = body.turn.chatId.toLowerCase();
+          if (!(await ownsChat(identity, chatId)))
+            return sendError(res, 404, "not_found", "visuals not found");
+          const head = await turnHead(identity, chatId, body.turn.ord);
+          const experience =
+            head &&
+            deps.views.turnExperience({ chatId, ord: body.turn.ord }, head.visuals, head.live);
+          if (!experience) return sendError(res, 404, "not_found", "visuals not found");
+          results = await deps.views.hydrateExperience(
+            experience,
+            body.requests,
+            readers(identity),
+            identity.userId,
+            "turn",
+          );
         } else {
           const id = body.document.toLowerCase();
           if (!(await owns(identity, id)))

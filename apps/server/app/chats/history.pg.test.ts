@@ -301,4 +301,56 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
       expect(id).toBe(`conv#o${turnKeyOf(e)}:${e.role === "user" ? "user" : "reply"}`);
     }
   });
+
+  it("marks complete, cited replies with hasVisuals from the turn heads, and every other message false (also without heads)", async () => {
+    const withHeads = await startChatServer({
+      heads: { has: async (_ref, ords) => new Set(ords.filter((o) => o === 2)) },
+    });
+    try {
+      const chatId = await seedChat(withHeads, ALICE);
+      const documentId = await seedDoc(
+        withHeads.owner,
+        withHeads.app,
+        withHeads.fields,
+        ALICE,
+        randomBytes(32).toString("hex"),
+        0,
+      );
+      const passageId = randomUUID();
+      const stored: StoredPassage = {
+        passageId,
+        documentId,
+        locator: { kind: "page", page: 2 },
+        headingPath: ["Terms"],
+        snippet: "Payment is due within 30 days.",
+      };
+      withHeads.fake.addTurn(convOf(chatId), {
+        question: "When is payment due?",
+        answer: `Within 30 days [[${passageId}]].`,
+      }); // ords 1, 2
+      withHeads.fake.addTurn(convOf(chatId), {
+        question: "And the weather?",
+        answer: "I have no source for that.",
+      }); // ords 3, 4
+      await withHeads.wiring.items.put(ref(chatId), 1, "conv#o1#turn:0:tool:0#p", {
+        kind: "passages",
+        body: { passages: [stored] },
+      });
+      const { body } = await history(withHeads, "alice", chatId);
+      expect(body.items.map((m) => [m.role, m.hasVisuals])).toEqual([
+        ["user", false],
+        ["assistant", true],
+        ["user", false],
+        ["assistant", false],
+      ]);
+      // the same chat on a server with no heads: false everywhere, and still valid against the contract
+      const plainChat = await seedChat(h, ALICE);
+      h.fake.addTurn(convOf(plainChat), { question: "q", answer: "a" });
+      const plain = await history(h, "alice", plainChat);
+      expect(plain.body.items).toHaveLength(2);
+      expect(plain.body.items.every((m) => m.hasVisuals === false)).toBe(true);
+    } finally {
+      await withHeads.close();
+    }
+  });
 });

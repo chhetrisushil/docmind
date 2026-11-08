@@ -29,7 +29,7 @@ export const MAX_CHAT_STREAMS_GLOBAL = 1000;
 export interface ChatStreamDeps
   extends Pick<
     ChatRouteDeps,
-    "pool" | "authenticator" | "fields" | "chat" | "eventStore" | "reasoning"
+    "pool" | "authenticator" | "fields" | "chat" | "eventStore" | "reasoning" | "heads"
   > {
   maxStreamsPerUser?: number;
   maxStreams?: number;

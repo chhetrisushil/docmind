@@ -4,10 +4,14 @@ import type { Authenticator } from "@docmind/auth";
 import { UiViewResponse } from "@docmind/contracts";
 import { createViews } from "@docmind/experiences";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
+import { ReferencePlanner } from "@loom-ui/planner";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { commitPlan } from "../flows/visualize-document/lineage";
-import { aPlan } from "../flows/visualize-document/testing";
+import { commitPlan, commitPlanTo } from "../flows/visualize-document/lineage";
+import { aPlan, recording, scriptedPlannerModel } from "../flows/visualize-document/testing";
+import { turnExperienceId } from "../flows/visualize-turn/ids";
+import { TURN_INTENT, planTurn } from "../flows/visualize-turn/plan";
+import { aTurnPlan } from "../flows/visualize-turn/testing";
 import { createHttpServer } from "../server";
 import { uiRoutes } from "./routes";
 
@@ -15,10 +19,26 @@ const ID = {
   tenantId: "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11",
   userId: "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10",
 };
+const BOB_ID = { tenantId: ID.tenantId, userId: "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c" };
 const authenticator: Authenticator = {
   authenticate: async (req: IncomingMessage) =>
-    req.headers["x-test-user"] === "alice" ? ID : null,
+    req.headers["x-test-user"] === "alice"
+      ? ID
+      : req.headers["x-test-user"] === "bob"
+        ? BOB_ID
+        : null,
 } as never;
+const CHAT = "00000000-0000-4000-8000-0000000000c1";
+const CHAT_NO_HEAD = "00000000-0000-4000-8000-0000000000c2";
+const GONE_DOC = "00000000-0000-4000-8000-0000000000d9";
+const turnFactCalls: unknown[] = [];
+const ownsCalls: [string, string][] = [];
+const target = (r: { userId: string; chatId: string; ord: number }) => ({
+  experienceId: turnExperienceId(r),
+  intent: TURN_INTENT,
+  sourceKind: "turn-visuals",
+});
+const at = () => "2026-11-08T10:00:00.000Z";
 const MINE = "00000000-0000-4000-8000-0000000000a1";
 const MINE_EMPTY = "00000000-0000-4000-8000-0000000000a2";
 const THEIRS = "00000000-0000-4000-8000-0000000000b1";
@@ -46,6 +66,11 @@ beforeAll(async () => {
       readers: {} as never,
       lineage,
       owns: async (_identity, id) => id === MINE || id === MINE_EMPTY,
+      ownsChat: async (identity, id) => {
+        ownsCalls.push([identity.userId, id]);
+        return identity.userId === ID.userId && (id === CHAT || id === CHAT_NO_HEAD); // alice's chats; bob owns none
+      },
+      ownedDocuments: async (_identity, ids) => new Set(ids.filter((d) => d !== GONE_DOC)),
       readersFor: (identity) => {
         builtFor.push(identity);
         return {
@@ -70,7 +95,19 @@ beforeAll(async () => {
               },
             ];
           },
-          turnFacts: async () => null,
+          turnFacts: async (a) => {
+            turnFactCalls.push(a);
+            return [
+              {
+                kind: "figure",
+                label: "Revenue",
+                value: 4242,
+                unit: "USD",
+                chunkIds: [],
+                ordinal: 0,
+              },
+            ];
+          },
         };
       },
     }),
@@ -330,5 +367,103 @@ describe("GET /api/ui/documents/:id/detail", () => {
     expect(results[0]?.state).toBe("error");
     expect(log).toHaveBeenCalledWith("ui finding version-mismatch");
     log.mockRestore();
+  });
+});
+
+describe("GET /api/ui/chats/:id/turns/:ord/visuals", () => {
+  beforeAll(async () => {
+    // alice's head, and a head on the same chat id under bob's user id: only the owner check can keep bob out
+    await commitPlanTo(
+      lineage,
+      target({ userId: ID.userId, chatId: CHAT, ord: 4 }),
+      await aTurnPlan("headline", "Revenue"),
+      at,
+    );
+    await commitPlanTo(
+      lineage,
+      target({ userId: BOB_ID.userId, chatId: CHAT, ord: 4 }),
+      await aTurnPlan("headline", "Revenue"),
+      at,
+    );
+    // a head whose only widget binds a document that is no longer the caller's: it drops out, nothing survives
+    const model = scriptedPlannerModel([
+      JSON.stringify({
+        summary: "s",
+        nodes: [
+          {
+            id: "g1",
+            type: "KeyFigure",
+            label: "Gone",
+            span: 4,
+            props: {},
+            binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" },
+          },
+        ],
+      }),
+    ]);
+    const gone = await planTurn(
+      new ReferencePlanner({ model, modelId: "test" }),
+      [
+        {
+          fact: { kind: "figure", label: "Gone", value: 1, chunkIds: [], ordinal: 0 },
+          origin: { kind: "doc", documentId: GONE_DOC },
+        },
+      ],
+      recording(),
+    );
+    await commitPlanTo(lineage, target({ userId: ID.userId, chatId: CHAT, ord: 6 }), gone, at);
+  });
+  it("serves the compiled turn visuals to the owner, uncacheable", async () => {
+    const res = await get(`/api/ui/chats/${CHAT}/turns/4/visuals?surface=web`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const body = UiViewResponse.parse(await res.json());
+    expect(body.view).toBe("turn");
+    expect(body.inventory.handles.length).toBeGreaterThan(0);
+  });
+  it("is 404 for a user who does not own the chat even though a head exists under their id: the owner check is what refuses", async () => {
+    ownsCalls.length = 0;
+    expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "bob")).status).toBe(404);
+    expect(ownsCalls).toEqual([[BOB_ID.userId, CHAT]]);
+  });
+  it("is 401 without a session, 404 for a chat or turn without a head, a malformed id or ord, and a head none of whose widgets survive; 400 for an unknown surface", async () => {
+    expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "")).status).toBe(401);
+    expect((await get(`/api/ui/chats/${CHAT_NO_HEAD}/turns/4/visuals`)).status).toBe(404);
+    expect((await get(`/api/ui/chats/${CHAT}/turns/5/visuals`)).status).toBe(404); // no head for that ord
+    expect((await get(`/api/ui/chats/${CHAT}/turns/6/visuals`)).status).toBe(404); // its only document is gone
+    for (const bad of ["x", "0", "01", "-1"])
+      expect((await get(`/api/ui/chats/${CHAT}/turns/${bad}/visuals`)).status, bad).toBe(404);
+    expect((await get("/api/ui/chats/not-a-uuid/turns/4/visuals")).status).toBe(404);
+    expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals?surface=paper`)).status).toBe(400);
+  });
+});
+
+describe("POST /api/ui/hydrate with a turn", () => {
+  it("hydrates the turn's extracted fact for its owner", async () => {
+    const view = UiViewResponse.parse(
+      await (await get(`/api/ui/chats/${CHAT}/turns/4/visuals?surface=web`)).json(),
+    );
+    const handle = view.inventory.handles[0]?.handle as string;
+    const res = await post({
+      turn: { chatId: CHAT, ord: 4 },
+      requests: [
+        { experienceId: view.experienceId, versionHash: view.versionHash, handle, params: {} },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const { results } = (await res.json()) as { results: { state: string }[] };
+    expect(results[0]?.state).toBe("ready");
+    expect(turnFactCalls).toContainEqual({ chatId: CHAT, ord: 4 });
+  });
+  it("is 404 for a user who does not own the chat, and for a turn without a head", async () => {
+    const req = { experienceId: "e", versionHash: "h", handle: "fact-0", params: {} };
+    ownsCalls.length = 0;
+    expect((await post({ turn: { chatId: CHAT, ord: 4 }, requests: [req] }, "bob")).status).toBe(
+      404,
+    );
+    expect(ownsCalls).toEqual([[BOB_ID.userId, CHAT]]);
+    expect((await post({ turn: { chatId: CHAT_NO_HEAD, ord: 4 }, requests: [req] })).status).toBe(
+      404,
+    );
   });
 });

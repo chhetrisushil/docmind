@@ -10,6 +10,7 @@ import { getDocument, listDocuments, toDto } from "../documents/repo";
 import { type SourceDeps, readSource } from "../documents/source";
 import { isDocumentGone } from "../flows/ingest-document/errors";
 import type { VisualFactStore } from "../flows/visualize-document/pgFacts";
+import type { TurnFactStore } from "../flows/visualize-turn/pgTurnFacts";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { STATUS_MESSAGES, UPLOADED } from "../status/model";
 
@@ -20,6 +21,7 @@ export interface UiReaderDeps {
   blobs: SourceDeps["blobs"];
   registry: SourceDeps["registry"];
   visualFacts: VisualFactStore;
+  turnFacts: TurnFactStore;
 }
 
 const PAGE = 100;
@@ -141,9 +143,14 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
       }
     },
 
-    // Task 10 wires this to the turn's stored facts.
-    async turnFacts() {
-      return null;
+    async turnFacts({ chatId, ord }) {
+      const facts = await deps.turnFacts.list({
+        tenantId: identity.tenantId,
+        userId: identity.userId,
+        chatId,
+        ord,
+      });
+      return facts.length === 0 ? null : facts;
     },
   };
 }

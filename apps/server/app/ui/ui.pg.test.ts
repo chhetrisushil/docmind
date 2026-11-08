@@ -17,6 +17,7 @@ import {
 import type { Chunk } from "../flows/ingest-document/chunker";
 import { PgChunkStore } from "../flows/ingest-document/pgChunks";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
+import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import { ingestRun } from "../status/testing";
 import { readersFor } from "./readers";
 
@@ -233,6 +234,7 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
         },
         registry: h.wiring.registry,
         visualFacts: new PgVisualFacts(h.app, fields),
+        turnFacts: new PgTurnVisualFacts(h.app, fields),
       },
       ALICE,
     );

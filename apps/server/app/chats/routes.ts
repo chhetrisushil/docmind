@@ -35,6 +35,7 @@ import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
 import { chatReasoningRoutes } from "./reasoningRoutes";
 import { insertChat, listChats, softDeleteChat } from "./sessions";
+import type { TurnHeads } from "./turnHeads";
 import type { ChatRef } from "./turnItems";
 import { chatVisualizeRoutes } from "./visualizeRoutes";
 import type { ChatWiring } from "./wiring";
@@ -51,6 +52,8 @@ export interface ChatRouteDeps {
   reasoning: ReplyReasoning;
   /** Called by the send route for an untitled chat after a message was accepted. Absent without a title model. */
   titles?: Pick<TitleStarter, "fire">;
+  /** Which turns have visuals (absent without the visuals lineage): marks `hasVisuals` on history and live messages. */
+  heads?: TurnHeads;
   /** On-demand visuals (absent without the visuals flow): the starter, the turn reader and the per-user limiter. */
   visualize?: {
     starter: Pick<TurnVisualsStarter, "visualize">;

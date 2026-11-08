@@ -121,6 +121,8 @@ export const ChatMessageDto = z.object({
   /** Only on a failed assistant message (also in its SSE `message` frame). */
   failureReason: ChatFailureReason.optional(),
   createdAt: IsoDateTime,
+  /** Whether the turn has a visuals head: true only for a complete, cited assistant message whose visuals exist; false for every other message. */
+  hasVisuals: z.boolean(),
 });
 export type ChatMessageDto = z.infer<typeof ChatMessageDto>;
 

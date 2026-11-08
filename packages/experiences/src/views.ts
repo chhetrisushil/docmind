@@ -323,6 +323,17 @@ export function turnWithVisuals(
   return build({ id: "docmind.turn", objective: "Answer visuals", children: kept, providers });
 }
 
+/** The distinct documents the planner's providers name by their stored-fact pins, in provider order. */
+export function documentsOfVisuals(visuals: Experience): string[] {
+  const out = new Set<string>();
+  for (const p of Object.values(visuals.providers)) {
+    const step = p.executionGraph[0];
+    const ref = step ? factRefOfPin(step.toolName, step.toolSchemaHash ?? "") : null;
+    if (ref?.kind === "doc") out.add(ref.documentId);
+  }
+  return [...out];
+}
+
 const sessions = (): Experience =>
   build({
     id: "docmind.sessions",

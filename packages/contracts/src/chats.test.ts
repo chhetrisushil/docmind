@@ -62,7 +62,16 @@ describe("chat contracts", () => {
     steps: [{ name: "search_docs", label: 'Searched documents: "Q3"', count: 8 }],
     outcome: null,
     createdAt: "2026-10-18T10:00:00.000Z",
+    hasVisuals: false,
   };
+
+  it("requires hasVisuals as a boolean", () => {
+    expect(ChatMessageDto.parse({ ...message, hasVisuals: true }).hasVisuals).toBe(true);
+    expect(ChatMessageDto.parse({ ...message, hasVisuals: false }).hasVisuals).toBe(false);
+    const { hasVisuals: _omit, ...missing } = message;
+    expect(ChatMessageDto.safeParse(missing).success).toBe(false);
+    expect(ChatMessageDto.safeParse({ ...message, hasVisuals: "yes" }).success).toBe(false);
+  });
 
   it("keeps locator fields it does not know yet", () => {
     expect(ChatMessageDto.parse(message).citations[0]?.locator).toEqual({ kind: "page", page: 4 });
@@ -261,6 +270,7 @@ describe("chat contracts", () => {
       steps: [],
       outcome: null,
       createdAt: "2026-10-21T10:00:00.000Z",
+      hasVisuals: false,
     };
     for (const failureReason of [
       "rate-limited",
