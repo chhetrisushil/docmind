@@ -1,6 +1,6 @@
 # Document connections: live cross-document visuals (design)
 
-Date: 2026-11-08. Status: draft for review.
+Date: 2026-11-08. Status: accepted; as built (see the As built section).
 
 ## 1. Goal
 

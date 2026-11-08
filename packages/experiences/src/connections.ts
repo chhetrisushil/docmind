@@ -81,9 +81,22 @@ export function bindsConnections(visuals: Experience, handle: string): boolean {
 /** A reader's answer cut to the caps, rebuilt field by field so nothing it adds survives. */
 export const clipConnections = (raw: RawConnections): RawConnections => ({
   documentId: raw.documentId,
-  related: raw.related.slice(0, CONNECTIONS_CAPS.related),
+  related: raw.related.slice(0, CONNECTIONS_CAPS.related).map((r) => ({
+    documentId: r.documentId,
+    title: r.title,
+    kinds: {
+      entity: r.kinds.entity,
+      reference: r.kinds.reference,
+      similar: r.kinds.similar,
+    },
+    strength: r.strength,
+  })),
   entities: raw.entities.slice(0, CONNECTIONS_CAPS.entities).map((e) => ({
-    ...e,
-    documents: e.documents.slice(0, CONNECTIONS_CAPS.entityDocuments),
+    entityId: e.entityId,
+    name: e.name,
+    kind: e.kind,
+    documents: e.documents
+      .slice(0, CONNECTIONS_CAPS.entityDocuments)
+      .map((d) => ({ documentId: d.documentId, title: d.title })),
   })),
 });

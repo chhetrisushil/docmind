@@ -65,11 +65,18 @@ SELECT dd.id AS document_id, dd.title_enc, n.entity, n.reference, n.similar, n.s
  ORDER BY n.strength DESC, n.n DESC, dd.id
  LIMIT $3`;
 
+/** Candidate entities per slot of the entity cap: the readiness join drops some, so 3 times the cap are walked. */
+export const ENTITY_CANDIDATES = 3;
+
 /**
- * $1 owner, $2 document, $3 entity limit, $4 documents per entity. The owner's entities of this document's chunks
+ * $1 owner, $2 document, $3 entity limit, $4 documents per entity, $5 candidate limit (`ENTITY_CANDIDATES` times $3). The owner's entities of this document's chunks
  * (`chunks_document_ordinal_key`, the `chunk_entities` primary key, `entities`), then the (entity, document) pairs through
  * the other chunks of each entity (`chunk_entities_entity_idx`), all MATERIALIZED so they stay a walk from this document.
- * Rarity (the number of other documents) is counted over those pairs, before the readiness join; an entity whose other
+ * A hub entity (on a large share of the library) must not make the walk library-sized, so the entities are first ranked by
+ * their chunk mention count (one index count each, `chunk_entities_entity_idx`) and only the rarest $5 go on to the pairs and
+ * the readiness join. A document has at most as many chunks as an entity has mentions of it, so mentions are a cheap proxy
+ * for the document count; the factor of ENTITY_CANDIDATES leaves room for the candidates the readiness join drops. Rarity
+ * (the number of other documents) is then counted over those pairs, before the readiness join; an entity whose other
  * documents are none ready, or none the owner's, drops out at that join. Titles are sealed, so SQL keeps the newest
  * documents per entity and the reader orders them by title.
  */
@@ -80,9 +87,16 @@ export const ENTITIES_SQL = `WITH mine AS MATERIALIZED (
     JOIN chunk_entities ce ON ce.tenant_id = mc.tenant_id AND ce.chunk_id = mc.id
     JOIN entities en ON en.tenant_id = ce.tenant_id AND en.id = ce.entity_id AND en.owner_id = $1
    WHERE me.id = $2 AND me.owner_id = $1),
+sized AS MATERIALIZED (
+  SELECT m.tenant_id, m.entity_id,
+         (SELECT count(*) FROM chunk_entities x
+           WHERE x.tenant_id = m.tenant_id AND x.entity_id = m.entity_id) AS mentions
+    FROM mine m),
+cand AS MATERIALIZED (
+  SELECT z.tenant_id, z.entity_id FROM sized z ORDER BY z.mentions, z.entity_id LIMIT $5),
 pairs AS MATERIALIZED (
   SELECT m.entity_id, oc.tenant_id, oc.document_id
-    FROM mine m
+    FROM cand m
     JOIN chunk_entities oe ON oe.tenant_id = m.tenant_id AND oe.entity_id = m.entity_id
     JOIN chunks oc ON oc.tenant_id = oe.tenant_id AND oc.id = oe.chunk_id AND oc.document_id <> $2
    GROUP BY m.entity_id, oc.tenant_id, oc.document_id),
@@ -151,6 +165,7 @@ export async function readConnections(
       id,
       CONNECTIONS_CAPS.entities,
       CONNECTIONS_CAPS.entityDocuments,
+      CONNECTIONS_CAPS.entities * ENTITY_CANDIDATES,
     ]);
     return { related: related.rows, entities: entities.rows };
   });
