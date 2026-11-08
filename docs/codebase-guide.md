@@ -57,6 +57,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `apps/server/app/documents/` | Upload, list, get, delete, retry routes; content sniffing; limits; starting and sweeping ingestion |
 | `apps/server/app/flows/ingest-document/` | The durable ingestion flow and one file per step in `steps/` |
 | `apps/server/app/flows/visualize-document/` | The flow that runs after ingest turns a document ready: `extract.ts` (LLM facts, grounding), `pgFacts.ts` (sealed `visual_facts`), `planner.ts` and `plan.ts` (the planner decision), `lineage.ts` and `commit.ts` (the sealed lineage head), `start.ts` (starter, boot sweep, cancel) |
+| `apps/server/app/flows/visualize-turn/` | Chat visuals: `readTurn.ts` and `coverage.ts` (cited chunks, which stored facts cover them), `steps.ts` (turn-load, turn-extract, turn-facts), `plan.ts` and `commit.ts`, `trigger.ts` and `start.ts` (the turn-settled filter, the starter, on-demand re-runs), `pgTurnFacts.ts` (sealed `turn_visual_facts`) |
 | `apps/server/app/flows/chat-title/` | The small flow that names a chat from its first question |
 | `apps/server/app/chats/` | Chat sessions, the `doc-chat` agent, tools (`tools/`), retrieval (`retrieval/`), SSE stream, citations, reasoning, the rolling summary (`summaryChoice.ts` seals Loom's summary decision, which would otherwise land in the log in the clear; `summarizer.ts` keeps a failing summarizer from ending a chat) |
 | `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers |
@@ -155,6 +156,7 @@ Sending a message only appends a turn to a Loom conversation and answers 202. Th
 6. **Citations.**
     1. The stored reply is the model's raw text. `chats/citations.ts` validates each `[[id]]` against the passages that turn actually retrieved, and drops ungrounded ones.
     2. Valid citations become numbered markers. Clicking one opens the Sources panel (the `sources` view), and from there the passage in its document.
+    3. Once the reply has settled, `flows/visualize-turn/trigger.ts` decides whether to compose visuals for it; `chats/visualizeRoutes.ts` does so on demand, and `web/src/components/dm-turn-visuals.ts` draws the strip.
 7. **History.** `chats/messages.ts` serves `GET /api/chats/:id/messages`: pages of turns merged with the sealed turn items (citations, tool steps) and the reasoning. Reopening an old chat continues the same conversation.
 
 ## Ideas that run through everything
