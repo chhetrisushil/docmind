@@ -72,7 +72,7 @@ describe("the visuals catalogue", () => {
         (c) =>
           c.kind === "docmind" &&
           c.toolName === "visual.facts" &&
-          c.toolSchemaHash === "docmind:visual.facts@1" &&
+          c.toolSchemaHash === `docmind:visual.facts@1#fact-${c.handle.slice(5)}` &&
           c.sensitivity === "sensitive" &&
           c.sampleOutput !== undefined,
       ),

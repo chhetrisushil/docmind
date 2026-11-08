@@ -3,7 +3,6 @@ import type { AddressInfo } from "node:net";
 import type { Authenticator } from "@docmind/auth";
 import { UiViewResponse } from "@docmind/contracts";
 import { createViews } from "@docmind/experiences";
-import { factProvider } from "@docmind/experiences";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -218,36 +217,12 @@ describe("POST /api/ui/hydrate", () => {
 describe("GET /api/ui/documents/:id/detail", () => {
   const detail = async (id: string, query = "", user = "alice") =>
     get(`/api/ui/documents/${id}/detail${query}`, user);
-  // The head as detailWithVisuals reads it: a KeyFigure bound to the `fact-0` handle. (The scripted planner mints
-  // `p-<hash>` handles instead, which the per-document detail does not recognise: see the task report.)
   const commit = async (id: string) => {
-    const ops = [
-      {
-        type: "remapProvider",
-        handle: "fact-0",
-        spec: { ...factProvider(0, "planner-guess", "KeyFigure"), handle: "fact-0" },
-      },
-      {
-        type: "insertNode",
-        parentId: "root",
-        node: {
-          id: "revenue",
-          order: "a",
-          kind: "semantic",
-          type: "KeyFigure",
-          typeVersion: "1.0.0",
-          span: 4,
-          label: { key: "revenue.label", fallback: "Revenue" },
-          props: {},
-        },
-      },
-      { type: "bindProvider", nodeId: "revenue", handle: "fact-0" },
-    ];
-    const real = await aPlan("revenue", "Revenue");
+    const plan = await aPlan("revenue", "Revenue");
     await commitPlan(
       lineage,
       { tenantId: ID.tenantId, userId: ID.userId, documentId: id },
-      { ...real, ops } as never,
+      plan,
       () => "2026-11-08T10:00:00.000Z",
     );
   };

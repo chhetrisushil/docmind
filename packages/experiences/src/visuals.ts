@@ -77,7 +77,9 @@ export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[]
     kind: KIND,
     toolName: TOOL,
     toolVersion: "1.0.0",
-    toolSchemaHash: PINS[TOOL],
+    // One pin per fact: the planner mints its provider handle from the pin, so two facts never share a handle and the
+    // ordinal can be read back from the committed provider (R26). The invoker still checks against `PINS[TOOL]`.
+    toolSchemaHash: `${PINS[TOOL]}#fact-${f.ordinal}`,
     description:
       f.kind === "series"
         ? "a series of numbers from the document"

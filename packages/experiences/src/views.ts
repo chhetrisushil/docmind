@@ -186,7 +186,19 @@ const detail = (): Experience =>
 
 const VISUAL_ENTRIES = new Set<string>(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
 const MAX_SIBLINGS = 26;
-const FACT_HANDLE = /^fact-(\d+)$/;
+const FACT_HANDLE = /^fact-(0|[1-9]\d*)$/;
+const FACT_PIN = /^docmind:visual\.facts@1#fact-(0|[1-9]\d*)$/;
+
+/** The fact a bound node reads: its `fact-<n>` handle, or the `#fact-<n>` pin of the planner's provider for that handle. */
+function factOrdinal(visuals: Experience, handle: string): number | null {
+  const direct = FACT_HANDLE.exec(handle);
+  if (direct) return Number(direct[1]);
+  const step = Object.hasOwn(visuals.providers, handle)
+    ? visuals.providers[handle]?.executionGraph[0]
+    : undefined;
+  const m = step?.toolName === "visual.facts" ? FACT_PIN.exec(step.toolSchemaHash ?? "") : null;
+  return m ? Number(m[1]) : null;
+}
 
 /**
  * The per-document detail: the static detail plus a Visuals tab holding a planner-composed
@@ -207,19 +219,27 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
         .filter((c): c is Child => c !== null);
       return children.length === 0 ? null : { ...n, id: `v-${n.id}`, children };
     }
-    const m = n.binding && FACT_HANDLE.exec(n.binding.handle);
-    if (!n.binding || !m || Number(m[1]) >= MAX_VISUAL_FACTS || !VISUAL_ENTRIES.has(n.type))
+    const ordinal = n.binding ? factOrdinal(visuals, n.binding.handle) : null;
+    if (
+      !n.binding ||
+      ordinal === null ||
+      ordinal >= MAX_VISUAL_FACTS ||
+      !VISUAL_ENTRIES.has(n.type)
+    )
       return null;
     const entry = n.type as VisualEntry;
-    const base = n.binding.handle;
+    const base = `fact-${ordinal}`;
     let handle = base;
     for (let i = 0; (entryOf.get(handle) ?? entry) !== entry; i++)
       handle = `${base}-${String.fromCharCode(0x62 + i)}`;
     if (!entryOf.has(handle)) {
       entryOf.set(handle, entry);
-      providers[handle] = { ...factProvider(Number(m[1]), documentId, entry), handle };
+      providers[handle] = { ...factProvider(ordinal, documentId, entry), handle };
     }
-    return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle } };
+    // The planner marks its bindings `sensitive` (so its summary is not withheld); served to the document's owner, that
+    // class would make hydration treat the handle as restricted and refuse it, so the served binding does not carry it.
+    const { sensitivity: _dropped, ...binding } = n.binding;
+    return { ...n, id: `v-${n.id}`, binding: { ...binding, handle } };
   };
   const kept = (visuals.root as ContainerNode).children
     .slice(0, MAX_SIBLINGS)
