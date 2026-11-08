@@ -98,7 +98,7 @@ docker run --rm \
 - The migration connection must be direct or session-mode, not a transaction pooler (cloud-scaling.md S8).
 - Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
   role on, the first boot after it re-plans every visualized document once (one planner call each over its stored facts, at
-  most 2 at a time, no extraction) to add the Connections section; it is stamped, so later boots do not repeat it.
+  most 2 at a time, no extraction) to add the Connections section; it is stamped when it completes, so later boots do not repeat it (a re-plan whose end is lost to a crash is re-planned once more).
 
 ## 4. Environment of the server
 
