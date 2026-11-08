@@ -72,15 +72,14 @@ export interface VisualsStarter {
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
    */
   sweep(signal?: AbortSignal): Promise<number>;
-  /** Cancels the visualize executions of the document's generation and the one before it (as ingest's cancel). Unknown ones are fine. */
-  cancel(identity: Identity, documentId: string, generation: number): Promise<void>;
+  /** Cancels the visualize executions of the document's generation and the one before it (as ingest's cancel). Unknown ones are fine. `reason` is recorded in the log: a fixed word, never content. */
+  cancel(identity: Identity, documentId: string, generation: number, reason: string): Promise<void>;
+  /** Resolves when the document's pending starts have settled, so a cancel never runs before a start lands. */
+  settle(identity: Identity, documentId: string): Promise<void>;
 }
 
 const logClass = (what: string) => (err: unknown) =>
   console.error(what, err instanceof Error ? err.constructor.name : typeof err);
-
-// A fixed reason: it is recorded in the log, so it never names the document.
-const CANCEL_REASON = "document-deleted";
 
 export interface VisualsStarterOptions {
   /** The boot sweep's source; absent: the sweep does nothing. */
@@ -108,6 +107,9 @@ export function loomVisualsStarter(
     onError = logClass("visualize start failed"),
   } = options;
   const pending = new Set<Promise<unknown>>();
+  // Pending starts by user and lower-cased document id (never logged), for `settle`.
+  const byDocument = new Map<string, Set<Promise<unknown>>>();
+  const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.toLowerCase()}`;
   const start = async (ref: VisualizeRef, generation: number): Promise<ExecutionHandle | null> => {
     if (!enabled) return null;
     const input = VisualizeInput.parse({
@@ -126,17 +128,33 @@ export function loomVisualsStarter(
       throw err;
     }
   };
-  const fire = (ref: VisualizeRef, generation: number) => {
+  const fire = (ref: VisualizeRef, generation: number): Promise<unknown> => {
     const run = start(ref, generation).then(
       () => undefined,
       (err: unknown) => onError(err),
     );
     pending.add(run);
-    void run.finally(() => pending.delete(run));
+    const key = keyOf(ref.userId, ref.documentId);
+    const runs = byDocument.get(key) ?? new Set<Promise<unknown>>();
+    byDocument.set(key, runs);
+    runs.add(run);
+    void run.finally(() => {
+      pending.delete(run);
+      runs.delete(run);
+      if (runs.size === 0 && byDocument.get(key) === runs) byDocument.delete(key);
+    });
+    return run;
   };
   return {
     start,
-    fire,
+    fire: (ref, generation) => void fire(ref, generation),
+    async settle(identity, documentId) {
+      while (true) {
+        const runs = byDocument.get(keyOf(identity.userId, documentId));
+        if (!runs || runs.size === 0) return;
+        await Promise.all([...runs]);
+      }
+    },
     async idle() {
       while (pending.size > 0) await Promise.all([...pending]);
     },
@@ -146,11 +164,14 @@ export function loomVisualsStarter(
       try {
         for (let after = NIL_UUID; !signal?.aborted; ) {
           const page = await ready(after, pageSize);
+          const starts: Promise<unknown>[] = [];
           for (const d of page) {
             if (signal?.aborted) break;
-            fire(d, d.generation);
+            starts.push(fire(d, d.generation));
             fired++;
           }
+          // Bounded: this page's starts finish before the next page is read.
+          await Promise.all(starts);
           const last = page[page.length - 1];
           if (!last || page.length < pageSize) break;
           after = last.documentId;
@@ -160,12 +181,12 @@ export function loomVisualsStarter(
       }
       return fired;
     },
-    async cancel(identity, documentId, generation) {
+    async cancel(identity, documentId, generation, reason) {
       const principal = { tenant: identity.tenantId, actor: identity.userId };
       for (let g = Math.max(1, generation - 1); g <= generation; g++) {
         const executionId = visualizeExecutionId(identity.userId, documentId, g);
         try {
-          await runtime.cancel(executionId, CANCEL_REASON, { principal });
+          await runtime.cancel(executionId, reason, { principal });
         } catch (err) {
           // Loom throws a plain Error (no class) for an execution that never existed; match its exact message for this id only.
           if (

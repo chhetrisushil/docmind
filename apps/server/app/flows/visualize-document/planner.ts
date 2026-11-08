@@ -20,7 +20,7 @@ export function loadPlannerDecisionKey(
   visualsOn: boolean,
 ): Uint8Array | undefined {
   const raw = env[KEY_VARIABLE]?.trim();
-  if (!visualsOn && !raw) return undefined;
+  if (!visualsOn) return undefined; // the role is off: nothing is read or validated
   if (!raw)
     throw new StartupConfigError(
       `${KEY_VARIABLE} is not set (required while the visuals role is on)`,

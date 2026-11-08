@@ -41,10 +41,10 @@ import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { PgChunkStore } from "./flows/ingest-document/pgChunks";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
-import { PgStepGuard } from "./flows/ingest-document/pgGuard";
 import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { visualsLineage } from "./flows/visualize-document/lineage";
 import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
+import { PgVisualizeGuard } from "./flows/visualize-document/pgGuard";
 import { visualsPlanner } from "./flows/visualize-document/planner";
 import { loomVisualsStarter, pgReadyDocuments } from "./flows/visualize-document/start";
 import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
@@ -196,7 +196,7 @@ export function buildServer(options: ComposeOptions) {
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
     deps: {
-      guard: new PgStepGuard(pool),
+      guard: new PgVisualizeGuard(pool),
       chunks: new PgChunkStore(pool, fields),
       facts: new PgVisualFacts(pool, fields),
       lineage: visualsLineage({

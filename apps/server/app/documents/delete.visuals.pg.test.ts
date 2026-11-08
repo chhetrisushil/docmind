@@ -29,7 +29,11 @@ describe.skipIf(!PG_URL)(
             },
           },
           visuals: {
-            cancel: async (_identity, documentId, generation) => {
+            settle: async (_identity, documentId) => {
+              visualCalls.push(`settle:${documentId}`);
+            },
+            cancel: async (_identity, documentId, generation, reason) => {
+              expect(reason).toBe("document-deleted");
               visualCalls.push(`${documentId}:${generation}`);
               if (failVisuals > 0) {
                 failVisuals--;
@@ -65,7 +69,7 @@ describe.skipIf(!PG_URL)(
       const doc = await create("v.txt", TEXT("visuals delete"));
       const generation = await generationOf(doc.id);
       expect((await del(doc.id)).status).toBe(204);
-      expect(visualCalls).toEqual([`${doc.id}:${generation}`]);
+      expect(visualCalls).toEqual([`settle:${doc.id}`, `${doc.id}:${generation}`]);
       expect(await exists(doc.id)).toBe(false);
     });
 
@@ -74,7 +78,11 @@ describe.skipIf(!PG_URL)(
       const generation = await generationOf(doc.id);
       bumpOnIngestCancel = true;
       expect((await del(doc.id)).status).toBe(204);
-      expect(visualCalls).toEqual([`${doc.id}:${generation}`, `${doc.id}:${generation + 1}`]);
+      expect(visualCalls).toEqual([
+        `settle:${doc.id}`,
+        `${doc.id}:${generation}`,
+        `${doc.id}:${generation + 1}`,
+      ]);
     });
 
     it("deletes nothing when the visualize cancel fails, and repeating the delete finishes the job", async () => {
@@ -85,7 +93,7 @@ describe.skipIf(!PG_URL)(
       expect(await exists(doc.id)).toBe(true);
       expect((await del(doc.id)).status).toBe(204);
       expect(await exists(doc.id)).toBe(false);
-      expect(visualCalls).toHaveLength(2);
+      expect(visualCalls.filter((c) => !c.startsWith("settle:"))).toHaveLength(2);
     });
 
     it("another user's document is not cancelled for them", async () => {

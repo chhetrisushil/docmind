@@ -2,6 +2,7 @@ import type { Lineage } from "@loom-ui/lineage";
 import type { Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
+import { visualizeGenerationOf } from "../../status/model";
 import type { ChunkStore } from "../ingest-document/pgChunks";
 import type { StepGuard, StepSeams } from "../ingest-document/stepEffect";
 import { type CommitInput, commitEffect } from "./commit";
@@ -26,10 +27,14 @@ export interface VisualizeDeps extends StepSeams {
 }
 
 /** The effect of each step, keyed by step id (which is also its tool id). */
-export const visualizeEffects = (deps: VisualizeDeps): Record<string, Effect> => ({
-  "visualize-extract": extractEffect(deps) as unknown as Effect,
-  "visualize-load": loadEffect(deps) as unknown as Effect,
-  "visualize-commit": commitEffect(deps) as unknown as Effect<CommitInput>,
-});
+export const visualizeEffects = (seams: VisualizeDeps): Record<string, Effect> => {
+  // The D1 generation guard: a visualize execution of a superseded ingest generation must not write.
+  const deps = { ...seams, generationOf: visualizeGenerationOf };
+  return {
+    "visualize-extract": extractEffect(deps) as unknown as Effect,
+    "visualize-load": loadEffect(deps) as unknown as Effect,
+    "visualize-commit": commitEffect(deps) as unknown as Effect<CommitInput>,
+  };
+};
 
 export type { VisualizeRef };

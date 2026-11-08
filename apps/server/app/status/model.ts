@@ -46,6 +46,12 @@ const VISUALIZE_EXECUTION = new RegExp(
 export const isVisualizeExecution = (executionId: string): boolean =>
   VISUALIZE_EXECUTION.test(executionId);
 
+/** The ingest generation a visualize execution ran for (no suffix is 1); `undefined` for an id that is not one. */
+export const visualizeGenerationOf = (executionId: string): number | undefined => {
+  const match = VISUALIZE_EXECUTION.exec(executionId);
+  return match ? Number(match[3] ?? 1) : undefined;
+};
+
 export const ingestKeyOf = (executionId: string): string | undefined =>
   INGEST_EXECUTION.exec(executionId)?.[2];
 export const ingestScopeOf = (executionId: string): string | undefined =>
