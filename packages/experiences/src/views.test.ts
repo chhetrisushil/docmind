@@ -4,6 +4,7 @@ import {
   type Experience,
   type ExperienceNode,
   type Operation,
+  type ProviderSpec,
   type SemanticNode,
   chatCatalogEntries,
   compile,
@@ -15,7 +16,8 @@ import { describe, expect, it } from "vitest";
 import { SOURCES_VIEW } from "./a2ui";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
-import { EXPERIENCES, detailWithVisuals } from "./views";
+import { provider } from "./providers";
+import { EXPERIENCES, detailWithVisuals, turnWithVisuals } from "./views";
 import { factProvider, mergedCatalog } from "./visuals";
 
 const NAMES = ["library", "library-empty", "detail", "sessions", "chat", "sources"] as const;
@@ -380,5 +382,116 @@ describe("detailWithVisuals", () => {
       );
       expect(r.findings).toEqual([]);
     }
+  });
+});
+
+describe("turnWithVisuals", () => {
+  const CHAT = "00000000-0000-4000-8000-0000000000c1";
+  const A = "00000000-0000-4000-8000-00000000000a";
+  const B = "00000000-0000-4000-8000-00000000000b";
+  const node = (id: string, type: string, handle: string, order = "a"): SemanticNode =>
+    ({
+      id,
+      order,
+      kind: "semantic",
+      type,
+      typeVersion: "1.0.0",
+      span: 6,
+      props: {},
+      binding: { handle, priority: "P0" },
+    }) as SemanticNode;
+  /** What the planner commits: a provider per capability whose single step carries that capability's pin. */
+  const planned = (handle: string, tool: "visual.facts" | "turn.facts", pin: string) => {
+    const spec = provider(handle, { target: tool, args: {}, reshaper: "x" });
+    return {
+      ...spec,
+      executionGraph: [{ ...spec.executionGraph[0], toolName: tool, toolSchemaHash: pin }],
+    } as ProviderSpec;
+  };
+  const experience = (nodes: SemanticNode[], specs: ProviderSpec[]): Experience => {
+    const g = genesis({
+      experienceId: "docmind.turnvisuals",
+      intent: { objective: "Visuals", source: "user" },
+      meta: { author: "planner", createdAt: "2026-11-08T00:00:00Z", sourceKind: "code" },
+    });
+    const ops: Operation[] = [
+      ...specs.map((s) => ({ type: "remapProvider", handle: s.handle, spec: s }) as Operation),
+      ...nodes.map(
+        (n, i) =>
+          ({
+            type: "insertNode",
+            parentId: g.root.id,
+            node: { ...n, order: String.fromCharCode(0x61 + i) },
+          }) as Operation,
+      ),
+    ];
+    const r = replay(g, ops);
+    if (!r.ok) throw new Error("fixture does not replay");
+    return r.value;
+  };
+  const live = new Set([A, B]);
+
+  it("points each node at the document and ordinal its pin names, and a turn fact at the turn's own read", () => {
+    const e = experience(
+      [
+        node("n1", "KeyFigure", "p-a"),
+        node("n2", "FactTable", "p-b"),
+        node("n3", "FigureChart", "p-c"),
+      ],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-0`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${B}/fact-2`),
+        planned("p-c", "turn.facts", "docmind:turn.facts@1#fact-1"),
+      ],
+    );
+    const out = turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live) as Experience;
+    const steps = Object.values(out.providers).map((p) => [
+      p.executionGraph[0]?.toolName,
+      p.executionGraph[0]?.arguments,
+      (p.reshaping as { scriptRef: string }).scriptRef,
+    ]);
+    expect(steps).toEqual([
+      ["visual.facts", { id: A }, "visual-kpi-0"],
+      ["visual.facts", { id: B }, "visual-table-2"],
+      ["turn.facts", { chatId: CHAT, ord: 6 }, "visual-bar-1"],
+    ]);
+  });
+
+  it("drops a node whose document is no longer the user's, and everything when nothing is left", () => {
+    const e = experience(
+      [node("n1", "KeyFigure", "p-a"), node("n2", "KeyFigure", "p-b")],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-0`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${B}/fact-0`),
+      ],
+    );
+    const some = turnWithVisuals(e, { chatId: CHAT, ord: 6 }, new Set([A])) as Experience;
+    expect(Object.keys(some.providers)).toHaveLength(1);
+    expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, new Set())).toBeNull();
+    expect(turnWithVisuals(null, { chatId: CHAT, ord: 6 }, live)).toBeNull();
+  });
+
+  it("ignores a detail-page pin, a malformed pin and a provider the planner never declared", () => {
+    const e = experience(
+      [
+        node("n1", "KeyFigure", "p-a"),
+        node("n2", "KeyFigure", "p-b"),
+        node("n3", "KeyFigure", "p-missing"),
+      ],
+      [
+        planned("p-a", "visual.facts", "docmind:visual.facts@1#fact-0"),
+        planned("p-b", "visual.facts", "docmind:visual.facts@1#garbage"),
+      ],
+    );
+    expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
+  });
+
+  it("gives two entries over one fact separate providers", () => {
+    const e = experience(
+      [node("n1", "KeyFigure", "p-a"), node("n2", "FigureChart", "p-a")],
+      [planned("p-a", "turn.facts", "docmind:turn.facts@1#fact-0")],
+    );
+    const out = turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live) as Experience;
+    expect(Object.keys(out.providers).sort()).toEqual(["fact-0", "fact-0-b"]);
   });
 });

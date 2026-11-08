@@ -70,6 +70,7 @@ beforeAll(async () => {
               },
             ];
           },
+          turnFacts: async () => null,
         };
       },
     }),

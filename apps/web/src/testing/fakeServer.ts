@@ -202,6 +202,7 @@ export class FakeServer {
       const req = UiHydrateRequest.safeParse(body);
       if (!req.success) return fail(400, "invalid_request");
       const { requests, ...source } = req.data;
+      if ("turn" in source) return fail(404, "not_found"); // Task 11 teaches the web a turn source
       return json(200, { results: await this.ui.api.uiHydrate(source, requests) });
     }
     if (path === "/api/documents/events" && method === "GET") return this.open(path);
@@ -306,6 +307,7 @@ export class FakeServer {
           .reverse()
           .filter((c) => (c.title ?? "New chat").toLowerCase().includes(q.toLowerCase())),
       visualFacts: async () => null,
+      turnFacts: async () => null,
     };
   }
 

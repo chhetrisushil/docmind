@@ -73,3 +73,25 @@ describe("the UI plane contracts", () => {
     expect(UiHydrateResponse.safeParse({ results: "x" }).success).toBe(false);
   });
 });
+
+it("accepts a turn as a hydrate source and as a view name", () => {
+  const uuid = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+  const rq = { experienceId: "e", versionHash: "h", handle: "fact-0", params: {} };
+  expect(
+    UiHydrateRequest.safeParse({ turn: { chatId: uuid, ord: 6 }, requests: [rq] }).success,
+  ).toBe(true);
+  expect(
+    UiHydrateRequest.safeParse({ turn: { chatId: uuid, ord: 0 }, requests: [rq] }).success,
+  ).toBe(false);
+  expect(
+    UiHydrateRequest.safeParse({
+      turn: { chatId: uuid, ord: 1_000_000_000_000_000 },
+      requests: [rq],
+    }).success,
+  ).toBe(false);
+  expect(
+    UiHydrateRequest.safeParse({ turn: { chatId: "nope", ord: 6 }, requests: [rq] }).success,
+  ).toBe(false);
+  expect(UiViewResponse.shape.view.safeParse("turn").success).toBe(true);
+  expect(UiViewResponse.shape.view.safeParse("elsewhere").success).toBe(false);
+});

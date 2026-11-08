@@ -27,6 +27,7 @@ function setup(path = "/chats") {
     content: async () => null,
     source: async () => null,
     visualFacts: async () => null,
+    turnFacts: async () => null,
     chats: chatsReader,
   });
   const api = {

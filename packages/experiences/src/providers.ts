@@ -19,6 +19,7 @@ export const PINS = {
   "document.source": "docmind:document.source@1",
   "chats.list": "docmind:chats.list@1",
   "visual.facts": "docmind:visual.facts@1",
+  "turn.facts": "docmind:turn.facts@1",
   "host.published": "docmind:host.published@1",
 } as const;
 export type Target = keyof typeof PINS;

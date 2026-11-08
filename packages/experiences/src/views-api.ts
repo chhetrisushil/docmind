@@ -19,8 +19,8 @@ import {
 } from "./payload";
 import { KIND, PINS } from "./providers";
 import { reshapers } from "./reshapers";
-import { EXPERIENCES, detailWithVisuals } from "./views";
-import { OWNER_READ, mergedCatalog } from "./visuals";
+import { EXPERIENCES, detailWithVisuals, turnWithVisuals } from "./views";
+import { OWNER_READ, TURN_READ, mergedCatalog } from "./visuals";
 
 const MAX_BATCH = 32;
 /** Reads in flight at once for one POST: the app pool is shared with every other user. */
@@ -58,15 +58,30 @@ export interface Views {
    */
   documentExperience(documentId: string, visuals: Experience | null): Experience;
   /**
+   * The experience a chat turn's visuals are served as, or null when there is nothing to show, a document is no longer
+   * the user's, or the experience does not compile (on any surface). `turnPayload` and a `{ turn }` hydrate both use it.
+   */
+  turnExperience(
+    turn: { chatId: string; ord: number },
+    visuals: Experience | null,
+    liveDocuments: ReadonlySet<string>,
+  ): Experience | null;
+  turnPayload(
+    turn: { chatId: string; ord: number },
+    visuals: Experience | null,
+    liveDocuments: ReadonlySet<string>,
+    surface: SurfaceName,
+  ): ViewPayload | null;
+  /**
    * Answers handle loads for an experience the caller was served. `scope` "view" (default) is a static view;
-   * "document" is a `documentExperience`, served to its owner under their clearance (R27).
+   * "document" is a `documentExperience` and "turn" a `turnExperience`, served to their owner under their clearance (R27).
    */
   hydrateExperience(
     experience: Experience,
     requests: readonly HandleLoadRequest[],
     readers: UiReaders,
     principalId: string,
-    scope?: "view" | "document",
+    scope?: "view" | "document" | "turn",
   ): Promise<HandleLoadResult[]>;
   /** Answers handle loads for one view with the caller's readers. Surface-independent: values do not depend on how a view is drawn. */
   hydrate(
@@ -86,19 +101,19 @@ export function createViews(o: ViewsOptions): Views {
     principalId,
     scope = "view",
   ) => {
-    // A per-document detail uses the merged catalogue (it holds the visuals entries) and its owner's clearance.
-    const document = scope === "document";
+    // A per-document detail or a turn uses the merged catalogue (it holds the visuals entries) and its owner's clearance.
+    const owned = scope === "document" ? OWNER_READ : scope === "turn" ? TURN_READ : undefined;
     return [
       ...(await serveHandles(experience, requests, {
         invoker: createInvoker(readers),
         providers,
         reshapers,
         contentRefArgs: "none",
-        outputKinds: { catalog: document ? mergedCatalog() : DOCMIND_CATALOG, surface: "web" },
-        ...(document && {
-          viewer: OWNER_READ.viewer,
-          audience: OWNER_READ.audience,
-          declaredToolClasses: OWNER_READ.declaredToolClasses,
+        outputKinds: { catalog: owned ? mergedCatalog() : DOCMIND_CATALOG, surface: "web" },
+        ...(owned && {
+          viewer: owned.viewer,
+          audience: owned.audience,
+          declaredToolClasses: owned.declaredToolClasses,
         }),
         principalId,
         now: Date.now(),
@@ -130,6 +145,23 @@ export function createViews(o: ViewsOptions): Views {
       return EXPERIENCES.detail;
     }
   };
+  const turnExperience: Views["turnExperience"] = (turn, visuals, liveDocuments) => {
+    try {
+      const experience = turnWithVisuals(visuals, turn, liveDocuments);
+      if (experience === null) return null;
+      for (const surface of SURFACES) base.compileTurn(experience, surface);
+      return experience;
+    } catch (err) {
+      // Finding codes only, never a message (it may name the model's labels).
+      o.onFinding?.(
+        UNBOUND,
+        err instanceof DetailCompileError
+          ? err.codes.join(",") || "compile-failed"
+          : "compile-failed",
+      );
+      return null;
+    }
+  };
   return {
     names: base.names,
     surfaces: base.surfaces,
@@ -137,6 +169,11 @@ export function createViews(o: ViewsOptions): Views {
     documentExperience,
     documentPayload: (documentId, visuals, surface) =>
       base.compileDetail(documentExperience(documentId, visuals), surface),
+    turnExperience,
+    turnPayload: (turn, visuals, liveDocuments, surface) => {
+      const e = turnExperience(turn, visuals, liveDocuments);
+      return e === null ? null : base.compileTurn(e, surface);
+    },
     hydrateExperience,
     async hydrate(name, requests, readers, principalId) {
       if (!Object.hasOwn(EXPERIENCES, name)) {

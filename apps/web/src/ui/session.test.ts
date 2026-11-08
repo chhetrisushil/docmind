@@ -24,6 +24,7 @@ const readers = (items: DocumentDto[]) => ({
   content: vi.fn(async () => ({ items: [], more: false })),
   source: vi.fn(async () => null),
   visualFacts: async () => null,
+  turnFacts: async () => null,
   chats: vi.fn(async () => []),
 });
 const tick = () => new Promise((r) => setTimeout(r, 0));

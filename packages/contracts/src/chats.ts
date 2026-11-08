@@ -99,6 +99,10 @@ export const ChatFailureReason = z.enum([
 ]);
 export type ChatFailureReason = z.infer<typeof ChatFailureReason>;
 
+/** A chat record's ordinal as a number: the range of `ChatMessageDto.id`'s decimal string (`/^(0|[1-9][0-9]{0,14})$/`), from 1. */
+export const RecordOrd = z.number().int().min(1).max(999_999_999_999_999);
+export type RecordOrd = z.infer<typeof RecordOrd>;
+
 export const ChatMessageDto = z.object({
   /** The conversation record's ordinal, in decimal (the record's own `ord`). The history cursor and the SSE `id:` are `cursor`. */
   id: z.string().regex(/^(0|[1-9][0-9]{0,14})$/),
