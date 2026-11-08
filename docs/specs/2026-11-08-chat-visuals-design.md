@@ -158,7 +158,12 @@ Lineage content goes to the existing `lineage_content` store. No new settings.
 - Cited answers show "Visualize" (no visuals yet), "Visualizing…" (after 202 until a frame or
   60 s), or "Re-visualize". 409 `visualize_running` shows "Visualizing…"; 429 shows "Try again in a
   minute"; an outcome of `nothing` shows "Nothing to visualize".
-- Uncited, interrupted and failed answers show neither.
+- Uncited, interrupted and failed answers show neither. The action also needs `ChatMessageDto.visualizable`
+  (visuals role on, complete, cited); with the role off no action is offered, and an existing strip still shows.
+  A strip whose widgets cannot load hides (no toggle, no alert); the action stays.
+- As built (F6): the collapsed strip is a fixed-height (112 px) clip of the widgets, not a separate
+  "first key figure or thumbnail" rendering: one rendering path, so a chart may be cut mid-way.
+  "Nothing to visualize" shows only after an on-demand click, never for an automatic run that ends nothing.
 
 ## 9. Lifecycle and privacy
 
@@ -170,6 +175,11 @@ Lineage content goes to the existing `lineage_content` store. No new settings.
 - No answer or fact text reaches the event log in plaintext: step outputs carry references only,
   turn facts are sealed per user, the lineage is sealed, decision ids are keyed.
 - Ids contain the user and chat UUIDs in plaintext, as existing execution ids do (R14).
+- As built (F7): widgets bound to stored document facts (`fact-<n>`) follow the document's current
+  `visual_facts`; a later visualize-document run that replaces them (only for a failed document) re-points
+  the old chat visuals, which may then show a changed or missing chart. Accepted.
+- As built (F1): a re-run does not extract again for a turn that already has `turn_visual_facts` rows, so
+  the kept head's `fact-<n>` handles keep pointing at the same rows.
 
 ## 10. Testing
 

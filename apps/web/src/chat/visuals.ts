@@ -19,16 +19,24 @@ export interface VisualsView {
   note: string | null;
 }
 
-/** What a message shows: null for anything but a complete, cited assistant answer (uncited, interrupted, failed, user). */
+/**
+ * What a message shows: null for anything but a complete, cited assistant answer (uncited, interrupted, failed, user).
+ * The action is offered only when the server says the answer is `visualizable` (the visuals role is on); an existing strip shows regardless.
+ */
 export function visualsViewOf(e: {
   role: "user" | "assistant";
   status: string;
   citations: readonly unknown[];
   hasVisuals: boolean;
+  visualizable: boolean;
   phase: VisualsPhase;
 }): VisualsView | null {
   if (e.role !== "assistant" || e.status !== "complete" || e.citations.length === 0) return null;
-  const idleAction = e.hasVisuals ? VISUALS_COPY.revisualize : VISUALS_COPY.visualize;
+  const idleAction = !e.visualizable
+    ? null
+    : e.hasVisuals
+      ? VISUALS_COPY.revisualize
+      : VISUALS_COPY.visualize;
   switch (e.phase) {
     case "running":
       return { strip: e.hasVisuals, action: VISUALS_COPY.visualizing, busy: true, note: null };

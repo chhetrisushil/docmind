@@ -36,7 +36,9 @@ const llmReplying = (facts: unknown[]): LlmProvider & { calls: unknown[] } => {
     },
   } as never;
 };
-function setup(o: { llm?: LlmProvider; retrieved?: string[]; summaryMaxChars?: number } = {}) {
+function setup(
+  o: { llm?: LlmProvider; retrieved?: string[]; summaryMaxChars?: number; existing?: Fact[] } = {},
+) {
   const writes: Fact[][] = [];
   const read = vi.fn(
     async (_s: unknown, ids: readonly string[]) =>
@@ -57,7 +59,7 @@ function setup(o: { llm?: LlmProvider; retrieved?: string[]; summaryMaxChars?: n
         writes.push([...facts]);
         return facts.length;
       },
-      list: async () => [],
+      list: async () => o.existing ?? [],
     },
     summaryMaxChars: o.summaryMaxChars ?? 400_000,
     ...(o.llm && { llm: o.llm }),
@@ -66,6 +68,15 @@ function setup(o: { llm?: LlmProvider; retrieved?: string[]; summaryMaxChars?: n
 }
 
 describe("turn-extract", () => {
+  it("does nothing for a turn that already has facts (a re-run): no model call, no write", async () => {
+    const llm = llmReplying([GOOD]);
+    const fact: Fact = { kind: "figure", label: "L", value: 1, chunkIds: [K0], ordinal: 0 };
+    const s = setup({ llm, existing: [fact] });
+    expect(await s.run()).toEqual({ outcome: "done", count: 1, model: "visuals-test" });
+    expect(llm.calls).toHaveLength(0);
+    expect(s.writes).toHaveLength(0);
+  });
+
   it("grounds the model's facts against the retrieved chunks, drops the ungrounded, and stores the rest", async () => {
     const llm = llmReplying([GOOD, BAD]);
     const s = setup({ llm });

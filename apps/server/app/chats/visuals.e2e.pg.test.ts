@@ -113,6 +113,28 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       { timeout: WAIT, interval: 50 },
     );
 
+  /**
+   * Waits until the turn's closing record is readable from the conversation's log, then until the hook's queued check has
+   * settled: Loom calls the settled listener once the write resolved, so a read that sees the record comes after the call,
+   * and a negative assertion made after this is not vacuous.
+   */
+  async function hookSettled(st: IngestStack, cookie: string, chatId: string, ord: number) {
+    await vi.waitFor(
+      async () => {
+        const page = (await (
+          await st.chatReq(cookie, "GET", `/api/chats/${chatId}/messages`)
+        ).json()) as { items: { id: string; role: string; status: string }[] };
+        expect(
+          page.items.some(
+            (m) => m.role === "assistant" && m.id === String(ord) && m.status === "complete",
+          ),
+        ).toBe(true);
+      },
+      { timeout: WAIT, interval: 50 },
+    );
+    await st.composed.turns?.idle();
+  }
+
   const outcomeOf = async (
     st: IngestStack,
     userId: string,
@@ -269,6 +291,10 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       );
       expect(rows.rows).toHaveLength(1);
       expect(rows.rows[0].t).not.toContain(LABEL);
+      const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
+      expect(ids.some(isTurnVisualizeExecution)).toBe(true);
+      const raw = (await Promise.all(ids.map((id) => st.durable.raw.eventStore.read(id)))).flat();
+      assertNoPlaintext(raw, [LABEL, "A headline figure"]); // the fallback path's extraction and plan reach no raw log in the clear
       expect(JSON.stringify((await hydrate(st, ada.cookie, chat.id, ord))[0])).toContain("7391.25");
       // deleting the chat takes the facts with it once the row goes; the route refuses at once
       await st.chatReq(ada.cookie, "DELETE", `/api/chats/${chat.id}`);
@@ -291,7 +317,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       );
       const reply = await ask(st, ada.cookie, chat.id, "What is the weather?");
       const ord = Number(reply.id);
-      await st.composed.turns?.idle(); // the hook's check for this turn has settled: a run would exist by now
+      await hookSettled(st, ada.cookie, chat.id, ord); // the hook's check for this turn has settled: a run would exist by now
       const res = await st.chatReq(
         ada.cookie,
         "POST",
@@ -316,7 +342,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       );
       const offReply = await ask(off, bea.cookie, offChat.id, "What were the takings?");
       expect(offReply.citations).toHaveLength(1);
-      await off.composed.turns?.idle(); // settled: the role is off, so the check ended without a start
+      await hookSettled(off, bea.cookie, offChat.id, Number(offReply.id)); // settled: the role is off, so the check ended without a start
       const offIds = (await off.durable.raw.eventStore.listExecutions?.()) ?? [];
       expect(offIds.filter(isTurnVisualizeExecution)).toEqual([]);
       const refused = await off.chatReq(

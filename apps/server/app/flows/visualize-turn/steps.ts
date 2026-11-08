@@ -93,7 +93,8 @@ const readRetrieved = (deps: TurnExtractDeps, ref: TurnRef, ids: string[]) =>
 /**
  * Step 2 (C1 fallback), run only when `turn-load` kept nothing: the model reads the turn's retrieved chunks with
  * sub-project 1's prompt, the grounding check keeps the facts whose numbers appear in the chunks they cite,
- * at most 16, sealed in `turn_visual_facts`. A refusal or no grounded fact is done with none.
+ * at most 16, sealed in `turn_visual_facts`. A refusal or no grounded fact is done with none. A turn that already has
+ * facts (a re-run) is not extracted again: its rows are kept so an earlier head's widgets still resolve.
  */
 export function turnExtractEffect(deps: TurnExtractDeps): Effect<TurnRef, StepResult> {
   return stepEffect<TurnRef>(
@@ -103,6 +104,9 @@ export function turnExtractEffect(deps: TurnExtractDeps): Effect<TurnRef, StepRe
       const llm = deps.llm;
       if (!llm) return { model: "none" };
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
+      // A re-run keeps the facts the kept head's widgets point at (`<family>-<ordinal>`): extraction runs only for a turn with none.
+      const existing = await deps.facts.list(ref);
+      if (existing.length > 0) return { count: existing.length, model };
       const turn = await deps.turn.read(ref, signal);
       const chunks = turn ? await readRetrieved(deps, ref, turn.retrieved) : [];
       if (chunks.length === 0) {

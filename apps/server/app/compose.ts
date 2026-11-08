@@ -383,6 +383,7 @@ export function buildServer(options: ComposeOptions) {
       eventStore: options.status.source,
       reasoning,
       heads,
+      visualsOn: visualsLlm !== undefined,
       ...(options.heartbeatMs && { heartbeatMs: options.heartbeatMs }),
     });
   // After the streams exist: the eraser closes them per user.
@@ -511,6 +512,7 @@ export function buildServer(options: ComposeOptions) {
           eventStore: options.status.source,
           reasoning,
           heads,
+          visualsOn: visualsLlm !== undefined,
           ...(titleLlm && titles && { titles }),
           ...(turns &&
             turnRead && {

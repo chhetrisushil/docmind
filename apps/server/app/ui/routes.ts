@@ -36,6 +36,22 @@ export interface UiRouteDeps {
   readersFor?: (identity: Identity) => UiReaders;
 }
 
+/** The ids among `ids` that are the caller's documents right now (owner-scoped, one query): a foreign or deleted document is left out. */
+export async function ownedDocumentIds(
+  pool: UiReaderDeps["pool"],
+  identity: Identity,
+  ids: string[],
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set<string>();
+  const { rows } = await withTenant(pool, identity.tenantId, (tx) =>
+    tx.query<{ id: string }>(
+      "SELECT id FROM documents WHERE owner_id = $1 AND id = ANY($2::uuid[])",
+      [identity.userId, ids],
+    ),
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 /** Every answer of a UI route, 401 and errors included, is uncacheable. */
 const noStore =
   (value: string, handler: Handler): Handler =>
@@ -81,16 +97,7 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
       ));
   const ownedDocuments =
     deps.ownedDocuments ??
-    (async (identity: Identity, ids: string[]) => {
-      if (ids.length === 0) return new Set<string>();
-      const { rows } = await withTenant(deps.readers.pool, identity.tenantId, (tx) =>
-        tx.query<{ id: string }>(
-          "SELECT id FROM documents WHERE owner_id = $1 AND id = ANY($2::uuid[])",
-          [identity.userId, ids],
-        ),
-      );
-      return new Set(rows.map((r) => r.id));
-    });
+    ((identity: Identity, ids: string[]) => ownedDocumentIds(deps.readers.pool, identity, ids));
   const ORD = /^[1-9][0-9]{0,14}$/; // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
   /** The turn's visuals head and the documents of it that are still the caller's; null when there is no head. */
   const turnHead = async (identity: Identity, chatId: string, ord: number) => {

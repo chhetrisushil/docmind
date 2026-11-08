@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { VisualizeTurnResponse } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, BOB } from "../documents/testHarness";
 import { UserRateLimit } from "../flows/visualize-turn/limiter";
@@ -34,6 +34,11 @@ describe.skipIf(!PG_URL)(
       });
     });
     afterAll(async () => void (await h.close()));
+    beforeEach(() => {
+      state.limit = new UserRateLimit(10); // each test starts with a fresh limiter, whatever ran before it
+      state.turn = CITED;
+      state.start = { kind: "started", rerun: 1 };
+    });
     const post = (user: string, chat: string, ord: string | number) =>
       h.req(user, "POST", `/api/chats/${chat}/turns/${ord}/visualize`);
     const code = async (res: Response) =>

@@ -33,6 +33,7 @@ const msg = (
   outcome: null,
   createdAt: "2026-10-21T10:00:00.000Z",
   hasVisuals: false,
+  visualizable: false,
   ...over,
 });
 const cited = {
@@ -1208,9 +1209,14 @@ const MIXED = async () => ({
       text: `Due in 30 days [[${PASSAGE}]].`,
       citations: [cited],
       hasVisuals: true,
+      visualizable: true,
     }),
     msg(3, "user", 2),
-    msg(4, "assistant", 2, { text: `Also net 30 [[${PASSAGE}]].`, citations: [cited] }),
+    msg(4, "assistant", 2, {
+      text: `Also net 30 [[${PASSAGE}]].`,
+      citations: [cited],
+      visualizable: true,
+    }),
     msg(5, "user", 3),
     msg(6, "assistant", 3, { text: "Not in the documents." }),
   ],

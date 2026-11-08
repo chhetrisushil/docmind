@@ -205,6 +205,26 @@ describe("toMessageDtos hasVisuals", () => {
     expect(has).toHaveBeenCalledTimes(1);
     expect(has).toHaveBeenCalledWith({ userId: IDENTITY.userId, chatId: C }, [2, 4]); // only complete, cited replies
   });
+  it("marks visualizable only for a complete, cited reply while the visuals role is on", async () => {
+    const on = await toMessageDtos(
+      { ...depsOf(await items(), noReasoning), visualsOn: true } as MessageDeps,
+      IDENTITY,
+      C,
+      history,
+    );
+    expect(on.map((m) => [m.id, m.visualizable])).toEqual([
+      ["1", false],
+      ["2", true],
+      ["3", false],
+      ["4", true],
+      ["5", false],
+      ["6", false],
+      ["7", false],
+      ["8", false],
+    ]);
+    const off = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, C, history);
+    expect(off.every((m) => m.visualizable === false)).toBe(true);
+  });
   it("makes no lookup when no reply qualifies, and says false everywhere when the server has no heads", async () => {
     const has = vi.fn(async () => new Set<number>());
     const uncited = await toMessageDtos(
