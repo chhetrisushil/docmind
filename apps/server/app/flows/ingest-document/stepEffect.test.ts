@@ -744,4 +744,24 @@ describe("stepEffect gate", () => {
     await new Promise((r) => setImmediate(r)); // only drains microtasks; asserts nothing about time
     expect(settled).not.toHaveBeenCalled();
   });
+
+  it("runs a step over a ref that is not an ingest ref, and gates it by the ref's tenant", async () => {
+    type R = { tenantId: string; chatId: string };
+    const seen: string[] = [];
+    const guard: StepGuard<R> = { begin: async (r, step) => void seen.push(`${step}:${r.chatId}`) };
+    const gateTenants: string[] = [];
+    const gate = {
+      run: async <T>(tenant: string, _s: AbortSignal | undefined, task: () => Promise<T>) => {
+        gateTenants.push(tenant);
+        return task();
+      },
+    };
+    const effect = stepEffect<R>("turn-load", guard, async () => ({ count: 1 }), { gate });
+    const out = await effect.execute({ tenantId: "t1", chatId: "c1" }, {
+      executionId: "e1",
+    } as never);
+    expect(out).toEqual({ outcome: "done", count: 1 });
+    expect(seen).toEqual(["turn-load:c1"]);
+    expect(gateTenants).toEqual(["t1"]);
+  });
 });

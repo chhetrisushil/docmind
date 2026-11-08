@@ -1,3 +1,4 @@
+import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { describe, expect, it } from "vitest";
 import { executionIdFor, subjectOfExecution } from "./subject";
 
@@ -115,5 +116,18 @@ describe("erasure subject of a visuals lineage line", () => {
     ]) {
       expect(subjectOfExecution({ executionId: `${P}${id}` })).toBe("");
     }
+  });
+
+  it("owns a chat turn's visuals lineage line by its user, and refuses a malformed one", () => {
+    const prefix = LINEAGE_STREAM_PREFIX;
+    const chat = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+    expect(subjectOfExecution({ executionId: `${prefix}turnvisuals-${USER}-${chat}-6` })).toBe(
+      USER,
+    );
+    expect(subjectOfExecution({ executionId: `${prefix}turnvisuals-${USER}-${chat}-0` })).toBe("");
+    expect(subjectOfExecution({ executionId: `${prefix}turnvisuals-${USER}-${chat}` })).toBe("");
+    expect(
+      subjectOfExecution({ executionId: `${prefix}turnvisuals-${USER.toUpperCase()}-${chat}-6` }),
+    ).toBe("");
   });
 });

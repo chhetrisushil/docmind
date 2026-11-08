@@ -86,7 +86,7 @@ export function createDurableStorage({
     sensitive: { ...sensitive },
     subjectOf: subjectOfExecution,
   });
-  // The visuals lineage (`__loom_ui_lineage__:visuals-<userId>-<documentId>`, owned by `subjectOfExecution`): its composed ops,
+  // The visuals lineage (`__loom_ui_lineage__:visuals-<userId>-<documentId>` or `turnvisuals-<userId>-<chatId>-<ord>`, owned by `subjectOfExecution`): its composed ops,
   // summary and provenance are sealed under the user's key from the first write, so destroying the key erases the line.
   registerLineageSensitivePaths(events);
   // The rolling summary's `summary-fit` decision carries the summary as a bare string choice; the decorator stores it
