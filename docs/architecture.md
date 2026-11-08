@@ -179,6 +179,7 @@ flowchart LR
 - **Plan.** A loom-ui planner decides the nodes through `ctx.decide`, so a resumed execution replays the recorded plan. The decision id is keyed by the deployment secret, because it is logged in plaintext.
 - **Commit.** The plan becomes the head of the document's lineage line, which replaces the previous head and is idempotent. Its events go through the sealing event store and its artifacts through a per-user sealed Postgres content store (`lineage_content`). The step then publishes `{status: ready, step: finalize, visuals: ready}` so an open detail page reloads.
 - **Outcomes.** `done`, `empty` (no facts or an empty plan), `skipped`, `failed`. A failure never changes the document's ingest status.
+- **Trend axis.** A `FigureTrend` value carries `timeFormat: { granularity }` (the coarsest granularity among its labels, no `timeZone`), so loom-ui draws "Q1 2026" as a quarter, not as a month tick.
 - **Serving.** `GET /api/ui/documents/:id/detail` is owner-checked (404 otherwise) and adds the Visuals panel. Its `fact-<n>` handles are classified and hydrate only under the owner's clearance, through the `visual.facts` read.
 - **Delete and erasure.** Deleting a document cancels its visualize executions with its ingest ones, and the facts cascade. Erasing a user destroys the key that seals their lineage, so the line reads `line-erased` and nothing in the log or `lineage_content` is readable.
 

@@ -126,9 +126,14 @@ facts by hand.
 | Entry | Kind | Binds |
 |---|---|---|
 | `FigureChart` | `BarChart` (`{ unit?, format?, bars: [{ label, value }] }`) | a `series` fact |
-| `FigureTrend` | `TimeSeries` (`{ series: [{ label, unit?, points: [{ timestamp, value }] }] }`) | a `series` fact whose `x` values are dates |
+| `FigureTrend` | `TimeSeries` (`{ timeFormat, series: [{ label, unit?, points: [{ timestamp, value }] }] }`) | a `series` fact whose `x` values are dates |
 | `KeyFigure` | `Kpi` (`{ value, unit?, label?, deltaPct? }`, `deltaPct` a fraction) | a `figure` fact |
 | `FactTable` | `Table` (`{ columns, rows }`) | a `factTable` fact |
+
+As built, a trend declares its time axis: `timeFormat: { granularity }` (no `timeZone`, so loom-ui reads a period in
+UTC) is the coarsest granularity any label was written at (year > half > quarter > month > week > day), so "Q1 2026" to
+"Q4 2026" is drawn as "Q1 2026".."Q4 2026" rather than as month ticks. Labels are normalised to ISO dates as before
+(`visuals.ts` `toIso`); only date-only labels are accepted, so `datetime` and `week` are never produced.
 
 These are loom-ui framework kinds (`FRAMEWORK_KINDS`); the terminal renderer draws all four.
 Offered containers: `section` and `grid` (`PLAIN_CONTAINERS`).

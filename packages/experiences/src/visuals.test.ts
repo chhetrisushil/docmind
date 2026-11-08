@@ -1,4 +1,11 @@
-import { effectiveFormat, formatSemanticNumber } from "@loom-ui/core";
+import {
+  TimeSeriesValue,
+  checkKindValue,
+  effectiveFormat,
+  formatSemanticNumber,
+  formatTimeLabel,
+  isTimeFormat,
+} from "@loom-ui/core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, createInvoker } from "./invoker";
 import { PINS } from "./providers";
@@ -104,6 +111,7 @@ describe("the visual reshapers", () => {
       ],
     });
     expect(shape("visual-trend-2", raw)).toEqual({
+      timeFormat: { granularity: "day" },
       series: [
         {
           label: "Users",
@@ -165,6 +173,52 @@ describe("the visual reshapers", () => {
     });
     expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01-xyz")])).toThrow();
     expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01")])).not.toThrow();
+  });
+  it("declare the trend's time axis at the granularity its labels were written in", () => {
+    const xs = (labels: string[]): VisualFactRaw => ({
+      ...DATED_SERIES,
+      points: labels.map((x, i) => ({ x, y: i })),
+    });
+    const trend = (labels: string[]) =>
+      shape("visual-trend-2", [FIGURE, SERIES, xs(labels)]) as {
+        timeFormat: { granularity: string; timeZone?: string };
+        series: { points: { timestamp: string }[] }[];
+      };
+    const grain = (labels: string[]) => trend(labels).timeFormat;
+    expect(grain(["2025", "2026"])).toEqual({ granularity: "year" });
+    expect(grain(["H1 2026", "H2 2026"])).toEqual({ granularity: "half" });
+    expect(grain(["Q1 2026", "Q2 2026"])).toEqual({ granularity: "quarter" });
+    expect(grain(["Mar 2026", "Apr 2026"])).toEqual({ granularity: "month" });
+    expect(grain(["2026-03", "2026-04"])).toEqual({ granularity: "month" });
+    expect(grain(["2026-03-01", "2026-03-02"])).toEqual({ granularity: "day" });
+    // Mixed labels are drawn at the coarsest granularity any point has.
+    expect(grain(["2026-03-05", "Q2 2026", "2027-01-01"])).toEqual({ granularity: "quarter" });
+    expect(grain(["Mar 2026", "2027", "2028-05-01"])).toEqual({ granularity: "year" });
+    expect(grain(["2026-03-05", "2026-04"])).toEqual({ granularity: "month" });
+    // Each declared granularity reads as the label it came from, through loom-ui's own formatter.
+    const words = (key: string, v: Readonly<Record<string, string | number>>) =>
+      key === "lu.time.quarter" ? `Q${v.n} ${v.year}` : `H${v.n} ${v.year}`;
+    const say = (labels: string[]) => {
+      const t = trend(labels);
+      return t.series[0]?.points.map((p) =>
+        formatTimeLabel(p.timestamp, t.timeFormat as never, "en-US", words as never),
+      );
+    };
+    expect(say(["Q1 2026", "Q2 2026", "Q3 2026", "Q4 2026"])).toEqual([
+      "Q1 2026",
+      "Q2 2026",
+      "Q3 2026",
+      "Q4 2026",
+    ]);
+    expect(say(["H1 2026", "H2 2026"])).toEqual(["H1 2026", "H2 2026"]);
+    expect(say(["2025", "2026"])).toEqual(["2025", "2026"]);
+    expect(say(["Jan 2026", "Feb 2026"])).toEqual(["Jan 2026", "Feb 2026"]);
+    expect(say(["2026-01-05", "2026-01-06"])).toEqual(["Jan 5, 2026", "Jan 6, 2026"]);
+    // The value passes loom-ui's TimeSeries contract and the declared format is a TimeFormat.
+    const t = trend(["Q1 2026", "Q2 2026"]);
+    expect(isTimeFormat(t.timeFormat)).toBe(true);
+    expect(TimeSeriesValue.safeParse(t).success).toBe(true);
+    expect(checkKindValue("TimeSeries", t)).toEqual({ ok: true });
   });
   it("normalise quarter, half, year and month labels to ISO dates for the trend", () => {
     const xs = (labels: string[]): VisualFactRaw => ({
