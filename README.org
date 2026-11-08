@@ -57,6 +57,14 @@ Data flow as built:
    complete the API; =POST /api/documents/:id/retry= re-runs a failed document. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
 
 5. =/api/chats= (create, list, messages, send, stream, reasoning, stop, patch, delete) runs a =doc-assistant= agent over the configured chat model (Ollama by default) with five read-only tools; answers cite =[[chunk id]]= markers that are validated on read. See [[file:docs/design/linked-retrieval.md][linked retrieval]].
+   Chat answers that cite a document get visuals too: when a cited answer settles, Loom's =turnSettledObserver=
+   starts the =visualize-turn= flow (only while the =visuals= role is on). It reuses the stored facts of the cited
+   documents, or extracts facts from the turn's own chunks, plans charts and cards from them and commits them to a
+   per-user sealed lineage; the chat shows a collapsible Visuals strip under the answer, and
+   =POST /api/chats/:id/turns/:ord/visualize= makes or remakes one on demand.
+   The =visuals= frame carries an =outcome= (=visualized= or =nothing=); a re-run that finds nothing keeps the earlier
+   visuals. Chat visuals need no settings beyond =DOCMIND_VISUALS_PROVIDER= and =DOCMIND_PLANNER_DECISION_KEY=, and
+   answers from before the upgrade are not backfilled (their Visualize button makes them).
 6. =DELETE /api/me= (body =password=) erases the account: it records a durable request, logs the user out
    everywhere, frees the email, answers 202 with a receipt, and a background =Eraser= stops the user's work,
    destroys the user's key (which makes every event, snapshot, sealed column and blob unreadable),

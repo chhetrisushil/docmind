@@ -21,7 +21,7 @@ Unset variables mean Ollama. An `ANTHROPIC_API_KEY` alone enables nothing: to us
 | `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `title` | The name of a chat | `DOCMIND_TITLE_PROVIDER` | `DOCMIND_TITLE_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `summary` | Document summaries | `DOCMIND_SUMMARY_PROVIDER` | `DOCMIND_SUMMARY_MODEL` | `ollama`, `gemma4:31b-cloud` |
-| `visuals` | Extracts facts and plans document visuals; `off` hides the Visuals tab | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `ollama`, `gemma4:31b-cloud` |
+| `visuals` | Extracts facts and plans document and chat-answer visuals; `off` hides every Visuals tab and strip and starts no visuals run | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `ollama`, `gemma4:31b-cloud` |
 | `vision` | Text and description of images | `DOCMIND_VISION_PROVIDER` | `DOCMIND_VISION_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `vision_pdf` | Scanned PDF pages (no text layer) | `DOCMIND_VISION_PDF_PROVIDER` | `DOCMIND_VISION_PDF_MODEL` | `gemini`, `gemini-3.5-flash` when `GEMINI_API_KEY` is set, else `off` |
 
@@ -151,6 +151,8 @@ does. An upgraded deployment therefore boots as before, with no new key and no n
    document reads at most `DOCMIND_SUMMARY_MAX_CHARS` of its text, but a large library still takes a while and costs
    model calls.
 4. Keep the key stable from then on (see the rotation note above).
+
+The same role (and the same `DOCMIND_PLANNER_DECISION_KEY`) turns on chat visuals; it adds one table (`turn_visual_facts`, migration 0029) and needs a Loom build that exports `turnSettledObserver` (the `LOOM_REF` in CI). Chat turns that settled while the role was off, or before the upgrade, are not backfilled: the "Visualize" action on the answer makes them.
 
 ## What users see
 
