@@ -51,9 +51,13 @@ planner (cannot judge what is worth showing; kept as a possible fallback, not bu
   guard become parameters) so both flows share one retry and failure policy.
 - Input is ids only and strict: `{ tenantId, userId, documentId }`. The execution id is
   `executionIdFor(userId, "visualize-" + documentId)`, which is also the idempotency key.
-- Steps: `visualize-extract` then `visualize-plan`, each with `LLM_RETRY`, granted in `security.ts`
-  like the ingest steps.
-- Output: `{ outcome: "done" | "empty" | "skipped" | "failed", code? }`.
+- As built: steps `visualize-extract`, `visualize-load` and `visualize-commit` (granted in
+  `security.ts`), with the planner's `ctx.decide` in the flow runner between load and commit (the
+  planner needs the flow's context). The execution id carries the ingest generation
+  (`visualize-<doc>[.<gen>]`). Visualize steps take their own gate (1 slot per tenant), never the
+  ingest gate, so ingest never queues behind visuals; the boot sweep keeps at most 2 executions in
+  flight.
+- Output: `{ outcome: "done" | "empty" | "skipped" | "failed" | "document_gone", code? }`.
 - Deleting a document cancels every generation of `visualize-document` as it does for ingest.
   `POST /api/documents/:id/retry` re-runs it. Boot recovery resumes an interrupted run through the
   `recovery.ts` pattern.
@@ -61,14 +65,17 @@ planner (cannot judge what is worth showing; kept as a possible fallback, not bu
 ## 4. Model role
 
 A new LLM role `visuals` in `apps/server/app/llm/roles.ts`, beside `chat`, `title`, `summary`,
-`vision` and `visionPdf`: `DOCMIND_VISUALS_PROVIDER` (default Ollama), its model variable, and `off`.
-When it is `off` the flow ends at once with `outcome: "skipped"`, and `llmWarnings` says
+`vision` and `visionPdf`: `DOCMIND_VISUALS_PROVIDER`, its model variable, and `off`. As built, the
+role is OFF unless `DOCMIND_VISUALS_PROVIDER` is set explicitly (a shared `DOCMIND_LLM_PROVIDER` does
+not turn it on), and turning it on also requires the deployment secret `DOCMIND_PLANNER_DECISION_KEY`
+(keys the planner's recorded decision id). When it is off no visualize execution is started at all, and `llmWarnings` says
 "visuals are off: DOCMIND_VISUALS_PROVIDER is off". The runbook `docs/operations/llm-providers.md`
 gains the role.
 
 ## 5. Extraction (`visualize-extract`)
 
-The step reads the document's chunks in order, windowed as the summarizer does, and asks the
+The step reads the document's chunks in order, at most `DOCMIND_SUMMARY_MAX_CHARS` of text (the
+summarizer's cap), windowed as the summarizer does, and asks the
 `visuals` model for JSON through the `llmJson.ts` helpers, validated by a strict zod schema.
 
 Fact kinds (schema version 1):
@@ -143,8 +150,10 @@ widget binds a fact. Fact values reach the model only as fenced, untrusted data,
 
 **Call.** `new ReferencePlanner({ model, modelId })` with the `visuals` role's provider, then
 `compose({ intent, catalog, capabilities, containers }, ctx)` with the step's execution context, so
-the plan is one recorded `ctx.decide`. Error findings fail the attempt (planner's two attempts, then
-the step's `LLM_RETRY`). Zero nodes is a valid plan: the flow ends `empty`.
+the plan is one recorded `ctx.decide`. Error findings fail the attempt (the planner's two attempts).
+As built in step (a) there is no step-level retry of planning: a model error is recorded in the
+decision and the flow ends `failed` with `visuals-plan-invalid` (deferred: a retry/re-run path and a
+separate `visuals-model-unavailable` code). Zero nodes is a valid plan: the flow ends `empty`.
 
 **Decision sealing.** The plan is recorded as a `DECISION_RECORDED` event in the visualize
 execution's log; the paths of the planner's recorded choice that hold ops and summary are added to
@@ -169,8 +178,9 @@ retry once, then fail.
 - The `fact-N` handles hydrate through the new invoker target `visual.facts`: one owner-scoped read
   under RLS that decrypts the document's facts, inside the existing limits (8 distinct reads, 4
   concurrent).
-- Each widget's caption carries its citations as reference markers (the generic loom-ui support from
-  Task 176b); a marker opens the passage in the Sources view.
+- Deferred (not built in step (a)): each widget's caption carrying its citations as reference
+  markers (the generic loom-ui support from Task 176b). Facts keep their `chunkIds`, so this needs no
+  data change.
 - Status reaches the browser over SSE (`GET /api/documents/events`), not a poll.
   `DocumentProgressEvent` gains an optional `visuals: "ready"`; when `visualize-document` commits a
   head, the server sends it, and the open detail page calls `ViewSession.reload()` (which re-GETs
@@ -182,10 +192,10 @@ retry once, then fail.
 
 | Case | Result |
 |---|---|
-| Model unavailable / plan invalid after retries | flow `failed`, `visuals-model-unavailable` / `visuals-plan-invalid`; tab hidden; ingest status untouched |
+| Model unavailable / plan invalid | flow `failed`, `visuals-plan-invalid` (step (a) does not re-run it; deferred); tab hidden; ingest status untouched |
 | A fact fails grounding | that fact dropped; others kept |
 | A fact row gone at read time | per-widget error placeholder |
-| Pin mismatch (`schemaDrift`) | server re-runs `visualize-document` for that document |
+| Pin mismatch (`schemaDrift`) | per-widget placeholder (deferred: re-run `visualize-document`); served providers always carry the current pin |
 
 **Delete and erasure.** Deleting a document cancels the flow (both cancel points of the delete
 route) and its `visual_facts` rows go with the document by FK cascade; the lineage line is left to
@@ -226,3 +236,7 @@ catalogue entry.
 
 Visuals in chat answers (sub-project 2); user editing or pinning of visuals; interactive filtering
 inside charts; facts spanning documents before step (b).
+
+Deferred from step (a) after the final review (owner to schedule): retry or re-run of a failed
+visualize execution, and a `visuals-model-unavailable` code; citation markers in widget captions;
+re-running on `schemaDrift`; reclaiming erased or orphaned `lineage_content` rows.
