@@ -89,8 +89,12 @@ export const runVisualize =
     if (
       extracted.count === 0 &&
       (plan.ops.length === 0 || plan.findings.some((f) => f.severity === "error"))
-    )
+    ) {
+      // Codes only, never text: a broken connections binding must not hide behind a quiet `empty`.
+      const codes = plan.findings.filter((f) => f.severity === "error").map((f) => f.code);
+      if (codes.length > 0) console.warn("visualize connections-only plan failed", codes);
       return { outcome: "empty" };
+    }
     if (plan.findings.some((f) => f.severity === "error"))
       return { outcome: "failed", code: "visuals-plan-invalid" };
     if (plan.ops.length === 0) return { outcome: "empty" };

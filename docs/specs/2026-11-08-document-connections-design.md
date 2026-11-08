@@ -65,6 +65,10 @@ Rejected:
 - For this release, the boot stale pass treats done runs with a NULL format as stale, so each visualized document is re-planned once:
   - over its stored facts (no extraction), one planner call each, at most 2 at a time;
   - then stamped, so it runs once.
+  - a document with no facts that already has a `done` run is re-planned the same way (connections only, no extraction); the starter notes the previous state in-process, since a new run overwrites it in `visual_runs`, and the run reader is the fallback after a restart.
+- Accepted costs:
+  - A retry after a planner-unavailable failure on a zero-fact document may extract once per boot (bounded).
+  - A document whose last run ended `empty` before this release is neither stale nor unvisualized, so it gets no Connections section until it is re-ingested or retried.
 
 ## 6. Errors, privacy, testing
 

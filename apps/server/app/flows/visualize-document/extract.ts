@@ -19,6 +19,7 @@ import {
 import { type DraftFact, ExtractAnswer, admit } from "./facts";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
 import { EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
+import type { VisualRuns } from "./runs";
 
 /** The most chunk text sent to the model in one request; a window never splits a chunk. */
 export const EXTRACT_WINDOW_CHARS = 24_000;
@@ -45,6 +46,13 @@ export interface ExtractDeps extends StepSeams {
   summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */
   llm?: LlmProvider;
+  /** The run reader: a re-run of a document whose previous run ended `done` re-plans over its stored facts even when there are none. */
+  runs?: Pick<VisualRuns, "last">;
+  /**
+   * Execution ids of re-runs the starter began right after a `done` run (it knew the previous state before the new run
+   * overwrote it in visual_runs). In-process only; after a restart the reader is the fallback.
+   */
+  afterDone?: Set<string>;
 }
 
 export type Chunk = { id: string; text: string };
@@ -131,10 +139,18 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       const llm = deps.llm;
       if (!llm) return { model: "none" };
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
-      // A re-run (`-r<n>`) re-plans over the stored facts and extracts only when the document has none.
-      if (executionId !== undefined && (parseVisualizeExecution(executionId)?.rerun ?? 0) > 0) {
+      // A re-run (`-r<n>`) re-plans over the stored facts without extracting, when there are some or the previous run
+      // already ended `done` (a document that has no facts: its plan is the connections alone). It extracts otherwise.
+      const id = executionId === undefined ? null : parseVisualizeExecution(executionId);
+      const rerun = id?.rerun ?? 0;
+      if (executionId !== undefined && id && rerun > 0) {
         const stored = await deps.facts.list(ref);
         if (stored.length > 0) return { count: stored.length, model };
+        // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
+        // is the sure source, the reader answers when the previous run is still the last one (or after a restart).
+        const noted = deps.afterDone?.has(executionId) === true;
+        const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
+        if (noted || (last?.state === "done" && last.run < rerun)) return { count: 0, model };
       }
       const ids = (await deps.chunks.sectionsOf(ref)).map((s) => s.id);
       const chunks = await readChunks(

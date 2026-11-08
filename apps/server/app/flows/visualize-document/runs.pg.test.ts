@@ -16,6 +16,7 @@ import {
   pgRetryDocuments,
   pgRunningRuns,
   pgStaleFormatDocuments,
+  visualizeExecutionId,
 } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
@@ -248,7 +249,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     const stale = await readyDoc();
     const staleB = await readyDoc(BOB);
     const current = await readyDoc();
-    const unstamped = await readyDoc(); // done, format NULL (a row from before the column): stale since 0032
+    const unstamped = await readyDoc(); // done, format NULL (recorded before stamping existed, or by a boot reconcile): stale since 0032
     const empty = await readyDoc();
     const failed = await readyDoc();
     const notReady = await seedDoc(owner, app, fields, ALICE, fp(), 600);
@@ -307,7 +308,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     await owner.query("DELETE FROM documents");
     const d = await readyDoc();
     const at = (run: number) => ({ userId: U1, documentId: d.id, generation: d.g, run });
-    await runs.record(at(0), "done"); // a run from before the column: no format
+    await runs.record(at(0), "done"); // recorded before stamping existed (or by a boot reconcile): no format
     const list = pgStaleFormatDocuments(app); // the current fingerprint
     expect((await list(NIL, 10)).map((x) => x.documentId)).toEqual([d.id]);
     await runs.record(at(1), "running"); // the boot pass starts the re-plan
@@ -322,6 +323,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     const d = await readyDoc();
     await runs.record({ userId: U1, documentId: d.id, generation: d.g, run: 0 }, "done"); // no format
     const started: string[] = [];
+    const afterDone = new Set<string>();
     const runtime = {
       cancel: async () => {},
       start: async (_f: unknown, _i: unknown, o: { executionId: string }) => {
@@ -346,10 +348,12 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       {
         stale: pgStaleFormatDocuments(app),
         runs,
+        afterDone,
       },
     );
     expect(await starter.sweep()).toBe(1);
-    expect(started).toHaveLength(1);
+    expect(started).toEqual([visualizeExecutionId(U1, d.id, d.g, 1)]); // a stale re-run is always `-r<n>`, n > 0
+    expect(afterDone.size).toBe(1); // noted for the extract step: no extraction
     expect(await starter.sweep()).toBe(0);
     expect(started).toHaveLength(1);
   });

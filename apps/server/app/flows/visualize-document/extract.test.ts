@@ -234,6 +234,46 @@ describe("visualize-extract step", () => {
       expect(requests).toHaveLength(1);
     });
 
+    const lastOf = (state: "done" | "failed", run = 0) => ({
+      last: async () => ({ run, state, code: null }),
+    });
+
+    it("a zero-fact document whose last run was done re-plans with no extraction (count 0)", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      const d = { ...s.d, runs: lastOf("done") };
+      expect(await extractEffect(d).execute(s.ref, rerunCtx(s))).toEqual({
+        outcome: "done",
+        count: 0,
+        model: "claude-test",
+      });
+      expect(requests).toEqual([]);
+      expect(s.store.writes).toEqual([]);
+    });
+
+    it("a re-run the starter noted as after a done run skips extraction even when its own record replaced the state", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      const ctx = rerunCtx(s, 2);
+      const afterDone = new Set([(ctx as { executionId: string }).executionId]);
+      const d = {
+        ...s.d,
+        runs: { last: async () => ({ run: 2, state: "running" as const, code: null }) },
+        afterDone,
+      };
+      expect(await extractEffect(d).execute(s.ref, ctx)).toMatchObject({ count: 0 });
+      expect(requests).toEqual([]);
+    });
+
+    it("a zero-fact document whose last run failed (or never ran) extracts", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      expect(
+        await extractEffect({ ...s.d, runs: lastOf("failed") }).execute(s.ref, rerunCtx(s)),
+      ).toMatchObject({ count: 1 });
+      expect(requests).toHaveLength(1);
+    });
+
     it("the automatic run (no -r) extracts again over stored facts", async () => {
       const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
       const s = setup({ llm });

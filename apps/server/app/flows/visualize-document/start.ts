@@ -190,6 +190,11 @@ export interface VisualsStarterOptions {
   /** Records a run as `running` when it starts (so a page shows it and a retry waits for it); absent: nothing is recorded. */
   runs?: Pick<VisualRuns, "record" | "last">;
   /**
+   * Shared with the extract step (`ExtractDeps.afterDone`): a re-run started after a `done` run is noted here by its execution
+   * id, so it re-plans over the stored facts without extracting even when there are none.
+   */
+  afterDone?: Set<string>;
+  /**
    * False while the `visuals` role is off: nothing starts (`start` answers null, the sweep fires nothing), so a
    * deployment without the role records no executions and a later switch-on finds every ready document unvisualized.
    * Default true. Cancel always runs.
@@ -211,6 +216,7 @@ export function loomVisualsStarter(
     stale,
     running: runningSource,
     runs,
+    afterDone,
     enabled = true,
     pageSize = READY_PAGE,
     onError = logClass("visualize start failed"),
@@ -304,7 +310,14 @@ export function loomVisualsStarter(
       let last = (await runs?.last(ref, ref.documentId, generation)) ?? null;
       if (last?.state === "running") last = await reconcile(ref, generation, last);
       if (last?.state === "running") return { kind: "running" }; // a run this process does not track, still going (recovered after a restart)
-      const out = await tracker.probe(key, last?.run ?? 0, (n) => startOne(ref, generation, n));
+      const wasDone = last?.state === "done";
+      const out = await tracker.probe(key, last?.run ?? 0, (n) => {
+        if (wasDone && afterDone) {
+          if (afterDone.size >= 1000) afterDone.clear(); // ids only; a lost note just means one extraction
+          afterDone.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
+        }
+        return startOne(ref, generation, n);
+      });
       return out.kind === "started" ? out : { kind: "running" };
     });
   };
