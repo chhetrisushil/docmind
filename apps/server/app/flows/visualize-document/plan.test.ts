@@ -36,6 +36,14 @@ const NODE = {
 const REVISED_JSON = draft([{ ...NODE, span: 3 }], "A smaller headline figure");
 const PLAN_JSON = draft([NODE], "A single headline figure");
 const EMPTY_JSON = draft([]);
+const CONNECTIONS_NODE = {
+  id: "related",
+  type: "RelatedDocuments",
+  label: "Related documents",
+  span: 12,
+  props: {},
+  binding: { capability: "connections", arguments: {}, path: "", priority: "P1" },
+};
 
 describe("planVisuals", () => {
   it("passes the conformance kit (a second compose replays with no model call)", async () => {
@@ -245,5 +253,33 @@ describe("plannerUnavailable pins the planner's finding shape", () => {
       recording(),
     );
     expect(plannerUnavailable(malformed)).toBe(false);
+  });
+});
+
+describe("planVisuals offers the live connections", () => {
+  it("binds a RelatedDocuments node to the connections capability beside a fact node", async () => {
+    const ctx = recording();
+    const model = scriptedPlannerModel([
+      draft([NODE, CONNECTIONS_NODE], "A figure and its neighbours"),
+    ]);
+    const plan = await planVisuals(new ReferencePlanner({ model, modelId: "t" }), [FIGURE], ctx);
+    expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const ops = JSON.stringify(plan.ops);
+    expect(ops).toContain("RelatedDocuments");
+    expect(ops).toContain("connections");
+    expect(ctx.decisions.size).toBe(1);
+  });
+
+  it("offers the facts first and connections last, and always connections", () => {
+    expect(visualCapabilities([FIGURE]).map((c) => c.handle)).toEqual(["fact-0", "connections"]);
+    expect(visualCapabilities([]).map((c) => c.handle)).toEqual(["connections"]);
+  });
+
+  it("tells the planner connections are live, bind no fact, and belong in a compact section when material is or may be related", () => {
+    const o = VISUALS_INTENT.objective;
+    expect(o).toContain("Every widget binds one fact, except RelatedDocuments and ConnectionMap");
+    expect(o).toContain("live connections capability");
+    expect(o).toContain("compact Connections section");
+    expect(o).toContain("is likely to gain, related material");
   });
 });

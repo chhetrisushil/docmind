@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
+import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
@@ -47,6 +47,18 @@ const NODE = {
 };
 const PLAN = JSON.stringify({ summary: SUMMARY, nodes: [NODE] });
 const EMPTY_PLAN = JSON.stringify({ nodes: [] });
+const CONNECTIONS_NODE = {
+  id: "related",
+  type: "RelatedDocuments",
+  label: "Related documents",
+  span: 12,
+  props: {},
+  binding: { capability: "connections", arguments: {}, path: "", priority: "P1" },
+};
+const CONNECTIONS_PLAN = JSON.stringify({
+  summary: "The documents this one connects to",
+  nodes: [CONNECTIONS_NODE],
+});
 const KEY = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
 
 /** A provider that answers each call with the next reply (the last repeats) and records the requests. */
@@ -206,11 +218,42 @@ describe("visualize-document flow", () => {
     expect(types.has("DECISION_RECORDED")).toBe(true);
   });
 
-  it("is empty when the model finds no facts: nothing is planned or committed", async () => {
-    const s = stack([JSON.stringify({ facts: [] })]);
+  it("plans connections when the model finds no facts: a plan with a connections widget, outcome done", async () => {
+    const s = stack([JSON.stringify({ facts: [] }), CONNECTIONS_PLAN]);
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(2); // one extraction, one planner call
+    const head = await s.lineage.head(experienceIdOf(s.ref));
+    expect(head.ok && head.value).toBeTruthy();
+    expect(JSON.stringify(await s.sealed.read(s.executionId))).toContain("RelatedDocuments");
+  });
+
+  it("is empty when there are no facts and the planner emits nothing: nothing is committed", async () => {
+    const s = stack([JSON.stringify({ facts: [] }), EMPTY_PLAN]);
     expect(await s.run()).toEqual({ outcome: "empty" });
-    expect(s.model?.requests).toHaveLength(1);
     expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  it("is still failed when there are no facts and the model is unreachable for the plan", async () => {
+    const f = failingAfter([JSON.stringify({ facts: [] })], () => new LlmUnavailableError(503));
+    const s = stack(["unused"], { provider: f });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
+  });
+
+  it("a refusal clears the facts and still plans the connections", async () => {
+    let calls = 0;
+    const requests: LlmRequest[] = [];
+    const llm: LlmProvider & { model: string } = {
+      model: "claude-test",
+      complete: async (r: LlmRequest) => {
+        requests.push(r);
+        calls += 1;
+        if (calls === 1) throw new LlmRefusalError();
+        return { content: CONNECTIONS_PLAN, stopReason: "end_turn" };
+      },
+    };
+    const s = stack(["unused"], { provider: { llm, requests } });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(requests).toHaveLength(2);
   });
 
   it("fails when the planner answers with no nodes (the planner refuses an empty plan), committing nothing", async () => {

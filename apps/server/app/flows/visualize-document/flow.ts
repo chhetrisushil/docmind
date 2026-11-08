@@ -61,7 +61,8 @@ export const visualizeCommitStep = step$({
 export const VISUALIZE_STEPS = [visualizeExtractStep, visualizeLoadStep, visualizeCommitStep];
 
 /**
- * extract (model, facts stored sealed) -> load (the facts, for the decision) -> one planner decision -> commit
+ * extract (model, facts stored sealed) -> load (the facts, for the decision; skipped when there are none) -> one planner
+ * decision (over the facts and the live connections) -> commit
  * (the plan to the document's lineage). `planner` is read after the load step, so a role that went off in
  * between ends the run as `skipped`. A failure here never reaches the document's ingest status.
  */
@@ -72,13 +73,24 @@ export const runVisualize =
     if (extracted.outcome !== "done")
       return { outcome: extracted.outcome, ...(extracted.code && { code: extracted.code }) };
     if (extracted.model === "none") return { outcome: "skipped" };
-    if (extracted.count === 0) return { outcome: "empty" };
-    const loaded = await ctx.run(visualizeLoadStep, input);
-    if (loaded.outcome !== "done") return { outcome: loaded.outcome };
+    // No facts (the model found none, or refused and the stored facts were cleared): there is nothing to load, but the
+    // connections are live data, so the planner still runs, offered only the connections capability.
+    let facts: LoadOutput["facts"] = [];
+    if (extracted.count !== 0) {
+      const loaded = await ctx.run(visualizeLoadStep, input);
+      if (loaded.outcome !== "done") return { outcome: loaded.outcome };
+      facts = loaded.facts;
+    }
     const p = planner();
     if (!p) return { outcome: "skipped" };
-    const plan = await planVisuals(p, loaded.facts, ctx);
+    const plan = await planVisuals(p, facts, ctx);
     if (plannerUnavailable(plan)) return { outcome: "failed", code: "visuals-model-unavailable" };
+    // With no facts, a plan the planner could not make (it refuses an empty plan) is just nothing to show.
+    if (
+      extracted.count === 0 &&
+      (plan.ops.length === 0 || plan.findings.some((f) => f.severity === "error"))
+    )
+      return { outcome: "empty" };
     if (plan.findings.some((f) => f.severity === "error"))
       return { outcome: "failed", code: "visuals-plan-invalid" };
     if (plan.ops.length === 0) return { outcome: "empty" };
