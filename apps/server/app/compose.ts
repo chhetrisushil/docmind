@@ -53,7 +53,13 @@ import { visualsLineage } from "./flows/visualize-document/lineage";
 import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
 import { PgVisualizeGuard } from "./flows/visualize-document/pgGuard";
 import { visualsPlanner } from "./flows/visualize-document/planner";
-import { loomVisualsStarter, pgReadyDocuments } from "./flows/visualize-document/start";
+import { PgVisualRuns, visualRunRecorder } from "./flows/visualize-document/runs";
+import {
+  loomVisualsStarter,
+  pgReadyDocuments,
+  pgRetryDocuments,
+} from "./flows/visualize-document/start";
+import { visualsStateReader } from "./flows/visualize-document/state";
 import { visualizeTurnFlow } from "./flows/visualize-turn/flow";
 import { PgTurnGuard } from "./flows/visualize-turn/guard";
 import type { TurnRef } from "./flows/visualize-turn/ids";
@@ -302,8 +308,11 @@ export function buildServer(options: ComposeOptions) {
     },
   });
   const titles = options.chat && loomTitleStarter(app.runtime);
+  const visualRuns = new PgVisualRuns(pool);
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
     ready: pgReadyDocuments(pool),
+    retry: pgRetryDocuments(pool),
+    runs: visualRuns,
     enabled: visualsLlm !== undefined,
   });
   const turns =
@@ -355,7 +364,10 @@ export function buildServer(options: ComposeOptions) {
     sensitive,
     ...(options.status.userExecutions && { userExecutions: options.status.userExecutions }),
   });
-  feed.sinks = [status.onEvent, activity.onEvent];
+  // The end of a visualize execution is recorded (the detail page's `visuals.state`, the boot sweep's re-run source) and a
+  // failed one tells the owner's open pages.
+  const visualRecorder = visualRunRecorder({ runs: visualRuns, bus: options.ingest.bus });
+  feed.sinks = [status.onEvent, activity.onEvent, visualRecorder.onEvent];
   const ingest = options.wrapIngest
     ? options.wrapIngest(loomIngest(app.runtime))
     : loomIngest(app.runtime);
@@ -490,6 +502,9 @@ export function buildServer(options: ComposeOptions) {
         registry: options.ingest.registry,
         ingest,
         visuals,
+        // Its own limiter (10 per user per minute): a document's retry and a chat's visualize are different resources, and
+        // a shared window would let clicks on one starve the other.
+        visualize: { starter: visuals, limiter: new UserRateLimit() },
         starts,
         status,
       }),
@@ -497,6 +512,7 @@ export function buildServer(options: ComposeOptions) {
         authenticator,
         views,
         lineage: visualsLineageOf,
+        visualsState: visualsStateReader({ pool, runs: visualRuns, starter: visuals }),
         readers: {
           pool,
           fields,

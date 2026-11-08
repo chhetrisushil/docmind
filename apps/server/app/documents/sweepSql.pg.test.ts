@@ -16,7 +16,9 @@ const DEFINERS = [
   "docmind_erasure_status",
   "docmind_orphan_statuses",
   "docmind_ready_documents",
+  "docmind_record_visual_run",
   "docmind_stale_uploads_v2",
+  "docmind_visual_retry_documents",
 ];
 const fn = (max = 10) =>
   `docmind_stale_uploads_v2(make_interval(secs => 120), make_interval(secs => 604800), ${max})`;

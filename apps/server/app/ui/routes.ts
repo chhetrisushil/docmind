@@ -14,6 +14,7 @@ import { getChat } from "../chats/sessions";
 import { withTenant } from "../db/tenant";
 import { getDocument } from "../documents/repo";
 import { experienceIdOf } from "../flows/visualize-document/lineage";
+import type { VisualsStateReader } from "../flows/visualize-document/state";
 import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
@@ -26,6 +27,8 @@ export interface UiRouteDeps {
   readers: UiReaderDeps;
   /** The visuals lineage (the one the visualize flow commits to): its head is the document's visuals. */
   lineage: Lineage;
+  /** Where the document's visuals stand (`visuals: { state }` on its detail). Absent: the detail carries none (a deployment without the visuals flow). */
+  visualsState?: VisualsStateReader;
   /** Test seam: replaces the owner check (default: the document is the caller's, tenant-scoped, as `GET /api/documents/:id`). */
   owns?: (identity: Identity, documentId: string) => Promise<boolean>;
   /** Test seam: replaces the chat owner check (default: the chat is the caller's and not soft-deleted). */
@@ -144,8 +147,12 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
           return sendError(res, 404, "not_found", "document not found");
         const surface = surfaceOf(req);
         if (!surface.success) return sendError(res, 400, "invalid_request", "unknown surface");
-        const payload = deps.views.documentPayload(id, await headOf(identity, id), surface.data);
-        json(res, 200, payload as unknown as UiViewResponse);
+        const head = await headOf(identity, id);
+        const payload = deps.views.documentPayload(id, head, surface.data);
+        const visuals = deps.visualsState
+          ? { visuals: { state: await deps.visualsState(identity, id, head !== null) } }
+          : {};
+        json(res, 200, { ...payload, ...visuals } as unknown as UiViewResponse);
       }),
     ),
 

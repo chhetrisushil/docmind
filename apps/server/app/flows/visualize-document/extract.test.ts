@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LlmRefusalError } from "@docmind/llm-anthropic";
+import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { tainted } from "@loom/classify";
 import { type LlmProvider, type LlmRequest, guardRequest } from "@loom/llm";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +7,7 @@ import { LLM_RETRY } from "../ingest-document/stepEffect";
 import { EXTRACT_WINDOW_CHARS, extractEffect } from "./extract";
 import type { Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
+import { visualizeExecutionId } from "./start";
 
 const C0 = randomUUID();
 const C1 = randomUUID();
@@ -48,7 +49,7 @@ function setup(
       store.held = [...facts];
       return facts.length;
     },
-    list: async () => [] as Fact[],
+    list: async () => store.held,
   };
   const d = {
     guard: { begin: async () => {} },
@@ -160,5 +161,94 @@ describe("visualize-extract step", () => {
     expect(content[0]?.text).toBe((fenced.messages[0]?.content as { text: string }[])[0]?.text);
     expect(content[0]?.text).toMatch(/^<untrusted-input origin="document">/);
     expect(req?.system).toContain("untrusted");
+  });
+
+  const failing = (err: () => Error) => {
+    const calls = { n: 0 };
+    const llm = Object.assign(
+      {
+        complete: async () => {
+          calls.n++;
+          throw err();
+        },
+      },
+      { model: "claude-test" },
+    );
+    return { llm, calls };
+  };
+
+  it("ends failed with visuals-model-unavailable when the model stays unavailable through every attempt", async () => {
+    const { llm, calls } = failing(() => new LlmUnavailableError(503));
+    const sleep = vi.fn(async () => {});
+    const s = setup({ llm, sleep });
+    expect(await run(s)).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
+    expect(calls.n).toBe(LLM_RETRY.maxAttempts);
+    expect(sleep).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts - 1);
+    expect(s.store.writes).toEqual([]);
+  });
+
+  it("an unavailable model that comes back within the attempts is a normal run", async () => {
+    let n = 0;
+    const llm = Object.assign(
+      {
+        complete: async () => {
+          if (++n < 3) throw new LlmUnavailableError(529);
+          return { content: JSON.stringify({ facts: [GOOD] }), stopReason: "end_turn" as const };
+        },
+      },
+      { model: "claude-test" },
+    );
+    expect(await run(setup({ llm }))).toEqual({ outcome: "done", count: 1, model: "claude-test" });
+  });
+
+  it("a permanent model error and bad JSON are not 'unavailable': the step still fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { llm } = failing(() => new LlmRequestError(400));
+    await expect(run(setup({ llm }))).rejects.toThrow(/^ingest step failed: visualize-extract$/);
+  });
+
+  describe("a re-run (-r<n> execution)", () => {
+    const rerunCtx = (s: ReturnType<typeof setup>, n = 1) =>
+      ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+
+    it("keeps the stored facts and makes no model call", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      s.store.held = [{ ...GOOD, ordinal: 0 } as Fact, { ...GOOD, ordinal: 1 } as Fact];
+      expect(await extractEffect(s.d).execute(s.ref, rerunCtx(s))).toEqual({
+        outcome: "done",
+        count: 2,
+        model: "claude-test",
+      });
+      expect(requests).toEqual([]);
+      expect(s.store.writes).toEqual([]);
+    });
+
+    it("extracts when the document has no stored facts", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      expect(await extractEffect(s.d).execute(s.ref, rerunCtx(s, 4))).toMatchObject({
+        outcome: "done",
+        count: 1,
+      });
+      expect(requests).toHaveLength(1);
+    });
+
+    it("the automatic run (no -r) extracts again over stored facts", async () => {
+      const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+      const s = setup({ llm });
+      s.store.held = [{ ...GOOD, ordinal: 0 } as Fact];
+      const ctx = { executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1) } as never;
+      await extractEffect(s.d).execute(s.ref, ctx);
+      expect(requests).toHaveLength(1);
+    });
+
+    it("with the role off a re-run is still model none", async () => {
+      const s = setup();
+      expect(await extractEffect(s.d).execute(s.ref, rerunCtx(s))).toEqual({
+        outcome: "done",
+        model: "none",
+      });
+    });
   });
 });

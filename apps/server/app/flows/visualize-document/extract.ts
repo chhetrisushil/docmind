@@ -1,17 +1,20 @@
-import { LlmOutputError, LlmRefusalError } from "@docmind/llm-anthropic";
+import { LlmOutputError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { tainted } from "@loom/classify";
 import type { Effect } from "@loom/effect-runtime";
 import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { z } from "zod";
+import { parseVisualizeExecution } from "../../status/model";
+import { FAILURE_CODES } from "../ingest-document/errors";
 import { jsonAnswer } from "../ingest-document/llmJson";
 import type { ChunkStore } from "../ingest-document/pgChunks";
 import {
   LLM_BACKOFF_CAP_MS,
   LLM_RETRY,
   type StepGuard,
-  type StepResult,
+  StepResult,
   type StepSeams,
   ingestStepOptions,
-  stepEffect,
+  stepEffectOf,
 } from "../ingest-document/stepEffect";
 import { type DraftFact, ExtractAnswer, admit } from "./facts";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
@@ -21,6 +24,15 @@ import { EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
 export const EXTRACT_WINDOW_CHARS = 24_000;
 const READ_BATCH = 200;
 export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
+
+/**
+ * The extract step's output: a `StepResult` that may also end `visuals-model-unavailable` (the model stayed unreachable
+ * through every attempt). A code, never text.
+ */
+export const ExtractResult = StepResult.extend({
+  code: z.enum([...FAILURE_CODES, "visuals-model-unavailable"]).optional(),
+});
+export type ExtractResult = z.infer<typeof ExtractResult>;
 
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
@@ -108,14 +120,19 @@ export async function askForFacts(
  * Visualize-extract step: the document's chunks go to the `visuals` model in windows, as fenced
  * untrusted data; the answer is parsed, grounded against the chunks, and the survivors stored sealed.
  */
-export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResult> {
-  return stepEffect(
+export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractResult> {
+  return stepEffectOf<ExtractResult, VisualizeRef>(
     "visualize-extract",
     deps.guard,
-    async (ref, signal) => {
+    async (ref, signal, _progress, executionId) => {
       const llm = deps.llm;
       if (!llm) return { model: "none" };
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
+      // A re-run (`-r<n>`) re-plans over the stored facts and extracts only when the document has none.
+      if (executionId !== undefined && (parseVisualizeExecution(executionId)?.rerun ?? 0) > 0) {
+        const stored = await deps.facts.list(ref);
+        if (stored.length > 0) return { count: stored.length, model };
+      }
       const ids = (await deps.chunks.sectionsOf(ref)).map((s) => s.id);
       const chunks = await readChunks(
         async (batch) => new Map((await deps.chunks.read(ref, batch)).map((c) => [c.id, c.text])),
@@ -139,10 +156,22 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResul
       const count = await deps.facts.replace(ref, facts, signal);
       return { count, model };
     },
-    ingestStepOptions(
-      { ...deps, stepTimeoutMs: EXTRACT_STEP_TIMEOUT_MS },
-      LLM_RETRY,
-      LLM_BACKOFF_CAP_MS,
-    ),
+    {
+      schema: ExtractResult,
+      ended: (end) => end,
+    },
+    {
+      ...ingestStepOptions(
+        { ...deps, stepTimeoutMs: EXTRACT_STEP_TIMEOUT_MS },
+        LLM_RETRY,
+        LLM_BACKOFF_CAP_MS,
+      ),
+      // The model stayed unreachable (a timeout, a 5xx, a rate limit) through every attempt: a recorded failure the user
+      // can retry, not a failed execution.
+      exhausted: (err) =>
+        err instanceof LlmUnavailableError
+          ? { outcome: "failed", code: "visuals-model-unavailable" }
+          : undefined,
+    },
   );
 }

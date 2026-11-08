@@ -157,8 +157,13 @@ widget binds a fact. Fact values reach the model only as fenced, untrusted data,
 `compose({ intent, catalog, capabilities, containers }, ctx)` with the step's execution context, so
 the plan is one recorded `ctx.decide`. Error findings fail the attempt (the planner's two attempts).
 As built in step (a) there is no step-level retry of planning: a model error is recorded in the
-decision and the flow ends `failed` with `visuals-plan-invalid` (deferred: a retry/re-run path and a
-separate `visuals-model-unavailable` code). Zero nodes is a valid plan: the flow ends `empty`.
+decision and the flow ends `failed` with `visuals-plan-invalid`. Zero nodes is a valid plan: the flow ends `empty`.
+As built (retry item): a model that stayed unreachable (`LlmUnavailableError` through every attempt of the extract step, or
+the planner's own attempts all ending in `model-error` for that class) ends `failed` with `visuals-model-unavailable`
+instead of a thrown failure, and `POST /api/documents/:id/visuals/retry` re-runs the document as `<id>-r<n>`: it re-plans over
+the stored facts and extracts only when there are none. The last run is recorded in `visual_runs` (migration 0030), the
+detail response carries `visuals: { state }`, the progress stream a `visuals: "failed"` event, and the boot sweep re-runs
+once the documents whose last run ended `visuals-model-unavailable`. A permanent model error still fails the execution.
 
 **Decision sealing.** The plan is recorded as a `DECISION_RECORDED` event in the visualize
 execution's log; the paths of the planner's recorded choice that hold ops and summary are added to
@@ -242,6 +247,5 @@ catalogue entry.
 Visuals in chat answers (sub-project 2); user editing or pinning of visuals; interactive filtering
 inside charts; facts spanning documents before step (b).
 
-Deferred from step (a) after the final review (owner to schedule): retry or re-run of a failed
-visualize execution, and a `visuals-model-unavailable` code; citation markers in widget captions;
+Deferred from step (a) after the final review (owner to schedule): citation markers in widget captions;
 re-running on `schemaDrift`; reclaiming erased or orphaned `lineage_content` rows.

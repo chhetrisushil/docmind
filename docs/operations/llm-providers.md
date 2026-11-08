@@ -153,6 +153,15 @@ does. An upgraded deployment therefore boots as before, with no new key and no n
    flight, so a burst of visuals work queues rather than flooding the `visuals` provider.
 4. Keep the key stable from then on (see the rotation note above).
 
+Document visuals can be made again. A run whose `visuals` model stayed unreachable (a timeout, a 5xx or a rate limit, after the
+step's 6 attempts) ends `failed` with the code `visuals-model-unavailable`, and the document page offers "Retry" (`POST
+/api/documents/:id/visuals/retry`, 10 per user per minute). The next server boot also re-runs, once, every ready document whose
+last run ended that way (at most two visualize executions at once, none while the role is off). This needs migration 0030:
+the table `visual_runs` (one row per document and ingest generation: run number, state, a fixed code; ids and enums only) and
+two narrow SECURITY DEFINER functions, `docmind_record_visual_run` (the tenant comes from the document row) and
+`docmind_visual_retry_documents` (the boot sweep's list). The flow's step graph is unchanged, so executions in flight at
+an upgrade resume as before.
+
 The same role (and the same `DOCMIND_PLANNER_DECISION_KEY`) turns on chat visuals; it adds one table (`turn_visual_facts`, migration 0029) and one narrow SECURITY DEFINER lookup, `docmind_chat_tenant(chat_id, user_id)`, which the turn-settled hook uses to find a chat's tenant (it binds the user too) and needs a Loom build that exports `turnSettledObserver` (the `LOOM_REF` in CI). Chat turns that settled while the role was off, or before the upgrade, are not backfilled: the "Visualize" action on the answer makes them (it is offered only while the role is on; with the role off an existing strip still shows, with no action). Turns further back than 5000 records cannot be visualized on demand. After a dropped chat connection the web re-reads the newest page on reconnect, so a strip made in the gap appears without a reload.
 
 ## What users see

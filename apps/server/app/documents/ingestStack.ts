@@ -54,6 +54,7 @@ export interface IngestEvent {
   step?: string;
   status: string;
   detail?: string;
+  visuals?: string;
 }
 
 export interface IngestStack {

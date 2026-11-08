@@ -58,6 +58,11 @@ export class ViewSession {
     return "view" in this.source ? this.source.view : "document" in this.source ? "detail" : "turn";
   }
 
+  /** Where the document's visuals stand, as of the last fetch of the view (a document's detail only). */
+  get visuals(): UiViewResponse["visuals"] {
+    return this.payload.visuals;
+  }
+
   private constructor(
     private readonly api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals" | "uiHydrate">,
     readonly source: ViewSource,

@@ -11,6 +11,7 @@ import {
   MeResponse,
   type PatchChatRequest,
   RetryDocumentResponse,
+  RetryVisualsResponse,
   type SendMessageRequest,
   SendMessageResponse,
   type SignUpRequest,
@@ -66,6 +67,8 @@ export interface Api {
   uiDocumentDetail(id: string, signal?: AbortSignal): Promise<UiViewResponse>;
   /** A chat turn's compiled visuals (404 when it has none). */
   uiTurnVisuals(chatId: string, ord: number, signal?: AbortSignal): Promise<UiViewResponse>;
+  /** Asks for the document's visuals to be made again (202). Rejects with `ApiError`: 409 `visualize_running` / `not_visualizable`, 429. */
+  retryDocumentVisuals(id: string): Promise<void>;
   /** Asks for the turn's visuals to be made (202). Rejects with `ApiError`: 409 `visualize_running` / `not_visualizable`, 429. */
   visualizeTurn(chatId: string, ord: number): Promise<void>;
   uiHydrate(
@@ -177,6 +180,11 @@ export function createApi(
         schema: UiViewResponse,
         ...(signal && { signal }),
       }),
+    retryDocumentVisuals: async (id) => {
+      await http.request("POST", `/api/documents/${seg(id)}/visuals/retry`, {
+        schema: RetryVisualsResponse,
+      });
+    },
     visualizeTurn: async (chatId, ord) => {
       await http.request("POST", `/api/chats/${seg(chatId)}/turns/${ord}/visualize`, {
         schema: VisualizeTurnResponse,

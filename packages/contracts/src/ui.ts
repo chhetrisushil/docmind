@@ -20,6 +20,10 @@ export type SurfaceName = z.infer<typeof SurfaceName>;
 const Scalar = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 /** `GET /api/ui/views/:view?surface=`: the compiled blueprint and the handle inventory; never a provider, never data. */
+/** The state of a document's visuals, on its detail response: `none` (no visuals and none failed), `ready`, `failed` (the last run ended failed: retry offers), `running`. */
+export const VisualsState = z.enum(["none", "ready", "failed", "running"]);
+export type VisualsState = z.infer<typeof VisualsState>;
+
 export const UiViewResponse = z.object({
   view: z.union([ViewName, z.literal("turn")]),
   surface: SurfaceName,
@@ -47,6 +51,8 @@ export const UiViewResponse = z.object({
       placeholderNodes: z.array(z.string()),
     })
     .passthrough(),
+  /** A document's detail only (owner-only like the rest of it): where the document's visuals stand. */
+  visuals: z.object({ state: VisualsState }).optional(),
 });
 export type UiViewResponse = z.infer<typeof UiViewResponse>;
 

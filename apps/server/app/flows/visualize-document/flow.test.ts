@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
@@ -69,7 +70,24 @@ afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
 });
 
-function stack(replies: string[] | null) {
+/** A provider that answers `ok` (in order, the last repeating) for the first `answers` calls and then throws `err` on every call. */
+const failingAfter = (answers: string[], err: () => Error) => {
+  const requests: LlmRequest[] = [];
+  const llm: LlmProvider & { model: string } = {
+    model: "claude-test",
+    complete: async (r: LlmRequest) => {
+      requests.push(r);
+      if (requests.length > answers.length) throw err();
+      return { content: answers[requests.length - 1] as string, stopReason: "end_turn" };
+    },
+  };
+  return { llm, requests };
+};
+
+function stack(
+  replies: string[] | null,
+  o: { provider?: ReturnType<typeof scripted>; executionId?: string } = {},
+) {
   const inner = new InMemoryAsyncEventStore();
   const sealed = new EncryptingEventStore(inner, new InMemoryKeyStore(), {
     sensitive: { ...SENSITIVE_EVENT_PATHS },
@@ -80,7 +98,7 @@ function stack(replies: string[] | null) {
     events: new InMemoryLineageStore(),
     content: new InMemoryContentStore(),
   });
-  const model = replies ? scripted(replies) : undefined;
+  const model = o.provider ?? (replies ? scripted(replies) : undefined);
   let held: Fact[] = [];
   const planner = model && visualsPlanner(model.llm, KEY);
   const deps: VisualizeDeps = {
@@ -117,20 +135,34 @@ function stack(replies: string[] | null) {
     userId: randomUUID(),
     documentId: randomUUID(),
   };
-  const executionId = visualizeExecutionId(ref.userId, ref.documentId, 2);
-  const run = async () => {
+  const executionId = o.executionId ?? visualizeExecutionId(ref.userId, ref.documentId, 2);
+  const run = async (id: string = executionId) => {
     const handle = await app.runtime.start(
       visualizeDocumentFlow(() => planner),
       ref,
       {
-        executionId,
+        executionId: id as typeof executionId,
         principal: { tenant: ref.tenantId, actor: ref.userId },
       },
     );
     const state = await handle.waitForCompletion();
     return VisualizeOutput.parse(state.variables._output);
   };
-  return { app, inner, sealed, lineage, bus, model, ref, executionId, run };
+  return {
+    app,
+    inner,
+    sealed,
+    lineage,
+    bus,
+    model,
+    ref,
+    executionId,
+    run,
+    held: () => held,
+    hold: (facts: Fact[]) => {
+      held = facts;
+    },
+  };
 }
 
 describe("visualize-document flow", () => {
@@ -199,6 +231,89 @@ describe("visualize-document flow", () => {
   });
 });
 
+describe("visualize-document flow: the model is unavailable", () => {
+  const down = () => new LlmUnavailableError(503);
+
+  it("ends failed with visuals-model-unavailable when the extract model stays down through every attempt (not a thrown failure)", async () => {
+    const provider = failingAfter([], down);
+    const s = stack(null, { provider });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
+    expect(provider.requests).toHaveLength(LLM_RETRY.maxAttempts);
+    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  it("ends failed with visuals-model-unavailable when the planner's model stays down (facts are stored first)", async () => {
+    const provider = failingAfter([FACTS], down);
+    const s = stack(null, { provider });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
+    expect(s.held()).toHaveLength(1); // the facts survive for the re-run
+    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  it("a permanent model error is not 'unavailable': the execution still fails", async () => {
+    const provider = failingAfter([], () => new LlmRequestError(400));
+    const s = stack(null, { provider });
+    await expect(s.run()).rejects.toThrow();
+  });
+
+  it("a planner that gives a malformed plan (not a model failure) stays visuals-plan-invalid", async () => {
+    const s = stack([FACTS, "not json", "not json", "not json"]);
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
+  });
+
+  it("the outcome and code are all the event log keeps of the failure (no message, no content)", async () => {
+    const s = stack(null, { provider: failingAfter([], down) });
+    await s.run();
+    const end = (await s.inner.read(s.executionId)).find(
+      (e) => e.eventType === "EXECUTION_COMPLETED",
+    );
+    expect((end?.payload as { output: unknown }).output).toEqual({
+      outcome: "failed",
+      code: "visuals-model-unavailable",
+    });
+  });
+});
+
+describe("visualize-document flow: a re-run", () => {
+  const rerunId = (s: ReturnType<typeof stack>) =>
+    visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+
+  it("re-plans over the stored facts without asking the model for facts again", async () => {
+    const s = stack([FACTS, PLAN]);
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(2);
+    expect(await s.run(rerunId(s))).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(3); // one more planner call only
+    expect(JSON.stringify(s.model?.requests.at(-1))).not.toContain("You extract facts");
+  });
+
+  it("extracts when the document has no stored facts", async () => {
+    const s = stack([FACTS, PLAN]);
+    expect(await s.run(rerunId(s))).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(2); // extract window, planner
+    expect(s.held()).toHaveLength(1);
+  });
+
+  it("a first run (no -r suffix) always extracts, even over stored facts", async () => {
+    const s = stack([FACTS, PLAN]);
+    s.hold([{ kind: "figure", label: "Old", value: 1, chunkIds: [CHUNK], ordinal: 0 } as Fact]);
+    await s.run();
+    expect(s.model?.requests).toHaveLength(2);
+  });
+
+  it("recovers from the failure that caused it: the model is back", async () => {
+    const down = failingAfter([FACTS], () => new LlmUnavailableError(503));
+    const s = stack(null, { provider: down });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
+    // Same facts held; the next run's planner call answers.
+    const back = scripted([PLAN]);
+    const s2 = stack(null, { provider: back });
+    s2.hold(s.held());
+    expect(await s2.run(rerunId(s2))).toEqual({ outcome: "done" });
+    expect(back.requests).toHaveLength(1);
+  });
+});
+
 describe("a visualize execution is not an ingest one", () => {
   it("its ids never match the ingest pattern, and its failure never folds into an ingest status", async () => {
     const s = stack(null);
@@ -206,6 +321,12 @@ describe("a visualize execution is not an ingest one", () => {
     expect(isVisualizeExecution(s.executionId)).toBe(true);
     expect(isVisualizeExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1))).toBe(
       true,
+    );
+    expect(isVisualizeExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(
+      true,
+    );
+    expect(isIngestExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(
+      false,
     );
     // A failed visualize execution's events leave the ingest status model at its initial state (the neutral row).
     const failed = {
