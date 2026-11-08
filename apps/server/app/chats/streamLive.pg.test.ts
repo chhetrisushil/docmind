@@ -55,6 +55,16 @@ describe.skipIf(!PG_URL)(
       s.close();
     });
 
+    it("carries a visuals frame live, with the outcome word and no content", async () => {
+      const chatId = await seedChat(h, ALICE);
+      const s = await open("alice", chatId);
+      await s.next();
+      await s.next();
+      h.wiring.bus.publish(chatId, { kind: "visuals", ord: 4, outcome: "visualized" });
+      expect(await s.next()).toBe('event: visuals\ndata: {"ord":4,"outcome":"visualized"}');
+      s.close();
+    });
+
     it("tells a late joiner what the running turn has reasoned and answered so far, once, before anything new", async () => {
       const chatId = await seedChat(h, ALICE);
       // The hub keeps the in-progress reasoning and reply of a running turn; produce them the way the model effect does.

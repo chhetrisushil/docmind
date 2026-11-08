@@ -46,3 +46,14 @@ describe("ChatBus", () => {
     expect(() => bus.subscribe("a", () => {})).not.toThrow();
   });
 });
+
+it("delivers a visuals event to the chat's subscribers only", () => {
+  const bus = new ChatBus();
+  const mine: unknown[] = [];
+  const other: unknown[] = [];
+  bus.subscribe("c1", (e) => mine.push(e));
+  bus.subscribe("c2", (e) => other.push(e));
+  bus.publish("c1", { kind: "visuals", ord: 6, outcome: "visualized" });
+  expect(mine).toEqual([{ kind: "visuals", ord: 6, outcome: "visualized" }]);
+  expect(other).toEqual([]);
+});

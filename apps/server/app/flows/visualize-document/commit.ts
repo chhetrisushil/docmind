@@ -25,6 +25,18 @@ export type CommitInput = VisualizeRef & {
   report: PlanReport;
 };
 
+/** Runs a lineage commit and maps its failures to the step errors: an erased line is "gone"; a refusal repeats and an unreadable line fails closed (neither is transient). */
+export async function committing<T>(commit: () => Promise<T>): Promise<T> {
+  try {
+    return await commit();
+  } catch (err) {
+    if (err instanceof LineErasedError) throw new DocumentGoneError();
+    if (err instanceof LineageRefusedError || err instanceof LineUnreadableError)
+      throw new VisualsLineageError();
+    throw err;
+  }
+}
+
 /**
  * Commits the plan to the document's lineage line (sealed under the user's key). The output is a content-free
  * `StepResult` (the number of ops committed). A line whose owner was erased is `document_gone`.
@@ -39,15 +51,7 @@ export function commitEffect(
     deps.guard,
     async (ref) => {
       const input = ref as CommitInput;
-      try {
-        await commitPlan(deps.lineage, input, input, deps.now);
-      } catch (err) {
-        if (err instanceof LineErasedError) throw new DocumentGoneError();
-        // Neither is transient: a refusal repeats, and an unreadable line (key not on this node, not a confirmed erasure) fails closed.
-        if (err instanceof LineageRefusedError || err instanceof LineUnreadableError)
-          throw new VisualsLineageError();
-        throw err;
-      }
+      await committing(() => commitPlan(deps.lineage, input, input, deps.now));
       try {
         deps.bus.publish(
           { userId: input.userId },

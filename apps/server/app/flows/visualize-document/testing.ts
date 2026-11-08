@@ -34,11 +34,16 @@ export function recording() {
   return ctx;
 }
 
-/** A real `PlanResult` (one KeyFigure tile `nodeId`, labelled `label`, binding one fact), made by the reference planner on a scripted model. */
-export async function aPlan(
+/** A real `PlanResult` with one KeyFigure `nodeId` binding `fact-0`, made by the reference planner on a scripted model; `run` composes it (document or turn flavour). */
+export async function scriptedFigurePlan(
   nodeId: string,
   label: string,
-  summary = "A headline figure",
+  summary: string,
+  run: (
+    planner: ReferencePlanner,
+    fact: Fact,
+    ctx: ReturnType<typeof recording>,
+  ) => Promise<PlanResult>,
 ): Promise<PlanResult> {
   const fact: Fact = {
     kind: "figure",
@@ -57,8 +62,18 @@ export async function aPlan(
     binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" },
   };
   const model = scriptedPlannerModel([JSON.stringify({ summary, nodes: [node] })]);
-  return planVisuals(new ReferencePlanner({ model, modelId: "test" }), [fact], recording());
+  return run(new ReferencePlanner({ model, modelId: "test" }), fact, recording());
 }
+
+/** A real `PlanResult` (one KeyFigure tile `nodeId`, labelled `label`, binding one fact), made by the reference planner on a scripted model. */
+export const aPlan = (
+  nodeId: string,
+  label: string,
+  summary = "A headline figure",
+): Promise<PlanResult> =>
+  scriptedFigurePlan(nodeId, label, summary, (planner, fact, ctx) =>
+    planVisuals(planner, [fact], ctx),
+  );
 
 /** A node's children (the experience root is a container; its static type is the wider ExperienceNode). */
 export const childrenOf = (root: unknown) =>

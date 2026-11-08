@@ -11,7 +11,16 @@ import {
 } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { subjectOfExecution } from "../../subject";
-import { HeadMovedError, commitPlan, experienceIdOf, visualsLineage } from "./lineage";
+import { turnExperienceId } from "../visualize-turn/ids";
+import { TURN_INTENT } from "../visualize-turn/plan";
+import { aTurnPlan } from "../visualize-turn/testing";
+import {
+  HeadMovedError,
+  commitPlan,
+  commitPlanTo,
+  experienceIdOf,
+  visualsLineage,
+} from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { aPlan, childrenOf } from "./testing";
 
@@ -195,5 +204,34 @@ describe("visualsLineage", () => {
         subjectOf: subjectOfExecution,
       }),
     ).toBeInstanceOf(Lineage);
+  });
+});
+
+describe("commitPlanTo a turn's line", () => {
+  const target = (r: { userId: string; chatId: string; ord: number }) => ({
+    experienceId: turnExperienceId(r),
+    intent: TURN_INTENT,
+    sourceKind: "turn-visuals",
+  });
+  it("creates the line, replaces its content on a re-run, and writes nothing for an identical plan", async () => {
+    const lineage = newLineage();
+    const r = { userId: randomUUID(), chatId: randomUUID(), ord: 6 };
+    const first = await commitPlanTo(lineage, target(r), await aTurnPlan("a", "A"), now);
+    const again = await commitPlanTo(lineage, target(r), await aTurnPlan("a", "A"), now);
+    expect(again.head).toBe(first.head);
+    const second = await commitPlanTo(lineage, target(r), await aTurnPlan("b", "B"), now);
+    expect(second.head).not.toBe(first.head);
+    const latest = await lineage.resolveLatest(turnExperienceId(r));
+    if (!latest.ok) throw new Error("no head");
+    expect(childrenOf(latest.value.root).map((c) => c.id)).toEqual(["b"]);
+  });
+  it("keeps a document's line and a turn's line apart", async () => {
+    const lineage = newLineage();
+    const doc = ref();
+    const turn = { userId: doc.userId, chatId: randomUUID(), ord: 2 };
+    await commitPlan(lineage, doc, await aPlan("doc", "D"), now);
+    await commitPlanTo(lineage, target(turn), await aTurnPlan("turn", "T"), now);
+    expect((await lineage.head(experienceIdOf(doc))).ok).toBe(true);
+    expect((await lineage.head(turnExperienceId(turn))).ok).toBe(true);
   });
 });

@@ -204,6 +204,8 @@ const Count = z.number().int().nonnegative();
  * `turn` is the hub's accepted-turn number, the same one as `answer` and `ChatMessageDto.turn`. `tool` and
  * `tool-reset` come from DocMind's `ChatBus`, which numbers by the turn key (`turnKey`, what the side table uses);
  * the two numbers are not convertible from a live event, so each frame keeps the name of the one it carries.
+ * `visuals` is live like `tool`: it carries `ord` (the assistant record's ordinal, `ChatMessageDto.id`; `RecordOrd`) and a
+ * fixed `outcome` word, no content.
  */
 export const ChatStreamEvent = z.discriminatedUnion("kind", [
   z.object({
@@ -223,6 +225,11 @@ export const ChatStreamEvent = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tool-reset"), turnKey: Count }),
   z.object({ kind: z.literal("answer"), turn: Count, text: z.string() }),
   z.object({ kind: z.literal("reset"), turn: Count }),
+  z.object({
+    kind: z.literal("visuals"),
+    ord: RecordOrd,
+    outcome: z.enum(["visualized", "nothing"]).default("visualized"),
+  }),
   z.object({ kind: z.literal("closed") }),
   z.object({
     kind: z.literal("error"),

@@ -1,6 +1,6 @@
 import { VISUALS_CATALOG, capabilitiesOf } from "@docmind/experiences";
 import type { Intent } from "@loom-ui/core";
-import type { DecideContext, PlanResult, Planner } from "@loom-ui/planner";
+import type { CapabilityRef, DecideContext, PlanResult, Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
@@ -45,21 +45,27 @@ export const VISUALS_INTENT: Intent = {
   sensitivity: "sensitive",
 };
 
-/** One `ctx.decide` (the planner's own): the model's plan over the document's facts, recorded and replayable. */
-export async function planVisuals(
+/** One `ctx.decide` (the planner's own): the model's plan for `intent` over `capabilities`, recorded and replayable. */
+export const composeVisuals = (
   planner: Planner,
-  facts: readonly Fact[],
+  intent: Intent,
+  capabilities: CapabilityRef[],
   ctx: DecideContext,
-): Promise<PlanResult> {
-  return planner.compose(
+): Promise<PlanResult> =>
+  planner.compose(
     {
-      intent: VISUALS_INTENT,
+      intent,
       catalog: VISUALS_CATALOG,
-      capabilities: capabilitiesOf(facts),
+      capabilities,
       containers: [],
       surface: "web",
       contextClass: "sensitive",
     },
     ctx,
   );
-}
+
+export const planVisuals = (
+  planner: Planner,
+  facts: readonly Fact[],
+  ctx: DecideContext,
+): Promise<PlanResult> => composeVisuals(planner, VISUALS_INTENT, capabilitiesOf(facts), ctx);
