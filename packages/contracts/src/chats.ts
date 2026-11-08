@@ -237,3 +237,7 @@ export const ChatStreamEvent = z.discriminatedUnion("kind", [
   }),
 ]);
 export type ChatStreamEvent = z.infer<typeof ChatStreamEvent>;
+
+/** `POST /api/chats/:id/turns/:ord/visualize`: a run of the turn's visuals was started. */
+export const VisualizeTurnResponse = z.object({ started: z.literal(true) });
+export type VisualizeTurnResponse = z.infer<typeof VisualizeTurnResponse>;

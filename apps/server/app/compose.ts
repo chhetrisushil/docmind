@@ -56,6 +56,7 @@ import { loomVisualsStarter, pgReadyDocuments } from "./flows/visualize-document
 import { visualizeTurnFlow } from "./flows/visualize-turn/flow";
 import { PgTurnGuard } from "./flows/visualize-turn/guard";
 import type { TurnRef } from "./flows/visualize-turn/ids";
+import { UserRateLimit } from "./flows/visualize-turn/limiter";
 import { PgTurnVisualFacts } from "./flows/visualize-turn/pgTurnFacts";
 import { readTurn } from "./flows/visualize-turn/readTurn";
 import { loomTurnStarter } from "./flows/visualize-turn/start";
@@ -505,6 +506,10 @@ export function buildServer(options: ComposeOptions) {
           eventStore: options.status.source,
           reasoning,
           ...(titleLlm && titles && { titles }),
+          ...(turns &&
+            turnRead && {
+              visualize: { starter: turns, turn: turnRead, limiter: new UserRateLimit() },
+            }),
         })),
       ...events.routes, // exact route, matched before `GET /api/documents/:id`
       ...(chatStreams?.routes ?? {}),
