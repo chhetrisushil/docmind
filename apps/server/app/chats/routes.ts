@@ -12,6 +12,10 @@ import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { decodeCursor, encodeCursor } from "../documents/cursor";
 import type { TitleStarter } from "../flows/chat-title/start";
+import type { TurnRef } from "../flows/visualize-turn/ids";
+import type { UserRateLimit } from "../flows/visualize-turn/limiter";
+import type { TurnRead } from "../flows/visualize-turn/readTurn";
+import type { TurnVisualsStarter } from "../flows/visualize-turn/start";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -32,6 +36,7 @@ import type { ReplyReasoning } from "./reasoningRead";
 import { chatReasoningRoutes } from "./reasoningRoutes";
 import { insertChat, listChats, softDeleteChat } from "./sessions";
 import type { ChatRef } from "./turnItems";
+import { chatVisualizeRoutes } from "./visualizeRoutes";
 import type { ChatWiring } from "./wiring";
 
 export interface ChatRouteDeps {
@@ -46,6 +51,12 @@ export interface ChatRouteDeps {
   reasoning: ReplyReasoning;
   /** Called by the send route for an untitled chat after a message was accepted. Absent without a title model. */
   titles?: Pick<TitleStarter, "fire">;
+  /** On-demand visuals (absent without the visuals flow): the starter, the turn reader and the per-user limiter. */
+  visualize?: {
+    starter: Pick<TurnVisualsStarter, "visualize">;
+    turn: { read(ref: TurnRef): Promise<TurnRead | null> };
+    limiter: Pick<UserRateLimit, "tryAcquire">;
+  };
 }
 
 export const PAGE = 50;
@@ -172,5 +183,6 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
     ...chatManageRoutes(deps),
     ...chatMessageRoutes(deps),
     ...chatReasoningRoutes(deps),
+    ...chatVisualizeRoutes(deps),
   };
 }

@@ -14,6 +14,7 @@ import {
   SendMessageRequest,
   SendMessageResponse,
   StopChatResponse,
+  VisualizeTurnResponse,
 } from "./index";
 
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -285,4 +286,9 @@ it("RecordOrd is the range of a message id: 1 to 15 digits, an integer", () => {
   expect(RecordOrd.safeParse(999_999_999_999_999).success).toBe(true);
   for (const bad of [0, -1, 1.5, 1_000_000_000_000_000])
     expect(RecordOrd.safeParse(bad).success, String(bad)).toBe(false);
+});
+
+it("VisualizeTurnResponse is exactly { started: true }", () => {
+  expect(VisualizeTurnResponse.parse({ started: true })).toEqual({ started: true });
+  expect(VisualizeTurnResponse.safeParse({ started: false }).success).toBe(false);
 });
