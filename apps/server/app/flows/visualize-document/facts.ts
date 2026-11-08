@@ -138,12 +138,13 @@ export function numbersInFact(f: DraftFact): number[] {
   }
 }
 
+const isPercent = (unit: string | undefined) => unit?.trim() === "%";
 const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1e-9, Math.abs(b) * 1e-6);
 
 /** A fact is grounded only if every number it asserts appears in the text of the chunks it cites. */
 export function grounded(f: DraftFact, chunkTexts: ReadonlyMap<string, string>): boolean {
   const pool = f.chunkIds.flatMap((id) => sourcePool(chunkTexts.get(id) ?? ""));
-  const percentUnit = f.kind !== "factTable" && f.unit === "%";
+  const percentUnit = f.kind !== "factTable" && isPercent(f.unit);
   return numbersInFact(f).every((n) =>
     pool.some((p) => close(p.value, n) || (percentUnit && p.percent && close(p.value / 100, n))),
   );
@@ -154,17 +155,26 @@ export function grounded(f: DraftFact, chunkTexts: ReadonlyMap<string, string>):
  * data value that grounded only as a fraction of a written percentage is rewritten to that written number.
  */
 function inDocumentForm(f: DraftFact, chunkTexts: ReadonlyMap<string, string>): DraftFact {
-  if (f.kind === "factTable" || f.unit !== "%") return f;
+  if (f.kind === "factTable" || !isPercent(f.unit)) return f;
   const pool = f.chunkIds.flatMap((id) => sourcePool(chunkTexts.get(id) ?? ""));
-  const fix = (n: number): number => {
-    if (pool.some((p) => close(p.value, n))) return n;
-    return pool.find((p) => p.percent && close(p.value / 100, n))?.value ?? n;
-  };
+  const asWritten = (n: number): number | undefined =>
+    pool.find((p) => p.percent && close(p.value / 100, n))?.value;
+  const asFraction = (n: number) =>
+    !pool.some((p) => close(p.value, n)) && asWritten(n) !== undefined;
+  const values =
+    f.kind === "figure"
+      ? [f.value, ...(f.compare ? [f.compare.value] : [])]
+      : f.points.map((p) => p.y);
+  // Mixed scales (some values in the document's form, some fractions) are left exactly as the model gave them.
+  if (!values.every(asFraction)) return f;
+  const fix = (n: number) => asWritten(n) ?? n;
   return f.kind === "figure"
     ? {
         ...f,
         value: fix(f.value),
-        ...(f.compare && { compare: { ...f.compare, value: fix(f.compare.value) } }),
+        ...(f.compare && {
+          compare: { ...f.compare, value: fix(f.compare.value) },
+        }),
       }
     : { ...f, points: f.points.map((p) => ({ ...p, y: fix(p.y) })) };
 }

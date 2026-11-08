@@ -165,7 +165,10 @@ export function factRefOfPin(toolName: string, pin: string): FactRef | null {
 export const TURN_READ = {
   viewer: { clearance: "sensitive" },
   audience: "viewer",
-  declaredToolClasses: { "docmind:visual.facts": "sensitive", "docmind:turn.facts": "sensitive" },
+  declaredToolClasses: {
+    "docmind:visual.facts": "sensitive",
+    "docmind:turn.facts": "sensitive",
+  },
 } as const;
 
 export type VisualEntry = "FigureChart" | "FigureTrend" | "KeyFigure" | "FactTable";
@@ -189,6 +192,8 @@ export const factProvider = (
 
 const isDate = (x: string) => /^\d{4}-\d{2}(-\d{2})?$/.test(x);
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const MONTH_LABEL =
+  /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?[\s-]+(\d{4})$/i;
 const ym = (y: string, m: number) => `${y}-${String(m).padStart(2, "0")}`;
 /** A period label ("Q1 2026", "H2 2026", "2026", "Mar 2026") as the ISO month it starts; an ISO date or anything unknown comes back as it was. */
 const toIso = (raw: string): string => {
@@ -198,13 +203,31 @@ const toIso = (raw: string): string => {
   const h = /^(?:h([12])[\s-]+(\d{4})|(\d{4})[\s-]+h([12]))$/i.exec(x);
   if (h) return ym((h[2] ?? h[3]) as string, Number(h[1] ?? h[4]) === 1 ? 1 : 7);
   if (/^\d{4}$/.test(x)) return ym(x, 1);
-  const m = /^([a-z]{3})[a-z]*\.?[\s-]+(\d{4})$/i.exec(x);
-  const month = m ? MONTHS.indexOf((m[1] as string).toLowerCase()) : -1;
+  const m = MONTH_LABEL.exec(x);
+  const month = m ? MONTHS.indexOf((m[1] as string).slice(0, 3).toLowerCase()) : -1;
   return m && month >= 0 ? ym(m[2] as string, month + 1) : x;
 };
+/** Every label is a date and each is strictly later than the one before it (mixed granularities can collide or run backwards). */
+const isIncreasing = (isos: string[]) =>
+  isos.every((x, i) => isDate(x) && (i === 0 || Date.parse(x) > Date.parse(isos[i - 1] as string)));
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
 /** loom-ui's "%" format reads a fraction (0.38 prints 38%), while facts hold the document's form (38 for "38%"). */
-const toLoom = (f: { unit?: string }, n: number) => (f.unit?.trim() === "%" ? n / 100 : n);
+const isPercent = (unit: string | undefined) => unit?.trim() === "%";
+const toLoom = (f: { unit?: string }, n: number) => (isPercent(f.unit) ? n / 100 : n);
+const decimalsOf = (n: number) => {
+  const s = String(n);
+  return s.includes("e") ? 4 : (s.split(".")[1]?.length ?? 0);
+};
+/** loom-ui's percent style rounds to whole percents by default, so a "%" fact states the most decimals any of its stored values has (at most 4). */
+const formatOf = (f: { unit?: string }, values: number[]) =>
+  isPercent(f.unit)
+    ? {
+        format: {
+          semanticType: "percentage",
+          maximumFractionDigits: Math.min(4, Math.max(0, ...values.map(decimalsOf))),
+        },
+      }
+    : {};
 const wrong = (): never => {
   throw new Error("visual fact does not fit this widget");
 };
@@ -217,6 +240,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
       : {
           value: toLoom(f, f.value),
           ...unitOf(f),
+          ...formatOf(f, [f.value]),
           ...(f.compare &&
             f.compare.value !== 0 && {
               deltaPct: (f.value - f.compare.value) / Math.abs(f.compare.value),
@@ -225,16 +249,30 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
   "visual-bar": (f) =>
     f.kind !== "series"
       ? wrong()
-      : { ...unitOf(f), bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })) },
+      : {
+          ...unitOf(f),
+          ...formatOf(
+            f,
+            f.points.map((p) => p.y),
+          ),
+          bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })),
+        },
   "visual-trend": (f) =>
-    f.kind !== "series" || !f.points.every((p) => isDate(toIso(p.x)))
+    f.kind !== "series" || !isIncreasing(f.points.map((p) => toIso(p.x)))
       ? wrong()
       : {
           series: [
             {
               label: f.label,
               ...unitOf(f),
-              points: f.points.map((p) => ({ timestamp: toIso(p.x), value: toLoom(f, p.y) })),
+              ...formatOf(
+                f,
+                f.points.map((p) => p.y),
+              ),
+              points: f.points.map((p) => ({
+                timestamp: toIso(p.x),
+                value: toLoom(f, p.y),
+              })),
             },
           ],
         },
