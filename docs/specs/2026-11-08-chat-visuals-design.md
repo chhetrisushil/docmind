@@ -158,7 +158,8 @@ Lineage content goes to the existing `lineage_content` store. No new settings.
   fetches the widgets when the strip is first shown (the preview needs them) and expands in place.
 - Cited answers show "Visualize" (no visuals yet), "Visualizing…" (after 202 until a frame or
   60 s), or "Re-visualize". 409 `visualize_running` shows "Visualizing…"; 429 shows "Try again in a
-  minute"; an outcome of `nothing` shows "Nothing to visualize".
+  minute"; an outcome of `nothing` shows "Nothing to visualize"; any other failure of the click (404, 5xx,
+  network) shows "Could not start. Try again." for 8 s and keeps the action.
 - Uncited, interrupted and failed answers show neither. The action also needs `ChatMessageDto.visualizable`
   (visuals role on, complete, cited); with the role off no action is offered, and an existing strip still shows.
   A strip whose widgets cannot load hides (no toggle, no alert); the action stays.
@@ -201,3 +202,19 @@ Lineage content goes to the existing `lineage_content` store. No new settings.
 Visuals for uncited or general-knowledge answers; visuals combining figures across documents
 (sub-project 1 step (b)); diagrams (step (c)); user editing, pinning or export of visuals; backfill
 of existing turns; shared or multi-user chats; references to visuals from the answer text.
+
+## 12. As built (polish wave)
+
+- A1: `docmind_chat_tenant(p_chat, p_user)` binds the user (`c.user_id = p_user`); the hook passes the user parsed from the
+  conversation id. A right chat with a wrong user gives no row.
+- C1: when the chat stream reopens (not on its first open), the web reads the newest history page again and takes
+  `hasVisuals` and `visualizable` for replies it holds (a reply that now has visuals bumps its strip revision and ends a
+  "Visualizing…" wait). Older pages and their cursor are untouched; a failed re-read is silent.
+- C2: the conversation reader has no seek by `ord` (cursors are position based), so the backward scan is bounded at 5000
+  records (100 per page, 50 pages). A turn past it is `too_old`: the route answers 409 `not_visualizable` with its own
+  message, and the flow treats it like any turn that is not complete.
+- C3: a visualize click that fails with 404, 5xx or a network error shows "Could not start. Try again." for 8 s, with the
+  action kept (a new copy string beside the others in `VISUALS_COPY`).
+- B6: the turn flow keeps the shared `document_gone` outcome word (every step output and the status model share it) and
+  throws `TurnGoneError`, a `DocumentGoneError`, for a gone chat or an erased turn line.
+- `hasVisuals` uses `resolveLatest`, the route's own first test (at most 30 per page, 8 in flight).

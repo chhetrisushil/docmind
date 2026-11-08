@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { loadSummaryMaxChars } from "../flows/ingest-document/limits";
 import { grounded } from "../flows/visualize-document/facts";
 import {
   EVAL_SUMMARY_MAX_CHARS,
@@ -33,6 +34,11 @@ describe("the chat visuals eval fixture", () => {
         expect(c.document.length, c.id).toBeLessThanOrEqual(EVAL_SUMMARY_MAX_CHARS);
       else expect(c.document.search(/\d/), c.id).toBeGreaterThan(EVAL_SUMMARY_MAX_CHARS); // the filler holds no digit
     }
+  });
+  it("the eval cap is what the real config parsing yields when the deployment sets it as the fixture says", () => {
+    expect(loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: String(EVAL_SUMMARY_MAX_CHARS) })).toBe(
+      EVAL_SUMMARY_MAX_CHARS,
+    );
   });
   it("scores the stored and fallback rates and the wrong facts", () => {
     const [a, b, c] = VISUALS_EVAL_CASES;

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { createViews } from "@docmind/experiences";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatBus, type LiveChatEvent } from "../../chats/bus";
 import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -186,6 +187,39 @@ describe("visualize-turn flow", () => {
     expect(s.heldFacts()).toEqual(before); // the head's `fact-0` still points at the same row
     const latest = await s.lineage.resolveLatest(turnExperienceId(s.ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
+
+    // ...and the kept head's widgets still hydrate, from the facts the re-run left in place
+    if (!latest.ok) throw new Error("the head is gone");
+    const views = createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
+    const turn = { chatId: s.ref.chatId, ord: s.ref.ord };
+    const live = new Set<string>();
+    const payload = views.turnPayload(turn, latest.value, live, "web");
+    const experience = views.turnExperience(turn, latest.value, live);
+    if (!payload || !experience) throw new Error("the head does not serve");
+    const turnFacts = vi.fn(async () => s.heldFacts());
+    const out = await views.hydrateExperience(
+      experience,
+      Object.keys(experience.providers).map((handle) => ({
+        experienceId: payload.experienceId,
+        versionHash: payload.versionHash,
+        handle,
+        params: {},
+      })),
+      {
+        turnFacts,
+        documents: async () => ({ items: [], truncated: false }),
+        document: async () => null,
+        content: async () => ({ items: [], more: false }),
+        source: async () => null,
+        chats: async () => [],
+        visualFacts: async () => null,
+      },
+      s.ref.userId,
+      "turn",
+    );
+    expect(turnFacts).toHaveBeenCalledWith(turn);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ state: "ready", value: { value: 4242, label: LABEL } });
   });
 
   it("is nothing for an uncited answer: no model call, no lineage head, and the nothing frame", async () => {

@@ -659,4 +659,76 @@ describe("a turn's visuals", () => {
     expect(r.visualFacts).toHaveBeenCalledTimes(1);
     expect(r.turnFacts).toHaveBeenCalledWith({ chatId: CHAT, ord: 6 });
   });
+
+  it("hydrates a stored (document) fact widget from its document's facts alone", async () => {
+    const v = views();
+    const r = readers({ visualFacts: vi.fn(async () => [fact(0, 11), fact(2, 22)]) });
+    const exp = turnExperienceFor(v, CHAT, 6, [
+      { entry: "KeyFigure", pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-2`] },
+    ]);
+    const p = v.turnPayload(
+      { chatId: CHAT, ord: 6 },
+      exp.visuals,
+      new Set([id(1)]),
+      "web",
+    ) as ViewPayload;
+    const handles = Object.keys(exp.experience.providers);
+    expect(handles).toHaveLength(1);
+    const [out] = await v.hydrateExperience(
+      exp.experience,
+      [
+        {
+          experienceId: p.experienceId,
+          versionHash: p.versionHash,
+          handle: handles[0] as string,
+          params: {},
+        },
+      ],
+      r,
+      "user-1",
+      "turn",
+    );
+    expect(out).toMatchObject({ state: "ready", value: { value: 22, label: "Revenue" } });
+    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1) });
+    expect(r.turnFacts).not.toHaveBeenCalled();
+  });
+
+  it("a document that leaves the live set between the view and the hydrate loses its widget: its handle is refused and its facts are never read", async () => {
+    const v = views();
+    const r = readers({ visualFacts: vi.fn(async () => [fact(0, 11)]) });
+    const specs = [
+      {
+        entry: "KeyFigure",
+        pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-0`] as [string, string],
+      },
+      {
+        entry: "KeyFigure",
+        pin: ["visual.facts", `docmind:visual.facts@1#${id(2)}/fact-0`] as [string, string],
+      },
+    ];
+    const both = turnExperienceFor(v, CHAT, 6, specs).visuals;
+    const at = (live: string[]) =>
+      v.turnExperience({ chatId: CHAT, ord: 6 }, both, new Set(live)) as Experience;
+    const viewed = at([id(1), id(2)]);
+    expect(Object.keys(viewed.providers)).toHaveLength(2);
+    // the user deletes document 2; the hydrate rebuilds the experience from the then-live set
+    const hydrating = at([id(1)]);
+    expect(Object.keys(hydrating.providers)).toHaveLength(1);
+    const p = v.turnPayload({ chatId: CHAT, ord: 6 }, both, new Set([id(1)]), "web") as ViewPayload;
+    const out = await v.hydrateExperience(
+      hydrating,
+      Object.keys(viewed.providers).map((handle) => ({
+        experienceId: p.experienceId,
+        versionHash: p.versionHash,
+        handle,
+        params: {},
+      })),
+      r,
+      "user-1",
+      "turn",
+    );
+    expect(out.map((o) => o.state).sort()).toEqual(["error", "ready"]);
+    expect(r.visualFacts).toHaveBeenCalledTimes(1);
+    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1) });
+  });
 });
