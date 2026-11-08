@@ -5,6 +5,7 @@ import {
   formatSemanticNumber,
   formatTimeLabel,
   isTimeFormat,
+  widgetRefProblems,
 } from "@loom-ui/core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, createInvoker } from "./invoker";
@@ -434,5 +435,72 @@ describe("factCapabilities", () => {
       ["visual.facts", `docmind:visual.facts@1#${A.slice(0, -1)}A/fact-1`],
     ] as const)
       expect(factRefOfPin(tool, pin), pin).toBeNull();
+  });
+});
+
+describe("the visual reshapers: source references", () => {
+  const D = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+  const P = (n: number) => `7f6d1b8e-3b0a-4a56-8f2f-${String(n).padStart(12, "0")}`;
+  const cite = (n: number, label = `Report, Page ${n}`) => ({
+    documentId: D,
+    passageId: P(n),
+    label,
+  });
+  const withCites = (f: VisualFactRaw, cites: ReturnType<typeof cite>[]): VisualFactRaw => ({
+    ...f,
+    cites,
+  });
+  const refsOf = (family: string, f: VisualFactRaw) =>
+    (shape(`${family}-${f.ordinal}`, [f]) as { refs?: { id: string; label?: string }[] }).refs;
+
+  it("each of the four widgets carries its fact's citations as refs, id = <documentId>:<passageId>", () => {
+    const cites = [cite(1), cite(2)];
+    const want = [
+      { id: `${D}:${P(1)}`, label: "Report, Page 1" },
+      { id: `${D}:${P(2)}`, label: "Report, Page 2" },
+    ];
+    expect(refsOf("visual-kpi", withCites(FIGURE, cites))).toEqual(want);
+    expect(refsOf("visual-bar", withCites(SERIES, cites))).toEqual(want);
+    expect(refsOf("visual-trend", withCites(DATED_SERIES, cites))).toEqual(want);
+    expect(refsOf("visual-table", withCites(TABLE, cites))).toEqual(want);
+  });
+  it("keeps order, folds a repeated passage, and caps at 16", () => {
+    expect(
+      refsOf("visual-kpi", withCites(FIGURE, [cite(3), cite(1), cite(3), cite(2)]))?.map(
+        (r) => r.id,
+      ),
+    ).toEqual([P(3), P(1), P(2)].map((p) => `${D}:${p}`));
+    const many = Array.from({ length: 30 }, (_, i) => cite(i + 1));
+    expect(refsOf("visual-kpi", withCites(FIGURE, many))).toHaveLength(16);
+  });
+  it("omits refs when there is nothing to cite (none resolved, or an unresolved fact)", () => {
+    expect(shape("visual-kpi-0", [FIGURE])).not.toHaveProperty("refs");
+    expect(shape("visual-kpi-0", [withCites(FIGURE, [])])).not.toHaveProperty("refs");
+  });
+  it("never carries anything but the id and the label, and the value passes loom-ui's ref rules", () => {
+    const f = withCites(FIGURE, [cite(1), cite(2, "x".repeat(300))]);
+    const refs = refsOf("visual-kpi", f) as { id: string; label?: string }[];
+    expect(refs.map((r) => Object.keys(r).sort())).toEqual([
+      ["id", "label"],
+      ["id", "label"],
+    ]);
+    expect((refs[1] as { label: string }).label.length).toBeLessThanOrEqual(200);
+    expect(widgetRefProblems(refs)).toEqual([]);
+    for (const r of refs) expect(r.id).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+    for (const [family, fact] of [
+      ["visual-kpi", FIGURE],
+      ["visual-bar", SERIES],
+      ["visual-trend", DATED_SERIES],
+      ["visual-table", TABLE],
+    ] as const) {
+      const kind = {
+        "visual-kpi": "Kpi",
+        "visual-bar": "BarChart",
+        "visual-trend": "TimeSeries",
+        "visual-table": "Table",
+      }[family];
+      const v = shape(`${family}-${fact.ordinal}`, [withCites(fact, [cite(1)])]);
+      expect(checkKindValue(kind, v)).toMatchObject({ ok: true });
+    }
   });
 });

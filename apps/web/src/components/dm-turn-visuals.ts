@@ -1,7 +1,11 @@
+import { intentOf } from "@docmind/contracts";
 import { LitElement, css, html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { VISUALS_COPY, type VisualsView } from "../chat/visuals";
+import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
+import { performIntent } from "../surface/perform";
+import type { ActionHandler } from "../ui/session";
 import "./dm-view";
 
 /** The strip under a cited answer: collapsed by default, expanding in place; its widgets are one `dm-view` over the turn. */
@@ -35,6 +39,7 @@ export class DmTurnVisuals extends LitElement {
   declare count: number;
   declare broken: boolean;
   private io: IntersectionObserver | undefined;
+  private readonly ctx = new ServicesController(this);
   constructor() {
     super();
     this.chatId = "";
@@ -78,6 +83,21 @@ export class DmTurnVisuals extends LitElement {
     const root = (e.target as HTMLElement).shadowRoot;
     this.count = root?.querySelectorAll("[data-widget-kind]").length ?? 0;
   };
+  /** The strip's widgets are read-only; a source marker on one opens the passage it cites, and nothing else is an action. */
+  private act: ActionHandler = async (a) => {
+    const svc = this.ctx.services;
+    const intent = intentOf("turn", a);
+    if (!svc || !intent) return { ok: false, reason: "refused" };
+    return {
+      ok: await performIntent(intent, {
+        api: svc.api,
+        router: svc.router,
+        toasts: svc.toasts,
+        session: { invalidate() {}, setParams() {} },
+        confirm: async () => false,
+      }),
+    };
+  };
   private toggle = () => {
     this.open = !this.open;
   };
@@ -101,7 +121,7 @@ export class DmTurnVisuals extends LitElement {
                 this.seen
                   ? keyed(
                       this.rev,
-                      html`<dm-view .turn=${{ chatId: this.chatId, ord: this.ord }} @view-ready=${this.ready} @view-problem=${this.problem}></dm-view>`,
+                      html`<dm-view .turn=${{ chatId: this.chatId, ord: this.ord }} .onAct=${this.act} @view-ready=${this.ready} @view-problem=${this.problem}></dm-view>`,
                     )
                   : nothing
               }

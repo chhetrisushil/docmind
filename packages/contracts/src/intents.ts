@@ -35,6 +35,21 @@ const own = (r: Record<string, unknown>, k: string): unknown =>
   Object.hasOwn(r, k) ? r[k] : undefined;
 const isUuid = (v: unknown): v is string => typeof v === "string" && Uuid.safeParse(v).success;
 
+/** A visual's source marker: `<documentId>:<passageId>`, both uuids (what the server builds from a fact's cited passage). */
+const refTarget = (refId: unknown): { documentId: string; passageId: string } | undefined => {
+  if (typeof refId !== "string") return undefined;
+  const parts = refId.split(":");
+  const [documentId, passageId] = parts;
+  return parts.length === 2 && isUuid(documentId) && isUuid(passageId)
+    ? { documentId, passageId }
+    : undefined;
+};
+/** loom-ui's `REF_OPEN` (a numbered source marker on a widget) means opening that passage, the chat's own `source.open`. */
+const refOpen = (p: Record<string, unknown>): Intent | undefined => {
+  const t = refTarget(own(p, "refId"));
+  return t === undefined ? undefined : { type: "source.open", ...t };
+};
+
 const ENTRY_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 /** loom-ui's submit-key shape (`isSubmitKey`, packages/core/src/chatActions.ts); the key becomes the turn's idempotency key. */
 const SUBMIT_KEY = /^[A-Za-z0-9_-]{16,128}$/;
@@ -101,6 +116,7 @@ function resolve(
       return undefined;
     }
     case "detail": {
+      if (type === "REF_OPEN") return refOpen(p);
       if (type !== "A2UI_ACTION") return undefined;
       const a = own(p, "action");
       if (a === "show-more") return { type: "content.more" };
@@ -164,6 +180,9 @@ function resolve(
       if (type === "LOAD_OLDER") return { type: "chat.older" };
       return undefined;
     }
+    case "turn":
+      // a chat turn's visuals are read-only: a source marker opens its passage, and nothing else is an action here
+      return type === "REF_OPEN" ? refOpen(p) : undefined;
     case "sources": {
       if (type !== "A2UI_ACTION" || own(p, "action") !== "open-source") return undefined;
       const s = heldAt(own(p, "context"), held.list);
@@ -186,7 +205,7 @@ function resolve(
  * `held.refs`). Staleness is the caller's job: run loom-ui's `isStaleAction` / `viewedVersion` check first; `intentOf` ignores it.
  */
 export function intentOf(
-  view: ViewName | "turn", // a chat turn's visuals are read-only: `turn` (and any view this does not know) has no intents
+  view: ViewName | "turn", // a chat turn's visuals are read-only: `turn` has only `REF_OPEN`; a view this does not know has no intents
   action: { type: string; payload?: unknown },
   held: Held = {},
 ): Intent | undefined {

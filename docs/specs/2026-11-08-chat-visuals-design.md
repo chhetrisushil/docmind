@@ -233,3 +233,10 @@ of existing turns; shared or multi-user chats; references to visuals from the an
 Document visuals are re-planned at boot when their stored plan was made over an older fact format (see the document-visuals
 spec, "As built"). Turns record no format and are not re-planned: they are lazy, remade only when the user presses Visualize
 on the answer. (Served providers carry the current pin on every hydrate, so a turn's strip never fails on a pin.)
+
+### As built: source markers on a turn's visuals
+
+Turn widgets carry the same loom-ui `refs` as a document's (see the document visuals spec, "As built: source markers on
+visuals"): stored-document facts cite their own document, extracted facts the retrieved chunks' documents, both resolved
+by the `visualFacts` / `turnFacts` readers. The strip's `dm-view` now has an action handler that answers only `REF_OPEN`
+(the passage opens in the document page); every other action stays refused.

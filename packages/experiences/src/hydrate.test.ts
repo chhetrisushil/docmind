@@ -669,6 +669,43 @@ describe("a turn's visuals", () => {
     expect(r.turnFacts).toHaveBeenCalledWith({ chatId: CHAT, ord: 6 });
   });
 
+  it("hydrates a turn's widgets with a source marker per cited passage (stored and extracted facts alike)", async () => {
+    const v = views();
+    const cites = (n: number) => [
+      { documentId: id(1), passageId: id(50 + n), label: `Contract, Page ${n}` },
+    ];
+    const r = readers({
+      visualFacts: vi.fn(async () => [{ ...fact(2, 22), cites: cites(1) }]),
+      turnFacts: vi.fn(async () => [{ ...fact(0, 33), cites: cites(2) }]),
+    });
+    const exp = turnExperienceFor(v, CHAT, 6, [
+      { entry: "KeyFigure", pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-2`] },
+      { entry: "KeyFigure", pin: ["turn.facts", "docmind:turn.facts@1#fact-0"] },
+    ]);
+    const p = v.turnPayload(
+      { chatId: CHAT, ord: 6 },
+      exp.visuals,
+      new Set([id(1)]),
+      "web",
+    ) as ViewPayload;
+    const out = await v.hydrateExperience(
+      exp.experience,
+      Object.keys(exp.experience.providers).map((handle) => ({
+        experienceId: p.experienceId,
+        versionHash: p.versionHash,
+        handle,
+        params: {},
+      })),
+      r,
+      "user-1",
+      "turn",
+    );
+    expect(out.map((o) => (o as { value: { refs: unknown } }).value.refs)).toEqual([
+      [{ id: `${id(1)}:${id(51)}`, label: "Contract, Page 1" }],
+      [{ id: `${id(1)}:${id(52)}`, label: "Contract, Page 2" }],
+    ]);
+  });
+
   it("hydrates a FigureTrend over quarter labels (Q1 2026 .. Q4 2026) as ready", async () => {
     const v = views();
     const quarters: VisualFactRaw[] = [

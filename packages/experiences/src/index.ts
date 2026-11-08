@@ -15,7 +15,7 @@ export {
   factRefOfPin,
   mergedCatalog,
 } from "./visuals";
-export type { FactOrigin, FactRef, OfferedFact, VisualFactRaw } from "./visuals";
+export type { FactCite, FactOrigin, FactRef, OfferedFact, VisualFactRaw } from "./visuals";
 export type { RawContent, RawDocuments, SourceResult, UiReaders } from "./invoker";
 export * from "./reshapers";
 export * from "./format";
