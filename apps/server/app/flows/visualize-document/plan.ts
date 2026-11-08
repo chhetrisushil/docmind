@@ -1,6 +1,6 @@
-import { VISUALS_CATALOG, capabilitiesOf } from "@docmind/experiences";
+import { VISUALS_CATALOG, visualCapabilities } from "@docmind/experiences";
 import { LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { Intent } from "@loom-ui/core";
+import type { Intent, SemanticCatalog } from "@loom-ui/core";
 import type { CapabilityRef, DecideContext, PlanResult, Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
@@ -46,17 +46,18 @@ export const VISUALS_INTENT: Intent = {
   sensitivity: "sensitive",
 };
 
-/** One `ctx.decide` (the planner's own): the model's plan for `intent` over `capabilities`, recorded and replayable. */
+/** One `ctx.decide` (the planner's own): the model's plan for `intent` over `capabilities` and `catalog`, recorded and replayable. */
 export const composeVisuals = (
   planner: Planner,
   intent: Intent,
   capabilities: CapabilityRef[],
+  catalog: SemanticCatalog,
   ctx: DecideContext,
 ): Promise<PlanResult> =>
   planner.compose(
     {
       intent,
-      catalog: VISUALS_CATALOG,
+      catalog,
       capabilities,
       containers: [],
       surface: "web",
@@ -69,7 +70,8 @@ export const planVisuals = (
   planner: Planner,
   facts: readonly Fact[],
   ctx: DecideContext,
-): Promise<PlanResult> => composeVisuals(planner, VISUALS_INTENT, capabilitiesOf(facts), ctx);
+): Promise<PlanResult> =>
+  composeVisuals(planner, VISUALS_INTENT, visualCapabilities(facts), VISUALS_CATALOG, ctx);
 
 const UNAVAILABLE = `model call failed: ${new LlmUnavailableError().message.replace(/ \(HTTP \d+\)$/, "")}`;
 

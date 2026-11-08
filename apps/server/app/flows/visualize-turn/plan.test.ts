@@ -1,4 +1,4 @@
-import { ReferencePlanner } from "@loom-ui/planner";
+import { type Planner, ReferencePlanner } from "@loom-ui/planner";
 import { describe, expect, it } from "vitest";
 import { recording, scriptedPlannerModel } from "../visualize-document/testing";
 import { TURN_INTENT, planTurn } from "./plan";
@@ -46,6 +46,27 @@ describe("planTurn", () => {
     await planTurn(new ReferencePlanner({ model, modelId: "test" }), offered, ctx);
     expect(model.calls).toBe(before);
     expect(before).toBe(1);
+  });
+  it("is given a catalogue and capabilities without connections (K7)", async () => {
+    let seen:
+      | { catalog: { entries: { name: string }[] }; capabilities: { handle: string }[] }
+      | undefined;
+    const spy = {
+      compose: async (req: typeof seen) => {
+        seen = req;
+        return { ops: [], findings: [] };
+      },
+    } as unknown as Planner;
+    await planTurn(
+      spy,
+      [{ fact: fig(0, "Revenue"), origin: { kind: "doc", documentId: A } }],
+      recording(),
+    );
+    const names = seen?.catalog.entries.map((e) => e.name) ?? [];
+    expect(names).toEqual(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
+    expect(names).not.toContain("RelatedDocuments");
+    expect(names).not.toContain("ConnectionMap");
+    expect(seen?.capabilities.map((c) => c.handle)).not.toContain("connections");
   });
   it("states the fixed intent and carries no answer text", () => {
     expect(TURN_INTENT.objective).toBe(

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { VISUALS_CATALOG, capabilitiesOf } from "@docmind/experiences";
+import { VISUALS_CATALOG, visualCapabilities } from "@docmind/experiences";
 import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { ReferencePlanner, checkPlannerConformance } from "@loom-ui/planner";
 import type { EventEnvelope } from "@loom/core";
@@ -44,7 +44,7 @@ describe("planVisuals", () => {
     const findings = await checkPlannerConformance(planner, {
       intent: VISUALS_INTENT,
       catalog: VISUALS_CATALOG,
-      capabilities: capabilitiesOf([FIGURE]),
+      capabilities: visualCapabilities([FIGURE]),
       meta: { author: "test", createdAt: "2026-11-08T00:00:00Z", sourceKind: "test" },
       revision: { text: "make it smaller" },
       ctx: recording(),
