@@ -20,7 +20,7 @@ the turn's hot path. An answer streams exactly as it does today; its visuals arr
 | C1 | Facts are layered. A turn first uses the stored facts (sub-project 1) of the documents its answer cited, kept only when they cite a chunk the answer cited. Only when none survive does the turn extract facts from its own retrieved chunks, with the same grounding rules. |
 | C2 | Trigger: automatic for every completed answer that cites at least one document, plus an on-demand "Visualize" / "Re-visualize" action on any cited answer. |
 | C3 | Placement: a collapsible "Visuals" strip under the assistant message, collapsed by default, expanding in place. The answer text above it never reflows. |
-| C4 | The turn-end trigger is a generic Loom hook, `onTurnSettled`, added to `@loom/conversation` first (sub-project 1 V7: gaps are closed generically upstream). DocMind does not poll and does not depend on a browser being open. |
+| C4 | The turn-end trigger is a generic Loom hook, `turnSettledObserver`, added to `@loom/conversation` first (sub-project 1 V7: gaps are closed generically upstream). DocMind does not poll and does not depend on a browser being open. |
 | C5 | One lineage per turn, `turnvisuals-<userId>-<chatId>-<ord>`. A re-run replaces its head (sub-project 1 R18). |
 | C6 | No backfill and no boot sweep. A turn whose hook call was missed (crash, role off) is recovered by the on-demand action. |
 | C7 | Visuals are optional. A failed, empty or disabled run leaves the strip hidden; the turn is never affected. |
@@ -36,25 +36,42 @@ Approaches considered and rejected for the fact source (C1): extracting only fro
 past the summary cap, or over documents without facts, get nothing), and per-turn extraction only (a
 model call on every turn even when stored facts already cover it).
 
-## 3. Prerequisite: `onTurnSettled` in `@loom/conversation`
+## 3. Prerequisite: `turnSettledObserver` in `@loom/conversation`
 
-A generic, conversation-level callback, naming no DocMind concept:
+A generic helper in `@loom/conversation`, naming no DocMind concept, built on the runtime's existing
+`onDurableEvent` (ADR 0147). No kernel change. Loom branch `feat/conversation-turn-settled`; the plan
+pins the merged Loom SHA in CI.
 
-- Fired once per settled turn, after the durable reply record is appended, so a reader called from
-  the callback sees the reply.
-- Payload: ids and status only (conversation id, turn, ord, status, principal). No reply text.
-- In-process and best-effort: a throwing or rejecting callback is isolated and never fails or delays
-  the turn. Missed if the process dies between append and callback; consumers own recovery.
-- Re-runs and edits are their own turns and fire their own call. Behaviour on recovery of an
-  already-settled turn is documented by Loom; DocMind is idempotent either way (execution id per
-  turn, section 4).
+```ts
+turnSettledObserver(flow: { definition: { id: string } }, listener: TurnSettledListener)
+  : (event: EventEnvelope) => void | Promise<void>
+type TurnSettledListener = (e: TurnSettledEvent) => void | Promise<void>
+interface TurnSettledEvent {
+  conversationId: string;
+  executionId: string;   // the generation, "<id>~n" after a rotation
+  turn: number;          // 0 for a rejected message
+  ord: number;           // unique within the conversation: the idempotency key
+  status: "complete" | "interrupted" | "failed" | "rejected";
+  asker?: Identity;      // shared mode only
+}
+```
 
-Requested from the Loom session on 2026-11-08. The exported name and signature are taken from the
-merged Loom PR; the plan pins that Loom SHA in CI.
+- Fires once per settled turn of any conversation of that flow, after the store's write has
+  resolved: a history read from the listener sees the reply. An edit is a new turn.
+- Never re-fires on replay or restart. Missed if the process dies between write and call (C6).
+- A throwing or rejecting listener goes to `onWarn` and never fails the turn.
+- Ids and status only, no reply text.
+- The listener's synchronous part runs on the runtime's write chain: DocMind's listener only
+  enqueues (section 4) and returns.
+- One `onDurableEvent` per runtime. DocMind uses none today; it composes one observer per chat flow
+  (`doc-chat`, `doc-chat-gk`) into a single function, so later observers compose there too.
+- A fork can report its copied prefix again under the fork's id. DocMind keys work by chat and
+  `ord`, which covers it.
 
 ## 4. Trigger
 
-DocMind's `onTurnSettled` handler starts `visualize-turn` when all hold:
+DocMind's turn-settled listener resolves the chat from `conversationId` (`u_<userId>.c-<chatId>`), enqueues the
+check below off the write chain, and returns. The queued check starts `visualize-turn` when all hold:
 
 - status is `complete` (not interrupted, failed or rejected);
 - the `visuals` role is on;
