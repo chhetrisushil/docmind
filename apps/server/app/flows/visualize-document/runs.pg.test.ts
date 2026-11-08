@@ -7,7 +7,7 @@ import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSu
 import { ingestExecutionId } from "../../documents/ingest";
 import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
 import { PgVisualRuns } from "./runs";
-import { pgReadyDocuments, pgRetryDocuments } from "./start";
+import { pgReadyDocuments, pgRetryDocuments, pgRunningRuns } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
@@ -181,6 +181,35 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     expect((await pgReadyDocuments(app)(NIL, 100)).length).toBeGreaterThanOrEqual(2);
   });
 
+  it("docmind_visual_running_runs lists the running rows of current generations, across tenants, paged, with the run number", async () => {
+    await owner.query("DELETE FROM documents");
+    const a = await readyDoc();
+    const b = await readyDoc(BOB);
+    const done = await readyDoc();
+    const at = (who: string, d: { id: string; g: number }, run: number) => ({
+      userId: who,
+      documentId: d.id,
+      generation: d.g,
+      run,
+    });
+    await runs.record(at(U1, a, 2), "running");
+    await runs.record(at(U2, b, 0), "running");
+    await runs.record(at(U1, done, 1), "done");
+    const list = pgRunningRuns(app);
+    const all = await list(NIL, 100);
+    expect(all.map((d) => [d.documentId, d.run])).toEqual(
+      [
+        [a.id, 2],
+        [b.id, 0],
+      ].sort((x, y) => String(x[0]).localeCompare(String(y[0]))),
+    );
+    const first = await list(NIL, 1);
+    expect(await list(first[0]?.documentId as string, 5)).toHaveLength(1);
+    expect((await app.query("SELECT * FROM docmind_visual_running_runs(NULL, 10)")).rows).toEqual(
+      [],
+    );
+  });
+
   it("the retry list leaves out a document whose generation moved on, a user being erased, and answers nothing to a null (STRICT)", async () => {
     await owner.query("DELETE FROM documents");
     const d = await readyDoc();
@@ -205,5 +234,12 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     expect(await pgRetryDocuments(app)(NIL, 10)).toHaveLength(1);
     await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U1]); // final: last in this file
     expect(await pgRetryDocuments(app)(NIL, 10)).toEqual([]);
+  });
+
+  it("records nothing for a user being erased (final: erasing_at cannot be undone)", async () => {
+    const { id, g } = await readyDoc(BOB);
+    await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U2]);
+    await runs.record({ userId: U2, documentId: id, generation: g, run: 0 }, "failed");
+    expect(await rowOf(id)).toEqual([]);
   });
 });

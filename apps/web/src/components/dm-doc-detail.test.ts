@@ -647,6 +647,24 @@ describe("dm-doc-detail: rendered content", () => {
       }
     });
 
+    it("a state the server reports as running, with no event, is read again after 60 s and ends when it is no longer running", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "running";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+        const before = t.ui.calls.documents.length;
+        t.ui.detail.visuals = "failed"; // the server repaired a stale state
+        await vi.advanceTimersByTimeAsync(VISUALS_RETRY_TIMEOUT_MS + 100);
+        await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+        expect(t.ui.calls.documents.length).toBeGreaterThan(before);
+        expect(retrying(page)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("429 gives the button back with a note; 409 visualize_running keeps waiting", async () => {
       const t = setup({ name: "document", id: id(1) });
       t.ui.detail.visuals = "failed";

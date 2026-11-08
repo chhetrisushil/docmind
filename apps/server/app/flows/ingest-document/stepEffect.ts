@@ -99,7 +99,7 @@ export const ATTEMPT_SETTLE_MS = 30_000;
  */
 export const MAX_ATTEMPTS_TOTAL = 1024;
 
-export interface StepOptions {
+export interface StepOptions<E = never> {
   /** Test seam: the absolute attempt ceiling (default MAX_ATTEMPTS_TOTAL). */
   maxAttemptsTotal?: number;
   /** Test seam: the settle wait after a timed-out attempt (default ATTEMPT_SETTLE_MS). */
@@ -122,7 +122,7 @@ export interface StepOptions {
    * recorded failure instead of a thrown one. Returns the ended output, or undefined to fail as usual. Never called for
    * an abort, a fatal error or a document-gone one.
    */
-  exhausted?: (err: unknown) => ExhaustedEnd | undefined;
+  exhausted?: (err: unknown) => E | undefined;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -180,16 +180,14 @@ export const ingestStepOptions = (
 /** A step's non-done outcomes, as the plain fields every output shape mirrors. */
 export type StepEnd = { outcome: "document_gone" } | { outcome: "failed"; code: FailureCode };
 
-/** What a step's `exhausted` option may answer: a failed outcome with a code of the flow's own (its output schema must allow it). */
-export type ExhaustedEnd = { outcome: "failed"; code: "visuals-model-unavailable" };
-
 /**
  * How `stepEffectOf` builds a step's output: `schema` validates what the work returned (merged over
  * `outcome: "done"`), and `ended` shapes a document-gone or permanent-failure outcome into that same output.
  */
-export interface StepOutputSpec<O> {
+export interface StepOutputSpec<O, E = never> {
   schema: z.ZodType<O>;
-  ended(end: StepEnd): O;
+  /** `E` is the flow's own end, what its step's `exhausted` option may answer (its output schema must allow it). */
+  ended(end: StepEnd | E): O;
 }
 
 const STEP_RESULT_SPEC: StepOutputSpec<StepResult> = { schema: StepResult, ended: (end) => end };
@@ -212,7 +210,7 @@ export function stepEffect<R extends { tenantId: string } = IngestStartInput>(
  * Same retry, timeout, gate and failure behaviour; the output is validated by `spec.schema`, and nothing
  * outside it reaches the event log. The work returns the output's fields apart from `outcome`.
  */
-export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInput>(
+export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInput, E = never>(
   step: string,
   guard: StepGuard<R>,
   work: (
@@ -221,8 +219,8 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
     progress?: () => void,
     executionId?: string,
   ) => Promise<object | undefined>,
-  spec: StepOutputSpec<O>,
-  options: StepOptions = {},
+  spec: StepOutputSpec<O, E>,
+  options: StepOptions<E> = {},
 ): Effect<R, O> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const sleep = options.sleep ?? defaultSleep;
@@ -265,7 +263,7 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
     }
   };
   // An ended output is written to the event log too: it passes the same schema as a done one.
-  const endedOutput = (end: StepEnd): O => {
+  const endedOutput = (end: StepEnd | E): O => {
     const parsed = spec.schema.safeParse(spec.ended(end));
     if (!parsed.success) throw new StepResultError();
     return parsed.data;
@@ -313,8 +311,7 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
           if (isAbort(err) || isFatal(err)) throw failure(step, err);
           if (attempt >= maxAttempts) {
             const end = options.exhausted?.(err);
-            // The spec's schema parse refuses a code it does not list, so a flow that sets `exhausted` lists it.
-            if (end) return endedOutput(end as unknown as StepEnd);
+            if (end) return endedOutput(end);
             throw failure(step, err);
           }
           if (

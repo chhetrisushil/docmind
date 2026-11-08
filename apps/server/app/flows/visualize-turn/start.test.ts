@@ -126,6 +126,13 @@ describe("the turn starter: on demand", () => {
     await vi.waitFor(() => expect(s.running(ref)).toBe(false));
     expect(await s.visualize(ref)).toEqual({ kind: "started", rerun: 1 });
   });
+  it("two concurrent requests start exactly one run; the other answers running", async () => {
+    const f = fake();
+    const s = loomTurnStarter(f.runtime, flow, options());
+    const answers = await Promise.all([s.visualize(ref), s.visualize(ref)]);
+    expect(answers.map((a) => a.kind).sort()).toEqual(["running", "started"]);
+    expect(f.started.size).toBe(1);
+  });
   it("answers running (never throws) once every re-run number is taken", async () => {
     const f = fake();
     f.start.mockRejectedValue(new ExecutionAlreadyExistsError("taken"));

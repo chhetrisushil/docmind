@@ -115,6 +115,22 @@ export function visualRunRecorder(o: {
   };
 }
 
+/** The recorded outcome of a terminal Loom execution state (its output is ids and enums only); null while it has not ended. */
+export function outcomeOfState(state: {
+  status: string;
+  variables?: Record<string, unknown>;
+}): { state: VisualRunState; code?: VisualRunCode } | null {
+  if (state.status === "completed") {
+    const out = VisualizeOutput.safeParse(state.variables?._output);
+    return out.success
+      ? { state: out.data.outcome, ...(out.data.code && { code: out.data.code }) }
+      : { state: "failed", code: "internal" };
+  }
+  if (state.status === "failed" || state.status === "cancelled")
+    return { state: "failed", code: "internal" };
+  return null;
+}
+
 function endOf(
   e: EventEnvelope,
 ): { state: VisualRunState; code?: VisualRunCode; notify: boolean } | null {
