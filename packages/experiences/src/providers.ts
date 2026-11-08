@@ -5,6 +5,9 @@ export const CHAT_LIST_CAP = 50;
 export const CONTENT_STEP = 20;
 export const CONTENT_CAP = 200;
 
+/** What one connections read returns at most: related documents, shared entities, and documents named per entity. */
+export const CONNECTIONS_CAPS = { related: 8, entities: 12, entityDocuments: 5 } as const;
+
 /** The step kind DocMind registers with hydration (Task 186c). */
 export const KIND = "docmind";
 

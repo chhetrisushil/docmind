@@ -15,6 +15,31 @@ export interface RawContent {
   more: boolean;
 }
 
+export interface ConnectionDocument {
+  documentId: string;
+  title: string;
+}
+/**
+ * What `doc.connections` reads for one document of the caller's library (live: no stored copy). Titles and entity names are
+ * decrypted for the owner and are content: they reach only a rendered value, never a log. `documentId` is the document asked about.
+ */
+export interface RawConnections {
+  documentId: string;
+  related: {
+    documentId: string;
+    title: string;
+    kinds: { entity: number; reference: number; similar: number };
+    /** The maximum link weight between this document's passages and that one's (0..1). */
+    strength: number;
+  }[];
+  entities: {
+    entityId: string;
+    name: string;
+    kind: string;
+    documents: ConnectionDocument[];
+  }[];
+}
+
 /** A document's original text for the page to render; a document that cannot be rendered is the value `{ applicable: false }`, never an error. */
 export type SourceResult =
   | { applicable: false }
