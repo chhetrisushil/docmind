@@ -118,3 +118,13 @@ export function connectionsSeeder(getFixture: () => PgFixture, defaultWho: SeedW
 
   return { ids, id, ch, seed, link, entity };
 }
+
+/** The planner node that binds the live connections capability (shared by the planner stubs of the flow, plan and end-to-end tests). */
+export const CONNECTIONS_PLAN_NODE = {
+  id: "related",
+  type: "RelatedDocuments",
+  label: "Related documents",
+  span: 12,
+  props: {},
+  binding: { capability: "connections", arguments: {}, path: "", priority: "P1" },
+};

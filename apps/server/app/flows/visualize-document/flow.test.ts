@@ -13,6 +13,7 @@ import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { isIngestExecution, isVisualizeExecution } from "../../status/model";
 import { foldIngestStatus } from "../../status/model";
 import { subjectOfExecution } from "../../subject";
+import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { LLM_RETRY, STEP_RETRY } from "../ingest-document/stepEffect";
 import type { VisualizeDeps } from "./deps";
 import type { Fact } from "./facts";
@@ -47,17 +48,9 @@ const NODE = {
 };
 const PLAN = JSON.stringify({ summary: SUMMARY, nodes: [NODE] });
 const EMPTY_PLAN = JSON.stringify({ nodes: [] });
-const CONNECTIONS_NODE = {
-  id: "related",
-  type: "RelatedDocuments",
-  label: "Related documents",
-  span: 12,
-  props: {},
-  binding: { capability: "connections", arguments: {}, path: "", priority: "P1" },
-};
 const CONNECTIONS_PLAN = JSON.stringify({
   summary: "The documents this one connects to",
-  nodes: [CONNECTIONS_NODE],
+  nodes: [CONNECTIONS_PLAN_NODE],
 });
 const KEY = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
 

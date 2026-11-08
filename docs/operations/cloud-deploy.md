@@ -96,6 +96,9 @@ docker run --rm \
   **before** starting the new server and make its failure stop the deploy: ECS, a one-off task or a
   `RunTask` step; Cloud Run, a Cloud Run job; Kubernetes, a `Job` or a Helm hook.
 - The migration connection must be direct or session-mode, not a transaction pooler (cloud-scaling.md S8).
+- Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
+  role on, the first boot after it re-plans every visualized document once (one planner call each over its stored facts, at
+  most 2 at a time, no extraction) to add the Connections section; it is stamped, so later boots do not repeat it.
 
 ## 4. Environment of the server
 

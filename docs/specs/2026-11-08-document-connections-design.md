@@ -88,6 +88,15 @@ Rejected:
   - **Boot:** the re-plan of NULL-format runs happens once.
   - **Flow:** zero facts plus one connection gives a plan with a connections widget and outcome `done`; zero facts and an empty planner answer give `empty`; a refusal clears the facts and still plans connections.
 
+### As built
+
+- "Rarest first" for shared entities counts every other document of the owner that shares the entity, ready or not (counted before the readiness join so the query stays index-bound); an entity mostly in unfinished documents therefore sorts later.
+- The two accepted costs of section 5 stand as written: a zero-fact retry after a planner outage may extract once per boot, and a document whose last pre-release run ended `empty` gets no Connections section until it is re-ingested or retried.
+- loom-ui is pinned at 3b4d046 (PR #130: widget hosts contain their sr-only and absolute descendants).
+- The chat catalogue keeps the id `docmind.visuals.v1` (chat decisions unchanged); the document catalogue is `docmind.visuals.v2`.
+- The first boot after this release re-plans every visualized document once (migration 0032): one planner call each, at most 2 at a time, no extraction (see docs/operations/cloud-deploy.md).
+- The end-to-end test (`documents/visuals.e2e.pg.test.ts`) covers upload A then B sharing an entity (no re-plan of A), deleting B, a text-only document with zero facts still getting its Connections section, another user's 404, and no plaintext title or entity name in the event log.
+
 ## 7. Out of scope
 
 Comparing figures across documents; connections in chat answers; revising visuals in place and `@loom-ui/changes`; user-edited or pinned connections.

@@ -2,14 +2,17 @@ import type { UploadDocumentResponse } from "@docmind/contracts";
 import { UiViewResponse } from "@docmind/contracts";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { assertNoPlaintext } from "../chats/eventLogProof";
 import { PG_URL } from "../db/testSupport";
 import { eraseMe, waitErased } from "../erasure/e2eSupport";
+import type { PgFixture } from "../flows/ingest-document/pgFixture";
 import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { visualizeExecutionId } from "../flows/visualize-document/start";
 import { collectLineageContent } from "../storage/lineageGc";
 import { lineageGcDeps } from "../storage/pgLineageGc";
 import { subjectOfExecution } from "../subject";
+import { CONNECTIONS_PLAN_NODE, connectionsSeeder } from "../ui/testSupport";
 import { type IngestStack, startIngestStack } from "./ingestStack";
 
 const CHUNK_ID = /\[\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]\]/;
@@ -24,7 +27,20 @@ const ADA: Figure = { marker: "Revenue", label: "Revenue", value: 1200 };
 const BEN: Figure = { marker: "Zebra", label: "Zebra-Quarterly-Takings", value: 7391.25 };
 
 /** A `visuals` model that finds one figure fact in whatever document it is shown, and plans a KeyFigure for it. */
-function stubVisuals(claude: FakeAnthropic, figures: Figure[], down?: { value: boolean }) {
+const CONNECTIONS_NODES = [
+  CONNECTIONS_PLAN_NODE,
+  { ...CONNECTIONS_PLAN_NODE, id: "map", type: "ConnectionMap", label: "Connection map" },
+];
+
+/** A document whose text carries this finds no facts (the text-only case). */
+const NO_FACTS = "Plain-prose-without-figures";
+
+function stubVisuals(
+  claude: FakeAnthropic,
+  figures: Figure[],
+  down?: { value: boolean },
+  connections = false,
+) {
   claude.reply((body) => {
     if (down?.value) return { status: 503, rawBody: "{}" }; // the visuals model is unavailable
     const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
@@ -32,10 +48,19 @@ function stubVisuals(claude: FakeAnthropic, figures: Figure[], down?: { value: b
     const { label, value } = figures.find((f) => text.includes(f.marker)) ?? (ADA as Figure);
     if (system.includes("You extract facts")) {
       const chunk = CHUNK_ID.exec(text)?.[1];
-      if (!chunk) return { text: '{"facts":[]}' };
+      if (!chunk || text.includes(NO_FACTS)) return { text: '{"facts":[]}' };
       return {
         text: JSON.stringify({
           facts: [{ kind: "figure", label, value, unit: "USD", chunkIds: [chunk] }],
+        }),
+      };
+    }
+    if (!text.includes("fact-0")) {
+      // The connections capability alone (no facts were found).
+      return {
+        text: JSON.stringify({
+          summary: "The documents this one connects to",
+          nodes: connections ? CONNECTIONS_NODES : [],
         }),
       };
     }
@@ -43,6 +68,7 @@ function stubVisuals(claude: FakeAnthropic, figures: Figure[], down?: { value: b
       text: JSON.stringify({
         summary: "A headline figure",
         nodes: [
+          ...(connections ? CONNECTIONS_NODES : []),
           {
             id: "headline",
             type: "KeyFigure",
@@ -75,11 +101,11 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     st: IngestStack,
     cookie: string,
     text: string,
-    opts: { visuals: boolean } = { visuals: true },
+    opts: { visuals: boolean; name?: string } = { visuals: true },
   ) {
     const events = await st.events(cookie);
     try {
-      const res = await st.upload(cookie, "report.txt", Buffer.from(text));
+      const res = await st.upload(cookie, opts.name ?? "report.txt", Buffer.from(text));
       expect(res.status).toBe(201);
       const id = ((await res.json()) as UploadDocumentResponse).document.id;
       const seen = await st.until(events, id, (s) => s === "ready" || s === "failed");
@@ -507,5 +533,153 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     await vi.waitFor(async () =>
       expect(await runRow(second, id)).toEqual([{ run: 1, state: "done", code: null }]),
     );
+  }, 180_000);
+
+  /** Seeds what the ingest (which has no entity model here) would write: one entity on a chunk of each document, linked both ways. */
+  async function connect(
+    st: IngestStack,
+    who: { userId: string; tenantId: string },
+    a: string,
+    b: string,
+    name: string,
+  ) {
+    const seed = connectionsSeeder(
+      () => ({ db: st.db, fields: st.fields }) as unknown as PgFixture,
+      who,
+    );
+    const chunkOf = async (id: string) =>
+      (
+        await st.db.owner.query(
+          "SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal LIMIT 1",
+          [id],
+        )
+      ).rows[0].id as string;
+    const [ca, cb] = [await chunkOf(a), await chunkOf(b)];
+    await seed.entity(name, [ca, cb]);
+    await seed.link(ca, cb, 0.8, "entity");
+  }
+
+  const eventLog = async (st: IngestStack) => {
+    const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
+    return (await Promise.all(ids.map((id) => st.durable.raw.eventStore.read(id)))).flat();
+  };
+
+  it("connections are live: A shows B once B shares an entity with it, with no re-plan of A, and nothing after B is deleted", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    stubVisuals(st.visualsClaude as FakeAnthropic, [ADA, BEN], undefined, true);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const a = await upload(st, ada.cookie, "Revenue was 1,200 in 2024", {
+      visuals: true,
+      name: "alpha-ledger-2024.txt",
+    });
+    expect(await visualizeOutcome(st, ada.userId, a)).toBe("done");
+
+    type Table = { rows: string[][]; rowKeys?: string[] };
+    type GraphMap = { nodes: { id: string; label: string; group: string }[] };
+    const table = async () =>
+      (await hydrate(st, ada.cookie, a, "connections-table")) as { state: string; value: Table };
+    const graph = async () =>
+      (await hydrate(st, ada.cookie, a, "connections-map")) as { state: string; value: GraphMap };
+    const visualizeRuns = async () =>
+      ((await st.durable.raw.eventStore.listExecutions?.()) ?? [])
+        .filter((e) => e.includes(`visualize-${a}`))
+        .sort();
+    const versionOf = async () =>
+      UiViewResponse.parse(await (await detail(st, ada.cookie, a)).json()).versionHash;
+
+    // A, uploaded first, already has the section, empty.
+    expect((await table()).value.rows).toEqual([["No connected documents yet", "", ""]]);
+    expect((await graph()).value.nodes.map((n) => n.group)).toEqual(["self"]);
+    const runsBefore = await visualizeRuns();
+    const versionBefore = await versionOf();
+    expect(runsBefore.length).toBeGreaterThan(0);
+
+    // B arrives and shares an entity with A.
+    const b = await upload(st, ada.cookie, "Zebra takings were 7,391.25 in 2024", {
+      visuals: true,
+      name: "bravo-ledger-2024.txt",
+    });
+    await connect(st, ada, a, b, "Acme-Holdings-International");
+    const titleOfB = (
+      (await (await get(st, ada.cookie, `/api/documents/${b}`)).json()) as { title: string }
+    ).title;
+    const live = await table();
+    expect(live.state).toBe("ready");
+    expect(live.value.rowKeys).toEqual([b]);
+    expect(live.value.rows[0]?.[0]).toBe(titleOfB);
+    expect(live.value.rows[0]?.[1]).toContain("Acme-Holdings-International");
+    const liveMap = (await graph()).value.nodes;
+    expect(liveMap.some((n) => n.group === "document" && n.label === titleOfB)).toBe(true);
+    expect(
+      liveMap.some((n) => n.group === "entity" && n.label === "Acme-Holdings-International"),
+    ).toBe(true);
+
+    // No re-plan of A: the same visualize executions and the same served experience.
+    expect(await visualizeRuns()).toEqual(runsBefore);
+    expect(await versionOf()).toBe(versionBefore);
+
+    // Another user cannot read A's connections.
+    const other = await st.signUpAndLogIn("other@example.com");
+    const view = UiViewResponse.parse(await (await detail(st, ada.cookie, a)).json());
+    const foreign = await fetch(`${st.base}/api/ui/hydrate`, {
+      method: "POST",
+      headers: { cookie: other.cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        document: a,
+        requests: [
+          {
+            experienceId: view.experienceId,
+            versionHash: view.versionHash,
+            handle: "connections-table",
+            params: {},
+          },
+        ],
+      }),
+    });
+    expect(foreign.status).toBe(404);
+
+    // Nothing readable in the event log: no title, no entity name.
+    expect(titleOfB.length).toBeGreaterThanOrEqual(12);
+    assertNoPlaintext(await eventLog(st), [
+      titleOfB,
+      "Acme-Holdings-International",
+      "alpha-ledger-2024",
+    ]);
+
+    // Deleting B removes it on the next hydrate.
+    const del = await fetch(`${st.base}/api/documents/${b}`, {
+      method: "DELETE",
+      headers: { cookie: ada.cookie },
+    });
+    expect(del.status).toBe(204);
+    await vi.waitFor(async () =>
+      expect((await table()).value.rows).toEqual([["No connected documents yet", "", ""]]),
+    );
+    expect((await graph()).value.nodes.map((n) => n.group)).toEqual(["self"]);
+  }, 180_000);
+
+  it("a text-only document with no facts still gets a Connections section", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    stubVisuals(st.visualsClaude as FakeAnthropic, [ADA, BEN], undefined, true);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const a = await upload(st, ada.cookie, `${NO_FACTS} describing the situation in words only`, {
+      visuals: true,
+    });
+    expect(await visualizeOutcome(st, ada.userId, a)).toBe("done");
+    const view = UiViewResponse.parse(await (await detail(st, ada.cookie, a)).json());
+    expect(view.visuals?.state).toBe("ready");
+    expect((await hydrate(st, ada.cookie, a, "connections-table"))?.value).toMatchObject({
+      rows: [["No connected documents yet", "", ""]],
+    });
+    const b = await upload(st, ada.cookie, "Zebra takings were 7,391.25 in 2024", {
+      visuals: true,
+    });
+    await connect(st, ada, a, b, "Globex-Industries-Ltd");
+    const t = (await hydrate(st, ada.cookie, a, "connections-table"))?.value as {
+      rowKeys?: string[];
+    };
+    expect(t.rowKeys).toEqual([b]);
   }, 180_000);
 });
