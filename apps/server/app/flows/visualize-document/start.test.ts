@@ -591,6 +591,108 @@ describe("rerun and the retry sweep", () => {
   });
 });
 
+describe("the stale-format boot pass", () => {
+  const flow = visualizeDocumentFlow();
+  const NIL = "00000000-0000-0000-0000-000000000000";
+  const mk = (): ReadyDocument => ({
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+    documentId: randomUUID(),
+    generation: 1,
+  });
+  const page = (docs: ReadyDocument[]) => async (after: string, limit: number) => {
+    const from = after === NIL ? 0 : docs.findIndex((d) => d.documentId === after) + 1;
+    return docs.slice(from, from + limit);
+  };
+  const setup = () => {
+    const started: string[] = [];
+    let live = 0;
+    let peak = 0;
+    const runtime = {
+      cancel: vi.fn(),
+      start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        started.push(o.executionId);
+        return {
+          executionId: o.executionId,
+          waitForCompletion: once(async () => {
+            live++;
+            peak = Math.max(peak, live);
+            await new Promise((r) => setTimeout(r, 5));
+            live--;
+          }),
+        } as never;
+      }),
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const runs = { record: vi.fn(async () => {}), last: vi.fn(async () => null as never) };
+    return { started, runtime, runs, peak: () => peak };
+  };
+
+  it("re-runs each stale-format document once (gate-bounded, through the re-run lock), recorded as running", async () => {
+    const s = setup();
+    const docs = Array.from({ length: 5 }, mk);
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      stale: page(docs),
+      runs: s.runs,
+      pageSize: 2,
+    });
+    expect(await starter.sweep()).toBe(5);
+    expect(s.started).toEqual(docs.map((d) => visualizeExecutionId(d.userId, d.documentId, 1, 1)));
+    expect(s.peak()).toBeLessThanOrEqual(SWEEP_EXECUTIONS);
+    expect(s.runs.record).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not start a document whose run is still going (the shared lock/tracker), and nothing while the role is off or without a source", async () => {
+    const s = setup();
+    const doc = mk();
+    const busy = loomVisualsStarter(s.runtime, flow, {
+      stale: page([doc]),
+      runs: {
+        record: s.runs.record,
+        last: vi.fn(async () => ({ run: 1, state: "running", code: null }) as never),
+      },
+    });
+    expect(await busy.sweep()).toBe(1);
+    expect(s.started).toEqual([]);
+    const off = loomVisualsStarter(s.runtime, flow, { stale: page([doc]), enabled: false });
+    expect(await off.sweep()).toBe(0);
+    expect(await loomVisualsStarter(s.runtime, flow, {}).sweep()).toBe(0);
+    expect(s.started).toEqual([]);
+  });
+
+  it("a failing stale source is logged by class and does not undo the other passes", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fresh = mk();
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      ready: page([fresh]),
+      stale: async () => {
+        throw new RangeError("down");
+      },
+      runs: s.runs,
+    });
+    await expect(starter.sweep()).resolves.toBe(1);
+    expect(s.started).toEqual([visualizeExecutionId(fresh.userId, fresh.documentId, 1)]);
+    expect(log).toHaveBeenCalledWith("visuals stale-format pass failed", "RangeError");
+    log.mockRestore();
+  });
+
+  it("a failing earlier source does not stop the stale pass either", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const doc = mk();
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      running: async () => {
+        throw new Error("x");
+      },
+      stale: page([doc]),
+      runs: s.runs,
+    });
+    await expect(starter.sweep()).resolves.toBe(1);
+    expect(s.started).toEqual([visualizeExecutionId(doc.userId, doc.documentId, 1, 1)]);
+    log.mockRestore();
+  });
+});
+
 describe("rerun: concurrency, numbering and settle", () => {
   const flow = visualizeDocumentFlow();
   const base = () => {

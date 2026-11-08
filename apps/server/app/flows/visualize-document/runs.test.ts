@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
+import { factFormatFingerprint } from "@docmind/experiences";
 import type { EventEnvelope } from "@loom/core";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
@@ -44,6 +45,29 @@ describe("visualRunRecorder", () => {
       "failed",
       "visuals-model-unavailable",
     );
+  });
+
+  it("stamps the current fact format on a run that ends done, and on no other outcome", async () => {
+    const s = setup();
+    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
+    await s.rec.idle();
+    expect(s.record).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "done",
+      undefined,
+      factFormatFingerprint(),
+    );
+    for (const outcome of ["empty", "skipped", "document_gone"])
+      s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome } }));
+    s.rec.onEvent(
+      event(id, "EXECUTION_COMPLETED", {
+        output: { outcome: "failed", code: "visuals-plan-invalid" },
+      }),
+    );
+    s.rec.onEvent(event(id, "EXECUTION_FAILED"));
+    await s.rec.idle();
+    for (const call of s.record.mock.calls.slice(1)) expect(call).toHaveLength(3);
   });
 
   it("a failed outcome tells the owner's open pages (visuals: failed); other outcomes do not", async () => {
