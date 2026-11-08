@@ -255,7 +255,9 @@ function adoptVisuals<R extends FactRef>(
       entryOf.set(handle, entry);
       providers[handle] = { ...o.provider(ref, entry), handle };
     }
-    return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle } };
+    // The web reports no visibility, so a P2 handle would never be requested: bind at most at P1.
+    const priority = n.binding.priority === "P0" ? "P0" : "P1";
+    return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle, priority } };
   };
   return (visuals.root as ContainerNode).children
     .slice(0, MAX_SIBLINGS)

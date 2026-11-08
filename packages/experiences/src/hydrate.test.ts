@@ -16,6 +16,7 @@ import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP } from "./providers";
 import { provider } from "./providers";
 import { detailWithVisuals } from "./views";
 import { MAX_CONCURRENT_READS, createViews } from "./views-api";
+import type { VisualFactRaw } from "./visuals";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const doc = (n: number): DocumentDto => ({
@@ -666,6 +667,43 @@ describe("a turn's visuals", () => {
     expect(out.map((o) => (o as { value: { value: number } }).value.value)).toEqual([22, 33]);
     expect(r.visualFacts).toHaveBeenCalledTimes(1);
     expect(r.turnFacts).toHaveBeenCalledWith({ chatId: CHAT, ord: 6 });
+  });
+
+  it("hydrates a FigureTrend over quarter labels (Q1 2026 .. Q4 2026) as ready", async () => {
+    const v = views();
+    const quarters: VisualFactRaw[] = [
+      {
+        kind: "series",
+        label: "Units",
+        points: ["Q1 2026", "Q2 2026", "Q3 2026", "Q4 2026"].map((x, i) => ({ x, y: i + 1 })),
+        chunkIds: [],
+        ordinal: 0,
+      },
+    ];
+    const r = readers({ visualFacts: vi.fn(async () => quarters) });
+    const exp = turnExperienceFor(v, CHAT, 6, [
+      { entry: "FigureTrend", pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-0`] },
+    ]);
+    const p = v.turnPayload(
+      { chatId: CHAT, ord: 6 },
+      exp.visuals,
+      new Set([id(1)]),
+      "web",
+    ) as ViewPayload;
+    const handles = Object.keys(exp.experience.providers);
+    const [out] = await v.hydrateExperience(
+      exp.experience,
+      handles.map((handle) => ({
+        experienceId: p.experienceId,
+        versionHash: p.versionHash,
+        handle,
+        params: {},
+      })),
+      r,
+      "user-1",
+      "turn",
+    );
+    expect(out?.state).toBe("ready");
   });
 
   it("hydrates a stored (document) fact widget from its document's facts alone", async () => {

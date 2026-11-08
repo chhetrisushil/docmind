@@ -262,7 +262,12 @@ describe("detailWithVisuals", () => {
       }),
     );
     for (const n of nodes)
-      ops.push({ type: "bindProvider", nodeId: n.id, handle: n.binding?.handle as string });
+      ops.push({
+        type: "bindProvider",
+        nodeId: n.id,
+        handle: n.binding?.handle as string,
+        priority: n.binding?.priority,
+      });
     const r = replay(g, ops);
     if (!r.ok) throw new Error(JSON.stringify(r));
     return r.value;
@@ -318,6 +323,17 @@ describe("detailWithVisuals", () => {
       engine: "Named",
       scriptRef: "visual-bar-1",
     });
+  });
+
+  it("binds a planner P2 node at P1, and leaves P0 and P1 as they are", () => {
+    const at = (id: string, priority: string, handle: string) =>
+      kf(id, "KeyFigure", handle, { binding: { handle, priority } } as never);
+    const exp = detailWithVisuals(
+      visualsOf([at("a", "P0", "fact-0"), at("b", "P1", "fact-1"), at("c", "P2", "fact-2")]),
+      DOC,
+    );
+    const kids = node(exp, "visuals").children as unknown as SemanticNode[];
+    expect(kids.map((c) => c.binding?.priority)).toEqual(["P0", "P1", "P1"]);
   });
 
   it("drops a node with an unknown handle and keeps its sibling", () => {
@@ -504,6 +520,17 @@ describe("turnWithVisuals", () => {
       ],
     );
     expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
+  });
+
+  it("binds a planner P2 turn node at P1, so the web requests every handle", () => {
+    const n = node("n1", "KeyFigure", "p-a");
+    const e = experience(
+      [{ ...n, binding: { handle: "p-a", priority: "P2" } } as SemanticNode],
+      [planned("p-a", "turn.facts", "docmind:turn.facts@1#fact-0")],
+    );
+    const out = turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live) as Experience;
+    const [c] = out.root.kind === "container" ? (out.root.children as SemanticNode[]) : [];
+    expect(c?.binding?.priority).toBe("P1");
   });
 
   it("gives two entries over one fact separate providers", () => {
