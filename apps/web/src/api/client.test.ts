@@ -279,3 +279,26 @@ describe("documents for the scope picker", () => {
     expect(calls.map((c) => c.url)).toEqual([`/api/documents/${doc.id}`, "/api/documents/a%2Fb"]);
   });
 });
+
+describe("createApi: visuals", () => {
+  it("visualizeTurn POSTs the turn's visualize route and uiTurnVisuals GETs its visuals, with the chat id escaped", async () => {
+    const view = {
+      view: "turn",
+      surface: "web",
+      experienceId: "e",
+      versionHash: "v",
+      blueprint: {},
+      inventory: { experienceId: "e", versionHash: "v", handles: [] },
+      fingerprint: { restrictedHandles: [], restrictedProjectionNodes: [], placeholderNodes: [] },
+    };
+    const { api, calls } = apiWith((url) =>
+      url.endsWith("/visualize") ? ok({ started: true }, 202) : ok(view),
+    );
+    await api.visualizeTurn("c/1", 4);
+    await api.uiTurnVisuals("c/1", 4);
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ["POST", "/api/chats/c%2F1/turns/4/visualize"],
+      ["GET", "/api/ui/chats/c%2F1/turns/4/visuals?surface=web"],
+    ]);
+  });
+});

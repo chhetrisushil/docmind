@@ -6,6 +6,12 @@ import type { OpenSse } from "../api/sse";
 import { ChatFold } from "../chat/feedAdapter";
 import { toTranscript } from "../chat/transcript";
 import { type ChatTransport, createChatTransport, newMessageKey } from "../chat/transport";
+import {
+  VISUALS_TIMEOUT_MS,
+  type VisualsPhase,
+  type VisualsView,
+  visualsViewOf,
+} from "../chat/visuals";
 import type { AuthStore } from "./auth";
 import { Store } from "./store";
 
@@ -22,6 +28,10 @@ export interface EntryView {
   steps: ChatToolStep[];
   reasoning?: ChatReasoning;
   outcome: ChatOutcome | null;
+  hasVisuals: boolean;
+  visualsRev: number;
+  /** What the message shows for visuals; null: neither strip nor action. */
+  visuals: VisualsView | null;
 }
 
 export type ChatProblem = "load" | "stream" | "gone" | "unavailable";
@@ -108,12 +118,14 @@ export class ChatController {
   private stopped = false;
   private sending = false;
   private stopping = false;
+  private readonly phases = new Map<number, VisualsPhase>();
+  private readonly phaseTimers = new Map<number, ReturnType<typeof setTimeout>>();
   /** Keys of the last few intents, kept until their send succeeds or is refused, so a retry after a timeout is idempotent. */
   private readonly keys = new Map<string, string>(); // signature to key, the last few intents
 
   constructor(
     private readonly d: {
-      api: Pick<Api, "listMessages" | "sendMessage" | "stopChat">;
+      api: Pick<Api, "listMessages" | "sendMessage" | "stopChat" | "visualizeTurn">;
       auth: Pick<AuthStore, "epoch" | "expired">;
       chatId: string;
       open: OpenSse;
@@ -157,6 +169,9 @@ export class ChatController {
             ...(history.truncated && { truncated: true }),
           }
         : undefined);
+    const hasVisuals = extras?.hasVisuals ?? false;
+    const phase =
+      (e.role === "assistant" && extras ? this.phases.get(extras.ord) : undefined) ?? "idle";
     const text = (e.parts ?? []).flatMap((p) => (p.type === "text" ? [p.text] : [])).join("");
     return {
       id: e.id,
@@ -171,6 +186,18 @@ export class ChatController {
       steps: e.status === "streaming" ? this.fold.liveSteps : (extras?.steps ?? []),
       ...(reasoning && { reasoning }),
       outcome: extras?.outcome ?? null,
+      hasVisuals,
+      visualsRev: extras?.visualsRev ?? 0,
+      visuals:
+        e.role === "assistant" && extras
+          ? visualsViewOf({
+              role: "assistant",
+              status: e.status,
+              citations: extras.citations,
+              hasVisuals,
+              phase,
+            })
+          : null,
     };
   }
 
@@ -183,6 +210,8 @@ export class ChatController {
 
   private publish(): void {
     if (this.stopped) return;
+    for (const [ord, outcome] of this.fold.drainVisuals())
+      this.setPhase(ord, outcome === "visualized" ? "idle" : "nothing");
     const value = this.fold.value();
     const entries = value.entries
       .filter((e) => e.role === "user" || e.role === "assistant")
@@ -227,6 +256,41 @@ export class ChatController {
       ...(prev.focus && { focus: prev.focus }),
       sourcesOpen: prev.sourcesOpen,
     });
+  }
+
+  private setPhase(ord: number, phase: VisualsPhase, resetAfterMs?: number): void {
+    clearTimeout(this.phaseTimers.get(ord));
+    this.phaseTimers.delete(ord);
+    if (phase === "idle") this.phases.delete(ord);
+    else this.phases.set(ord, phase);
+    if (resetAfterMs !== undefined)
+      this.phaseTimers.set(
+        ord,
+        setTimeout(() => {
+          // the wait ended with no frame, or the minute is over
+          this.phaseTimers.delete(ord);
+          this.phases.delete(ord);
+          this.publish();
+        }, resetAfterMs),
+      );
+  }
+
+  /** Asks the server to make the turn's visuals; "Visualizing…" lasts until a `visuals` frame or 60 s. */
+  async visualize(ord: number): Promise<void> {
+    if (this.stopped || this.phases.get(ord) === "running") return;
+    this.setPhase(ord, "running", VISUALS_TIMEOUT_MS);
+    this.publish();
+    try {
+      await this.d.api.visualizeTurn(this.d.chatId, ord);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.code === "visualize_running") return; // still being made: keep waiting
+      if (err instanceof ApiError && err.status === 409 && err.code === "not_visualizable")
+        this.setPhase(ord, "nothing");
+      else if (err instanceof ApiError && err.status === 429)
+        this.setPhase(ord, "limited", VISUALS_TIMEOUT_MS);
+      else this.setPhase(ord, "idle");
+      this.publish();
+    }
   }
 
   /** `key` is the widget's own key when the action came from it; otherwise one key per intent is held here. */
@@ -358,6 +422,8 @@ export class ChatController {
 
   close(): void {
     this.stopped = true;
+    for (const t of this.phaseTimers.values()) clearTimeout(t);
+    this.phaseTimers.clear();
     this.transport.close();
   }
 }

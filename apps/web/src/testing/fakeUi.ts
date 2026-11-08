@@ -27,8 +27,9 @@ export function fakeUi(readers: UiReaders = emptyReaders()) {
     views: [] as ViewName[],
     documents: [] as string[],
     hydrate: [] as { source: ViewSource; handles: string[] }[],
+    turns: [] as [string, number][],
   };
-  const api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiHydrate"> = {
+  const api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals" | "uiHydrate"> = {
     async uiView(name) {
       calls.views.push(name);
       return structuredClone(views.payload(name, "web")) as unknown as UiViewResponse;
@@ -37,8 +38,13 @@ export function fakeUi(readers: UiReaders = emptyReaders()) {
       calls.documents.push(id);
       return structuredClone(views.documentPayload(id, null, "web")) as unknown as UiViewResponse;
     },
+    uiTurnVisuals(chatId, ord) {
+      calls.turns.push([chatId, ord]);
+      return new Promise<never>(() => {}); // a turn view that never arrives: the page tests need the strip, not a preview
+    },
     async uiHydrate(source, requests) {
       calls.hydrate.push({ source, handles: requests.map((r) => r.handle) });
+      if ("turn" in source) throw new Error("the fake UI plane serves no turn hydrate");
       return "view" in source
         ? views.hydrate(source.view, requests, readers, "user-1")
         : views.hydrateExperience(
