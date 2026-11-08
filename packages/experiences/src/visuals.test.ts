@@ -1,3 +1,4 @@
+import { effectiveFormat, formatSemanticNumber } from "@loom-ui/core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, createInvoker } from "./invoker";
 import { PINS } from "./providers";
@@ -95,7 +96,7 @@ describe("the visuals catalogue", () => {
 describe("the visual reshapers", () => {
   const raw = [FIGURE, SERIES, DATED_SERIES, TABLE];
   it("map a fact to its kind's value contract", () => {
-    expect(shape("visual-kpi-0", raw)).toEqual({ value: 1200, unit: "EUR", label: "Revenue" });
+    expect(shape("visual-kpi-0", raw)).toEqual({ value: 1200, unit: "EUR" });
     expect(shape("visual-bar-1", raw)).toEqual({
       bars: [
         { label: "Q1", value: 1 },
@@ -123,6 +124,36 @@ describe("the visual reshapers", () => {
         { label: "2024-02-01", value: 4 },
       ],
     });
+  });
+  it("carry no fact label on a KPI value: the planner's title already names it", () => {
+    expect(shape("visual-kpi-0", [FIGURE])).not.toHaveProperty("label");
+  });
+  it("hand loom-ui a fraction for a percent unit, so a stored 38% renders 38%", () => {
+    const pctFigure: VisualFactRaw = { ...FIGURE, value: 38, unit: "%" };
+    const pctSeries: VisualFactRaw = {
+      ...DATED_SERIES,
+      unit: "%",
+      points: [
+        { x: "2024-01", y: 41 },
+        { x: "2024-02", y: 46 },
+      ],
+    };
+    const kpi = shape("visual-kpi-0", [pctFigure]) as { value: number; unit: string };
+    expect(kpi.value).toBeCloseTo(0.38);
+    expect(kpi.unit).toBe("%");
+    const say = (v: number, unit: string) =>
+      formatSemanticNumber(v, effectiveFormat(undefined, unit), "en-US");
+    expect(say(kpi.value, kpi.unit)).toBe("38%");
+    const bars = shape("visual-bar-2", [pctFigure, SERIES, pctSeries]) as {
+      bars: { value: number }[];
+    };
+    expect(bars.bars.map((b) => b.value)).toEqual([0.41, 0.46]);
+    const trend = shape("visual-trend-2", [pctFigure, SERIES, pctSeries]) as {
+      series: { points: { value: number }[] }[];
+    };
+    expect(trend.series[0]?.points.map((p) => p.value)).toEqual([0.41, 0.46]);
+    // Non-percent units are untouched.
+    expect((shape("visual-kpi-0", [FIGURE]) as { value: number }).value).toBe(1200);
   });
   it("treat only YYYY-MM or YYYY-MM-DD as a date for the trend", () => {
     const series = (x: string): VisualFactRaw => ({

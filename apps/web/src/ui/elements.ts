@@ -5,3 +5,5 @@ import "@loom-ui/renderer-lit/elements/lu-note";
 import "@loom-ui/renderer-lit/elements/lu-a2ui-view";
 import "@loom-ui/renderer-lit/elements/lu-embedded";
 import "@loom-ui/renderer-lit/elements/lu-prose";
+import "@loom-ui/renderer-lit/elements/lu-bar-chart";
+import "@loom-ui/renderer-lit/elements/lu-timeseries";

@@ -189,6 +189,8 @@ export const factProvider = (
 
 const isDate = (x: string) => /^\d{4}-\d{2}(-\d{2})?$/.test(x);
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
+/** loom-ui's "%" format reads a fraction (0.38 prints 38%), while facts hold the document's form (38 for "38%"). */
+const toLoom = (f: { unit?: string }, n: number) => (f.unit?.trim() === "%" ? n / 100 : n);
 const wrong = (): never => {
   throw new Error("visual fact does not fit this widget");
 };
@@ -199,9 +201,8 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
     f.kind !== "figure"
       ? wrong()
       : {
-          value: f.value,
+          value: toLoom(f, f.value),
           ...unitOf(f),
-          label: f.label,
           ...(f.compare &&
             f.compare.value !== 0 && {
               deltaPct: (f.value - f.compare.value) / Math.abs(f.compare.value),
@@ -210,7 +211,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
   "visual-bar": (f) =>
     f.kind !== "series"
       ? wrong()
-      : { ...unitOf(f), bars: f.points.map((p) => ({ label: p.x, value: p.y })) },
+      : { ...unitOf(f), bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })) },
   "visual-trend": (f) =>
     f.kind !== "series" || !f.points.every((p) => isDate(p.x))
       ? wrong()
@@ -219,7 +220,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
             {
               label: f.label,
               ...unitOf(f),
-              points: f.points.map((p) => ({ timestamp: p.x, value: p.y })),
+              points: f.points.map((p) => ({ timestamp: p.x, value: toLoom(f, p.y) })),
             },
           ],
         },

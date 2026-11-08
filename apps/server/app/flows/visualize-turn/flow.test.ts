@@ -228,7 +228,7 @@ describe("visualize-turn flow", () => {
     );
     expect(turnFacts).toHaveBeenCalledWith(turn);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ state: "ready", value: { value: 4242, label: LABEL } });
+    expect(out[0]).toMatchObject({ state: "ready", value: { value: 4242 } });
   });
 
   it("is nothing for an uncited answer: no model call, no lineage head, and the nothing frame", async () => {
