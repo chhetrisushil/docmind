@@ -201,6 +201,17 @@ describe("chat contracts", () => {
     expect(StopChatResponse.safeParse({ stopped: "yes" }).success).toBe(false);
   });
 
+  it("a visuals frame without an outcome means visualized, and refuses ord 0 or an unknown outcome", () => {
+    expect(ChatStreamEvent.parse({ kind: "visuals", ord: 6 })).toEqual({
+      kind: "visuals",
+      ord: 6,
+      outcome: "visualized",
+    });
+    expect(ChatStreamEvent.safeParse({ kind: "visuals", ord: 0 }).success).toBe(false);
+    expect(ChatStreamEvent.safeParse({ kind: "visuals", ord: 6, outcome: "other" }).success).toBe(
+      false,
+    );
+  });
   it("parses every stream event kind and refuses an unknown one", () => {
     const events = [
       { kind: "status", state: "open", running: false, turns: 0 },
@@ -211,6 +222,8 @@ describe("chat contracts", () => {
       { kind: "tool-reset", turnKey: 5 },
       { kind: "answer", turn: 3, text: "The" },
       { kind: "reset", turn: 3 },
+      { kind: "visuals", ord: 6, outcome: "visualized" },
+      { kind: "visuals", ord: 6, outcome: "nothing" },
       { kind: "closed" },
       { kind: "error", code: "internal" },
     ];

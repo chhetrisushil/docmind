@@ -315,6 +315,8 @@ function attachLive(
   };
   // Bus events carry the turn key; hub events the accepted-turn number. Each keeps its own name.
   const onBus = (e: LiveChatEvent) => {
+    if (e.kind === "visuals")
+      return void sink.send(frame("visuals", { ord: e.ord, outcome: e.outcome }));
     if (e.kind === "reset") return void sink.send(frame("tool-reset", { turnKey: e.turnKey }));
     sink.send(frame("tool", { turnKey: e.turnKey, step: e.step }));
   };

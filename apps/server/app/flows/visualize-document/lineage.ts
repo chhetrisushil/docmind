@@ -1,4 +1,4 @@
-import { type Experience, genesis, replay } from "@loom-ui/core";
+import { type Experience, type Intent, genesis, replay } from "@loom-ui/core";
 import {
   type Committed,
   LineErasedError,
@@ -91,27 +91,35 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/** Where a plan is committed: one lineage line, its intent and a fixed source label. */
+export interface CommitTarget {
+  experienceId: string;
+  intent: Intent;
+  /** A fixed label stored in the genesis metadata (never content). */
+  sourceKind: string;
+}
+
 /**
- * Commits the plan as the document's visuals: the head's content becomes exactly the plan's nodes (R18). A plan's
+ * Commits the plan as the target line's visuals: the head's content becomes exactly the plan's nodes (R18). A plan's
  * ops are relative to an empty experience, so a later commit first removes every root child of the head, then adds
  * the plan's. A head that already equals the plan's replay (a step retry or a resume after a commit) is returned
  * as it is, with nothing written. A head that moved in between is re-read once; moving again throws
  * `HeadMovedError`. A line whose owner was erased throws `LineErasedError` (the commit step reports `document_gone`).
  */
-export async function commitPlan(
+export async function commitPlanTo(
   lineage: Lineage,
-  ref: VisualizeRef,
+  target: CommitTarget,
   plan: CommitPlan,
   now: () => string,
 ): Promise<{ head: string }> {
-  const experienceId = experienceIdOf(ref);
+  const { experienceId } = target;
   const by = plannerProvenance(plan, { agentId: VISUALIZER_AGENT_ID });
   const emptyGenesis = () =>
     genesis({
       experienceId,
-      intent: VISUALS_INTENT,
+      intent: target.intent,
       // No content: the author and source are fixed labels, the time is the commit's.
-      meta: { author: VISUALIZER_AGENT_ID, createdAt: now(), sourceKind: "document-visuals" },
+      meta: { author: VISUALIZER_AGENT_ID, createdAt: now(), sourceKind: target.sourceKind },
     });
   const wanted = replay(emptyGenesis(), plan.ops);
   if (!wanted.ok) throw new LineageRefusedError(wanted.finding.code);
@@ -148,3 +156,16 @@ export async function commitPlan(
   }
   throw new HeadMovedError();
 }
+
+export const commitPlan = (
+  lineage: Lineage,
+  ref: VisualizeRef,
+  plan: CommitPlan,
+  now: () => string,
+) =>
+  commitPlanTo(
+    lineage,
+    { experienceId: experienceIdOf(ref), intent: VISUALS_INTENT, sourceKind: "document-visuals" },
+    plan,
+    now,
+  );

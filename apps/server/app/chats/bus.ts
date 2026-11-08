@@ -2,7 +2,9 @@ import type { ChatToolStep } from "@docmind/contracts";
 
 export type LiveChatEvent =
   | { kind: "tool"; turnKey: number; step: ChatToolStep }
-  | { kind: "reset"; turnKey: number };
+  | { kind: "reset"; turnKey: number }
+  /** A turn's visuals were committed, or its run found nothing. Ids and a fixed word only. */
+  | { kind: "visuals"; ord: number; outcome: "visualized" | "nothing" };
 
 export class ChatBusLimitError extends Error {
   constructor() {
