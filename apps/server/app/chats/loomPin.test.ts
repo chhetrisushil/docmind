@@ -7,7 +7,12 @@ describe("the pinned Loom exports turnSettledObserver", () => {
   it("ignores events of another flow", () => {
     const listener = vi.fn();
     const observe = turnSettledObserver({ definition: { id: "doc-chat" } }, listener);
-    observe({ workflowId: "something-else", executionId: "x", eventType: "STEP_COMPLETED", payload: {} } as unknown as EventEnvelope);
+    observe({
+      workflowId: "something-else",
+      executionId: "x",
+      eventType: "STEP_COMPLETED",
+      payload: {},
+    } as unknown as EventEnvelope);
     expect(listener).not.toHaveBeenCalled();
   });
 });
