@@ -21,6 +21,7 @@ const DEFINERS = [
   "docmind_visual_retry_documents",
   "docmind_visual_running_runs",
   "docmind_visual_stale_format_documents",
+  "docmind_visual_unrecorded_documents",
 ];
 const fn = (max = 10) =>
   `docmind_stale_uploads_v2(make_interval(secs => 120), make_interval(secs => 604800), ${max})`;

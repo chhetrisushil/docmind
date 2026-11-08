@@ -99,6 +99,9 @@ docker run --rm \
 - Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
   role on, the first boot after it re-plans every visualized document once (one planner call each over its stored facts, at
   most 2 at a time, no extraction) to add the Connections section; it is stamped when it completes, so later boots do not repeat it (a re-plan whose end is lost to a crash is re-planned once more).
+  Migration `0033` adds one narrow SECURITY DEFINER function (ids only) so that documents visualized before `visual_runs` existed
+  (no row, but a visuals lineage head) are re-planned once too. First-boot cost: one planner call per visualized document
+  (those with a row and those without), at most 2 at a time; the re-run records a row, so it does not repeat.
 
 ## 4. Environment of the server
 

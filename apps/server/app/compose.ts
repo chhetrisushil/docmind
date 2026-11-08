@@ -55,11 +55,13 @@ import { PgVisualizeGuard } from "./flows/visualize-document/pgGuard";
 import { visualsPlanner } from "./flows/visualize-document/planner";
 import { PgVisualRuns, visualRunRecorder } from "./flows/visualize-document/runs";
 import {
+  hasVisualsHead,
   loomVisualsStarter,
   pgReadyDocuments,
   pgRetryDocuments,
   pgRunningRuns,
   pgStaleFormatDocuments,
+  pgUnrecordedDocuments,
 } from "./flows/visualize-document/start";
 import { visualsStateReader } from "./flows/visualize-document/state";
 import { visualizeTurnFlow } from "./flows/visualize-turn/flow";
@@ -319,6 +321,8 @@ export function buildServer(options: ComposeOptions) {
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
     stale: pgStaleFormatDocuments(pool),
+    unrecorded: pgUnrecordedDocuments(pool),
+    visualized: hasVisualsHead(visualsLineageOf),
     running: pgRunningRuns(pool),
     runs: visualRuns,
     afterDone,

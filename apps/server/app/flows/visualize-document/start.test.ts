@@ -725,6 +725,119 @@ describe("the stale-format boot pass", () => {
   });
 });
 
+describe("the unrecorded-documents boot pass (documents visualized before visual_runs existed)", () => {
+  const flow = visualizeDocumentFlow();
+  const NIL = "00000000-0000-0000-0000-000000000000";
+  const mk = (): ReadyDocument => ({
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+    documentId: randomUUID(),
+    generation: 1,
+  });
+  const page = (docs: ReadyDocument[]) => async (after: string, limit: number) => {
+    const from = after === NIL ? 0 : docs.findIndex((d) => d.documentId === after) + 1;
+    return docs.slice(from, from + limit);
+  };
+  const setup = () => {
+    const started: string[] = [];
+    const runtime = {
+      cancel: vi.fn(),
+      start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        started.push(o.executionId);
+        return { executionId: o.executionId, waitForCompletion: async () => {} } as never;
+      }),
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const rows = new Map<string, { run: number; state: string; code: null }>();
+    const runs = {
+      record: vi.fn(async (r: { documentId: string; run: number }, state: string) => {
+        rows.set(r.documentId, { run: r.run, state, code: null });
+      }),
+      last: vi.fn(
+        async (_i: unknown, documentId: string) => (rows.get(documentId) ?? null) as never,
+      ),
+    };
+    return { started, runtime, runs };
+  };
+
+  it("re-runs a headed document once, noting it so the extract step never extracts; leaves a head-less one alone", async () => {
+    const s = setup();
+    const headed = mk();
+    const bare = mk();
+    const afterDone = new Set<string>();
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      unrecorded: page([headed, bare]),
+      visualized: async (d) => d.documentId === headed.documentId,
+      runs: s.runs,
+      afterDone,
+    });
+    expect(await starter.sweep()).toBe(1);
+    const id = visualizeExecutionId(headed.userId, headed.documentId, 1, 1);
+    expect(s.started).toEqual([id]);
+    expect(afterDone.has(id)).toBe(true);
+    expect(s.runs.record).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recorded row stops a repeat on the next sweep (the source no longer lists it; the run lock sees a running row)", async () => {
+    const s = setup();
+    const doc = mk();
+    let listed = true;
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      unrecorded: async (after, limit) => (listed ? page([doc])(after, limit) : []),
+      visualized: async () => true,
+      runs: s.runs,
+    });
+    await starter.sweep();
+    listed = false; // the row now exists
+    await starter.sweep();
+    expect(s.started).toHaveLength(1);
+  });
+
+  it("does nothing without a head source, while the role is off, and logs a failing head check by class without stopping the pass", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const [bad, good] = [mk(), mk()];
+    expect(
+      await loomVisualsStarter(s.runtime, flow, { unrecorded: page([bad]), runs: s.runs }).sweep(),
+    ).toBe(0);
+    expect(
+      await loomVisualsStarter(s.runtime, flow, {
+        unrecorded: page([bad]),
+        visualized: async () => true,
+        enabled: false,
+      }).sweep(),
+    ).toBe(0);
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      unrecorded: page([bad, good]),
+      visualized: async (d) => {
+        if (d.documentId === bad.documentId) throw new RangeError("unreadable");
+        return true;
+      },
+      runs: s.runs,
+    });
+    expect(await starter.sweep()).toBe(1);
+    expect(s.started).toEqual([visualizeExecutionId(good.userId, good.documentId, 1, 1)]);
+    expect(log).toHaveBeenCalledWith("visuals head check failed", "RangeError");
+    log.mockRestore();
+  });
+
+  it("a failing source is logged by class and does not undo the earlier passes", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fresh = mk();
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      ready: page([fresh]),
+      unrecorded: async () => {
+        throw new RangeError("down");
+      },
+      visualized: async () => true,
+      runs: s.runs,
+    });
+    expect(await starter.sweep()).toBe(1);
+    expect(log).toHaveBeenCalledWith("visuals unrecorded pass failed", "RangeError");
+    log.mockRestore();
+  });
+});
+
 describe("rerun: concurrency, numbering and settle", () => {
   const flow = visualizeDocumentFlow();
   const base = () => {
