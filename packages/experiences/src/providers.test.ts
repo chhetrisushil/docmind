@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { PINS, factFormatFingerprint } from "./providers";
 
 describe("factFormatFingerprint", () => {
-  it("is stable and names the pins of both fact tools", () => {
+  it("is stable and names the pins of both fact tools and of the connections tool", () => {
     expect(factFormatFingerprint()).toBe(factFormatFingerprint());
-    expect(factFormatFingerprint()).toBe(`${PINS["visual.facts"]}+${PINS["turn.facts"]}`);
+    expect(factFormatFingerprint()).toBe(
+      `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}`,
+    );
+    expect(factFormatFingerprint().length).toBeLessThanOrEqual(200);
   });
 
-  it("changes when either fact pin changes, and not when another pin does", () => {
+  it("changes when any of the three pins changes, and not when another pin does", () => {
     const saved = { ...PINS };
     const mut = PINS as Record<string, string>;
     try {
@@ -16,7 +19,10 @@ describe("factFormatFingerprint", () => {
       const afterVisual = factFormatFingerprint();
       expect(afterVisual).not.toBe(before);
       mut["turn.facts"] = "docmind:turn.facts@2";
-      expect(factFormatFingerprint()).not.toBe(afterVisual);
+      const afterTurn = factFormatFingerprint();
+      expect(afterTurn).not.toBe(afterVisual);
+      mut["doc.connections"] = "docmind:doc.connections@2";
+      expect(factFormatFingerprint()).not.toBe(afterTurn);
       Object.assign(mut, saved);
       mut["documents.list"] = "docmind:documents.list@9";
       expect(factFormatFingerprint()).toBe(before);

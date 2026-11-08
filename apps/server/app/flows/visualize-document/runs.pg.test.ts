@@ -1,4 +1,6 @@
+import { factFormatFingerprint } from "@docmind/experiences";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
@@ -6,8 +8,15 @@ import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
 import { ingestExecutionId } from "../../documents/ingest";
 import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
+import { visualizeDocumentFlow } from "./flow";
 import { PgVisualRuns } from "./runs";
-import { pgReadyDocuments, pgRetryDocuments, pgRunningRuns, pgStaleFormatDocuments } from "./start";
+import {
+  loomVisualsStarter,
+  pgReadyDocuments,
+  pgRetryDocuments,
+  pgRunningRuns,
+  pgStaleFormatDocuments,
+} from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
@@ -234,12 +243,12 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     expect(await formatOf(d.id)).toBe("fmt-b");
   });
 
-  it("docmind_visual_stale_format_documents lists done runs with a different non-null format, across tenants, paged, ids only", async () => {
+  it("docmind_visual_stale_format_documents lists done runs with a different or no format (NULL is stale since 0032), across tenants, paged, ids only", async () => {
     await owner.query("DELETE FROM documents");
     const stale = await readyDoc();
     const staleB = await readyDoc(BOB);
     const current = await readyDoc();
-    const unstamped = await readyDoc(); // done, format NULL (a row from before the column): not stale
+    const unstamped = await readyDoc(); // done, format NULL (a row from before the column): stale since 0032
     const empty = await readyDoc();
     const failed = await readyDoc();
     const notReady = await seedDoc(owner, app, fields, ALICE, fp(), 600);
@@ -262,7 +271,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     );
     const list = pgStaleFormatDocuments(app, "now");
     const all = await list(NIL, 100);
-    expect(all.map((d) => d.documentId)).toEqual([stale.id, staleB.id].sort());
+    expect(all.map((d) => d.documentId)).toEqual([stale.id, staleB.id, unstamped.id].sort());
     expect(all.find((d) => d.documentId === stale.id)).toEqual({
       tenantId: ALICE.tenantId,
       userId: U1,
@@ -271,8 +280,11 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     });
     const first = await list(NIL, 1);
     const second = await list(first[0]?.documentId as string, 1);
-    expect([first[0]?.documentId, second[0]?.documentId]).toEqual([stale.id, staleB.id].sort());
-    expect(await list(second[0]?.documentId as string, 1)).toEqual([]);
+    const third = await list(second[0]?.documentId as string, 1);
+    expect([first[0]?.documentId, second[0]?.documentId, third[0]?.documentId]).toEqual(
+      [stale.id, staleB.id, unstamped.id].sort(),
+    );
+    expect(await list(third[0]?.documentId as string, 1)).toEqual([]);
     expect(
       (await app.query("SELECT * FROM docmind_visual_stale_format_documents(NULL, 10, 'now')"))
         .rows,
@@ -286,7 +298,60 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
       [stale.id],
     );
-    expect((await list(NIL, 100)).map((d) => d.documentId)).toEqual([staleB.id]);
+    expect((await list(NIL, 100)).map((d) => d.documentId)).toEqual(
+      [staleB.id, unstamped.id].sort(),
+    );
+  });
+
+  it("lists a NULL-format done run for the current fingerprint until a done run stamps it, then never again (the re-plan happens once)", async () => {
+    await owner.query("DELETE FROM documents");
+    const d = await readyDoc();
+    const at = (run: number) => ({ userId: U1, documentId: d.id, generation: d.g, run });
+    await runs.record(at(0), "done"); // a run from before the column: no format
+    const list = pgStaleFormatDocuments(app); // the current fingerprint
+    expect((await list(NIL, 10)).map((x) => x.documentId)).toEqual([d.id]);
+    await runs.record(at(1), "running"); // the boot pass starts the re-plan
+    expect(await list(NIL, 10)).toEqual([]); // a running run is not `done`: not listed again mid-run
+    await runs.record(at(1), "done", undefined, factFormatFingerprint());
+    expect(await list(NIL, 10)).toEqual([]);
+    expect(await pgStaleFormatDocuments(app, "docmind:other@2")(NIL, 10)).toHaveLength(1);
+  });
+
+  it("the boot stale pass re-runs a NULL-format done run once, the end stamps it, and the next sweep leaves it", async () => {
+    await owner.query("DELETE FROM documents");
+    const d = await readyDoc();
+    await runs.record({ userId: U1, documentId: d.id, generation: d.g, run: 0 }, "done"); // no format
+    const started: string[] = [];
+    const runtime = {
+      cancel: async () => {},
+      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        started.push(o.executionId);
+        return {
+          executionId: o.executionId,
+          // The live event feed's end of a committed run: `done`, stamped with the current fingerprint.
+          waitForCompletion: async () => {
+            await runs.record(
+              { userId: U1, documentId: d.id, generation: d.g, run: 1 },
+              "done",
+              undefined,
+              factFormatFingerprint(),
+            );
+          },
+        } as never;
+      },
+    };
+    const starter = loomVisualsStarter(
+      runtime as unknown as Pick<WorkflowRuntime, "start" | "cancel">,
+      visualizeDocumentFlow(),
+      {
+        stale: pgStaleFormatDocuments(app),
+        runs,
+      },
+    );
+    expect(await starter.sweep()).toBe(1);
+    expect(started).toHaveLength(1);
+    expect(await starter.sweep()).toBe(0);
+    expect(started).toHaveLength(1);
   });
 
   it("the retry list leaves out a document whose generation moved on, a user being erased, and answers nothing to a null (STRICT)", async () => {

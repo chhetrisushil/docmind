@@ -41,7 +41,7 @@ export function loadEffect(
 
 export const VISUALS_INTENT: Intent = {
   objective:
-    "Help a reader grasp this document at a glance. Show only what a visual makes clearer than prose. Prefer fewer widgets. Every widget binds one fact.",
+    "Help a reader grasp this document at a glance. Show only what a visual makes clearer than prose. Prefer fewer widgets. Every widget binds one fact, except RelatedDocuments and ConnectionMap, which bind the live connections capability: it may grow, so include a compact Connections section when the document has, or is likely to gain, related material.",
   source: "application",
   sensitivity: "sensitive",
 };

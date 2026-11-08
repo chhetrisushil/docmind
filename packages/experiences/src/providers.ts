@@ -29,12 +29,12 @@ export const PINS = {
 export type Target = keyof typeof PINS;
 
 /**
- * The identity of the fact format visuals are planned over: the pins of the two fact tools, as one short canonical string.
+ * The identity of the format visuals are planned over: the pins of the two fact tools and of the connections tool, as one short canonical string.
  * A visualize run that ends `done` is stamped with it (visual_runs.format); a stored plan whose stamp differs was made over an
  * older format and is re-planned by the boot sweep. Pure, no content.
  */
 export function factFormatFingerprint(): string {
-  return `${PINS["visual.facts"]}+${PINS["turn.facts"]}`;
+  return `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}`;
 }
 
 export function provider(

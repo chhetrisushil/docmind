@@ -79,7 +79,7 @@ export const pgRetryDocuments = readyFrom("docmind_visual_retry_documents");
 
 /**
  * `docmind_visual_stale_format_documents` (migration 0030): ready documents whose last run ended `done` with a recorded format
- * other than `format` (default: the current fingerprint). A NULL format is not stale.
+ * other than `format` (default: the current fingerprint). A NULL format counts as stale for the connections release (migration 0032).
  */
 export const pgStaleFormatDocuments =
   (pool: Pick<Pool, "query">, format: string = factFormatFingerprint()): ReadyDocuments =>
@@ -161,7 +161,7 @@ export interface VisualsStarter {
    * Boot sweep: first reconciles the runs recorded as `running` (their end may have been lost), then starts every ready
    * document that has no visualize execution for its generation, then re-runs once every
    * ready document whose last run ended `visuals-model-unavailable`, then once every document whose last run was committed over an
-   * older fact format (migration 0030's stamp; a NULL stamp is never stale), page by page, with at most SWEEP_EXECUTIONS executions
+   * older fact format (migration 0030's stamp; a NULL stamp counts as stale, migration 0032), page by page, with at most SWEEP_EXECUTIONS executions
    * running at once (it resolves when they have all completed).
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
    */
