@@ -1,5 +1,5 @@
 import type { ChatMessageDto, ListMessagesResponse, SendMessageRequest } from "@docmind/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import type { SseOptions } from "../api/sse";
 import { ChatController, LIMITED_TEXT, problemText, sourcesOf } from "./chat";
@@ -37,8 +37,16 @@ const msg = (
 type ListFn = (id: string, cursor?: string) => Promise<ListMessagesResponse>;
 type SendFn = (id: string, req: SendMessageRequest) => Promise<{ messageId: string }>;
 type StopFn = (id: string) => Promise<{ stopped: boolean }>;
+type VisualizeFn = (id: string, ord: number) => Promise<void>;
 
-function setup(over: { listMessages?: ListFn; sendMessage?: SendFn; stopChat?: StopFn } = {}) {
+function setup(
+  over: {
+    listMessages?: ListFn;
+    sendMessage?: SendFn;
+    stopChat?: StopFn;
+    visualizeTurn?: VisualizeFn;
+  } = {},
+) {
   const api = {
     listMessages: vi.fn<ListFn>(async () => ({
       items: [
@@ -53,10 +61,12 @@ function setup(over: { listMessages?: ListFn; sendMessage?: SendFn; stopChat?: S
     })),
     sendMessage: vi.fn<SendFn>(async () => ({ messageId: "m" })),
     stopChat: vi.fn<StopFn>(async () => ({ stopped: true })),
+    visualizeTurn: vi.fn<VisualizeFn>(async () => {}),
   };
   if (over.listMessages) api.listMessages = vi.fn<ListFn>(over.listMessages);
   if (over.sendMessage) api.sendMessage = vi.fn<SendFn>(over.sendMessage);
   if (over.stopChat) api.stopChat = vi.fn<StopFn>(over.stopChat);
+  if (over.visualizeTurn) api.visualizeTurn = vi.fn<VisualizeFn>(over.visualizeTurn);
   const sse: { opts?: SseOptions } = {};
   const open = vi.fn((opts: SseOptions) => {
     sse.opts = opts;
@@ -599,5 +609,104 @@ describe("ChatController: fix round 1", () => {
     const t = setup();
     expect(await t.ctl.send("early")).toBe("failed");
     expect(t.api.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("visuals actions", () => {
+  const history =
+    (over: Partial<ChatMessageDto> = {}) =>
+    async () => ({
+      items: [msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited], ...over })],
+      nextCursor: null,
+    });
+  const started = async (
+    visualizeTurn: VisualizeFn = async () => {},
+    over: Partial<ChatMessageDto> = {},
+  ) => {
+    const t = setup({ listMessages: history(over), visualizeTurn });
+    await t.ctl.start();
+    vi.useFakeTimers();
+    return { ...t, visuals: () => t.state().entries.find((e) => e.role === "assistant")?.visuals };
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it("202: Visualizing…, then a visuals frame ends the wait and shows the strip", async () => {
+    const t = await started();
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false });
+    await t.ctl.visualize(2);
+    expect(t.api.visualizeTurn).toHaveBeenCalledWith("c1", 2);
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", busy: true });
+    t.frame("visuals", { ord: 2, outcome: "visualized" });
+    expect(t.visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+  });
+  it("ends the wait after 60 s with no frame", async () => {
+    const t = await started();
+    await t.ctl.visualize(2);
+    vi.advanceTimersByTime(59_999);
+    expect(t.visuals()?.busy).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false });
+  });
+  it("ignores a second activation while a run is waited on", async () => {
+    const t = await started();
+    await Promise.all([t.ctl.visualize(2), t.ctl.visualize(2)]);
+    expect(t.api.visualizeTurn).toHaveBeenCalledTimes(1);
+  });
+  it("409 visualize_running keeps Visualizing…", async () => {
+    const t = await started(async () => {
+      throw new ApiError(409, "visualize_running");
+    });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", busy: true });
+  });
+  it("409 not_visualizable, and a nothing frame, show Nothing to visualize", async () => {
+    const a = await started(async () => {
+      throw new ApiError(409, "not_visualizable");
+    });
+    await a.ctl.visualize(2);
+    expect(a.visuals()).toMatchObject({ action: "Visualize", note: "Nothing to visualize" });
+    const b = await started();
+    await b.ctl.visualize(2);
+    b.frame("visuals", { ord: 2, outcome: "nothing" });
+    expect(b.visuals()).toMatchObject({ note: "Nothing to visualize", busy: false });
+  });
+  it("a nothing frame for a turn that already has a strip keeps the strip and returns Re-visualize (ruling C1)", async () => {
+    const t = await started(undefined, { hasVisuals: true });
+    await t.ctl.visualize(2);
+    t.frame("visuals", { ord: 2, outcome: "nothing" });
+    expect(t.visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+  });
+  it("429 shows Try again in a minute for 60 s, then the action again", async () => {
+    const t = await started(async () => {
+      throw new ApiError(429, "too_many_requests", 60);
+    });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toEqual({
+      strip: false,
+      action: null,
+      busy: false,
+      note: "Try again in a minute",
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(t.visuals()).toMatchObject({ action: "Visualize", note: null });
+  });
+  it("any other failure puts the action back, silently", async () => {
+    const t = await started(async () => {
+      throw new ApiError(500, "internal");
+    });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false, note: null });
+  });
+  it("shows the strip from history when the reply has visuals", async () => {
+    const t = await started(undefined, { hasVisuals: true });
+    expect(t.visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+  });
+  it("shows no action on an uncited reply, and none on an interrupted or failed one", async () => {
+    const uncited = await started(undefined, { citations: [] });
+    expect(uncited.visuals()).toBeNull();
+    const cut = await started(undefined, { status: "interrupted" });
+    expect(cut.visuals()).toBeNull();
+    const failed = await started(undefined, { status: "failed" });
+    expect(failed.visuals()).toBeNull();
   });
 });

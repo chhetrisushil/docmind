@@ -308,3 +308,53 @@ describe("ChatFold fix round 1", () => {
     expect(fold.error).toBe(false);
   });
 });
+
+describe("visuals", () => {
+  const citation = {
+    passageId: PASSAGE,
+    documentId: DOC,
+    docTitle: "Doc",
+    locator: { kind: "page" as const, page: 2 },
+    snippet: "snip",
+  };
+  const folded = () => {
+    const fold = new ChatFold();
+    fold.applyHistory(page([msg(1, "user", 1), msg(2, "assistant", 1, { citations: [citation] })]));
+    return fold;
+  };
+  it("keeps hasVisuals from history, and marks the reply of a visuals frame by its ord", () => {
+    const fold = new ChatFold();
+    fold.applyHistory(
+      page([
+        msg(1, "user", 1),
+        msg(2, "assistant", 1, { citations: [citation], hasVisuals: false }),
+      ]),
+    );
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: false, visualsRev: 0 });
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: true, visualsRev: 1 });
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")?.visualsRev).toBe(2); // a re-run
+    expect(fold.drainVisuals()).toEqual([
+      [2, "visualized"],
+      [2, "visualized"],
+    ]);
+    expect(fold.drainVisuals()).toEqual([]);
+  });
+  it("keeps hasVisuals when the same reply arrives again (a reconnect snapshot says false for a reply that has visuals)", () => {
+    const fold = folded();
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    fold.applyStream(ev({ kind: "message", ...msg(2, "assistant", 1, { citations: [citation] }) }));
+    expect(fold.extrasOf("t1.assistant")?.hasVisuals).toBe(true);
+  });
+  it("keeps a nothing frame out of hasVisuals, and still reports a frame for an unknown ord", () => {
+    const fold = folded();
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "nothing" }));
+    fold.applyStream(ev({ kind: "visuals", ord: 77, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: false, visualsRev: 0 });
+    expect(fold.drainVisuals()).toEqual([
+      [2, "nothing"],
+      [77, "visualized"],
+    ]);
+  });
+});

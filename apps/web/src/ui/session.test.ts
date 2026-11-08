@@ -368,3 +368,35 @@ describe("ViewSession: freshness of moving reads", () => {
     ).toBe(false);
   });
 });
+
+describe("ViewSession: a turn source", () => {
+  it("opens a turn source and hydrates with it", async () => {
+    const turnViewPayload = {
+      view: "turn",
+      surface: "web",
+      experienceId: "e",
+      versionHash: "v",
+      blueprint: {},
+      inventory: {
+        experienceId: "e",
+        versionHash: "v",
+        handles: [{ handle: "h", priority: "P0", params: [], revision: "r" }],
+      },
+      fingerprint: { restrictedHandles: [], restrictedProjectionNodes: [], placeholderNodes: [] },
+    };
+    const api = {
+      uiView: vi.fn(),
+      uiDocumentDetail: vi.fn(),
+      uiTurnVisuals: vi.fn(async () => turnViewPayload),
+      uiHydrate: vi.fn(async () => []),
+    };
+    const s = await ViewSession.open(api as never, { turn: { chatId: "c1", ord: 4 } });
+    expect(api.uiTurnVisuals).toHaveBeenCalledWith("c1", 4, undefined);
+    s.start();
+    await vi.waitFor(() => expect(api.uiHydrate).toHaveBeenCalled());
+    expect((api.uiHydrate.mock.calls[0] as unknown[])[0]).toEqual({
+      turn: { chatId: "c1", ord: 4 },
+    });
+    s.dispose();
+  });
+});

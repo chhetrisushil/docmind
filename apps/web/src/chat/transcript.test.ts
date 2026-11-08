@@ -20,6 +20,8 @@ const extras = (o: Partial<Extras> = {}): Extras => ({
   steps: [],
   reasoning: null,
   outcome: null,
+  hasVisuals: false,
+  visualsRev: 0,
   ...o,
 });
 const value = (over: Record<string, unknown> = {}): ChatValue =>

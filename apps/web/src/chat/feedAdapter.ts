@@ -18,6 +18,9 @@ export interface Extras {
   steps: ChatToolStep[];
   reasoning: ChatReasoningDto | null;
   outcome: ChatOutcome | null;
+  hasVisuals: boolean;
+  /** How many `visualized` frames this reply has had: a re-run bumps it, so the strip reloads. */
+  visualsRev: number;
 }
 
 type Keyed = Pick<ChatMessageDto, "role" | "turn" | "id">;
@@ -67,12 +70,15 @@ export function wireOfMessage(m: ChatMessageDto): Record<string, unknown> {
   };
 }
 
-const extrasOf = (m: ChatMessageDto): Extras => ({
+const extrasOf = (m: ChatMessageDto, was?: Extras): Extras => ({
   ord: Number(m.id),
   citations: m.citations,
   steps: m.steps,
   reasoning: m.reasoning,
   outcome: m.outcome,
+  // A reply that has visuals keeps them when the same reply arrives again (a stream snapshot says false until the head is read).
+  hasVisuals: m.hasVisuals || (was?.hasVisuals ?? false),
+  visualsRev: was?.visualsRev ?? 0,
 });
 
 const MAX_LIVE_STEPS = 16;
@@ -92,6 +98,11 @@ export class ChatFold {
   private readonly extras = new Map<string, Extras>();
   /** Tool steps of the reply in flight (the stream numbers them by turn key, which cannot be mapped to a turn). */
   liveSteps: ChatToolStep[] = [];
+  private readonly visualsFrames: [number, "visualized" | "nothing"][] = [];
+  /** The visuals frames since the last call, oldest first: the controller turns them into action states. */
+  drainVisuals(): [number, "visualized" | "nothing"][] {
+    return this.visualsFrames.splice(0);
+  }
   error = false;
   /** The server's `nextCursor` of the oldest page loaded; `null` once the start of the chat is in the window. */
   olderCursor: string | null = null;
@@ -99,7 +110,8 @@ export class ChatFold {
 
   /** A page of `GET /api/chats/:id/messages` (oldest first within the page). The feed takes backward pages newest first. */
   applyHistory(page: ListMessagesResponse): void {
-    for (const m of page.items) this.extras.set(entryIdOf(m), extrasOf(m));
+    for (const m of page.items)
+      this.extras.set(entryIdOf(m), extrasOf(m, this.extras.get(entryIdOf(m))));
     this.feed.applyHistory(
       { entries: [...page.items].reverse().map(wireOfMessage), done: page.nextCursor === null },
       "backward",
@@ -111,7 +123,7 @@ export class ChatFold {
   applyStream(ev: ChatStreamEvent): void {
     switch (ev.kind) {
       case "message":
-        this.extras.set(entryIdOf(ev), extrasOf(ev));
+        this.extras.set(entryIdOf(ev), extrasOf(ev, this.extras.get(entryIdOf(ev))));
         this.feed.applyEvent("message", wireOfMessage(ev));
         if (ev.role === "assistant") this.liveSteps = [];
         break;
@@ -134,6 +146,15 @@ export class ChatFold {
         break;
       case "tool-reset":
         this.liveSteps = [];
+        break;
+      case "visuals":
+        this.visualsFrames.push([ev.ord, ev.outcome]);
+        if (ev.outcome === "visualized")
+          for (const x of this.extras.values())
+            if (x.ord === ev.ord) {
+              x.hasVisuals = true;
+              x.visualsRev += 1;
+            }
         break;
       case "closed":
         this.feed.applyEvent("closed", {});

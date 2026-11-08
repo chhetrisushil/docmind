@@ -20,6 +20,7 @@ import {
   UiViewResponse,
   UploadDocumentResponse,
   type ViewName,
+  VisualizeTurnResponse,
 } from "@docmind/contracts";
 import type { HandleLoadRequest } from "@loom-ui/hydration/client";
 import { ApiError, type Http, apiErrorFrom } from "./http";
@@ -32,8 +33,11 @@ const qs = (o: Record<string, string | number | undefined>): string => {
 };
 const seg = encodeURIComponent;
 
-/** What a view session hydrates against: a named view, or one document's detail experience. */
-export type ViewSource = { view: ViewName } | { document: string };
+/** What a view session hydrates against: a named view, one document's detail experience, or one chat turn's visuals. */
+export type ViewSource =
+  | { view: ViewName }
+  | { document: string }
+  | { turn: { chatId: string; ord: number } };
 
 export interface Api {
   signUp(req: SignUpRequest): Promise<void>;
@@ -60,6 +64,10 @@ export interface Api {
   uiView(name: ViewName, signal?: AbortSignal): Promise<UiViewResponse>;
   /** The per-document detail: the static detail plus this document's visuals. */
   uiDocumentDetail(id: string, signal?: AbortSignal): Promise<UiViewResponse>;
+  /** A chat turn's compiled visuals (404 when it has none). */
+  uiTurnVisuals(chatId: string, ord: number, signal?: AbortSignal): Promise<UiViewResponse>;
+  /** Asks for the turn's visuals to be made (202). Rejects with `ApiError`: 409 `visualize_running` / `not_visualizable`, 429. */
+  visualizeTurn(chatId: string, ord: number): Promise<void>;
   uiHydrate(
     source: ViewSource,
     requests: HandleLoadRequest[],
@@ -164,6 +172,16 @@ export function createApi(
         schema: UiViewResponse,
         ...(signal && { signal }),
       }),
+    uiTurnVisuals: (chatId, ord, signal) =>
+      http.request("GET", `/api/ui/chats/${seg(chatId)}/turns/${ord}/visuals?surface=web`, {
+        schema: UiViewResponse,
+        ...(signal && { signal }),
+      }),
+    visualizeTurn: async (chatId, ord) => {
+      await http.request("POST", `/api/chats/${seg(chatId)}/turns/${ord}/visualize`, {
+        schema: VisualizeTurnResponse,
+      });
+    },
     uiHydrate: async (source, requests, signal) =>
       (
         await http.request("POST", "/api/ui/hydrate", {

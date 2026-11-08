@@ -3,6 +3,7 @@ import { LitElement, css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
 import { type ScopeDoc, listRecent, lookUp, pickerValue, scopeFor } from "../chat/scopePicker";
+import { type StripHost, VisualsAccessories } from "../chat/visualsAccessory";
 import {
   ChatController,
   type ChatProblem,
@@ -18,6 +19,7 @@ import type { ActionHandler, ViewSession } from "../ui/session";
 import { confirmDialog } from "./confirm";
 import { DIALOG_CLOSED, deepActiveElement, dialogOpen, flatParent } from "./dm-dialog";
 import "./dm-icon";
+import "./dm-turn-visuals";
 import "./dm-view";
 
 /** Fixed sentences. Nothing from the transcript, the server or the chat's title is ever shown in a toast. */
@@ -66,6 +68,7 @@ export class DmChatPage extends LitElement {
   declare queued: boolean;
   controller: ChatController | undefined;
   private session: ViewSession | undefined;
+  private accessories: VisualsAccessories | undefined;
   private panel: ViewSession | undefined;
   /** The control that opened the panel from a citation: Escape or Close gives focus back to it. */
   private opener: HTMLElement | undefined;
@@ -206,6 +209,8 @@ export class DmChatPage extends LitElement {
     this.watch = undefined;
     this.controller?.close();
     this.controller = undefined;
+    this.accessories?.dispose();
+    this.accessories = undefined;
     this.session = undefined;
     this.panel = undefined;
     this.opener = undefined;
@@ -240,6 +245,11 @@ export class DmChatPage extends LitElement {
       },
     });
     this.controller = controller;
+    this.accessories = new VisualsAccessories({
+      chatId: id,
+      make: () => document.createElement("dm-turn-visuals") as unknown as StripHost,
+      onVisualize: (ord) => void controller.visualize(ord),
+    });
     if (this.narrow) controller.toggleSources(false); // an overlay opens on a citation or the toggle, never by itself
     this.off = controller.state.subscribe(() => this.sync());
     void this.begin(controller, id);
@@ -331,6 +341,7 @@ export class DmChatPage extends LitElement {
   /** The page folds the transcript itself, so it publishes it into the experience's store. */
   private sync(): void {
     const st = this.controller?.state.get();
+    if (st) this.accessories?.update(st.entries); // the strips are in the map before the widget is asked
     if (this.controller === undefined && this.session)
       this.session.publish("transcript", { entries: [] }, "Chat");
     else if (st)
@@ -398,6 +409,7 @@ export class DmChatPage extends LitElement {
     }
   }
   private onReady = (e: Event) => {
+    if (e.composedPath()[0] !== e.currentTarget) return; // a strip's view inside the transcript is not the chat view
     this.session = (e as CustomEvent<{ session: ViewSession }>).detail.session;
     this.publishScope(); // the offer may have loaded before the view was ready
     this.watch?.disconnect();
@@ -543,7 +555,7 @@ export class DmChatPage extends LitElement {
         ${st?.olderFailed ? html`<div data-older-failed role="alert" class="muted">Could not load earlier messages.<button class="btn ghost" data-older-retry @click=${() => void this.controller?.loadOlder()}>Try again</button></div>` : null}
       </div>
       <div class="layout">
-        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" fill .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`)}</div>
+        <div class="main" ?inert=${this.modal}>${keyed(this.chatId ?? "new", html`<dm-view name="chat" fill .onAct=${this.act} .chatAccessories=${this.accessories} @view-ready=${this.onReady}></dm-view>`)}</div>
         ${
           st?.sourcesOpen
             ? html`${this.narrow ? html`<div data-backdrop @click=${() => void this.closePanel()}></div>` : null}<aside id="sources" aria-label="Sources" aria-modal=${ifDefined(this.narrow ? "true" : undefined)} @keydown=${(e: KeyboardEvent) => this.onPanelKey(e)}>

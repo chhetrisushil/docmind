@@ -1,4 +1,5 @@
 import type { ViewName } from "@docmind/contracts";
+import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
 import { LitElement, css, html } from "lit";
 import type { ViewSource } from "../api/client";
 import { report } from "../report";
@@ -11,6 +12,8 @@ export class DmView extends LitElement {
   static properties = {
     name: { type: String },
     document: { type: String },
+    turn: { attribute: false },
+    chatAccessories: { attribute: false },
     params: { attribute: false },
     onAct: { attribute: false },
     phase: { state: true },
@@ -34,6 +37,10 @@ export class DmView extends LitElement {
   declare name: ViewName | undefined;
   /** A document id: the view is that document's detail experience (instead of `name`). */
   declare document: string | undefined;
+  /** A chat turn: the view is that turn's visuals (instead of `name` or `document`). */
+  declare turn: { chatId: string; ord: number } | undefined;
+  /** Host content drawn under chat entries (a Chat view only): given to the view session's registry. */
+  declare chatAccessories: ChatEntryAccessories | undefined;
   declare params: Record<string, string | number> | undefined;
   declare onAct: ActionHandler | undefined;
   declare phase: "loading" | "ready" | "failed";
@@ -46,6 +53,7 @@ export class DmView extends LitElement {
   }
 
   private get source(): ViewSource | undefined {
+    if (this.turn !== undefined) return { turn: this.turn };
     if (this.document !== undefined) return { document: this.document };
     return this.name === undefined ? undefined : { view: this.name };
   }
@@ -67,7 +75,9 @@ export class DmView extends LitElement {
       ? undefined
       : "view" in source
         ? `view:${source.view}`
-        : `document:${source.document}`;
+        : "document" in source
+          ? `document:${source.document}`
+          : `turn:${source.turn.chatId}:${source.turn.ord}`;
   }
 
   private async open(): Promise<void> {
@@ -104,7 +114,11 @@ export class DmView extends LitElement {
       session.start(this.params);
       await this.updateComplete;
       if (!current()) return this.drop(session);
-      session.mount(this.renderRoot.querySelector("#host") as HTMLElement, (a) => this.onAct?.(a));
+      session.mount(
+        this.renderRoot.querySelector("#host") as HTMLElement,
+        (a) => this.onAct?.(a),
+        this.chatAccessories ? { chatAccessories: this.chatAccessories } : undefined,
+      );
       this.phase = "ready";
       this.dispatchEvent(
         new CustomEvent("view-ready", { detail: { session }, bubbles: true, composed: true }),

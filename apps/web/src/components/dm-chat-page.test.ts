@@ -79,6 +79,7 @@ function setup(path = `/chats/${CHAT}`, over: Record<string, unknown> = {}) {
     })),
     sendMessage: vi.fn(async () => ({ messageId: "m" })),
     stopChat: vi.fn(async () => ({ stopped: true })),
+    visualizeTurn: vi.fn(async () => {}),
     getChat: vi.fn(async () => ({
       id: CHAT,
       title: null,
@@ -1185,5 +1186,98 @@ describe("dm-chat-page: sources, resize and dialogs", () => {
     expect(sib2.inert).toBe(true); // the dialog still relies on it
     d.remove();
     await vi.waitFor(() => expect(sib2.inert).toBe(false));
+  });
+});
+
+type StripEl = HTMLElement & {
+  ord: number;
+  view: { strip: boolean; action: string | null; busy: boolean } | null;
+};
+/** The strips lu-chat drew: inside each assistant article's accessory slot. */
+const strips = (p: Element) =>
+  Array.from(
+    chatRoot(p)?.querySelectorAll(
+      'article[data-role="assistant"] [data-entry-accessory] dm-turn-visuals',
+    ) ?? [],
+  ) as StripEl[];
+const turnOf = (s: StripEl) => (s.closest("article") as HTMLElement).dataset.turn;
+const MIXED = async () => ({
+  items: [
+    msg(1, "user", 1),
+    msg(2, "assistant", 1, {
+      text: `Due in 30 days [[${PASSAGE}]].`,
+      citations: [cited],
+      hasVisuals: true,
+    }),
+    msg(3, "user", 2),
+    msg(4, "assistant", 2, { text: `Also net 30 [[${PASSAGE}]].`, citations: [cited] }),
+    msg(5, "user", 3),
+    msg(6, "assistant", 3, { text: "Not in the documents." }),
+  ],
+  nextCursor: null,
+});
+
+describe("dm-chat-page: visuals under a reply (loom-ui chatAccessories)", () => {
+  it("lu-chat draws the Visuals strip under a reply that has visuals and the Visualize action under a cited one that does not, and nothing under an uncited reply", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    expect(strips(page).map((s) => [turnOf(s), s.ord, s.view?.strip, s.view?.action])).toEqual([
+      ["1", 2, true, "Re-visualize"],
+      ["2", 4, false, "Visualize"],
+    ]);
+    expect(
+      chatRoot(page)?.querySelector('article[data-turn="3"] [data-entry-accessory]'),
+    ).toBeNull();
+    expect(
+      chatRoot(page)?.querySelector('article[data-role="user"] [data-entry-accessory]'),
+    ).toBeNull();
+  });
+  it("keeps the same strip node across a redraw of the transcript", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const first = strips(page)[0];
+    t.frame("status", { state: "open", running: false });
+    await vi.waitFor(() => expect(strips(page)[0]).toBe(first));
+  });
+  it("shows the strip after a visuals frame, and asks the server when Visualize is clicked", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const second = strips(page)[1] as StripEl;
+    second.shadowRoot?.querySelector<HTMLButtonElement>("[data-action]")?.click();
+    await vi.waitFor(() => expect(t.api.visualizeTurn).toHaveBeenCalledWith(CHAT, 4));
+    t.frame("visuals", { ord: 4, outcome: "visualized" });
+    await vi.waitFor(() =>
+      expect(strips(page)[1]?.view).toMatchObject({ strip: true, action: "Re-visualize" }),
+    );
+    expect(strips(page)[1]).toBe(second); // the same node, updated in place
+  });
+  it("a strip's own view-ready does not replace the chat page's session (ruling P11)", async () => {
+    vi.stubGlobal("IntersectionObserver", undefined); // the environment's never fires: mount each strip's view at once
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const chatSession = viewOf(page)?.session;
+    expect(chatSession).toBeDefined();
+    const inner = (strips(page)[0] as StripEl).shadowRoot?.querySelector("dm-view") as HTMLElement;
+    inner.dispatchEvent(
+      new CustomEvent("view-ready", {
+        detail: { session: { publish() {} } },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    expect((page as unknown as { session?: unknown }).session).toBe(chatSession);
+    // the page's own event still works: a ready event dispatched on the chat view itself is taken
+    viewOf(page)?.dispatchEvent(
+      new CustomEvent("view-ready", {
+        detail: { session: chatSession },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+    expect((page as unknown as { session?: unknown }).session).toBe(chatSession);
   });
 });

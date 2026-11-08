@@ -7,7 +7,7 @@ import {
   HydrationStore,
   SplitHydrationController,
 } from "@loom-ui/hydration/client";
-import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
+import { type ChatEntryAccessories, createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
 import { referenceContainers } from "@loom-ui/renderer-lit/containers";
 import { type DomRenderHandle, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
 import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
@@ -32,13 +32,15 @@ const isLoadResult = (r: unknown): r is { finding?: { code?: string } } =>
 const RELOAD_BUDGET = 2;
 
 const fetchPayload = (
-  api: Pick<Api, "uiView" | "uiDocumentDetail">,
+  api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals">,
   source: ViewSource,
   signal: AbortSignal | undefined,
 ): Promise<UiViewResponse> =>
   "view" in source
     ? api.uiView(source.view, signal)
-    : api.uiDocumentDetail(source.document, signal);
+    : "document" in source
+      ? api.uiDocumentDetail(source.document, signal)
+      : api.uiTurnVisuals(source.turn.chatId, source.turn.ord, signal);
 
 export class ViewSession {
   readonly store: HydrationStore;
@@ -57,7 +59,7 @@ export class ViewSession {
   }
 
   private constructor(
-    private readonly api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiHydrate">,
+    private readonly api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals" | "uiHydrate">,
     readonly source: ViewSource,
     private payload: UiViewResponse,
     private readonly onStale: (() => void) | undefined,
@@ -92,7 +94,7 @@ export class ViewSession {
   }
 
   static async open(
-    api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiHydrate">,
+    api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals" | "uiHydrate">,
     source: ViewSource,
     o: { onStale?(): void; onFailed?(): void; signal?: AbortSignal } = {},
   ): Promise<ViewSession> {
@@ -111,13 +113,19 @@ export class ViewSession {
     this.split.load(this.payload.inventory as never);
   }
 
-  mount(host: HTMLElement, onAction: ActionHandler): void {
+  mount(
+    host: HTMLElement,
+    onAction: ActionHandler,
+    o: { chatAccessories?: ChatEntryAccessories } = {},
+  ): void {
     if (this.disposed || this.handle !== undefined) return;
     const fp = this.payload.fingerprint;
     this.handle = renderBlueprintDom(host, this.payload.blueprint as never, {
       projectionRuntime: this.runtime,
       executionId: this.store.executionId,
-      registry: createChatLitRegistry(),
+      registry: createChatLitRegistry({
+        ...(o.chatAccessories && { chatAccessories: o.chatAccessories }),
+      }),
       containers: referenceContainers(),
       title: "none",
       compile: compileFingerprint({
