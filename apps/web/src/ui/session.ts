@@ -9,6 +9,7 @@ import {
 } from "@loom-ui/hydration/client";
 import { type ChatEntryAccessories, createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
 import { referenceContainers } from "@loom-ui/renderer-lit/containers";
+import { registerDiagramWidgets } from "@loom-ui/renderer-lit/diagram";
 import { type DomRenderHandle, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
 import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
 import type { Api, ViewSource } from "../api/client";
@@ -41,6 +42,11 @@ const fetchPayload = (
     : "document" in source
       ? api.uiDocumentDetail(source.document, signal)
       : api.uiTurnVisuals(source.turn.chatId, source.turn.ord, signal);
+
+/** The registry every view is drawn with: loom-ui's chat kinds over its defaults, plus the opt-in Diagram widget (the connections map). */
+export function createViewRegistry(opts: Parameters<typeof createChatLitRegistry>[0] = {}) {
+  return registerDiagramWidgets(createChatLitRegistry(opts), {});
+}
 
 export class ViewSession {
   readonly store: HydrationStore;
@@ -128,7 +134,7 @@ export class ViewSession {
     this.handle = renderBlueprintDom(host, this.payload.blueprint as never, {
       projectionRuntime: this.runtime,
       executionId: this.store.executionId,
-      registry: createChatLitRegistry({
+      registry: createViewRegistry({
         ...(o.chatAccessories && { chatAccessories: o.chatAccessories }),
       }),
       containers: referenceContainers(),
