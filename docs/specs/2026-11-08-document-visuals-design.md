@@ -272,8 +272,10 @@ version hash, not on a pin. What can go stale is the stored plan, made over an o
 
 ### As built: reclaiming `lineage_content`
 
-- `storage/lineageGc.ts` (`collectLineageContent`, `startLineageGc`) runs daily (`DOCMIND_LINEAGE_GC_INTERVAL_MS`, default
-  86400000, `0` off, 60000 to 2592000000 otherwise), first run one interval after boot, one replica at a time
+- `storage/lineageGc.ts` (`collectLineageContent`, `startLineageGc`) is due daily (`DOCMIND_LINEAGE_GC_INTERVAL_MS`, default
+  86400000, `0` off, 60000 to 2592000000 otherwise); it ticks every min(interval, 1 h) and, under the lock, runs when the last
+  completed run (`maintenance_runs`, migration 0031, database clock; no row means due) is at least an interval old, so frequent
+  redeploys do not postpone it; a refusal or failure is not recorded and retries next tick. One replica at a time
   (`pg_try_advisory_lock` on the Loom pool, `docmind:lineage-gc`), skipped while a run is in progress, unref'd.
 - Roots: `Lineage.pins({ keepLast: Infinity })` of THE one visuals `Lineage`, which holds every document and chat-turn line
   of all users and finds the refs inside retained artifacts (`pgLineageGc.ts`). A confirmed-erased line (destroyed key)

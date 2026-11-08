@@ -33,6 +33,17 @@ export function loadLineageGcIntervalMs(env: NodeJS.ProcessEnv = process.env): n
   return value;
 }
 
+/** The ticker wakes this often (or every interval when shorter) and runs only when the last completed run is old enough. */
+const TICK_MS = 3_600_000;
+
+/** When recurring jobs last COMPLETED, durably and on the database's clock (`maintenance_runs`, migration 0031). */
+export interface MaintenanceRuns {
+  /** True when there is no row for `name`, or its last run is at least `everyMs` old by the database's clock. */
+  due(name: string, everyMs: number): Promise<boolean>;
+  /** Records a completed run, stamped by the database's clock. */
+  markRun(name: string): Promise<void>;
+}
+
 /** What the collector needs; `pgLineageGc.ts` binds it to the lineage, `lineage_content` and Postgres. */
 export interface LineageGcDeps {
   /**
@@ -47,6 +58,11 @@ export interface LineageGcDeps {
   >;
   /** The cross-replica lock of a run; null when another replica holds it. */
   lock(): Promise<SessionLock | null>;
+  /**
+   * When set, a run happens only if `runs.due(...)` (checked UNDER the lock, so two replicas make one run), and is
+   * recorded only after a run that completed: a refusal or a failure retries on the next tick.
+   */
+  schedule?: { name: string; everyMs: number; runs: MaintenanceRuns };
   /** Test seam: the margin. */
   graceMs?: number;
   /** Test seam: the log clock handed to Loom (the touch guard runs on the store's clock). */
@@ -61,13 +77,19 @@ export type LineageGcRefusal =
   | "no-roots"
   /** Loom's sweep refused or failed before or while erasing: the class is in `failedByClass`. */
   | "sweep-failed"
-  /** Aborted, or the lock was lost, before the erasing sweep began. */
+  /** The store's clock could not be read: the grace cannot be measured. */
+  | "no-clock"
+  /** The last-run record could not be read or written: no run is attempted (or, after a run, it is retried). */
+  | "schedule-unavailable"
+  /** Aborted (shutdown), or the lock was lost, before or during the erasing sweep. */
   | "stopped";
 
 /** Counts only, so it can be logged. */
 export interface LineageGcReport {
   /** Another replica held the lock: nothing was looked at. */
   skipped: boolean;
+  /** The last completed run is younger than the interval: nothing was looked at. */
+  notDue?: boolean;
   /** Set when the run deleted nothing on purpose (fail closed). */
   refused?: LineageGcRefusal;
   /** Distinct addresses the lines (and what they embed) keep. */
@@ -119,6 +141,15 @@ export async function collectLineageContent(
   try {
     const graceMs = deps.graceMs ?? LINEAGE_GC_GRACE_MS;
     const stopped = () => signal?.aborted === true || release.lost?.aborted === true;
+    if (deps.schedule) {
+      try {
+        if (!(await deps.schedule.runs.due(deps.schedule.name, deps.schedule.everyMs)))
+          return { ...report, notDue: true };
+      } catch (err) {
+        return fail("schedule-unavailable", err);
+      }
+      report.notDue = false;
+    }
     const roots = new Set<string>();
     let touchedBefore: number;
     try {
@@ -126,6 +157,10 @@ export async function collectLineageContent(
       touchedBefore = (await deps.store.touchClock?.()) ?? Number.NaN;
       if (!Number.isFinite(touchedBefore)) throw new TypeError("the store has no clock");
       touchedBefore -= graceMs;
+    } catch (err) {
+      return fail("no-clock", err);
+    }
+    try {
       for await (const address of deps.pins()) {
         if (stopped()) {
           report.refused = "stopped";
@@ -134,6 +169,10 @@ export async function collectLineageContent(
         roots.add(address);
       }
     } catch (err) {
+      if (stopped()) {
+        report.refused = "stopped"; // a shutdown that broke the reads is not a fault
+        return report;
+      }
       return fail("roots-incomplete", err);
     }
     report.roots = roots.size;
@@ -161,7 +200,18 @@ export async function collectLineageContent(
       report.reclaimed = swept.orphansReclaimed.length + swept.reclaimed.length;
       report.keptByTouch = swept.keptByTouch;
     } catch (err) {
+      if (stopped()) {
+        report.refused = "stopped"; // Loom's sweep takes no signal: a shutdown that broke it is not a fault
+        return report;
+      }
       return fail("sweep-failed", err);
+    }
+    if (deps.schedule) {
+      try {
+        await deps.schedule.runs.markRun(deps.schedule.name);
+      } catch (err) {
+        fail("schedule-unavailable", err); // the run completed; it is retried (idempotent) on the next tick
+      }
     }
     return report;
   } finally {
@@ -174,7 +224,11 @@ export interface LineageGc {
   stop(): Promise<void>;
 }
 
-/** One run per `everyMs`, the first one interval after start; a tick during a run is skipped. Unref'd. */
+/**
+ * Ticks every `min(everyMs, 1 h)`; each tick runs only when the last COMPLETED run (durable, `deps.schedule`) is at least
+ * `everyMs` old, so a service redeployed more often than the interval still collects. A tick during a run is skipped,
+ * and a tick that is not due logs nothing. Unref'd.
+ */
 export function startLineageGc(deps: LineageGcDeps, everyMs: number): LineageGc {
   const stopping = new AbortController();
   let running: Promise<unknown> | null = null;
@@ -183,6 +237,7 @@ export function startLineageGc(deps: LineageGcDeps, everyMs: number): LineageGc 
     const started = Date.now();
     running = collectLineageContent(deps, stopping.signal)
       .then((r) => {
+        if (r.notDue) return;
         if (r.skipped) console.info("lineage gc skipped: another replica holds the lock");
         else
           console.info("lineage gc", {
@@ -200,8 +255,9 @@ export function startLineageGc(deps: LineageGcDeps, everyMs: number): LineageGc 
         running = null;
       });
   };
-  const timer = setInterval(tick, everyMs);
+  const timer = setInterval(tick, Math.min(everyMs, TICK_MS));
   timer.unref();
+  console.info("lineage gc enabled", { everyMs });
   return {
     async stop() {
       clearInterval(timer);

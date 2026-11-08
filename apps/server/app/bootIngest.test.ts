@@ -35,6 +35,14 @@ vi.mock("./erasure/compliance", () => ({
     return 0;
   },
 }));
+const gcStarts: { everyMs: number }[] = [];
+vi.mock("./storage/lineageGc", () => ({
+  startLineageGc: (_deps: unknown, everyMs: number) => {
+    gcStarts.push({ everyMs });
+    return { stop: async () => void calls.push("lineageGc.stop") };
+  },
+}));
+vi.mock("./storage/pgLineageGc", () => ({ lineageGcDeps: () => ({}) }));
 vi.mock("./documents/sweeper", () => ({
   startSweeper: () => {
     calls.push("startSweeper");
@@ -109,6 +117,7 @@ beforeEach(() => {
   calls.length = 0;
   owned.length = 0;
   swept.length = 0;
+  gcStarts.length = 0;
   hydrateFails = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -120,6 +129,26 @@ describe("recoveryOwns", () => {
     expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6`)).toBe(true);
     expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6-r2`)).toBe(true);
     expect(recoveryOwns(`u_${u}:something-else`)).toBe(false);
+  });
+});
+
+describe("bootIngest: the lineage content collector", () => {
+  it("starts none when the interval is 0 or unset, even with background work on", async () => {
+    await bootIngest(parts({ lineageGcIntervalMs: 0 }));
+    await bootIngest(parts());
+    expect(gcStarts).toEqual([]);
+  });
+
+  it("starts it with the interval, and stops it on shutdown", async () => {
+    const boot = await bootIngest(parts({ lineageGcIntervalMs: 86_400_000 }));
+    expect(gcStarts).toEqual([{ everyMs: 86_400_000 }]);
+    await boot.stop();
+    expect(calls).toContain("lineageGc.stop");
+  });
+
+  it("starts none for a one-shot script (background off)", async () => {
+    await bootIngest(parts({ lineageGcIntervalMs: 86_400_000, background: false }));
+    expect(gcStarts).toEqual([]);
   });
 });
 

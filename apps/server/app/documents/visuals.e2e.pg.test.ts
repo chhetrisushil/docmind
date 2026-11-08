@@ -7,6 +7,8 @@ import { eraseMe, waitErased } from "../erasure/e2eSupport";
 import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { visualizeExecutionId } from "../flows/visualize-document/start";
+import { collectLineageContent } from "../storage/lineageGc";
+import { lineageGcDeps } from "../storage/pgLineageGc";
 import { subjectOfExecution } from "../subject";
 import { type IngestStack, startIngestStack } from "./ingestStack";
 
@@ -131,6 +133,25 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     expect(res.status).toBe(200);
     return ((await res.json()) as { results: { state: string; value: unknown }[] }).results[0];
   };
+
+  it("the production collector wiring runs over real visuals: no refusal, the document's blobs are roots and survive", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    stubVisuals(st.visualsClaude as FakeAnthropic, [ADA]);
+    const ada = await st.signUpAndLogIn("gc@example.com");
+    await upload(st, ada.cookie, "Revenue was 1,200 in 2024");
+    const before = (await st.app.query("SELECT count(*)::int AS n FROM lineage_content")).rows[0].n;
+    expect(before).toBeGreaterThan(0);
+    const report = await collectLineageContent(
+      lineageGcDeps(st.composed.lineageGc, st.durable.pool, st.app, 86_400_000),
+    );
+    expect(report.refused).toBeUndefined();
+    expect(report.roots).toBeGreaterThan(0);
+    expect(report).toMatchObject({ failed: 0, notDue: false });
+    expect((await st.app.query("SELECT count(*)::int AS n FROM lineage_content")).rows[0].n).toBe(
+      before,
+    );
+  });
 
   it("extracts, plans and commits visuals; serves, hydrates and cites them; deletes them with the document", async () => {
     const st = await startIngestStack({ visuals: true });
