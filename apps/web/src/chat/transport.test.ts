@@ -22,6 +22,7 @@ const msg = (
   steps: [],
   outcome: null,
   createdAt: "2026-10-21T10:00:00.000Z",
+  hasVisuals: false,
   ...over,
 });
 

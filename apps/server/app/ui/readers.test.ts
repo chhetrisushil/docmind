@@ -56,3 +56,30 @@ describe("the source reader", () => {
     vi.doUnmock("../documents/source");
   });
 });
+
+describe("the turnFacts reader", () => {
+  const identity = { userId: "u", tenantId: "t" } as never;
+  const fact = { kind: "figure", label: "Revenue", value: 4242, chunkIds: [], ordinal: 0 };
+  it("reads the caller's own turn facts, scoped by tenant and user, and answers null when the turn has none", async () => {
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async (ref: { ord: number }) => (ref.ord === 4 ? [fact] : []));
+    const r = readersFor({ turnFacts: { list } } as never, identity);
+    await expect(r.turnFacts({ chatId: "c", ord: 4 })).resolves.toEqual([fact]);
+    await expect(r.turnFacts({ chatId: "c", ord: 5 })).resolves.toBeNull();
+    expect(list).toHaveBeenLastCalledWith({ tenantId: "t", userId: "u", chatId: "c", ord: 5 });
+  });
+  it("rethrows a failure (a destroyed key is not 'no facts')", async () => {
+    const { readersFor } = await import("./readers");
+    const r = readersFor(
+      {
+        turnFacts: {
+          list: vi.fn(async () => {
+            throw new Error("boom");
+          }),
+        },
+      } as never,
+      identity,
+    );
+    await expect(r.turnFacts({ chatId: "c", ord: 4 })).rejects.toThrow("boom");
+  });
+});

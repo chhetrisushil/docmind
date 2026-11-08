@@ -335,6 +335,7 @@ export class FakeServer {
       steps: [],
       outcome: null,
       createdAt: stamp(),
+      hasVisuals: false,
       ...over,
     };
     list.push(message);

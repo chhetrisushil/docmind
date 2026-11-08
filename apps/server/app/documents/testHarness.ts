@@ -30,6 +30,7 @@ import {
 } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
+import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import {
   type FakeGemini,
   type FakeOpenAiCompat,
@@ -450,6 +451,7 @@ export async function startDocumentServer(
           blobs,
           registry: wiring.registry,
           visualFacts: new PgVisualFacts(app, fields),
+          turnFacts: new PgTurnVisualFacts(app, fields),
         },
       }),
       ...events.routes,

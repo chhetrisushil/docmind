@@ -57,6 +57,7 @@ export async function startChatServer(
     pageCap?: number;
     titles?: Pick<TitleStarter, "fire">;
     visualize?: ChatRouteDeps["visualize"];
+    heads?: ChatRouteDeps["heads"];
     stream?: Partial<ChatStreamDeps>;
   } = {},
 ): Promise<ChatHarness> {
@@ -101,6 +102,7 @@ export async function startChatServer(
     reasoning,
     ...(o.titles && { titles: o.titles }),
     ...(o.visualize && { visualize: o.visualize }),
+    ...(o.heads && { heads: o.heads }),
   };
   const streams = chatStreamRoutes({ ...deps, ...o.stream });
   const server = createHttpServer({ ...chatRoutes(deps), ...streams.routes });

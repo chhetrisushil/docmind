@@ -13,7 +13,7 @@ export const HISTORY_PAGE = 30;
 /** Calls to Loom's reader for one page: each scans a bounded number of events, so a busy log needs several. */
 const MAX_ROUNDS = 20;
 
-export type MessageDeps = Pick<ChatRouteDeps, "pool" | "fields" | "chat" | "reasoning">;
+export type MessageDeps = Pick<ChatRouteDeps, "pool" | "fields" | "chat" | "reasoning" | "heads">;
 
 /** The turn key of a history entry (the `<o>` of its turn's step ids). Undefined without a record ordinal. */
 export const turnKeyOf = (e: HistoryEntry): number | undefined =>
@@ -99,7 +99,8 @@ export async function toMessageDtos(
         for (const p of item.body.passages) documentIds.add(p.documentId);
   const titles = await documentTitles(deps.pool, deps.fields, identity, [...documentIds]);
 
-  return entries.map((e): ChatMessageDto => {
+  const citedOrds: number[] = []; // complete replies with at least one citation: the only ones that can have visuals
+  const dtos = entries.map((e): ChatMessageDto => {
     const base = {
       id: String(e.ord),
       cursor: e.cursor,
@@ -109,7 +110,15 @@ export async function toMessageDtos(
       createdAt: new Date(e.at ?? 0).toISOString(),
     };
     if (e.role === "user") {
-      return { ...base, text: e.text, citations: [], reasoning: null, steps: [], outcome: null };
+      return {
+        ...base,
+        text: e.text,
+        citations: [],
+        reasoning: null,
+        steps: [],
+        outcome: null,
+        hasVisuals: false,
+      };
     }
     const turnItems = items.get(keyOf(e) ?? -1) ?? [];
     const retrieved: StoredPassage[] = [];
@@ -121,6 +130,7 @@ export async function toMessageDtos(
       else outcome = item.body.kind;
     }
     const cited = citeReply(e.text, retrieved, titles);
+    if (e.status === "complete" && cited.citations.length > 0) citedOrds.push(e.ord as number);
     // A complete, empty reply with no recorded outcome is a loop that ran out of iterations (H11).
     if (outcome === null && e.status === "complete" && e.text.trim() === "")
       outcome = "max_iterations";
@@ -131,7 +141,13 @@ export async function toMessageDtos(
       reasoning: reasoning.get(e.cursor) ?? null,
       steps,
       outcome,
+      hasVisuals: false,
       ...(e.status === "failed" && { failureReason: failureReasonOf(e.reason) }),
     };
   });
+  if (!deps.heads || citedOrds.length === 0) return dtos;
+  const visualised = await deps.heads.has({ userId: identity.userId, chatId }, citedOrds);
+  return dtos.map((m) =>
+    m.role === "assistant" && visualised.has(Number(m.id)) ? { ...m, hasVisuals: true } : m,
+  );
 }

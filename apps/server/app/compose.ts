@@ -26,6 +26,7 @@ import { replyReasoning } from "./chats/reasoningRead";
 import { chatRoutes } from "./chats/routes";
 import type { ChatSettings } from "./chats/settings";
 import { chatStreamRoutes } from "./chats/stream";
+import { lineageTurnHeads } from "./chats/turnHeads";
 import { connectChat, prepareChat } from "./chats/wiring";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
@@ -214,6 +215,8 @@ export function buildServer(options: ComposeOptions) {
     keys,
     subjectOf: subjectOfExecution,
   });
+  // Read-only and cheap, so it serves whenever chat is on: a deployment that turned the visuals role off still shows earlier visuals.
+  const heads = lineageTurnHeads(visualsLineageOf);
   // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
   const visualizeGate = newVisualizeGate();
   const visualize = {
@@ -379,6 +382,7 @@ export function buildServer(options: ComposeOptions) {
       chat,
       eventStore: options.status.source,
       reasoning,
+      heads,
       ...(options.heartbeatMs && { heartbeatMs: options.heartbeatMs }),
     });
   // After the streams exist: the eraser closes them per user.
@@ -494,6 +498,7 @@ export function buildServer(options: ComposeOptions) {
           blobs,
           registry: options.ingest.registry,
           visualFacts: new PgVisualFacts(pool, fields),
+          turnFacts: new PgTurnVisualFacts(pool, fields),
         },
       }),
       ...(chat &&
@@ -505,6 +510,7 @@ export function buildServer(options: ComposeOptions) {
           chat,
           eventStore: options.status.source,
           reasoning,
+          heads,
           ...(titleLlm && titles && { titles }),
           ...(turns &&
             turnRead && {

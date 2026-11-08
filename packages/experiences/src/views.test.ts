@@ -17,7 +17,7 @@ import { SOURCES_VIEW } from "./a2ui";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
 import { provider } from "./providers";
-import { EXPERIENCES, detailWithVisuals, turnWithVisuals } from "./views";
+import { EXPERIENCES, detailWithVisuals, documentsOfVisuals, turnWithVisuals } from "./views";
 import { factProvider, mergedCatalog } from "./visuals";
 
 const NAMES = ["library", "library-empty", "detail", "sessions", "chat", "sources"] as const;
@@ -455,6 +455,24 @@ describe("turnWithVisuals", () => {
       ["visual.facts", { id: B }, "visual-table-2"],
       ["turn.facts", { chatId: CHAT, ord: 6 }, "visual-bar-1"],
     ]);
+  });
+
+  it("lists the distinct documents the planner's providers name, and none for turn or detail pins", () => {
+    const e = experience(
+      [
+        node("n1", "KeyFigure", "p-a"),
+        node("n2", "KeyFigure", "p-b"),
+        node("n3", "KeyFigure", "p-c"),
+        node("n4", "KeyFigure", "p-d"),
+      ],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-0`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${A}/fact-1`),
+        planned("p-c", "visual.facts", `docmind:visual.facts@1#${B}/fact-0`),
+        planned("p-d", "turn.facts", "docmind:turn.facts@1#fact-0"),
+      ],
+    );
+    expect(documentsOfVisuals(e)).toEqual([A, B]);
   });
 
   it("drops a node whose document is no longer the user's, and everything when nothing is left", () => {
