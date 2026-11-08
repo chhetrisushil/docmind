@@ -1,12 +1,11 @@
 import { mergedCatalog } from "@docmind/experiences";
-import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
 import { describe, expect, it } from "vitest";
 import "./elements";
-import "./session";
+import { createViewRegistry } from "./session";
 
 /**
  * The tag loom-ui's registry draws each widget kind with (litRegistry and the chat registry). Hand-copied on purpose:
- * loom-ui (pinned 9bcf82b) exports no kind-to-tag map; litRegistry.ts registers each tag inline, so none can be read.
+ * loom-ui (pinned 3b4d046) exports no kind-to-tag map; litRegistry.ts registers each tag inline, so none can be read.
  */
 const TAG: Record<string, string> = {
   Kpi: "lu-kpi",
@@ -18,13 +17,14 @@ const TAG: Record<string, string> = {
   BarChart: "lu-bar-chart",
   TimeSeries: "lu-timeseries",
   Chat: "lu-chat",
+  Diagram: "lu-diagram",
   TextInput: "lu-text-input",
   SelectInput: "lu-select-input",
   MultiSelectInput: "lu-multi-select-input",
 };
 
-// The chat registry defines the chat and input elements when it is built (session.ts builds it on mount).
-createChatLitRegistry();
+// The view registry defines the chat and input elements and the opt-in diagram element when it is built (session.ts builds it on mount).
+createViewRegistry();
 
 describe("the web app registers every element its catalogues can draw", () => {
   const kinds = [
@@ -37,5 +37,12 @@ describe("the web app registers every element its catalogues can draw", () => {
   });
   it.each(kinds)("%s has its custom element defined", (k) => {
     expect(customElements.get(TAG[k] as string), TAG[k]).toBeDefined();
+  });
+});
+
+describe("the opt-in diagram widget", () => {
+  it("is defined by the registry every view is drawn with (the connections map)", () => {
+    createViewRegistry();
+    expect(customElements.get("lu-diagram")).toBeDefined();
   });
 });
