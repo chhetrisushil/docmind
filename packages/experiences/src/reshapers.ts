@@ -1,6 +1,7 @@
 import type { ChatSessionDto, DocumentDto } from "@docmind/contracts";
 import { locatorText } from "@docmind/contracts";
 import { defineReshapers } from "@loom-ui/hydration";
+import { CONNECTION_SHAPES } from "./connectionShapes";
 import { formatBytes } from "./format";
 import type { RawContent, RawDocuments, SourceResult } from "./invoker";
 import { CONTENT_STEP, LIST_CAP } from "./providers";
@@ -44,6 +45,7 @@ const TYPE_NAMES: Record<string, string> = {
 
 const SHAPES: Record<string, (raw: never) => unknown> = {
   ...VISUAL_SHAPES,
+  ...CONNECTION_SHAPES,
   "library-total": (raw: RawDocuments) => ({
     value: raw.items.length,
     label: raw.truncated ? `Newest ${LIST_CAP} shown` : "in your library",

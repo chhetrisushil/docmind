@@ -2,6 +2,12 @@ import type { ViewName } from "@docmind/contracts";
 import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loom-ui/core";
 import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
 import { type Child, build, panel, tabs, widget } from "./compose";
+import {
+  CONNECTION_HANDLE,
+  bindsConnections,
+  connectionsProvider,
+  isConnectionEntry,
+} from "./connections";
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
 import {
   type FactRef,
@@ -217,6 +223,8 @@ interface Adopt<R extends FactRef> {
   baseHandle(ref: R): string;
   /** The handle in the returned spec is replaced by the adopted one. */
   provider(ref: R, entry: VisualEntry): ProviderSpec;
+  /** The document page only: connections entries are adopted onto providers made from this (the server's own) document id. */
+  connections?: { documentId: string };
 }
 
 /**
@@ -237,6 +245,19 @@ function adoptVisuals<R extends FactRef>(
         .map(copy)
         .filter((c): c is Child => c !== null);
       return children.length === 0 ? null : { ...n, id: `v-${n.id}`, children };
+    }
+    if (o.connections !== undefined && isConnectionEntry(n.type)) {
+      // A connections entry binds the connections capability and nothing else; its provider is generated, never the planner's,
+      // and its classification is always the capability's own (sensitive), whatever the planner wrote.
+      if (!n.binding || !bindsConnections(visuals, n.binding.handle)) return null;
+      const handle = CONNECTION_HANDLE[n.type];
+      providers[handle] = connectionsProvider(o.connections.documentId, n.type);
+      const priority = n.binding.priority === "P0" ? "P0" : "P1";
+      return {
+        ...n,
+        id: `v-${n.id}`,
+        binding: { ...n.binding, handle, priority, sensitivity: "sensitive" },
+      };
     }
     const ref = n.binding ? o.refOf(visuals, n.binding.handle) : null;
     if (
@@ -281,6 +302,7 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
       },
       baseHandle: (r) => `fact-${r.ordinal}`,
       provider: (r, entry) => factProvider(r.ordinal, documentId, entry),
+      connections: { documentId },
     },
     providers,
   );

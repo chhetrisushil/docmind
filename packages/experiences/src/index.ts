@@ -18,6 +18,7 @@ export * from "./payload";
 export { INVOKE_ID } from "./invoker";
 export {
   VISUALS_CATALOG,
+  FACT_VISUALS_CATALOG,
   OWNER_READ,
   TURN_READ,
   capabilitiesOf,

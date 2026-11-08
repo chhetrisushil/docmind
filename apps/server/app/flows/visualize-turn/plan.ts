@@ -1,4 +1,4 @@
-import { type OfferedFact, factCapabilities } from "@docmind/experiences";
+import { FACT_VISUALS_CATALOG, type OfferedFact, factCapabilities } from "@docmind/experiences";
 import type { Intent } from "@loom-ui/core";
 import type { DecideContext, PlanResult, Planner } from "@loom-ui/planner";
 import { composeVisuals } from "../visualize-document/plan";
@@ -18,4 +18,5 @@ export const planTurn = (
   planner: Planner,
   offered: readonly OfferedFact[],
   ctx: DecideContext,
-): Promise<PlanResult> => composeVisuals(planner, TURN_INTENT, factCapabilities(offered), ctx);
+): Promise<PlanResult> =>
+  composeVisuals(planner, TURN_INTENT, factCapabilities(offered), FACT_VISUALS_CATALOG, ctx);

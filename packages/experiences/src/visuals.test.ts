@@ -73,6 +73,8 @@ describe("the visuals catalogue", () => {
       ["FigureTrend", "TimeSeries"],
       ["KeyFigure", "Kpi"],
       ["FactTable", "Table"],
+      ["RelatedDocuments", "Table"],
+      ["ConnectionMap", "Diagram"],
     ]);
   });
   it("gives one bindable, classed capability per fact", () => {

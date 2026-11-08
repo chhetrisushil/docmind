@@ -48,30 +48,50 @@ const ENTRIES = [
   ["FigureTrend", "TimeSeries"],
   ["KeyFigure", "Kpi"],
   ["FactTable", "Table"],
+  ["RelatedDocuments", "Table"],
+  ["ConnectionMap", "Diagram"],
 ] as const;
 const PROPS: Record<string, string[]> = {
   BarChart: ["unit", "format"],
   TimeSeries: ["unit", "format"],
   Kpi: ["unit", "format"],
   Table: [],
+  Diagram: ["timeFormat"],
 };
 
-/** The closed set of widgets the planner may bind to a document's facts. */
-export const VISUALS_CATALOG: SemanticCatalog = defineSemanticCatalog({
-  id: "docmind.visuals.v1",
-  entries: ENTRIES.map(([name, kind]) => ({
-    name,
-    version: "1.0.0",
-    props: PROPS[kind] as string[],
-    binding: "required" as const,
-    surfaces: Object.fromEntries(
-      SURFACES.map((s) => [
-        s,
-        { kind, props: PROPS[kind] as string[], binding: "required" as const },
-      ]),
-    ),
-  })),
-});
+const catalogOf = (id: string, names: readonly string[]): SemanticCatalog =>
+  defineSemanticCatalog({
+    id,
+    entries: ENTRIES.filter(([name]) => names.includes(name)).map(([name, kind]) => ({
+      name,
+      version: "1.0.0",
+      props: PROPS[kind] as string[],
+      binding: "required" as const,
+      surfaces: Object.fromEntries(
+        SURFACES.map((s) => [
+          s,
+          { kind, props: PROPS[kind] as string[], binding: "required" as const },
+        ]),
+      ),
+    })),
+  });
+
+const FACT_ENTRY_NAMES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"];
+
+/** The closed set of widgets the document planner may bind: to the document's facts, and to its live connections. */
+export const VISUALS_CATALOG: SemanticCatalog = catalogOf(
+  "docmind.visuals.v1",
+  ENTRIES.map(([name]) => name),
+);
+
+/**
+ * The fact widgets alone: what the chat-turn planner is given (K7), so a turn can never be planned a connections widget.
+ * Connections belong to a document's own page.
+ */
+export const FACT_VISUALS_CATALOG: SemanticCatalog = catalogOf(
+  "docmind.visuals.facts.v1",
+  FACT_ENTRY_NAMES,
+);
 
 /** The static detail's catalogue plus the visuals entries, for the per-document detail. */
 export const mergedCatalog = (): SemanticCatalog =>
