@@ -114,24 +114,29 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
     );
 
   /**
-   * Waits until the turn's closing record is readable from the conversation's log, then until the hook's queued check has
-   * settled: Loom calls the settled listener once the write resolved, so a read that sees the record comes after the call,
-   * and a negative assertion made after this is not vacuous.
+   * Records the ords the turn-settled listener is called with (the starter's `onSettled`, which compose.ts reaches through
+   * the object, so wrapping it here sees every call). Install it before the question is asked.
    */
-  async function hookSettled(st: IngestStack, cookie: string, chatId: string, ord: number) {
-    await vi.waitFor(
-      async () => {
-        const page = (await (
-          await st.chatReq(cookie, "GET", `/api/chats/${chatId}/messages`)
-        ).json()) as { items: { id: string; role: string; status: string }[] };
-        expect(
-          page.items.some(
-            (m) => m.role === "assistant" && m.id === String(ord) && m.status === "complete",
-          ),
-        ).toBe(true);
-      },
-      { timeout: WAIT, interval: 50 },
-    );
+  const watchSettled = (st: IngestStack) => {
+    const seen = new Set<number>();
+    const turns = st.composed.turns;
+    if (turns) {
+      const original = turns.onSettled.bind(turns);
+      turns.onSettled = (e) => {
+        seen.add(e.ord);
+        original(e);
+      };
+    }
+    return seen;
+  };
+
+  /**
+   * Waits until the settled listener has been called for this turn, then until its queued check has finished: a negative
+   * assertion made after this is not vacuous. The signal is the listener call itself, not a poll of the history.
+   */
+  async function hookSettled(st: IngestStack, seen: Set<number>, ord: number) {
+    expect(st.composed.turns).toBeDefined();
+    await vi.waitFor(() => expect(seen.has(ord)).toBe(true), { timeout: WAIT, interval: 20 });
     await st.composed.turns?.idle();
   }
 
@@ -180,7 +185,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
   };
 
   it(
-    "a cited answer gets its visuals from the stored facts: hook, flow, visuals frame, hydrated widgets, replay with no model call; then on demand",
+    "a cited answer gets its visuals from the stored facts: hook, flow, visuals frame, hydrated widgets, the committed head re-served with no model call; then on demand",
     async () => {
       const st = await startIngestStack({ chat: true, visuals: true });
       stacks.push(st);
@@ -231,10 +236,12 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       expect(results[0]).toMatchObject({ state: "ready" });
       expect(JSON.stringify(results[0])).toContain("7391.25");
 
-      // serving and hydrating again read the committed head and never recompose it: no model call, counted before and after
+      // serving and hydrating again re-serve the committed head and never recompose it: no model call, counted before and after
       // (the flow-level replay claims are proven where they can be: `plan.test` re-composes from the recorded decision, `flow.test` re-starts a finished execution id)
       const served = state.calls;
-      await view(st, ada.cookie, chat.id, ord);
+      const headBefore = UiViewResponse.parse(
+        await (await view(st, ada.cookie, chat.id, ord)).json(),
+      ).versionHash;
       await hydrate(st, ada.cookie, chat.id, ord);
       expect(state.calls).toBe(served);
 
@@ -250,6 +257,12 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       );
       expect(again.status).toBe(202);
       expect(await outcomeOf(st, ada.userId, chat.id, ord, 1)).toBe("visualized");
+      // the re-run decided the same plan from the same fact, so the head is kept as it was (the commit is idempotent), and still served
+      const headAfter = UiViewResponse.parse(
+        await (await view(st, ada.cookie, chat.id, ord)).json(),
+      ).versionHash;
+      expect(headAfter).toBe(headBefore);
+      expect(JSON.stringify((await hydrate(st, ada.cookie, chat.id, ord))[0])).toContain("7391.25");
 
       // nothing readable is left in any raw log (the stack's whole event store), and the references stay readable
       const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
@@ -315,9 +328,10 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const chat = ChatSessionDto.parse(
         await (await st.chatReq(ada.cookie, "POST", "/api/chats", {})).json(),
       );
+      const settled = watchSettled(st);
       const reply = await ask(st, ada.cookie, chat.id, "What is the weather?");
       const ord = Number(reply.id);
-      await hookSettled(st, ada.cookie, chat.id, ord); // the hook's check for this turn has settled: a run would exist by now
+      await hookSettled(st, settled, ord); // the hook's check for this turn has settled: a run would exist by now
       const res = await st.chatReq(
         ada.cookie,
         "POST",
@@ -340,9 +354,10 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const offChat = ChatSessionDto.parse(
         await (await off.chatReq(bea.cookie, "POST", "/api/chats", {})).json(),
       );
+      const offSettled = watchSettled(off);
       const offReply = await ask(off, bea.cookie, offChat.id, "What were the takings?");
       expect(offReply.citations).toHaveLength(1);
-      await hookSettled(off, bea.cookie, offChat.id, Number(offReply.id)); // settled: the role is off, so the check ended without a start
+      await hookSettled(off, offSettled, Number(offReply.id)); // settled: the role is off, so the check ended without a start
       const offIds = (await off.durable.raw.eventStore.listExecutions?.()) ?? [];
       expect(offIds.filter(isTurnVisualizeExecution)).toEqual([]);
       const refused = await off.chatReq(
