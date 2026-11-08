@@ -103,6 +103,13 @@ function parts(
   } as unknown as BootIngestParts;
 }
 
+/** `parts()` for a build whose visuals role is on. */
+function withVisuals(over: Partial<BootIngestParts> = {}) {
+  const p = parts(over);
+  (p.built as unknown as { visualsOn: boolean }).visualsOn = true;
+  return p;
+}
+
 /** `parts()` for an app that has the subject index (an erasure-wired build). */
 function withIndex(over: Partial<BootIngestParts> = {}) {
   const p = parts(over);
@@ -140,14 +147,19 @@ describe("bootIngest: the lineage content collector", () => {
   });
 
   it("starts it with the interval, and stops it on shutdown", async () => {
-    const boot = await bootIngest(parts({ lineageGcIntervalMs: 86_400_000 }));
+    const boot = await bootIngest(withVisuals({ lineageGcIntervalMs: 86_400_000 }));
     expect(gcStarts).toEqual([{ everyMs: 86_400_000 }]);
     await boot.stop();
     expect(calls).toContain("lineageGc.stop");
   });
 
   it("starts none for a one-shot script (background off)", async () => {
-    await bootIngest(parts({ lineageGcIntervalMs: 86_400_000, background: false }));
+    await bootIngest(withVisuals({ lineageGcIntervalMs: 86_400_000, background: false }));
+    expect(gcStarts).toEqual([]);
+  });
+
+  it("starts none while the visuals role is off: there is nothing in the lineage to collect", async () => {
+    await bootIngest(parts({ lineageGcIntervalMs: 86_400_000 }));
     expect(gcStarts).toEqual([]);
   });
 });

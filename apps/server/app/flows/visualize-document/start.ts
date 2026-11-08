@@ -401,7 +401,7 @@ export function loomVisualsStarter(
       };
       try {
         // First: runs recorded as running whose end event was lost are repaired from Loom's state (a run that is still
-        // going stays running). A repaired `visuals-model-unavailable` is then picked up by the retry pass below.
+        // going stays running). A repaired `visuals-model-unavailable` is stamped now, so the retry pass below (failures over an hour old) leaves it to a later boot.
         // Its own try: a failed reconcile source must not stop the ready and retry passes.
         if (runningSource) {
           try {
@@ -419,17 +419,26 @@ export function loomVisualsStarter(
             logClass("visuals running reconcile failed")(err);
           }
         }
-        await pass(ready, (d) => fire(d, d.generation));
+        // Each pass has its own try: one failing source must never skip the passes after it.
+        try {
+          await pass(ready, (d) => fire(d, d.generation));
+        } catch (err) {
+          logClass("visuals ready pass failed")(err);
+        }
         // Once per boot: a document whose last run ended `visuals-model-unavailable` is re-run (the keyset never revisits it,
         // so a run that fails the same way waits for the next boot or the user's retry).
-        await pass(retry, (d) =>
-          fireWith(d, async () => {
-            const answer = await rerunWith(d, d.generation);
-            return answer.kind === "started" ? (answer.handle ?? null) : null;
-          }),
-        );
+        try {
+          await pass(retry, (d) =>
+            fireWith(d, async () => {
+              const answer = await rerunWith(d, d.generation);
+              return answer.kind === "started" ? (answer.handle ?? null) : null;
+            }),
+          );
+        } catch (err) {
+          logClass("visuals retry pass failed")(err);
+        }
         // Once per boot: a document planned over an older fact format is re-planned over its stored facts (and stamped with the
-        // new format when it commits). Its own try, like the running pass: a failing source must not stop the other passes.
+        // new format when it commits). Its own try, like the others.
         try {
           await pass(stale, (d) =>
             fireWith(d, async () => {

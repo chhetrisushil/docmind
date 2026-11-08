@@ -162,6 +162,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       "INSERT INTO visual_runs (document_id, generation, tenant_id, owner_id, run, state, code) SELECT id, ingest_generation, tenant_id, owner_id, 0, 'failed', 'visuals-model-unavailable' FROM documents WHERE id = $1",
       [notReady],
     );
+    await owner.query("UPDATE visual_runs SET updated_at = now() - interval '2 hours'");
     const list = pgRetryDocuments(app);
     const all = await list(NIL, 100);
     expect(all.map((d) => d.documentId)).toEqual([unavailable.id, otherTenant.id].sort());
@@ -296,6 +297,11 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       "failed",
       "visuals-model-unavailable",
     );
+    // A failure under an hour old is not retried at boot (a crash-looping process must not hammer a down model).
+    expect(await pgRetryDocuments(app)(NIL, 10)).toEqual([]);
+    await owner.query("UPDATE visual_runs SET updated_at = now() - interval '59 minutes'");
+    expect(await pgRetryDocuments(app)(NIL, 10)).toEqual([]);
+    await owner.query("UPDATE visual_runs SET updated_at = now() - interval '61 minutes'");
     expect(await pgRetryDocuments(app)(NIL, 10)).toHaveLength(1);
     expect(
       (await app.query("SELECT * FROM docmind_visual_retry_documents(NULL, 10)")).rows,

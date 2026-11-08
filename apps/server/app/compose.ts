@@ -586,6 +586,8 @@ export function buildServer(options: ComposeOptions) {
     turns,
     /** Starts, sweeps and cancels the visualize flow; boot calls `sweep()`, shutdown awaits `idle()`. */
     visuals,
+    /** True while the `visuals` role is on (the lineage collector runs only then). */
+    visualsOn: visualsLlm !== undefined,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
     /** Ends every open chat stream; shutdown calls it right after `events.closeAll()` (a stream never ends on its own). Absent without chat. */

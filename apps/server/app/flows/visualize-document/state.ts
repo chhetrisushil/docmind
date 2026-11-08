@@ -7,9 +7,11 @@ import type { VisualRuns } from "./runs";
 import type { VisualsStarter } from "./start";
 
 /**
- * Where a document's visuals stand, for its detail response (the caller owns the document): `running` while a run is in
- * flight (this process's, or one the table records as running), else `ready` when the lineage has a head, else `failed`
- * when the last run ended failed, else `none` (not made yet, empty, skipped).
+ * Where a document's visuals stand, for its detail response (the caller owns the document): `ready` when the lineage has a
+ * head (a run in flight over existing visuals, such as the boot's stale-format re-plan, changes nothing the page shows, so
+ * it is not reported), else `running` while a run is in flight (this process's, or one the table records as running: the
+ * first run, or a retry of a document with no visuals), else `failed` when the last run ended failed, else `none` (not
+ * made yet, empty, skipped).
  */
 export type VisualsStateReader = (
   identity: Identity,
@@ -23,10 +25,11 @@ export function visualsStateReader(o: {
   starter: Pick<VisualsStarter, "running" | "reconcile">;
 }): VisualsStateReader {
   return async (identity, documentId, hasHead) => {
+    if (hasHead) return "ready";
     const doc = await withTenant(o.pool, identity.tenantId, (tx) =>
       getDocument(tx, identity.userId, documentId),
     );
-    if (!doc) return hasHead ? "ready" : "none";
+    if (!doc) return "none";
     const ref = { tenantId: identity.tenantId, userId: identity.userId, documentId };
     if (o.starter.running(ref, doc.ingest_generation)) return "running";
     let last = await o.runs.last(identity, documentId, doc.ingest_generation);
@@ -34,7 +37,6 @@ export function visualsStateReader(o: {
     if (last?.state === "running")
       last = await o.starter.reconcile(ref, doc.ingest_generation, last);
     if (last?.state === "running") return "running";
-    if (hasHead) return "ready";
     return last?.state === "failed" ? "failed" : "none";
   };
 }

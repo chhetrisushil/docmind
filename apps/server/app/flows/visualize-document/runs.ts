@@ -118,7 +118,9 @@ export function visualRunRecorder(o: {
             end.code,
             ...(end.state === "done" ? [factFormatFingerprint()] : []),
             // A committed run (outcome done) is stamped with the format it planned over. Only this live feed stamps: a run
-            // repaired at boot (`reconcile`) is not, since that process cannot know which code wrote it (NULL is never stale).
+            // repaired at boot (`reconcile`) is not, since that process cannot know which code wrote it. The row keeps the
+            // PREVIOUS stamp (COALESCE in the SQL), so a stale re-run whose end event was lost is still stale and is
+            // re-planned once more at the next boot (one bounded extra planner call). A NULL stamp is never stale.
           );
           if (end.state === "failed" && end.notify)
             o.bus.publish(

@@ -52,7 +52,8 @@ REVOKE ALL ON FUNCTION public.docmind_record_visual_run(uuid, uuid, integer, int
 GRANT EXECUTE ON FUNCTION public.docmind_record_visual_run(uuid, uuid, integer, integer, text, text, text) TO docmind_app;
 
 -- The boot sweep's second source: ready documents (as 0028) whose last visualize run of the current generation ended
--- `visuals-model-unavailable`. Ids only, across tenants, keyset-paged by document id, at most 500 rows.
+-- `visuals-model-unavailable` AT LEAST AN HOUR AGO (`updated_at`): a process that crash-loops on boot must not re-run these
+-- every start and hammer a model that is down. Ids only, across tenants, keyset-paged by document id, at most 500 rows.
 CREATE FUNCTION public.docmind_visual_retry_documents(p_after uuid, p_limit integer)
 RETURNS TABLE (tenant_id uuid, owner_id uuid, id uuid, generation integer)
 LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -62,6 +63,7 @@ LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path = pg_catalog, pg_tem
     JOIN public.visual_runs r ON r.document_id = d.id AND r.generation = d.ingest_generation
    WHERE d.id > p_after
      AND r.state = 'failed' AND r.code = 'visuals-model-unavailable'
+     AND r.updated_at < now() - interval '1 hour'
      AND EXISTS (
        SELECT 1 FROM public.read_model_state s
         WHERE s.model_id = 'ingest-status'

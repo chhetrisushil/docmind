@@ -378,6 +378,17 @@ describe("startLineageGc", () => {
     expect(logged).not.toContain("sha256:");
   });
 
+  it("logs no-roots at info at most once per process, however many ticks find none", async () => {
+    const w = world();
+    const gc = startLineageGc(w.deps(yielding()), 1000);
+    await vi.advanceTimersByTimeAsync(5000);
+    await gc.stop();
+    const noRoots = vi
+      .mocked(console.info)
+      .mock.calls.filter((c) => JSON.stringify(c).includes("no-roots"));
+    expect(noRoots).toHaveLength(1);
+  });
+
   it("logs at startup that the collector is on and its interval", () => {
     const w = world();
     const gc = startLineageGc(w.deps(yielding("sha256:x")), 86_400_000);

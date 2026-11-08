@@ -124,7 +124,7 @@ export class DmDocDetail extends LitElement {
     if (session && this.session === session) this.visualsState = session.visuals?.state ?? "none";
   }
   /**
-   * "Retrying…" (asked here, or reported by the server as running) ends 60 s after it began without a `visuals` event, and
+   * "Retrying…" (asked here) and "Making visuals…" (reported by the server as running) end 60 s after it began without a `visuals` event, and
    * the page falls back to reading the state again: a run that ended with no event (a missed frame) must not freeze the note.
    * A state still running then is watched again.
    */
@@ -340,12 +340,18 @@ export class DmDocDetail extends LitElement {
     this.broken = false;
   }
 
-  /** Above the view: the visuals failed (with a retry), or a retry is under way. Nothing otherwise. */
+  /**
+   * Above the view: a retry this page started ("Retrying…"), the first visuals being made (the server says `running` while
+   * there are none yet), or a failure (with a retry). Nothing otherwise: the server reports no `running` over visuals that
+   * already exist.
+   */
   private visualsBanner() {
     const quiet = this.visualsState !== "failed" && this.visualsState !== "running";
     if (!this.served || (quiet && !this.retrying)) return null;
-    if (this.retrying || this.visualsState === "running")
+    if (this.retrying)
       return html`<p class="muted" data-visuals-retrying role="status">Retrying…</p>`;
+    if (this.visualsState === "running")
+      return html`<p class="muted" data-visuals-making role="status">Making visuals…</p>`;
     return html`<p class="muted" data-visuals-failed role="status">Visuals couldn't be made.
       <button class="btn secondary" data-visuals-retry @click=${() => this.retryVisuals()}>Retry</button>
       ${this.retryNote ? html`<span data-visuals-note>${this.retryNote}</span>` : null}</p>`;

@@ -567,6 +567,7 @@ describe("dm-doc-detail: rendered content", () => {
     const retryButton = (p: Element) =>
       p.shadowRoot?.querySelector<HTMLButtonElement>("button[data-visuals-retry]");
     const retrying = (p: Element) => p.shadowRoot?.querySelector("[data-visuals-retrying]");
+    const making = (p: Element) => p.shadowRoot?.querySelector("[data-visuals-making]");
     const ready = async (t: ReturnType<typeof setup>) => {
       const page = await t.mount();
       await vi.waitFor(() => expect(view(page).session?.statusOf("doc-status")).toBe("ready"));
@@ -595,15 +596,32 @@ describe("dm-doc-detail: rendered content", () => {
       retryButton(page)?.click();
       await vi.waitFor(() => expect(t.api.retryDocumentVisuals).toHaveBeenCalledWith(id(1)));
       await vi.waitFor(() => expect(retrying(page)?.textContent).toContain("Retrying…"));
+      expect(making(page)).toBeNull();
       expect(retryButton(page)).toBeNull();
     });
 
-    it("running on load shows Retrying with no button", async () => {
+    it("a first upload's run (server: running, no visuals yet) says Making visuals, never Retrying, then shows the visuals", async () => {
       const t = setup({ name: "document", id: id(1) });
       t.ui.detail.visuals = "running";
       const page = await ready(t);
-      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      await vi.waitFor(() => expect(making(page)?.textContent).toContain("Making visuals…"));
+      expect(retrying(page)).toBeNull();
       expect(retryButton(page)).toBeNull();
+      t.ui.detail.visuals = "ready";
+      t.progress(id(1), "ready", { visuals: "ready" });
+      await vi.waitFor(() => expect(making(page)).toBeNull());
+      expect(retrying(page)).toBeNull();
+    });
+
+    it("a re-plan over existing visuals (server: ready) shows no banner at all", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "ready";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(view(page).session?.statusOf("doc-summary")).toBe("ready"));
+      await (page as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+      expect(making(page)).toBeNull();
+      expect(retrying(page)).toBeNull();
+      expect(failedNote(page)).toBeNull();
     });
 
     it("a visuals:ready event ends Retrying and reloads the view", async () => {
@@ -669,13 +687,13 @@ describe("dm-doc-detail: rendered content", () => {
         const t = setup({ name: "document", id: id(1) });
         t.ui.detail.visuals = "running";
         const page = await ready(t);
-        await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+        await vi.waitFor(() => expect(making(page)).not.toBeNull());
         const before = t.ui.calls.documents.length;
         t.ui.detail.visuals = "failed"; // the server repaired a stale state
         await vi.advanceTimersByTimeAsync(VISUALS_RETRY_TIMEOUT_MS + 100);
         await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
         expect(t.ui.calls.documents.length).toBeGreaterThan(before);
-        expect(retrying(page)).toBeNull();
+        expect(making(page)).toBeNull();
       } finally {
         vi.useRealTimers();
       }
