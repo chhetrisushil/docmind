@@ -13,7 +13,7 @@ describe("loadLlmRoles defaults", () => {
       summary: { provider: "ollama", model: "gemma4:31b-cloud" },
       vision: { provider: "ollama", model: "gemma4:31b-cloud" },
       visionPdf: { provider: "off", model: "" },
-      visuals: { provider: "ollama", model: "gemma4:31b-cloud" },
+      visuals: { provider: "off", model: "" },
     });
   });
   it("uses Gemini for scanned PDF pages as soon as its key exists, and for nothing else", () => {
@@ -32,8 +32,13 @@ describe("loadLlmRoles visuals role", () => {
     expect(s.roles.visuals).toEqual({ provider: "off", model: "" });
     expect(llmWarnings(s, {})).toContain("visuals are off: DOCMIND_VISUALS_PROVIDER is off");
   });
-  it("visuals defaults to ollama", () => {
-    expect(loadLlmRoles({}).roles.visuals.provider).toBe("ollama");
+  it("visuals is off unless DOCMIND_VISUALS_PROVIDER is set, even with a shared provider", () => {
+    expect(loadLlmRoles({}).roles.visuals).toEqual({ provider: "off", model: "" });
+    expect(loadLlmRoles({ DOCMIND_LLM_PROVIDER: "ollama" }).roles.visuals.provider).toBe("off");
+    expect(loadLlmRoles({ DOCMIND_VISUALS_PROVIDER: "ollama" }).roles.visuals).toEqual({
+      provider: "ollama",
+      model: "gemma4:31b-cloud",
+    });
   });
 });
 
@@ -47,7 +52,7 @@ describe("loadLlmRoles configuration", () => {
       summary: { provider: "anthropic", model: "claude-haiku-5-5" },
       vision: { provider: "anthropic", model: "claude-sonnet-5-5" },
       visionPdf: { provider: "anthropic", model: "claude-sonnet-5-5" },
-      visuals: { provider: "anthropic", model: "claude-haiku-5-5" },
+      visuals: { provider: "off", model: "" },
     });
   });
   it("DOCMIND_LLM_PROVIDER=ollama cannot read PDFs: that role falls back like the default", () => {

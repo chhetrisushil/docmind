@@ -105,7 +105,7 @@ function createEmbedder(env: NodeJS.ProcessEnv): EmbeddingProvider {
 const MAX_LLM_TIMEOUT_MS = 300_000;
 const MAX_VISION_TIMEOUT_MS = 600_000;
 const SUMMARY_MAX_TOKENS = 2_048;
-export const VISUALS_MAX_TOKENS = 4096;
+export const VISUALS_MAX_TOKENS = 8192;
 const VISION_MAX_TOKENS = 16_000;
 
 /** Timeouts for the LLM steps. It never holds a key (R10): keys live only inside the providers. */

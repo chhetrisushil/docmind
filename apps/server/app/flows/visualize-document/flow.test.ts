@@ -96,6 +96,7 @@ function stack(replies: string[] | null) {
       },
       list: async () => held,
     },
+    summaryMaxChars: 400_000,
     bus,
     lineage,
     now: () => "2026-11-08T10:00:00.000Z",

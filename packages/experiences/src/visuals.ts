@@ -121,7 +121,7 @@ export const factProvider = (
     reshaper: `${FAMILY[entry]}-${ordinal}`,
   });
 
-const isDate = (x: string) => /^\d{4}-\d{2}(-\d{2})?/.test(x);
+const isDate = (x: string) => /^\d{4}-\d{2}(-\d{2})?$/.test(x);
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
 const wrong = (): never => {
   throw new Error("visual fact does not fit this widget");

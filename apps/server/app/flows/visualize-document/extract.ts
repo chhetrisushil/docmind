@@ -26,6 +26,8 @@ export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
   facts: VisualFactStore;
+  /** The most chunk text read, in chunk order (the summary cap, DOCMIND_SUMMARY_MAX_CHARS): it bounds the model calls. */
+  summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */
   llm?: LlmProvider;
 }
@@ -54,12 +56,24 @@ async function readAll(
   store: Pick<ChunkStore, "read">,
   ref: VisualizeRef,
   ids: string[],
+  cap: number,
 ): Promise<Chunk[]> {
-  const byId = new Map<string, string>();
-  for (let i = 0; i < ids.length; i += READ_BATCH)
-    for (const c of await store.read(ref, ids.slice(i, i + READ_BATCH))) byId.set(c.id, c.text);
-  // Keep ordinal order; a chunk that vanished (document being deleted) is skipped.
-  return ids.flatMap((id) => (byId.has(id) ? [{ id, text: byId.get(id) as string }] : []));
+  const out: Chunk[] = [];
+  let used = 0;
+  // Batches in ordinal order; no chunk is added once `cap` characters are read (the last one may cross it).
+  for (let i = 0; i < ids.length && used < cap; i += READ_BATCH) {
+    const batch = ids.slice(i, i + READ_BATCH);
+    const byId = new Map<string, string>();
+    for (const c of await store.read(ref, batch)) byId.set(c.id, c.text);
+    for (const id of batch) {
+      const text = byId.get(id); // a chunk that vanished (document being deleted) is skipped
+      if (text === undefined) continue;
+      if (used >= cap) break;
+      out.push({ id, text });
+      used += text.length;
+    }
+  }
+  return out;
 }
 
 /**
@@ -75,7 +89,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResul
       if (!llm) return { model: "none" };
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
       const ids = (await deps.chunks.sectionsOf(ref)).map((s) => s.id);
-      const chunks = await readAll(deps.chunks, ref, ids);
+      const chunks = await readAll(deps.chunks, ref, ids, deps.summaryMaxChars);
       const texts = new Map(chunks.map((c) => [c.id, c.text]));
       const drafts: DraftFact[] = [];
       try {
@@ -104,7 +118,9 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResul
         await deps.facts.replace(ref, [], signal);
         return { count: 0, model };
       }
-      const { facts } = admit(drafts, texts, new Set(ids));
+      const { facts, dropped } = admit(drafts, texts, new Set(ids));
+      // The count only, never a fact's content (spec 5: ungrounded facts are counted).
+      console.info("visualize-extract dropped ungrounded facts", dropped);
       const count = await deps.facts.replace(ref, facts, signal);
       return { count, model };
     },

@@ -38,6 +38,8 @@ export type ReadyDocuments = (after: string, limit: number) => Promise<ReadyDocu
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 export const READY_PAGE = 200;
+/** The most visualize executions the boot sweep keeps running at once (each is a few model calls). */
+export const SWEEP_EXECUTIONS = 2;
 
 /** `docmind_ready_documents` (migration 0028): ids only, across tenants, keyset-paged by document id. */
 export const pgReadyDocuments =
@@ -68,7 +70,7 @@ export interface VisualsStarter {
   /** Resolves when every fired start has settled (shutdown). */
   idle(): Promise<void>;
   /**
-   * Boot sweep: fires every ready document that has no visualize execution for its generation, page by page.
+   * Boot sweep: starts every ready document that has no visualize execution for its generation, page by page, with at most SWEEP_EXECUTIONS executions running at once (it resolves when they have all completed).
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
    */
   sweep(signal?: AbortSignal): Promise<number>;
@@ -128,10 +130,13 @@ export function loomVisualsStarter(
       throw err;
     }
   };
-  const fire = (ref: VisualizeRef, generation: number): Promise<unknown> => {
+  const fire = (ref: VisualizeRef, generation: number): Promise<ExecutionHandle | null> => {
     const run = start(ref, generation).then(
-      () => undefined,
-      (err: unknown) => onError(err),
+      (handle) => handle,
+      (err: unknown) => {
+        onError(err);
+        return null;
+      },
     );
     pending.add(run);
     const key = keyOf(ref.userId, ref.documentId);
@@ -161,17 +166,25 @@ export function loomVisualsStarter(
     async sweep(signal) {
       if (!ready || !enabled) return 0;
       let fired = 0;
+      // Bounds in-flight EXECUTIONS, not just starts: a slot frees when the execution completes (or fails).
+      const running = new Set<Promise<void>>();
       try {
         for (let after = NIL_UUID; !signal?.aborted; ) {
           const page = await ready(after, pageSize);
-          const starts: Promise<unknown>[] = [];
           for (const d of page) {
+            while (running.size >= SWEEP_EXECUTIONS && !signal?.aborted)
+              await Promise.race(running);
             if (signal?.aborted) break;
-            starts.push(fire(d, d.generation));
+            const run: Promise<void> = fire(d, d.generation)
+              .then((handle) => handle?.waitForCompletion())
+              .then(
+                () => undefined,
+                logClass("visualize execution failed"), // a failed or cancelled execution frees its slot
+              )
+              .finally(() => running.delete(run));
+            running.add(run);
             fired++;
           }
-          // Bounded: this page's starts finish before the next page is read.
-          await Promise.all(starts);
           const last = page[page.length - 1];
           if (!last || page.length < pageSize) break;
           after = last.documentId;
@@ -179,6 +192,7 @@ export function loomVisualsStarter(
       } catch (err) {
         logClass("visualize sweep failed")(err);
       }
+      if (!signal?.aborted) await Promise.all(running);
       return fired;
     },
     async cancel(identity, documentId, generation, reason) {

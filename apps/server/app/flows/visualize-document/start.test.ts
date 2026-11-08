@@ -10,7 +10,7 @@ import { MemoryLog, evt } from "../../status/testing";
 import { executionIdFor } from "../../subject";
 import { visualizeDocumentFlow } from "./flow";
 import type { ReadyDocument } from "./start";
-import { loomVisualsStarter, visualizeExecutionId } from "./start";
+import { SWEEP_EXECUTIONS, loomVisualsStarter, visualizeExecutionId } from "./start";
 
 const ref = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
 
@@ -188,25 +188,52 @@ describe("the starter", () => {
     expect(order.slice(0, 2)).toEqual(["start", "cancel"]);
   });
 
-  it("sweep awaits each page's starts before reading the next page", async () => {
-    const seen: string[] = [];
+  it("sweep keeps at most SWEEP_EXECUTIONS executions in flight, across pages", async () => {
+    let live = 0;
+    let peak = 0;
     const runtime = {
-      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => {
-        await new Promise((r) => setTimeout(r, 5));
-        seen.push("started");
-        return { executionId: o.executionId } as never;
-      },
+      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => ({
+        executionId: o.executionId,
+        waitForCompletion: async () => {
+          live++;
+          peak = Math.max(peak, live);
+          await new Promise((r) => setTimeout(r, 5));
+          live--;
+          return { status: "completed" };
+        },
+      }),
       cancel: async () => {},
     } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
-    const docs: ReadyDocument[] = [0, 1].map(() => ({ ...ref(), generation: 2 }));
-    const ready = async (after: string) => {
-      seen.push("page");
-      if (after === "00000000-0000-0000-0000-000000000000") return docs.slice(0, 1);
-      return after === docs[0]?.documentId ? docs.slice(1) : [];
+    const docs: ReadyDocument[] = Array.from({ length: 7 }, () => ({ ...ref(), generation: 1 }));
+    const ready = async (after: string, limit: number) => {
+      const from =
+        after === "00000000-0000-0000-0000-000000000000"
+          ? 0
+          : docs.findIndex((d) => d.documentId === after) + 1;
+      return docs.slice(from, from + limit);
     };
+    const fired = await loomVisualsStarter(runtime, flow, { ready, pageSize: 3 }).sweep();
+    expect(fired).toBe(7);
+    expect(peak).toBe(SWEEP_EXECUTIONS);
+    expect(live).toBe(0); // the sweep resolves after every execution completed
+  });
 
-    await loomVisualsStarter(runtime, flow, { ready, pageSize: 1 }).sweep();
-    expect(seen).toEqual(["page", "started", "page", "started", "page"]);
+  it("a failed execution frees its sweep slot (class only)", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const runtime = {
+      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => ({
+        executionId: o.executionId,
+        waitForCompletion: async () => {
+          throw new RangeError("secret");
+        },
+      }),
+      cancel: async () => {},
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const docs: ReadyDocument[] = Array.from({ length: 4 }, () => ({ ...ref(), generation: 1 }));
+    const ready = async (after: string) =>
+      after === "00000000-0000-0000-0000-000000000000" ? docs : [];
+    expect(await loomVisualsStarter(runtime, flow, { ready }).sweep()).toBe(4);
+    expect(log).toHaveBeenCalledWith("visualize execution failed", "RangeError");
   });
 
   it("cancel covers the generation and the one before it and tolerates 'No execution found'", async () => {
@@ -336,6 +363,7 @@ describe("a start still pending when the cancel runs", () => {
           guard: { begin: () => hang },
           chunks: { sectionsOf: async () => [], read: async () => [] },
           facts: { replace: async () => 0, list: async () => [] },
+          summaryMaxChars: 400_000,
           bus: new InMemoryProgressBus(),
           lineage: new Lineage({
             events: new InMemoryLineageStore(),

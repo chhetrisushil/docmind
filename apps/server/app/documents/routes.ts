@@ -261,10 +261,10 @@ const DELETE_ATTEMPTS = 3;
 const isDeadlock = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "40P01";
 
-/** How long a delete waits for that document's pending flow start before it cancels anyway. */
-export // Recorded in the log, so a fixed word that never names the document.
+// Recorded in the log, so a fixed word that never names the document.
 const CANCEL_REASON = "document-deleted";
-const SETTLE_TIMEOUT_MS = 5000;
+/** How long a delete waits for that document's pending flow start before it cancels anyway. */
+export const SETTLE_TIMEOUT_MS = 5000;
 
 async function settleWithin(
   starts: { settle(identity: Identity, documentId: string): Promise<void> },

@@ -18,10 +18,10 @@ Unset variables mean Ollama. An `ANTHROPIC_API_KEY` alone enables nothing: to us
 
 | Role | What it does | Provider variable | Model variable | Default provider and model |
 |---|---|---|---|---|
-| `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `ollama`, `gemma4:31b-cloud` |
+| `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `gemma4:31b-cloud` on Ollama |
 | `title` | The name of a chat | `DOCMIND_TITLE_PROVIDER` | `DOCMIND_TITLE_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `summary` | Document summaries | `DOCMIND_SUMMARY_PROVIDER` | `DOCMIND_SUMMARY_MODEL` | `ollama`, `gemma4:31b-cloud` |
-| `visuals` | Extracts facts and plans document visuals; `off` hides the Visuals tab | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `ollama`, `gemma4:31b-cloud` |
+| `visuals` | Extracts facts and plans document visuals; `off` hides the Visuals tab | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `ollama`, `gemma4:31b-cloud` |
 | `vision` | Text and description of images | `DOCMIND_VISION_PROVIDER` | `DOCMIND_VISION_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `vision_pdf` | Scanned PDF pages (no text layer) | `DOCMIND_VISION_PDF_PROVIDER` | `DOCMIND_VISION_PDF_MODEL` | `gemini`, `gemini-3.5-flash` when `GEMINI_API_KEY` is set, else `off` |
 
@@ -138,6 +138,19 @@ not read.
 **Rotate it only with no `visualize-document` execution in flight.** The same key gives the same id, which is how a resumed
 execution is served its recorded plan; after a change, a resumed execution misses it and plans again with the model, which
 may produce a different plan. Stop the server (or wait until no document is being visualized), change the key, start it.
+
+## Upgrading to document visuals
+
+The `visuals` role is off by default, and `DOCMIND_LLM_PROVIDER` does not turn it on: only `DOCMIND_VISUALS_PROVIDER`
+does. An upgraded deployment therefore boots as before, with no new key and no new model spend. To enable visuals:
+
+1. Set `DOCMIND_VISUALS_PROVIDER` (and `DOCMIND_VISUALS_MODEL` if you want a non-default model).
+2. Set `DOCMIND_PLANNER_DECISION_KEY` (see above); the server refuses to start without it while the role is on.
+3. Start the server. **The first boot after enabling sweeps every ready document through the model.** The sweep is
+   bounded (at most two visualize executions at once, on a gate of their own that ingest never waits behind), and each
+   document reads at most `DOCMIND_SUMMARY_MAX_CHARS` of its text, but a large library still takes a while and costs
+   model calls.
+4. Keep the key stable from then on (see the rotation note above).
 
 ## What users see
 
