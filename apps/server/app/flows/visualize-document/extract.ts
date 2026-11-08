@@ -20,7 +20,7 @@ import { EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
 /** The most chunk text sent to the model in one request; a window never splits a chunk. */
 export const EXTRACT_WINDOW_CHARS = 24_000;
 const READ_BATCH = 200;
-const EXTRACT_STEP_TIMEOUT_MS = 600_000;
+export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
 
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
@@ -32,10 +32,10 @@ export interface ExtractDeps extends StepSeams {
   llm?: LlmProvider;
 }
 
-type Chunk = { id: string; text: string };
+export type Chunk = { id: string; text: string };
 
 /** Consecutive chunks while the running length stays within `max`; an oversized chunk is its own window. */
-function windows(chunks: Chunk[], max: number): Chunk[][] {
+export function windows(chunks: Chunk[], max: number): Chunk[][] {
   const out: Chunk[][] = [];
   let cur: Chunk[] = [];
   let len = 0;
@@ -52,21 +52,20 @@ function windows(chunks: Chunk[], max: number): Chunk[][] {
   return out;
 }
 
-async function readAll(
-  store: Pick<ChunkStore, "read">,
-  ref: VisualizeRef,
+/** Chunks in `ids` order, read `batch` ids at a time through `read`; a chunk that vanished (document being deleted) is skipped; none is added once `cap` characters are read (the last one may cross it). */
+export async function readChunks(
+  read: (ids: string[]) => Promise<Map<string, string>>,
   ids: string[],
   cap: number,
+  batch: number,
 ): Promise<Chunk[]> {
   const out: Chunk[] = [];
   let used = 0;
-  // Batches in ordinal order; no chunk is added once `cap` characters are read (the last one may cross it).
-  for (let i = 0; i < ids.length && used < cap; i += READ_BATCH) {
-    const batch = ids.slice(i, i + READ_BATCH);
-    const byId = new Map<string, string>();
-    for (const c of await store.read(ref, batch)) byId.set(c.id, c.text);
-    for (const id of batch) {
-      const text = byId.get(id); // a chunk that vanished (document being deleted) is skipped
+  for (let i = 0; i < ids.length && used < cap; i += batch) {
+    const slice = ids.slice(i, i + batch);
+    const byId = await read(slice);
+    for (const id of slice) {
+      const text = byId.get(id);
       if (text === undefined) continue;
       if (used >= cap) break;
       out.push({ id, text });
@@ -74,6 +73,35 @@ async function readAll(
     }
   }
   return out;
+}
+
+/** The facts the `visuals` model finds in `chunks`: windowed, fenced as untrusted data. Not grounded, not stored. */
+export async function askForFacts(
+  llm: LlmProvider,
+  chunks: Chunk[],
+  signal?: AbortSignal,
+): Promise<DraftFact[]> {
+  const drafts: DraftFact[] = [];
+  for (const window of windows(chunks, EXTRACT_WINDOW_CHARS)) {
+    const text = window.map((c) => `[[${c.id}]]\n${c.text}`).join("\n\n");
+    const request = guardRequest({
+      system: `${EXTRACT_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: tainted(text, "document") },
+            { type: "text", text: EXTRACT_INSTRUCTION },
+          ],
+        },
+      ],
+      temperature: 0,
+    });
+    const res = await llm.complete({ ...request, ...(signal && { signal }) });
+    if (res.stopReason === "max_tokens") throw new LlmOutputError(); // truncated JSON
+    drafts.push(...jsonAnswer(res.content, ExtractAnswer).facts);
+  }
+  return drafts;
 }
 
 /**
@@ -89,29 +117,16 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, StepResul
       if (!llm) return { model: "none" };
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
       const ids = (await deps.chunks.sectionsOf(ref)).map((s) => s.id);
-      const chunks = await readAll(deps.chunks, ref, ids, deps.summaryMaxChars);
+      const chunks = await readChunks(
+        async (batch) => new Map((await deps.chunks.read(ref, batch)).map((c) => [c.id, c.text])),
+        ids,
+        deps.summaryMaxChars,
+        READ_BATCH,
+      );
       const texts = new Map(chunks.map((c) => [c.id, c.text]));
-      const drafts: DraftFact[] = [];
+      let drafts: DraftFact[];
       try {
-        for (const window of windows(chunks, EXTRACT_WINDOW_CHARS)) {
-          const text = window.map((c) => `[[${c.id}]]\n${c.text}`).join("\n\n");
-          const request = guardRequest({
-            system: `${EXTRACT_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: tainted(text, "document") },
-                  { type: "text", text: EXTRACT_INSTRUCTION },
-                ],
-              },
-            ],
-            temperature: 0,
-          });
-          const res = await llm.complete({ ...request, ...(signal && { signal }) });
-          if (res.stopReason === "max_tokens") throw new LlmOutputError(); // truncated JSON
-          drafts.push(...jsonAnswer(res.content, ExtractAnswer).facts);
-        }
+        drafts = await askForFacts(llm, chunks, signal);
       } catch (err) {
         if (!(err instanceof LlmRefusalError)) throw err;
         // A refusal is no facts, not a failure; the stored facts must reflect this run, so clear them.
