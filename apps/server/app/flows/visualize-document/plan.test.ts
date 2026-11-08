@@ -8,6 +8,7 @@ import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
+import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { DocumentGoneError } from "../ingest-document/errors";
 import type { Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
@@ -36,14 +37,6 @@ const NODE = {
 const REVISED_JSON = draft([{ ...NODE, span: 3 }], "A smaller headline figure");
 const PLAN_JSON = draft([NODE], "A single headline figure");
 const EMPTY_JSON = draft([]);
-const CONNECTIONS_NODE = {
-  id: "related",
-  type: "RelatedDocuments",
-  label: "Related documents",
-  span: 12,
-  props: {},
-  binding: { capability: "connections", arguments: {}, path: "", priority: "P1" },
-};
 
 describe("planVisuals", () => {
   it("passes the conformance kit (a second compose replays with no model call)", async () => {
@@ -260,7 +253,7 @@ describe("planVisuals offers the live connections", () => {
   it("binds a RelatedDocuments node to the connections capability beside a fact node", async () => {
     const ctx = recording();
     const model = scriptedPlannerModel([
-      draft([NODE, CONNECTIONS_NODE], "A figure and its neighbours"),
+      draft([NODE, CONNECTIONS_PLAN_NODE], "A figure and its neighbours"),
     ]);
     const plan = await planVisuals(new ReferencePlanner({ model, modelId: "t" }), [FIGURE], ctx);
     expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);

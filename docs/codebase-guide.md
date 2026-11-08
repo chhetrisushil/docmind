@@ -60,7 +60,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `apps/server/app/flows/visualize-turn/` | Chat visuals: `readTurn.ts` and `coverage.ts` (cited chunks, which stored facts cover them), `steps.ts` (turn-load, turn-extract, turn-facts), `plan.ts` and `commit.ts`, `trigger.ts` and `start.ts` (the turn-settled filter, the starter, on-demand re-runs), `pgTurnFacts.ts` (sealed `turn_visual_facts`) |
 | `apps/server/app/flows/chat-title/` | The small flow that names a chat from its first question |
 | `apps/server/app/chats/` | Chat sessions, the `doc-chat` agent, tools (`tools/`), retrieval (`retrieval/`), SSE stream, citations, reasoning, the rolling summary (`summaryChoice.ts` seals Loom's summary decision, which would otherwise land in the log in the clear; `summarizer.ts` keeps a failing summarizer from ending a chat) |
-| `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers |
+| `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers (`connections.ts`: a document's related documents and shared entities) |
 | `apps/server/app/erasure/`, `keys/`, `crypto/` | Account erasure (`DELETE /api/me`), key-encryption keys, field crypto |
 | `apps/server/app/llm/` | Builds one LLM provider per role (chat, title, summary, visuals, vision) |
 | `apps/server/app/db/` | Migration runner (`migrate.ts`) and `withTenant` (`tenant.ts`); SQL lives in `infra/migrations` |
