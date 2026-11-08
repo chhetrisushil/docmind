@@ -18,7 +18,7 @@ Unset variables mean Ollama. An `ANTHROPIC_API_KEY` alone enables nothing: to us
 
 | Role | What it does | Provider variable | Model variable | Default provider and model |
 |---|---|---|---|---|
-| `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `gemma4:31b-cloud` on Ollama |
+| `chat` | Streamed, cited answers with tools and reasoning | `DOCMIND_CHAT_PROVIDER` | `DOCMIND_CHAT_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `title` | The name of a chat | `DOCMIND_TITLE_PROVIDER` | `DOCMIND_TITLE_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `summary` | Document summaries | `DOCMIND_SUMMARY_PROVIDER` | `DOCMIND_SUMMARY_MODEL` | `ollama`, `gemma4:31b-cloud` |
 | `visuals` | Extracts facts and plans document visuals; `off` hides the Visuals tab | `DOCMIND_VISUALS_PROVIDER` | `DOCMIND_VISUALS_MODEL` | `off` unless `DOCMIND_VISUALS_PROVIDER` is set; then `ollama`, `gemma4:31b-cloud` |
