@@ -264,7 +264,16 @@ export class DmDocDetail extends LitElement {
     const questions = Array.isArray(summary?.questions)
       ? (summary.questions as { label?: unknown }[]).map((q) => q?.label)
       : [];
-    const intent: Intent | undefined = intentOf("detail", a, { list: questions });
+    // The Related documents table's row keys, as the server served them in its value: never the action's own claim, and only
+    // for that table (a row action from any other widget is held no keys, so it is refused).
+    const related = this.session?.valueOf("connections-table") as { rowKeys?: unknown } | undefined;
+    const rowKeys =
+      a.type === "TABLE_ROW_ACTION" &&
+      this.session?.widgetType(a.widgetId) === "RelatedDocuments" &&
+      Array.isArray(related?.rowKeys)
+        ? (related.rowKeys as unknown[]).filter((k): k is string => typeof k === "string")
+        : [];
+    const intent: Intent | undefined = intentOf("detail", a, { list: questions, rowKeys });
     if (!intent) return { ok: false, reason: "refused" };
     const ok = await this.run(intent);
     if (ok && intent.type === "content.more") this.upto = Math.min(200, this.upto + 20);

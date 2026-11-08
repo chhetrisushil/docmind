@@ -721,3 +721,52 @@ describe("dm-doc-detail: rendered content", () => {
     });
   });
 });
+
+describe("dm-doc-detail: the Related documents Open action", () => {
+  const action = (rowKey: string, name = "open", widgetId = "v-related") => ({
+    type: "TABLE_ROW_ACTION",
+    widgetId,
+    payload: { action: name, rowKey },
+  });
+  type Answer = { ok: boolean; reason?: string } | undefined;
+  async function served() {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(deepText(view(page))).toContain("Ready"));
+    // The fake UI plane serves no planned visuals; what the table "served" and which widget it is are what the session reads.
+    const session = view(page).session as unknown as {
+      valueOf(h: string): unknown;
+      widgetType(w: string): string | undefined;
+    };
+    const real = session.valueOf.bind(session);
+    vi.spyOn(session, "valueOf").mockImplementation((h: string) =>
+      h === "connections-table" ? { rowKeys: [id(7)] } : real(h),
+    );
+    vi.spyOn(session, "widgetType").mockImplementation((w: string) =>
+      w === "v-related" ? "RelatedDocuments" : w === "v-fact" ? "Table" : undefined,
+    );
+    const act = view(page).onAct as (a: unknown) => Promise<Answer>;
+    return { t, act };
+  }
+
+  it("opens the related document whose row key the served table holds", async () => {
+    const { t, act } = await served();
+    expect(await act(action(id(7)))).toEqual({ ok: true });
+    expect(t.services.router.route).toEqual({ name: "document", id: id(7) });
+  });
+
+  it("refuses a row key the table did not serve, and any other row action, and stays on the page", async () => {
+    const { t, act } = await served();
+    expect(await act(action(id(8)))).toEqual({ ok: false, reason: "refused" });
+    expect(await act(action(id(7), "delete"))).toEqual({ ok: false, reason: "refused" });
+    expect(await act(action(id(7), "ask"))).toEqual({ ok: false, reason: "refused" });
+    expect(t.services.router.route).toEqual({ name: "document", id: id(1) });
+  });
+
+  it("refuses a row action from another widget, even with a served row key", async () => {
+    const { t, act } = await served();
+    expect(await act(action(id(7), "open", "v-fact"))).toEqual({ ok: false, reason: "refused" });
+    expect(await act(action(id(7), "open", "unknown"))).toEqual({ ok: false, reason: "refused" });
+    expect(t.services.router.route).toEqual({ name: "document", id: id(1) });
+  });
+});

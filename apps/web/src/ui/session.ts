@@ -199,6 +199,23 @@ export class ViewSession {
   valueOf(handle: string): unknown {
     return (this.store.state().values as Record<string, unknown>)[handle];
   }
+  /** The semantic type (`RelatedDocuments`, ...) of the widget with this id in the served blueprint, if there is one. */
+  widgetType(widgetId: string): string | undefined {
+    const seen = new Set<unknown>();
+    const walk = (n: unknown): string | undefined => {
+      if (typeof n !== "object" || n === null || seen.has(n)) return undefined;
+      seen.add(n);
+      const w = n as { _tag?: unknown; id?: unknown; source?: { type?: unknown } };
+      if (w._tag === "Widget" && w.id === widgetId)
+        return typeof w.source?.type === "string" ? w.source.type : undefined;
+      for (const c of Array.isArray(n) ? n : Object.values(n)) {
+        const r = walk(c);
+        if (r !== undefined) return r;
+      }
+      return undefined;
+    };
+    return walk(this.payload.blueprint);
+  }
   statusOf(handle: string): string | undefined {
     return (this.store.state().status as Record<string, { state: string } | undefined>)[handle]
       ?.state;

@@ -117,6 +117,13 @@ function resolve(
     }
     case "detail": {
       if (type === "REF_OPEN") return refOpen(p);
+      if (type === "TABLE_ROW_ACTION") {
+        // The Related documents table (the document's connections): its one action opens that document. The key must be one
+        // the surface was served; any other action name is refused.
+        if (own(p, "action") !== "open") return undefined;
+        const id = heldId(own(p, "rowKey"), held);
+        return id === undefined ? undefined : { type: "document.open", id };
+      }
       if (type !== "A2UI_ACTION") return undefined;
       const a = own(p, "action");
       if (a === "show-more") return { type: "content.more" };
