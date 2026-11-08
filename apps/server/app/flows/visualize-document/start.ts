@@ -370,16 +370,21 @@ export function loomVisualsStarter(
       try {
         // First: runs recorded as running whose end event was lost are repaired from Loom's state (a run that is still
         // going stays running). A repaired `visuals-model-unavailable` is then picked up by the retry pass below.
+        // Its own try: a failed reconcile source must not stop the ready and retry passes.
         if (runningSource) {
-          for (let after = NIL_UUID; !signal?.aborted; ) {
-            const page = await runningSource(after, pageSize);
-            for (const d of page) {
-              if (signal?.aborted) break;
-              await reconcile(d, d.generation, { run: d.run, state: "running", code: null });
+          try {
+            for (let after = NIL_UUID; !signal?.aborted; ) {
+              const page = await runningSource(after, pageSize);
+              for (const d of page) {
+                if (signal?.aborted) break;
+                await reconcile(d, d.generation, { run: d.run, state: "running", code: null });
+              }
+              const last = page[page.length - 1];
+              if (!last || page.length < pageSize) break;
+              after = last.documentId;
             }
-            const last = page[page.length - 1];
-            if (!last || page.length < pageSize) break;
-            after = last.documentId;
+          } catch (err) {
+            logClass("visuals running reconcile failed")(err);
           }
         }
         await pass(ready, (d) => fire(d, d.generation));

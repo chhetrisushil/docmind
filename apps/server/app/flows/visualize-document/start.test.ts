@@ -791,4 +791,23 @@ describe("a lost end event never leaves a run stuck at running", () => {
     expect(s.record.mock.calls.filter((c) => (c as unknown[])[1] === "failed")).toHaveLength(3);
     expect(order.slice(0, 3)).toEqual(["record", "record", "record"]);
   });
+
+  it("a failing running-row source does not stop the boot sweep's ready and retry passes", async () => {
+    const doc = { ...ref(), generation: 1 };
+    const s = setup(completed({ outcome: "done" }));
+    s.runtime.start.mockImplementation(
+      async (_f, _i, o) =>
+        ({ executionId: o.executionId, waitForCompletion: async () => {} }) as never,
+    );
+    const starter = loomVisualsStarter(s.runtime as never, flow, {
+      running: async () => {
+        throw new Error("lookup down");
+      },
+      ready: async (after) =>
+        after === "00000000-0000-0000-0000-000000000000" ? [doc as never] : [],
+      runs: { record: s.record, last: vi.fn(async () => null as never) },
+    });
+    await expect(starter.sweep()).resolves.toBe(1);
+    expect(s.runtime.start).toHaveBeenCalledTimes(1);
+  });
 });
