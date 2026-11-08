@@ -6,12 +6,15 @@ export const VISUALS_COPY = {
   revisualize: "Re-visualize",
   limited: "Try again in a minute",
   nothing: "Nothing to visualize",
+  failed: "Could not start. Try again.",
 } as const;
 
 /** How long "Visualizing…" waits for a `visuals` frame, and how long "Try again in a minute" stays. */
 export const VISUALS_TIMEOUT_MS = 60_000;
+/** How long "Could not start. Try again." stays (the action is back at once). */
+export const VISUALS_FAILED_MS = 8_000;
 
-export type VisualsPhase = "idle" | "running" | "limited" | "nothing";
+export type VisualsPhase = "idle" | "running" | "limited" | "nothing" | "failed";
 export interface VisualsView {
   strip: boolean;
   action: string | null;
@@ -50,6 +53,8 @@ export function visualsViewOf(e: {
         busy: false,
         note: e.hasVisuals ? null : VISUALS_COPY.nothing,
       };
+    case "failed":
+      return { strip: e.hasVisuals, action: idleAction, busy: false, note: VISUALS_COPY.failed };
     default:
       return { strip: e.hasVisuals, action: idleAction, busy: false, note: null };
   }

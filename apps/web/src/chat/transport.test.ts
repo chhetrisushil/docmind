@@ -97,6 +97,39 @@ describe("createChatTransport", () => {
     expect(t.fold.value().entries.at(-1)).toMatchObject({ id: "t2.assistant", status: "complete" });
   });
 
+  it("on a reconnect (not the first open) reads the newest page again and takes the visuals it missed, leaving the older-page cursor alone", async () => {
+    const t = setup();
+    await t.transport.start();
+    t.sse.opts?.onOpen?.(); // the first open follows the history just read
+    expect(t.listMessages).toHaveBeenCalledTimes(1);
+    t.listMessages.mockImplementationOnce(async () => ({
+      items: [msg(1, "user", 1), msg(2, "assistant", 1, { hasVisuals: true, visualizable: true })],
+      nextCursor: "9.9" as string | null,
+    }));
+    t.sse.opts?.onOpen?.(); // a reconnect: the `visuals` frame fell in the gap
+    await vi.waitFor(() => expect(t.fold.extrasOf("t1.assistant")?.hasVisuals).toBe(true));
+    expect(t.listMessages).toHaveBeenCalledTimes(2);
+    expect(t.fold.extrasOf("t1.assistant")).toMatchObject({ visualsRev: 1, visualizable: true });
+    expect(t.fold.drainVisuals()).toEqual([[2, "visualized"]]);
+    expect(t.fold.olderCursor).toBe("1.5"); // not the refetched page's
+    t.fold.refreshVisuals({
+      items: [msg(2, "assistant", 1, { hasVisuals: true })],
+      nextCursor: null,
+    });
+    expect(t.fold.drainVisuals()).toEqual([]); // nothing new: no second frame
+  });
+
+  it("a failed re-read after a reconnect is not a problem of the chat", async () => {
+    const t = setup();
+    await t.transport.start();
+    t.sse.opts?.onOpen?.();
+    t.listMessages.mockRejectedValueOnce(new Error("offline"));
+    t.sse.opts?.onOpen?.();
+    await vi.waitFor(() => expect(t.listMessages).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(t.onProblem).not.toHaveBeenCalled();
+  });
+
   it("drops a frame that is not one of ours, without applying it and without throwing", async () => {
     const t = setup();
     await t.transport.start();

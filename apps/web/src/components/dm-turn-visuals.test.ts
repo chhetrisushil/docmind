@@ -119,4 +119,25 @@ describe("dm-turn-visuals", () => {
     await el.updateComplete;
     expect(q(el, "[data-toggle]")).not.toBeNull();
   });
+  it("a re-run's fresh view starts at no count, and one that then fails leaves no stale count behind", async () => {
+    const el = await mount();
+    el.count = 3; // the first view's widgets
+    await el.updateComplete;
+    expect(q(el, "[data-count]")?.textContent).toContain("3");
+    el.rev = 1; // the re-run
+    await el.updateComplete;
+    expect(q(el, "[data-count]")).toBeNull();
+    el.count = 2; // the fresh view's own widgets
+    await el.updateComplete;
+    q(el, "dm-view")?.dispatchEvent(
+      new CustomEvent("view-problem", { bubbles: true, composed: true }),
+    );
+    await el.updateComplete;
+    expect(el.count).toBe(0);
+    expect(q(el, "[data-toggle]")).toBeNull();
+    el.rev = 2; // another re-run: the strip is back, and shows no old count
+    await el.updateComplete;
+    expect(q(el, "[data-toggle]")).not.toBeNull();
+    expect(q(el, "[data-count]")).toBeNull();
+  });
 });

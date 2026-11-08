@@ -19,6 +19,7 @@ describe("visualsViewOf", () => {
       revisualize: "Re-visualize",
       limited: "Try again in a minute",
       nothing: "Nothing to visualize",
+      failed: "Could not start. Try again.",
     });
   });
   it("offers Visualize on a cited answer with no visuals, and Re-visualize plus the strip once it has some", () => {
@@ -43,6 +44,14 @@ describe("visualsViewOf", () => {
       note: null,
     });
     expect(visualsViewOf({ ...base, hasVisuals: true, phase: "running" })?.strip).toBe(true);
+  });
+  it("says it could not start after a failed click, and keeps the action", () => {
+    expect(visualsViewOf({ ...base, phase: "failed" })).toEqual({
+      strip: false,
+      action: "Visualize",
+      busy: false,
+      note: "Could not start. Try again.",
+    });
   });
   it("says Try again in a minute after a 429, without the action, and Nothing to visualize beside it", () => {
     expect(visualsViewOf({ ...base, phase: "limited" })).toEqual({

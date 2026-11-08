@@ -7,6 +7,7 @@ import { ChatFold } from "../chat/feedAdapter";
 import { toTranscript } from "../chat/transcript";
 import { type ChatTransport, createChatTransport, newMessageKey } from "../chat/transport";
 import {
+  VISUALS_FAILED_MS,
   VISUALS_TIMEOUT_MS,
   type VisualsPhase,
   type VisualsView,
@@ -293,7 +294,7 @@ export class ChatController {
         this.setPhase(ord, "nothing");
       else if (err instanceof ApiError && err.status === 429)
         this.setPhase(ord, "limited", VISUALS_TIMEOUT_MS);
-      else this.setPhase(ord, "idle");
+      else this.setPhase(ord, "failed", VISUALS_FAILED_MS); // 404, 5xx or the network: say so, the action is back
       this.publish();
     }
   }

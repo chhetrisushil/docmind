@@ -47,7 +47,11 @@ export class DmTurnVisuals extends LitElement {
     this.broken = false;
   }
   willUpdate(changed: Map<string, unknown>): void {
-    if (changed.has("rev")) this.broken = false; // a re-run opens a fresh view: try again
+    if (changed.has("rev")) {
+      // a re-run opens a fresh view: try again, and its widget count is not the old view's
+      this.broken = false;
+      this.count = 0;
+    }
   }
   connectedCallback(): void {
     super.connectedCallback();

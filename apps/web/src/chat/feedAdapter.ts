@@ -168,6 +168,25 @@ export class ChatFold {
     }
   }
 
+  /**
+   * The newest history page, read again after the stream reopened: a `visuals` frame is live-only, so one that fell in the
+   * gap is missed. Only the visuals fields of replies already held are taken (the stream itself catches the messages up,
+   * and the older-page cursor is left alone): a reply that now has visuals gets the strip, and a "Visualizing..." wait
+   * on it ends as if its frame had arrived.
+   */
+  refreshVisuals(page: ListMessagesResponse): void {
+    for (const m of page.items) {
+      const x = this.extras.get(entryIdOf(m));
+      if (!x || m.role !== "assistant") continue;
+      x.visualizable = m.visualizable;
+      if (m.hasVisuals && !x.hasVisuals) {
+        x.hasVisuals = true;
+        x.visualsRev += 1;
+        this.visualsFrames.push([x.ord, "visualized"]);
+      }
+    }
+  }
+
   /** Called when the stream (re)opens: it starts with a snapshot of the reply so far, which must land on an empty live reply. */
   resetLive(): void {
     this.error = false;
