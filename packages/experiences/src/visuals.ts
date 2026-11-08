@@ -195,17 +195,37 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 const MONTH_LABEL =
   /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?[\s-]+(\d{4})$/i;
 const ym = (y: string, m: number) => `${y}-${String(m).padStart(2, "0")}`;
-/** A period label ("Q1 2026", "H2 2026", "2026", "Mar 2026") as the ISO month it starts; an ISO date or anything unknown comes back as it was. */
-const toIso = (raw: string): string => {
+type Granularity = "year" | "half" | "quarter" | "month" | "week" | "day" | "datetime";
+/** Coarsest first: a trend with mixed labels is drawn at the coarsest granularity any point has. */
+const COARSE_FIRST: readonly Granularity[] = [
+  "year",
+  "half",
+  "quarter",
+  "month",
+  "week",
+  "day",
+  "datetime",
+];
+/** A period label ("Q1 2026", "H2 2026", "2026", "Mar 2026") as the ISO month it starts, with the granularity it was written at; an ISO date or anything unknown comes back as it was (a date is a "day", a bare ISO month a "month"). */
+const toIso = (raw: string): { iso: string; granularity: Granularity } => {
   const x = raw.trim();
   const q = /^(?:q([1-4])[\s-]+(\d{4})|(\d{4})[\s-]+q([1-4]))$/i.exec(x);
-  if (q) return ym((q[2] ?? q[3]) as string, (Number(q[1] ?? q[4]) - 1) * 3 + 1);
+  if (q)
+    return {
+      iso: ym((q[2] ?? q[3]) as string, (Number(q[1] ?? q[4]) - 1) * 3 + 1),
+      granularity: "quarter",
+    };
   const h = /^(?:h([12])[\s-]+(\d{4})|(\d{4})[\s-]+h([12]))$/i.exec(x);
-  if (h) return ym((h[2] ?? h[3]) as string, Number(h[1] ?? h[4]) === 1 ? 1 : 7);
-  if (/^\d{4}$/.test(x)) return ym(x, 1);
+  if (h)
+    return {
+      iso: ym((h[2] ?? h[3]) as string, Number(h[1] ?? h[4]) === 1 ? 1 : 7),
+      granularity: "half",
+    };
+  if (/^\d{4}$/.test(x)) return { iso: ym(x, 1), granularity: "year" };
   const m = MONTH_LABEL.exec(x);
   const month = m ? MONTHS.indexOf((m[1] as string).slice(0, 3).toLowerCase()) : -1;
-  return m && month >= 0 ? ym(m[2] as string, month + 1) : x;
+  if (m && month >= 0) return { iso: ym(m[2] as string, month + 1), granularity: "month" };
+  return { iso: x, granularity: /^\d{4}-\d{2}$/.test(x) ? "month" : "day" };
 };
 /**
  * A trend's points in date order, or null. Every label must be a date and no two may fall on the same instant (mixed
@@ -214,8 +234,8 @@ const toIso = (raw: string): string => {
  */
 const chronological = <P extends { x: string }>(
   points: readonly P[],
-): (P & { iso: string })[] | null => {
-  const dated = points.map((p) => ({ ...p, iso: toIso(p.x) }));
+): (P & { iso: string; granularity: Granularity })[] | null => {
+  const dated = points.map((p) => ({ ...p, ...toIso(p.x) }));
   if (!dated.every((p) => isDate(p.iso))) return null;
   const sorted = [...dated].sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
   return sorted.every(
@@ -224,6 +244,8 @@ const chronological = <P extends { x: string }>(
     ? sorted
     : null;
 };
+const coarsest = (points: readonly { granularity: Granularity }[]): Granularity =>
+  COARSE_FIRST.find((g) => points.some((p) => p.granularity === g)) ?? "day";
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
 /** loom-ui's "%" format reads a fraction (0.38 prints 38%), while facts hold the document's form (38 for "38%"). */
 const isPercent = (unit: string | undefined) => unit?.trim() === "%";
@@ -276,6 +298,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
     return f.kind !== "series" || points === null
       ? wrong()
       : {
+          timeFormat: { granularity: coarsest(points) },
           series: [
             {
               label: f.label,
