@@ -248,7 +248,7 @@ Visuals in chat answers (sub-project 2); user editing or pinning of visuals; int
 inside charts; facts spanning documents before step (b).
 
 Deferred from step (a) after the final review (owner to schedule): citation markers in widget captions;
-reclaiming erased or orphaned `lineage_content` rows.
+reclaiming erased or orphaned `lineage_content` rows (done, see "As built: reclaiming `lineage_content`" below).
 
 
 ### As built: re-planning over a changed fact format (instead of re-running on `schemaDrift`)
@@ -269,3 +269,17 @@ version hash, not on a pin. What can go stale is the stored plan, made over an o
 - Rows from before the column (format NULL) are NOT stale: they are re-planned only on the user's Retry, or by a later format
   bump after a re-run stamped them.
 - Chat turns record no format: they are re-made lazily, only by the Visualize action.
+
+### As built: reclaiming `lineage_content`
+
+- `storage/lineageGc.ts` (`collectLineageContent`, `startLineageGc`) runs daily (`DOCMIND_LINEAGE_GC_INTERVAL_MS`, default
+  86400000, `0` off, 60000 to 2592000000 otherwise), first run one interval after boot, one replica at a time
+  (`pg_try_advisory_lock` on the Loom pool, `docmind:lineage-gc`), skipped while a run is in progress, unref'd.
+- Roots: `Lineage.pins({ keepLast: Infinity })` of THE one visuals `Lineage`, which holds every document and chat-turn line
+  of all users and finds the refs inside retained artifacts (`pgLineageGc.ts`). A confirmed-erased line (destroyed key)
+  contributes none, so its blobs are reclaimed; any other read, fold or open failure throws and the run ends with nothing deleted.
+- The sweep is Loom's `sweepUnpinnedContent` (loom 4af27eaa; ADR 0055 D5-D7) with `eventStores: []`, `roots`, `reclaimOrphans:
+  { completeScan: true }`, `olderThanMs` 24 h and an explicit `touchedBefore` read from the store's clock BEFORE the roots, so a
+  blob a promote, a branch or a put touched while the roots were read survives. Loom refuses to erase without `touch` and `touchClock`.
+- Completeness rests on the visuals Lineage being the only user of the store; `storage/contentUsers.test.ts` pins that.
+- Fail closed also on an empty root set. Logs: counts and error classes only.

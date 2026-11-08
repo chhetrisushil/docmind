@@ -17,6 +17,8 @@ import { startSnapshotPruner } from "./snapshots/pruner";
 import { bootStatus } from "./status/boot";
 import { isIngestExecution, isVisualizeExecution } from "./status/model";
 import type { DurableStorage } from "./storage";
+import { startLineageGc } from "./storage/lineageGc";
+import { lineageGcDeps } from "./storage/pgLineageGc";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -56,6 +58,11 @@ export interface BootIngestParts {
    * Only with `background`.
    */
   snapshotPruneIntervalMs?: number;
+  /**
+   * How often to erase the visuals lineage's orphaned blobs (`DOCMIND_LINEAGE_GC_INTERVAL_MS`, loaded by `setupServer`).
+   * Default 0: off. Only with `background`.
+   */
+  lineageGcIntervalMs?: number;
   drainServer?: (then: () => Promise<void>) => Promise<void>;
 }
 
@@ -80,9 +87,11 @@ export async function bootIngest(
     background = true,
     shutdownDelayMs = 0,
     snapshotPruneIntervalMs = 0,
+    lineageGcIntervalMs = 0,
   } = parts;
   const {
     app,
+    lineageGc,
     store,
     throttle,
     starts,
@@ -147,6 +156,7 @@ export async function bootIngest(
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
   let uploadSweeper: ReturnType<typeof startSweeper> | undefined;
   let snapshotPruner: ReturnType<typeof startSnapshotPruner> | undefined;
+  let lineageCollector: ReturnType<typeof startLineageGc> | undefined;
   const afterListen = () => {
     // Resume what the last process left running, then keep looking. Not awaited: the server must not wait to listen.
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
@@ -187,6 +197,11 @@ export async function bootIngest(
     // The first sweep runs one interval from now, never during the boot (recovery and the index come first).
     if (snapshotPruneIntervalMs > 0)
       snapshotPruner = startSnapshotPruner(snapshotPruneDeps(durable), snapshotPruneIntervalMs);
+    if (lineageGcIntervalMs > 0)
+      lineageCollector = startLineageGc(
+        lineageGcDeps(lineageGc, durable.pool),
+        lineageGcIntervalMs,
+      );
   };
 
   if (listen) {
@@ -213,11 +228,15 @@ export async function bootIngest(
       // A prune in progress finishes its current execution (one DELETE) and releases its lock connection to the
       // Loom pool, which closes later; it shares the sweeper's drain bound, so the deadline is unchanged.
       const prunerStopped = snapshotPruner?.stop() ?? Promise.resolve();
+      const collectorStopped = lineageCollector?.stop() ?? Promise.resolve();
       events.closeAll();
       chatStreams?.closeAll();
       const close = async () => {
         // Let a sweep that is already running finish.
-        await drainWithin(Promise.all([sweeperStopped, prunerStopped]), SHUTDOWN_DRAIN_MS);
+        await drainWithin(
+          Promise.all([sweeperStopped, prunerStopped, collectorStopped]),
+          SHUTDOWN_DRAIN_MS,
+        );
         // The server has stopped accepting uploads; let every fired flow start settle, then close everything.
         await runAll(
           ...closeSequence({
