@@ -2,6 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Amendments (preflight)
+
+This plan was amended after the pre-flight scan (`.superpowers/sdd/2026-11-08-chat-visuals/preflight.md`) per rulings P1 to P14 (`progress.md`). Where each landed:
+
+| Ruling | What changed | Task(s) |
+|---|---|---|
+| P1 | `plan.test` filters on `remapProvider`, an `Operation` type that exists (no `addProvider`) | 7 |
+| P2 | the starter's `idle()` awaits in-flight `start()` calls only, never execution completion (the chat-title pattern); start tests updated; `turns.idle()` added to the `bootIngest` shutdown list and its pinned test | 8 |
+| P3 | `security.test` uses `authorizer.authorize` | 8 |
+| P4 | vacuous assertions replaced: head checks are `toEqual({ ok: true, value: null })`, replay counts model calls before and after, "starts nothing" waits for the starter to go idle, the e2e counts after document visuals settle | 7, 8, 12 |
+| P5 | e2e plaintext sentinels are at least 12 characters; the fixture sets a small `DOCMIND_SUMMARY_MAX_CHARS` (`EVAL_SUMMARY_MAX_CHARS`) instead of relying on the default | 12 |
+| P6 | hygiene: imports hoisted and merged, unused parameter removed, duplicated logic moved to shared helpers (`readChunks`, `composeVisuals`, `committing`, `scriptedFigurePlan`), no `as never` | 4, 5, 6, 7, 10 |
+| P7 | `documents/testHarness.ts` joins the `UiReaderDeps` literals; the `history.pg` test, the harness `heads` option and the `bootIngest` list are written out | 8, 10 |
+| P8 | weak or unrunnable tests rewritten against helpers that exist; the owner check is exercised with a second identity | 10, 11 |
+| P9 | spec wins: `docmind_chat_tenant(chat_id)`, every run that ends `nothing` publishes the frame (the `announce` flag is gone), `hasVisuals: boolean` required, the docs text names `outcome`; kept plan decision: at most 8 cited documents read per turn | 2, 7, 8, 10, 11, 12 |
+| P10 | one `RecordOrd` schema (the range of `ChatMessageDto.id`) for every new `ord` contract, the execution-id and lineage patterns and `turn_visual_facts.ord` | 2, 3, 4, 5, 7, 9, 10 |
+| P11 | a strip's nested `view-ready` never reaches the chat page's handler (the strip stops it; the page checks the event's origin) | 11 |
+| P12 | commit trailers are `Co-Authored-By: Claude Opus 5.5` plus the session line | all |
+| P13 | bare `R<n>` tags glossed inline, the wrong "section 10" pointer fixed | header, 3, 6, 7, 8, 9 |
+| P14 | Task 1 also pins `LOOM_UI_REF` d036e84; Task 11 places strips through loom-ui's `chatAccessories`, the shadow-DOM reconciler is gone | 1, 11 |
+
 **Goal:** After a chat answer that cites at least one document has settled, a background Loom flow composes the visuals that make the answer clearer (charts, metric cards, tables) from the figures behind it, and the chat shows them in a collapsible "Visuals" strip under the assistant message. The answer streams exactly as it does today; its visuals arrive later, or never.
 
 **Architecture:** `visualize-turn` is a new Loom flow. It is started by a `turnSettledObserver` listener (Loom's generic helper in `@loom/conversation`, composed into the runtime's single `onDurableEvent`) and by an on-demand route. Its steps are:
@@ -15,13 +36,13 @@ The server serves the turn's compiled visuals through a new view source `{ turn:
 
 **Tech Stack:** TypeScript, Loom (`@loom/core`, `@loom/conversation`, `@loom/workflow-runtime`, `@loom/llm`), loom-ui (`@loom-ui/core`, `@loom-ui/planner`, `@loom-ui/lineage`, `@loom-ui/hydration`), Postgres with RLS, vitest, Lit.
 
-**Spec:** `docs/specs/2026-11-08-chat-visuals-design.md` (binding). Sub-project 1: `docs/specs/2026-11-08-document-visuals-design.md` (rulings R1 to R31 referenced below are in its later sections and in `docs/superpowers/plans/2026-11-08-document-visuals.md`). Read both first: decisions C1 to C7, sections 3 to 10.
+**Spec:** `docs/specs/2026-11-08-chat-visuals-design.md` (binding). Sub-project 1: `docs/specs/2026-11-08-document-visuals-design.md` (the `R<n>` tags below are sub-project 1's numbered rulings; each is glossed where it appears, and the full set lives in the PR #489 report, not in the docs). Read both first: decisions C1 to C7, sections 3 to 10.
 
 ## Global Constraints
 
-- **Ids only.** Flow start input is `{ tenantId, userId, chatId, ord }`, strict, UUIDs and a positive integer. No plaintext content (answer text, fact text, labels) in the event log: step outputs carry references only (`turn-load`) or are sealed (`turn-facts` through `output.facts`, `turn-commit` through `input.ops|summary|report`), turn facts are sealed per user, the lineage is sealed, decision ids are keyed (`DOCMIND_PLANNER_DECISION_KEY`, R19). The raw-event content proof (`assertNoPlaintext`, `chats/eventLogProof.ts`) must pass for the new flow.
-- **Flow and ids.** Flow id `visualize-turn`, version `1.0.0`. Execution ids `visualize-turn-<chatId>-<ord>` (the one automatic pass) and `visualize-turn-<chatId>-<ord>-r<n>` (on demand, `n` the next re-run number), always through `executionIdFor(userId, name)` from `apps/server/app/subject.ts`. Lineage experience id `turnvisuals-<userId>-<chatId>-<ord>`. Ids contain the user and chat UUIDs in plaintext, as existing execution ids do (R14).
-- **Retry.** Every step: 3 attempts, 2 s backoff, ×2 (`{ maxAttempts: 3, backoffMs: 2_000, backoffMultiplier: 2 }`, the same numbers as `CHAT_TITLE_RETRY`). Exhausted retries fail the execution with the visuals error type (R20). A failed, empty or disabled run leaves the strip hidden; the turn is never affected (C7).
+- **Ids only.** Flow start input is `{ tenantId, userId, chatId, ord }`, strict, UUIDs and a positive integer. No plaintext content (answer text, fact text, labels) in the event log: step outputs carry references only (`turn-load`) or are sealed (`turn-facts` through `output.facts`, `turn-commit` through `input.ops|summary|report`), turn facts are sealed per user, the lineage is sealed, decision ids are keyed (`DOCMIND_PLANNER_DECISION_KEY`; R19, sub-project 1's keyed decision ids). The raw-event content proof (`assertNoPlaintext`, `chats/eventLogProof.ts`) must pass for the new flow.
+- **Flow and ids.** Flow id `visualize-turn`, version `1.0.0`. Execution ids `visualize-turn-<chatId>-<ord>` (the one automatic pass) and `visualize-turn-<chatId>-<ord>-r<n>` (on demand, `n` the next re-run number), always through `executionIdFor(userId, name)` from `apps/server/app/subject.ts`. Lineage experience id `turnvisuals-<userId>-<chatId>-<ord>`. Ids contain the user and chat UUIDs in plaintext, as existing execution ids do (R14: ids in execution ids stay plaintext).
+- **Retry.** Every step: 3 attempts, 2 s backoff, ×2 (`{ maxAttempts: 3, backoffMs: 2_000, backoffMultiplier: 2 }`, the same numbers as `CHAT_TITLE_RETRY`). Exhausted retries fail the execution with the visuals error type (R20: exhausted retries fail with that type). A failed, empty or disabled run leaves the strip hidden; the turn is never affected (C7).
 - **Limits.** At most **12** stored facts kept per turn (ordered by first citation); at most **16** facts extracted per turn (`MAX_FACTS` of sub-project 1). The extraction reads at most `DOCMIND_SUMMARY_MAX_CHARS` characters of retrieved chunk text (`summaryMaxChars`, in retrieval order). Facts keep sub-project 1's schema limits (2 to 64 points per series, 12 rows × 8 columns, 200 characters per cell).
 - **Capabilities and pins.** Planner capability handles are `fact-<i>` (`i` the index in the offered list). A stored fact's pin is `docmind:visual.facts@1#<documentId>/fact-<n>` (`n` its ordinal in its document); an extracted fact's pin is `docmind:turn.facts@1#fact-<n>`. Every capability has `sensitivity: "sensitive"`. Tools `visual.facts` and `turn.facts`, version `1.0.0`. Sub-project 1's pin `docmind:visual.facts@1#fact-<n>` (detail page) is unchanged.
 - **Seal bind.** `turn_visual_facts.fact_enc` is sealed with `FieldCrypto.forUser(userId).seal("turnfact:<id>", value)`. Seal before opening the transaction; no key-store call under row locks.
@@ -30,7 +51,7 @@ The server serves the turn's compiled visuals through a new view source `{ turn:
 - **Gate and role.** All visuals runs share sub-project 1's visuals gate (`newVisualizeGate()`: at most 2 executions in flight, 1 per tenant); chat and ingest never wait behind it. The whole feature is off unless the `visuals` role is on (`DOCMIND_VISUALS_PROVIDER`, plus `DOCMIND_PLANNER_DECISION_KEY`): then no `visualize-turn` execution is started and no route starts one.
 - **No backfill, no boot sweep** (C6). A turn whose hook call was missed is recovered by the on-demand action.
 - **UI copy (spec section 8), exact strings:** `Visuals`, `Visualize`, `Visualizing…`, `Re-visualize`, `Try again in a minute`, `Nothing to visualize`. The "Visualizing…" state ends at a `visuals` frame or after **60 s**. Uncited, interrupted and failed answers show neither strip nor action.
-- **Gaps go to Loom and loom-ui.** The turn-end hook is Loom's `turnSettledObserver` (merged, pinned in Task 1); DocMind adds no polling and no kernel change.
+- **Gaps go to Loom and loom-ui.** The turn-end hook is Loom's `turnSettledObserver` and the per-entry strip placement is loom-ui's `chatAccessories` (both merged, both pinned in Task 1); DocMind adds no polling, no kernel change and no reach into a widget's shadow DOM.
 - **Commit footer.** Every commit message ends with these two lines, exactly:
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
   `Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6`
@@ -46,17 +67,18 @@ Test commands: server `pnpm --filter @docmind/server exec vitest run <path relat
 
 ---
 
-### Task 1: Pin Loom to the merged SHA that exports `turnSettledObserver`
+### Task 1: Pin Loom and loom-ui to the merged SHAs (`turnSettledObserver`, `chatAccessories`)
 
 **Files:**
-- Modify: `.github/workflows/ci.yml` (`LOOM_REF` at line 29 and the comment above it)
-- Create: `S/chats/loomPin.test.ts`
+- Modify: `.github/workflows/ci.yml` (`LOOM_REF` at line 29 and the comment above it; `LOOM_UI_REF` at line 33 and its comment)
+- Create: `S/chats/loomPin.test.ts`, `WEB/ui/loomUiPin.test.ts`
 
 **Interfaces:**
 - Consumes: `turnSettledObserver(flow: { definition: { id: string } }, listener: TurnSettledListener): (event: EventEnvelope) => void | Promise<void>` and `TurnSettledEvent` from `@loom/conversation` (loom `packages/conversation/src/settled.ts`, merged by loom PR #776 as commit `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19`, which contains the current pin `db28b1b`).
-- Produces: `LOOM_REF` = `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19`.
+- Consumes: `createChatLitRegistry({ chatAccessories })`, `ChatEntryAccessories`, `ChatEntryRef` from `@loom-ui/renderer-lit/chat` (loom-ui `packages/renderer-lit/src/widgets/chatAccessory.ts` and `src/chat.ts`, merged by loom-ui PR #125 as commit `d036e842361226470d5f939aa5e6a01ba6803205`, which contains the current pin `6d4f6ca`).
+- Produces: `LOOM_REF` = `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19` and `LOOM_UI_REF` = `d036e842361226470d5f939aa5e6a01ba6803205`.
 
-How DocMind resolves Loom: `pnpm-workspace.yaml` `overrides` map every `@loom/*` package to `link:../loom/packages/...`, a sibling checkout. There is no version or lockfile entry to change. The pin is the `LOOM_REF` env var in `.github/workflows/ci.yml`, which checks `chhetrisushil/loom` out next to the repo at that ref and builds it. Locally the developer's `../loom` checkout must be at (or after) the same commit and built.
+How DocMind resolves Loom: `pnpm-workspace.yaml` `overrides` map every `@loom/*` package to `link:../loom/packages/...`, a sibling checkout. There is no version or lockfile entry to change. The pins are the `LOOM_REF` and `LOOM_UI_REF` env vars in `.github/workflows/ci.yml`, which check `chhetrisushil/loom` and `chhetrisushil/loom-ui` out next to the repo at those refs and build them. Locally the developer's `../loom` and `../loom-ui` checkouts must be at (or after) the same commits and built; Step 3 does that, and Step 4's guard tests fail if they are not.
 
 - [ ] **Step 1: Write the failing test** (`S/chats/loomPin.test.ts`)
 
@@ -76,31 +98,57 @@ describe("the pinned Loom exports turnSettledObserver", () => {
 });
 ```
 
-- [ ] **Step 2: Check it fails against the old checkout**
+`WEB/ui/loomUiPin.test.ts` (a guard that the loom-ui DocMind links to can draw host content under a chat entry, loom-ui PR #125; it fails on an older `../loom-ui` checkout):
 
-Run: `git -C ../loom checkout db28b1b4e76ae749b382f4a34c66ee158ffcb1a7 && (cd ../loom && pnpm build) && pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts`
-Expected: FAIL (`turnSettledObserver` is not exported). Skip this step if the sibling checkout is already newer.
+```ts
+import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
+import { describe, expect, it } from "vitest";
+
+describe("the pinned loom-ui draws host content under a chat entry", () => {
+  it("defines lu-chat with a chatAccessories property, and the registry takes the option", () => {
+    const accessories = { render: () => null };
+    expect(() => createChatLitRegistry({ chatAccessories: accessories })).not.toThrow();
+    const lu = customElements.get("lu-chat") as unknown as { elementProperties: Map<string, unknown> } | undefined;
+    expect(lu?.elementProperties.has("chatAccessories")).toBe(true);
+  });
+});
+```
+
+- [ ] **Step 2: Check they fail against the old checkouts**
+
+Run: `git -C ../loom checkout db28b1b4e76ae749b382f4a34c66ee158ffcb1a7 && (cd ../loom && pnpm build) && git -C ../loom-ui checkout 6d4f6cac8861e9448d2380351b36b33b19e8f8b6 && (cd ../loom-ui && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build) && pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts && pnpm --filter @docmind/web exec vitest run src/ui/loomUiPin.test.ts`
+Expected: FAIL (`turnSettledObserver` is not exported; `lu-chat` has no `chatAccessories`). Skip this step if the sibling checkouts are already newer.
 
 - [ ] **Step 3: Pin and rebuild**
-  - In `.github/workflows/ci.yml` replace the `LOOM_REF` value and its comment:
+  - In `.github/workflows/ci.yml` replace the `LOOM_REF` and `LOOM_UI_REF` values and their comments:
 
 ```yaml
   # 4af27ea: turnSettledObserver (@loom/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
   LOOM_REF: 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19
+  # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
+  # d036e84: chatAccessories (@loom-ui/renderer-lit/chat, loom-ui PR #125): host content drawn under a chat transcript entry. Contains 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
+  # Bump deliberately, like LOOM_REF.
+  LOOM_UI_REF: d036e842361226470d5f939aa5e6a01ba6803205
 ```
 
-  - Locally: `git -C ../loom checkout 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19 && (cd ../loom && pnpm install --frozen-lockfile && pnpm build)`.
+  - Locally (the workspace overrides link `../loom` and `../loom-ui`, so the checkouts are what DocMind builds against):
 
-- [ ] **Step 4: Run the guard test and the whole server typecheck**
+```bash
+git -C ../loom checkout 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19 && (cd ../loom && pnpm install --frozen-lockfile && pnpm build)
+git -C ../loom-ui checkout d036e842361226470d5f939aa5e6a01ba6803205 && (cd ../loom-ui && pnpm install --frozen-lockfile && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build)
+pnpm install
+```
 
-Run: `pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts && pnpm --filter @docmind/server typecheck`
-Expected: PASS. If the typecheck reports a Loom API difference elsewhere, the new Loom range (`db28b1b..4af27ea`) changed it: fix the call site and say so in the commit body.
+- [ ] **Step 4: Run the guard tests and the typechecks**
+
+Run: `pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts && pnpm --filter @docmind/web exec vitest run src/ui/loomUiPin.test.ts && pnpm --filter @docmind/server typecheck && pnpm --filter @docmind/web typecheck`
+Expected: PASS. If a typecheck reports a Loom or loom-ui API difference elsewhere, the new range (Loom `db28b1b..4af27ea`, loom-ui `6d4f6ca..d036e84`) changed it: fix the call site and say so in the commit body.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add .github/workflows/ci.yml apps/server/app/chats/loomPin.test.ts
-git commit -m "build(loom): pin LOOM_REF to the commit that exports turnSettledObserver
+git add .github/workflows/ci.yml apps/server/app/chats/loomPin.test.ts apps/web/src/ui/loomUiPin.test.ts
+git commit -m "build(loom): pin LOOM_REF to the commit that exports turnSettledObserver and LOOM_UI_REF to chatAccessories
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
@@ -121,7 +169,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
   - `type TurnRef = { tenantId: string; userId: string; chatId: string; ord: number }` (from `VT/ids.ts`, created here in Step 3 so the store can import it; Task 4 extends that file).
   - `interface TurnFactStore { replace(ref: TurnRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number>; list(ref: TurnRef): Promise<Fact[]> }`
   - `class PgTurnVisualFacts implements TurnFactStore { constructor(pool: Pool, fields: FieldCrypto) }`
-  - SQL function `public.docmind_chat_tenant(p_user uuid, p_chat uuid) RETURNS uuid`: the tenant of a live (not soft-deleted) chat of a user not being erased, or no row. Needed because the turn-settled event carries only `u_<userId>.c-<chatId>`, and a Loom principal needs the tenant. Same narrow SECURITY DEFINER pattern as `docmind_ready_documents` (0028).
+  - SQL function `public.docmind_chat_tenant(p_chat uuid) RETURNS uuid` (one argument, as spec section 3): the tenant of a live (not soft-deleted) chat whose owner is not being erased, or no row. Needed because the turn-settled event carries only `u_<userId>.c-<chatId>`, and a Loom principal needs the tenant. Same narrow SECURITY DEFINER pattern as `docmind_ready_documents` (0028). It takes no user: the later steps address the chat with the user from the event and every query is scoped by that user, so a mismatched user finds nothing.
 
 Plan decision: the FK is the composite `(tenant_id, user_id, chat_id) REFERENCES chat_sessions (tenant_id, user_id, id)` like `chat_turn_items` (0023), not a bare `chat_id` FK: a row of a chat that is not the writer's is then impossible.
 
@@ -225,12 +273,16 @@ describe.skipIf(!PG_URL)("PgTurnVisualFacts (needs DOCMIND_TEST_PG_URL)", () => 
 
   it("docmind_chat_tenant answers for a live chat only", async () => {
     const live = await chatOf(T1, U1);
-    const ask = async (userId: string, chatId: string) =>
-      (await fx.app.query("SELECT public.docmind_chat_tenant($1::uuid, $2::uuid) AS t", [userId, chatId])).rows[0].t as string | null;
-    expect(await ask(live.userId, live.chatId)).toBe(T1);
-    expect(await ask(U1B, live.chatId)).toBeNull();
+    const ask = async (chatId: string) =>
+      (await fx.app.query("SELECT public.docmind_chat_tenant($1::uuid) AS t", [chatId])).rows[0]?.t as string | null | undefined;
+    expect(await ask(live.chatId)).toBe(T1);
+    expect(await ask(randomUUID())).toBeFalsy(); // unknown chat
+    await fx.db.owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [live.userId]);
+    expect(await ask(live.chatId)).toBeFalsy(); // owner being erased
+    await fx.db.owner.query("UPDATE users SET erasing_at = NULL WHERE id = $1", [live.userId]);
+    expect(await ask(live.chatId)).toBe(T1);
     await fx.db.owner.query("UPDATE chat_sessions SET deleted_at = now() WHERE id = $1", [live.chatId]);
-    expect(await ask(live.userId, live.chatId)).toBeNull();
+    expect(await ask(live.chatId)).toBeFalsy(); // soft-deleted
   });
 });
 ```
@@ -253,7 +305,7 @@ CREATE TABLE turn_visual_facts (
   tenant_id uuid NOT NULL,
   user_id uuid NOT NULL,
   chat_id uuid NOT NULL,
-  ord integer NOT NULL CHECK (ord >= 1),
+  ord bigint NOT NULL CHECK (ord >= 1), -- RecordOrd: the range of ChatMessageDto.id (15 digits)
   ordinal int NOT NULL CHECK (ordinal BETWEEN 0 AND 15),
   fact_enc jsonb NOT NULL,
   chunk_ids uuid[] NOT NULL,
@@ -265,19 +317,19 @@ CREATE TABLE turn_visual_facts (
 ALTER TABLE turn_visual_facts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON turn_visual_facts USING (tenant_id = app_tenant_id());
 
--- The tenant of a user's live chat, for the turn-settled hook: the conversation id carries the user and the chat
--- but no tenant. Ids only, a narrow SECURITY DEFINER function like 0028; a soft-deleted chat or a user being erased
--- gives no row (the hook then does nothing).
-CREATE FUNCTION public.docmind_chat_tenant(p_user uuid, p_chat uuid)
+-- The tenant of a live chat, for the turn-settled hook: the conversation id carries the user and the chat but no
+-- tenant. Ids only, a narrow SECURITY DEFINER function like 0028; a soft-deleted chat or an owner being erased gives
+-- no row (the hook then does nothing).
+CREATE FUNCTION public.docmind_chat_tenant(p_chat uuid)
 RETURNS uuid
 LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT c.tenant_id
     FROM public.chat_sessions c
     JOIN public.users u ON u.id = c.user_id AND u.erasing_at IS NULL
-   WHERE c.id = p_chat AND c.user_id = p_user AND c.deleted_at IS NULL
+   WHERE c.id = p_chat AND c.deleted_at IS NULL
 $$;
-REVOKE ALL ON FUNCTION public.docmind_chat_tenant(uuid, uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.docmind_chat_tenant(uuid, uuid) TO docmind_app;
+REVOKE ALL ON FUNCTION public.docmind_chat_tenant(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.docmind_chat_tenant(uuid) TO docmind_app;
 ```
 
 `VT/ids.ts` (first slice; Task 4 adds the rest):
@@ -361,7 +413,7 @@ export class PgTurnVisualFacts implements TurnFactStore {
 }
 ```
 
-In `S/db/embeddings.pg.test.ts` add `"docmind_chat_tenant(uuid,uuid)",` to `APP_EXECUTABLE` in sorted position (before `docmind_delete_empty_tenant(uuid)`), and add `0029` to the comment's list of migrations that grant functions.
+In `S/db/embeddings.pg.test.ts` add `"docmind_chat_tenant(uuid)",` to `APP_EXECUTABLE` in sorted position (before `docmind_delete_empty_tenant(uuid)`), and add `0029` to the comment's list of migrations that grant functions.
 
 - [ ] **Step 4: Run the new test and the database suites**
 
@@ -392,9 +444,9 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 - Modify: `PE/payload.ts` (generic compile, `compileTurn`)
 - Modify: `PE/views-api.ts` (`turnExperience`, `turnPayload`, scope `"turn"`)
 - Modify: `PE/index.ts` (exports)
-- Modify: `CT/ui.ts` (`UiViewResponse.view`, `UiHydrateRequest` turn member)
+- Modify: `CT/chats.ts` (`RecordOrd`, the one schema of every new `ord`), `CT/ui.ts` (`UiViewResponse.view`, `UiHydrateRequest` turn member)
 - Modify: `S/ui/readers.ts` (a `turnFacts` reader stub that returns `null` until Task 10 wires it; keeps the server typechecking)
-- Test: `PE/visuals.test.ts`, `PE/views.test.ts`, `PE/hydrate.test.ts`, `CT/ui.test.ts`
+- Test: `PE/visuals.test.ts`, `PE/views.test.ts`, `PE/hydrate.test.ts`, `CT/ui.test.ts`, `CT/chats.test.ts`
 
 **Interfaces:**
 - Produces (all exported from `@docmind/experiences`):
@@ -408,10 +460,10 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
   - `Views.hydrateExperience(experience, requests, readers, principalId, scope?: "view" | "document" | "turn")`
   - `UiReaders.turnFacts(a: { chatId: string; ord: number }): Promise<VisualFactRaw[] | null>`
   - `TURN_READ` (viewer clearance `sensitive`, audience `viewer`, declared classes for both tools)
-  - Contract: `UiViewResponse.view: ViewName | "turn"`; `UiHydrateRequest` gains `{ turn: { chatId: Uuid, ord: int >= 1 }, requests }`.
+  - Contract: `RecordOrd` (`CT/chats.ts`: an integer from 1 to 999999999999999, the range of `ChatMessageDto.id`'s decimal string; ruling P10: every new `ord` in a contract, an id pattern or a column uses it); `UiViewResponse.view: ViewName | "turn"`; `UiHydrateRequest` gains `{ turn: { chatId: Uuid, ord: RecordOrd }, requests }`.
 - Consumes: `provider`, `PINS`, `KIND` (`PE/providers.ts`), `build`, `panel` (`PE/compose.ts`).
 
-Plan decision: planner handles are `fact-<i>` by index in the offered list, not by ordinal, because ordinals repeat across documents; the pin carries the true identity, and `turnWithVisuals` reads it back (the planner mints the provider from the pin, R26).
+Plan decision: planner handles are `fact-<i>` by index in the offered list, not by ordinal, because ordinals repeat across documents; the pin carries the true identity, and `turnWithVisuals` reads it back (the planner mints the provider from the pin; R26: the pin names the fact, so the identity can be read back).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -584,6 +636,7 @@ it("accepts a turn as a hydrate source and as a view name", () => {
   const req = { experienceId: "e", versionHash: "h", handle: "fact-0", params: {} };
   expect(UiHydrateRequest.safeParse({ turn: { chatId: uuid, ord: 6 }, requests: [req] }).success).toBe(true);
   expect(UiHydrateRequest.safeParse({ turn: { chatId: uuid, ord: 0 }, requests: [req] }).success).toBe(false);
+  expect(UiHydrateRequest.safeParse({ turn: { chatId: uuid, ord: 1_000_000_000_000_000 }, requests: [req] }).success).toBe(false);
   expect(UiHydrateRequest.safeParse({ turn: { chatId: "nope", ord: 6 }, requests: [req] }).success).toBe(false);
   expect(UiViewResponse.shape.view.safeParse("turn").success).toBe(true);
   expect(UiViewResponse.shape.view.safeParse("elsewhere").success).toBe(false);
@@ -592,7 +645,7 @@ it("accepts a turn as a hydrate source and as a view name", () => {
 
 - [ ] **Step 2: Run them and check they fail**
 
-Run: `pnpm --filter @docmind/experiences exec vitest run src/visuals.test.ts src/views.test.ts src/hydrate.test.ts && pnpm --filter @docmind/contracts exec vitest run src/ui.test.ts`
+Run: `pnpm --filter @docmind/experiences exec vitest run src/visuals.test.ts src/views.test.ts src/hydrate.test.ts && pnpm --filter @docmind/contracts exec vitest run src/ui.test.ts src/chats.test.ts`
 Expected: FAIL (missing exports, unknown contract member).
 
 - [ ] **Step 3: Implement**
@@ -628,7 +681,7 @@ function capability(f: VisualFactRaw, handle: string, tool: FactTool, pin: strin
 
 export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[] {
   // One pin per fact: the planner mints its provider handle from the pin, so two facts never share a handle and the
-  // ordinal can be read back from the committed provider (R26). The invoker still checks against `PINS[tool]`.
+  // ordinal can be read back from the committed provider (R26: the pin names the fact). The invoker still checks against `PINS[tool]`.
   return facts.map((f) => capability(f, `fact-${f.ordinal}`, TOOL, `${PINS[TOOL]}#fact-${f.ordinal}`));
 }
 
@@ -670,7 +723,7 @@ export function factRefOfPin(toolName: string, pin: string): FactRef | null {
   return null;
 }
 
-/** How a chat turn's visuals are compiled, inventoried and served: for its authenticated owner (R27), reading both tools. */
+/** How a chat turn's visuals are compiled, inventoried and served: for its authenticated owner (R27: hydration under the owner's `sensitive` clearance), reading both tools. */
 export const TURN_READ = {
   viewer: { clearance: "sensitive" },
   audience: "viewer",
@@ -697,7 +750,7 @@ Delete the old inline `capabilitiesOf` and the `description` ternary it carried.
 // UiReaders
 turnFacts(a: { chatId: string; ord: number }): Promise<VisualFactRaw[] | null>;
 // ARGS
-"turn.facts": z.object({ chatId: Id, ord: z.number().int().min(1).max(999_999_999_999_999) }).strict(),
+"turn.facts": z.object({ chatId: Id, ord: z.number().int().min(1).max(999_999_999_999_999) /* = RecordOrd (contracts) */ }).strict(),
 // plan(): next to the "visual.facts" case
 case "turn.facts": {
   const a = ARGS["turn.facts"].safeParse(args);
@@ -856,15 +909,33 @@ const owned = scope === "document" ? OWNER_READ : scope === "turn" ? TURN_READ :
 
 `PE/index.ts`: export `factCapabilities`, `factRefOfPin`, `turnWithVisuals` (already via `export * from "./views"`), `TURN_READ`, and the types `FactOrigin`, `FactRef`, `OfferedFact`.
 
-`CT/ui.ts`:
+`CT/chats.ts` (above `ChatMessageDto`):
+
+```ts
+/** A chat record's ordinal as a number: the range of `ChatMessageDto.id`'s decimal string (`/^(0|[1-9][0-9]{0,14})$/`), from 1. */
+export const RecordOrd = z.number().int().min(1).max(999_999_999_999_999);
+export type RecordOrd = z.infer<typeof RecordOrd>;
+```
+
+`CT/ui.ts` (`import { RecordOrd } from "./chats";`):
 
 ```ts
 // UiViewResponse: view: z.union([ViewName, z.literal("turn")]),
 export const UiHydrateRequest = z.union([
   z.object({ view: ViewName, requests: HandleRequests }),
   z.object({ document: Uuid, requests: HandleRequests }),
-  z.object({ turn: z.object({ chatId: Uuid, ord: z.number().int().min(1) }), requests: HandleRequests }),
+  z.object({ turn: z.object({ chatId: Uuid, ord: RecordOrd }), requests: HandleRequests }),
 ]);
+```
+
+`CT/chats.test.ts` (append):
+
+```ts
+it("RecordOrd is the range of a message id: 1 to 15 digits, an integer", () => {
+  expect(RecordOrd.safeParse(1).success).toBe(true);
+  expect(RecordOrd.safeParse(999_999_999_999_999).success).toBe(true);
+  for (const bad of [0, -1, 1.5, 1_000_000_000_000_000]) expect(RecordOrd.safeParse(bad).success, String(bad)).toBe(false);
+});
 ```
 
 `S/ui/readers.ts`: add `async turnFacts() { return null; },` to the returned readers object (Task 10 replaces it).
@@ -931,7 +1002,8 @@ describe("turn ids", () => {
     expect(turnExperienceId({ userId: user, chatId: chat, ord: 6 })).toBe(`turnvisuals-${user}-${chat}-6`);
   });
   it("refuses a bad ord or re-run number", () => {
-    for (const bad of [0, -1, 1.5, 1_000_000_000]) expect(() => turnExecutionId(user, chat, bad)).toThrow(RangeError);
+    for (const bad of [0, -1, 1.5, 1_000_000_000_000_000]) expect(() => turnExecutionId(user, chat, bad)).toThrow(RangeError);
+    expect(() => turnExecutionId(user, chat, 999_999_999_999_999)).not.toThrow(); // RecordOrd's top: the range of ChatMessageDto.id
     for (const bad of [0, 1.5, 1_000]) expect(() => turnExecutionId(user, chat, 6, bad)).toThrow(RangeError);
   });
   it("parses what it builds and nothing else, and is never a document-visualize or ingest id", () => {
@@ -1023,18 +1095,20 @@ Expected: FAIL (missing exports; the lineage subject is `""`; `StepGuard` is not
 
 - [ ] **Step 3: Implement**
 
-`VT/ids.ts` (append to the `TurnRef` from Task 2):
+`VT/ids.ts`: put the two imports below at the top of the file, above the `TurnRef` Task 2 created (organizeImports), and append the rest after it:
 
 ```ts
+// --- at the top of the file ---
 import { UUID_PATTERN } from "../../chats/ids";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 
+// --- appended after TurnRef ---
 export const TURN_FLOW_ID = "visualize-turn";
-const MAX_ORD = 999_999_999; // nine digits, as the execution-id pattern below allows
+const MAX_ORD = 999_999_999_999_999; // fifteen digits: `RecordOrd`, the range of ChatMessageDto.id
 const MAX_RERUN = 999;
 
 const checkOrd = (ord: number) => {
-  if (!Number.isSafeInteger(ord) || ord < 1 || ord > MAX_ORD) throw new RangeError("ord must be an integer from 1 to 999999999");
+  if (!Number.isSafeInteger(ord) || ord < 1 || ord > MAX_ORD) throw new RangeError("ord must be an integer from 1 to 999999999999999");
 };
 
 /**
@@ -1058,7 +1132,7 @@ export const turnExperienceId = (r: { userId: string; chatId: string; ord: numbe
 };
 
 const TURN_EXECUTION = new RegExp(
-  `^u_(${UUID_PATTERN}):visualize-turn-(${UUID_PATTERN})-([1-9][0-9]{0,8})(?:-r([1-9][0-9]{0,2}))?$`,
+  `^u_(${UUID_PATTERN}):visualize-turn-(${UUID_PATTERN})-([1-9][0-9]{0,14})(?:-r([1-9][0-9]{0,2}))?$`,
 );
 export function parseTurnExecution(id: string): { userId: string; chatId: string; ord: number; rerun?: number } | null {
   const m = TURN_EXECUTION.exec(id);
@@ -1073,7 +1147,7 @@ export const isTurnVisualizeExecution = (id: string): boolean => TURN_EXECUTION.
 ```ts
 /** The visuals lineage lines: a document's `visuals-<userId>-<documentId>` and a chat turn's `turnvisuals-<userId>-<chatId>-<ord>` (ids only). */
 const VISUALS_LINEAGE = new RegExp(
-  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}(?:visuals-(${UUID})-${UUID}|turnvisuals-(${UUID})-${UUID}-[1-9][0-9]{0,8})$`,
+  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}(?:visuals-(${UUID})-${UUID}|turnvisuals-(${UUID})-${UUID}-[1-9][0-9]{0,14})$`,
 );
 // in subjectOfExecution:
 if (e.executionId.startsWith(LINEAGE_STREAM_PREFIX)) {
@@ -1254,7 +1328,7 @@ const P2 = randomUUID();
 const passage = (passageId: string, documentId = DOC): StoredPassage => ({
   passageId, documentId, locator: { kind: "section", index: 1 }, headingPath: [], snippet: "x",
 });
-const reply = (text: string, over: Partial<HistoryEntry> = {}): HistoryEntry =>
+const reply = (text: string): HistoryEntry =>
   ({ ord: 4, turn: 2, role: "assistant", status: "complete", text, cursor: "1.9" }) as HistoryEntry;
 const user1 = { ord: 3, turn: 2, role: "user", status: "complete", text: "q", cursor: "1.8" } as HistoryEntry;
 
@@ -1497,10 +1571,11 @@ export async function readTurn(deps: TurnReadDeps, ref: TurnRef, signal?: AbortS
 `VT/model.ts`:
 
 ```ts
+import { RecordOrd } from "@docmind/contracts";
 import type { RetryPolicy } from "@loom/core";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
-import { StoredFact } from "../visualize-document/facts";
+import { MAX_FACTS, StoredFact } from "../visualize-document/facts";
 
 /** 3 attempts, 2 s backoff, ×2: the numbers of `CHAT_TITLE_RETRY`. Declared metadata (part of the flow's identity); `stepEffect` applies it. */
 export const TURN_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 2_000, backoffMultiplier: 2 };
@@ -1511,7 +1586,7 @@ export const TurnInput = z
     tenantId: z.string().uuid(),
     userId: z.string().uuid(),
     chatId: z.string().uuid(),
-    ord: z.number().int().min(1).max(999_999_999),
+    ord: RecordOrd,
   })
   .strict();
 export type TurnInput = z.infer<typeof TurnInput>;
@@ -1595,7 +1670,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 `turn-extract` reuses sub-project 1's extraction prompt, windowing and grounding. The model call moves out of `extractEffect` into one exported function both steps call.
 
 **Files:**
-- Modify: `VD/extract.ts` (export `Chunk`, `windows`, new `askForFacts`; `extractEffect` calls it)
+- Modify: `VD/extract.ts` (export `Chunk`, `windows`, `EXTRACT_STEP_TIMEOUT_MS`; new `askForFacts` and `readChunks`; `extractEffect` calls both)
 - Modify: `VT/model.ts` (`TurnFactsOutput`, `TurnFactsInput`)
 - Modify: `VT/steps.ts` (`turnExtractEffect`, `turnFactsEffect`)
 - Test: `VD/extract.test.ts` (unchanged, must still pass), `VT/steps.extract.test.ts`, `VT/steps.facts.test.ts`
@@ -1603,13 +1678,14 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 **Interfaces:**
 - Produces:
   - `askForFacts(llm: LlmProvider, chunks: Chunk[], signal?: AbortSignal): Promise<DraftFact[]>` (may throw `LlmRefusalError`/`LlmOutputError`; no persistence)
+  - `readChunks(read: (ids: string[]) => Promise<Map<string, string>>, ids: string[], cap: number, batch: number): Promise<Chunk[]>`: the capped, batched read `extractEffect`'s private `readAll` did, over any reader (a vanished chunk is skipped; none is added once `cap` characters are read, the last may cross it)
   - `turnExtractEffect(deps: TurnExtractDeps): Effect<TurnRef, StepResult>`; `TurnExtractDeps extends StepSeams { guard: StepGuard<TurnRef>; turn: { read(ref, signal?): Promise<TurnRead | null> }; passages: { read(scope: { tenantId: string; ownerId: string }, chunkIds: readonly string[]): Promise<Map<string, { text: string }>> }; facts: TurnFactStore; summaryMaxChars: number; llm?: LlmProvider }`
   - `turnFactsEffect(deps: TurnFactsDeps): Effect<TurnFactsInput, TurnFactsOutput>`; `TurnFactsDeps extends StepSeams { guard: StepGuard<TurnRef>; stored: VisualFactStore; turnFacts: TurnFactStore }`
   - `TurnFactsInput = TurnRef & { refs: { documentId: string; ordinal: number }[] }`
   - `TurnFactsOutput = { outcome, code?, facts: { origin: { kind: "doc"; documentId: string } | { kind: "turn" }; fact: StoredFact }[] (max 16) }`. Sealed in the log by the existing `STEP_COMPLETED` path `output.facts` (`S/sensitive.ts`), the same path `visualize-load` uses.
 - Consumes: `admit`, `MAX_FACTS` (`VD/facts.ts`), `EXTRACT_SYSTEM`, `EXTRACT_INSTRUCTION` (`VD/prompts.ts`), `PassageReader.read` (`CH/retrieval/passages.ts`, owner-scoped, a deleted document's chunks are absent).
 
-Plan decision: `turn-extract` reads **all** chunks retrieved in the turn (not only cited ones), concatenated in retrieval order, stopping once `summaryMaxChars` characters are read (the chunk that crosses the cap is kept whole, as `readAll` does for documents). The spec says "the chunks retrieved in this turn".
+Plan decision: `turn-extract` reads **all** chunks retrieved in the turn (not only cited ones), concatenated in retrieval order, stopping once `summaryMaxChars` characters are read (the chunk that crosses the cap is kept whole, as the document step does: both go through `readChunks`). The spec says "the chunks retrieved in this turn".
 
 Plan decision: `turn-facts` is a step of its own (the spec lists four). The planner decision runs in the flow runner and needs fact content; `turn-load` may output references only, and a runner must not read the database itself (replay). A sealed read step is how `visualize-load` solved it.
 
@@ -1748,11 +1824,35 @@ Expected: FAIL (`turnExtractEffect` / `turnFactsEffect` missing).
 
 - [ ] **Step 3: Implement**
 
-`VD/extract.ts`: export `Chunk` and `windows`, and move the loop into `askForFacts`; `extractEffect` keeps its `try/catch` for a refusal around the call.
+`VD/extract.ts`: export `Chunk`, `windows` and `EXTRACT_STEP_TIMEOUT_MS`; replace the private `readAll` with the generic `readChunks`; move the loop into `askForFacts`; `extractEffect` keeps its `try/catch` for a refusal around the call.
 
 ```ts
 export type Chunk = { id: string; text: string };
+export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
 export function windows(/* unchanged */) {}
+
+/** Chunks in `ids` order, read `batch` ids at a time through `read`; a chunk that vanished (document being deleted) is skipped; none is added once `cap` characters are read (the last one may cross it). */
+export async function readChunks(
+  read: (ids: string[]) => Promise<Map<string, string>>,
+  ids: string[],
+  cap: number,
+  batch: number,
+): Promise<Chunk[]> {
+  const out: Chunk[] = [];
+  let used = 0;
+  for (let i = 0; i < ids.length && used < cap; i += batch) {
+    const slice = ids.slice(i, i + batch);
+    const byId = await read(slice);
+    for (const id of slice) {
+      const text = byId.get(id);
+      if (text === undefined) continue;
+      if (used >= cap) break;
+      out.push({ id, text });
+      used += text.length;
+    }
+  }
+  return out;
+}
 
 /** The facts the `visuals` model finds in `chunks`: windowed, fenced as untrusted data. Not grounded, not stored. */
 export async function askForFacts(llm: LlmProvider, chunks: Chunk[], signal?: AbortSignal): Promise<DraftFact[]> {
@@ -1772,7 +1872,7 @@ export async function askForFacts(llm: LlmProvider, chunks: Chunk[], signal?: Ab
 }
 ```
 
-In `extractEffect`, replace the inline `for` loop with `drafts.push(...(await askForFacts(llm, chunks, signal)))` inside the existing `try`.
+In `extractEffect`, replace the inline `for` loop with `drafts.push(...(await askForFacts(llm, chunks, signal)))` inside the existing `try`, and its `readAll(deps.chunks, ref, ids, deps.summaryMaxChars)` call with `readChunks(async (batch) => new Map((await deps.chunks.read(ref, batch)).map((c) => [c.id, c.text])), ids, deps.summaryMaxChars, READ_BATCH)` (delete `readAll`; `READ_BATCH` and the old `EXTRACT_STEP_TIMEOUT_MS` const stay/move as exported above).
 
 `VT/model.ts` (append):
 
@@ -1806,22 +1906,34 @@ export const TurnFactsOutput = z
 export type TurnFactsOutput = z.infer<typeof TurnFactsOutput>;
 ```
 
-(import `MAX_FACTS` from `../visualize-document/facts`.)
+(`MAX_FACTS` is already imported by Task 5's `model.ts` header.)
 
-`VT/steps.ts` (append):
+`VT/steps.ts`: Task 5 wrote its import block; REPLACE that block with this merged one (one import per module, no duplicates), then append the code below it:
 
 ```ts
 import { LlmRefusalError } from "@docmind/llm-anthropic";
+import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
-import { StepResult } from "../ingest-document/stepEffect";
-import { stepEffect } from "../ingest-document/stepEffect";
-import { type Chunk, askForFacts } from "../visualize-document/extract";
-import { admit } from "../visualize-document/facts";
+import { isDocumentGone } from "../ingest-document/errors";
+import {
+  LLM_BACKOFF_CAP_MS,
+  type StepGuard,
+  type StepResult,
+  type StepSeams,
+  ingestStepOptions,
+  stepEffect,
+  stepEffectOf,
+} from "../ingest-document/stepEffect";
+import { EXTRACT_STEP_TIMEOUT_MS, askForFacts, readChunks } from "../visualize-document/extract";
+import { type Fact, admit } from "../visualize-document/facts";
+import type { VisualFactStore } from "../visualize-document/pgFacts";
+import { coverFacts } from "./coverage";
+import type { TurnRef } from "./ids";
+import { TURN_RETRY, type TurnFactsInput, TurnFactsOutput, TurnLoadOutput } from "./model";
 import type { TurnFactStore } from "./pgTurnFacts";
-import { TurnFactsOutput, type TurnFactsInput } from "./model";
+import type { TurnRead } from "./readTurn";
 
-const READ_BATCH = 100; // PassageReader's MAX_READ_IDS
-const EXTRACT_STEP_TIMEOUT_MS = 600_000;
+const PASSAGE_READ_BATCH = 100; // PassageReader's MAX_READ_IDS
 
 export interface TurnExtractDeps extends StepSeams {
   guard: StepGuard<TurnRef>;
@@ -1834,27 +1946,21 @@ export interface TurnExtractDeps extends StepSeams {
   llm?: LlmProvider;
 }
 
-/** The retrieved chunks' text in retrieval order; a chunk that vanished (its document was deleted) is skipped. */
-async function readRetrieved(deps: TurnExtractDeps, ref: TurnRef, ids: string[]): Promise<Chunk[]> {
-  const out: Chunk[] = [];
-  let used = 0;
-  for (let i = 0; i < ids.length && used < deps.summaryMaxChars; i += READ_BATCH) {
-    const batch = ids.slice(i, i + READ_BATCH);
-    const byId = await deps.passages.read({ tenantId: ref.tenantId, ownerId: ref.userId }, batch);
-    for (const id of batch) {
-      const p = byId.get(id);
-      if (!p) continue;
-      if (used >= deps.summaryMaxChars) break;
-      out.push({ id, text: p.text });
-      used += p.text.length;
-    }
-  }
-  return out;
-}
+/** The retrieved chunks' text in retrieval order (a chunk whose document was deleted is absent from the read and skipped), through the same capped reader the document step uses. */
+const readRetrieved = (deps: TurnExtractDeps, ref: TurnRef, ids: string[]) =>
+  readChunks(
+    async (batch) => {
+      const byId = await deps.passages.read({ tenantId: ref.tenantId, ownerId: ref.userId }, batch);
+      return new Map([...byId].map(([id, p]) => [id, p.text]));
+    },
+    ids,
+    deps.summaryMaxChars,
+    PASSAGE_READ_BATCH,
+  );
 
 /**
  * Step 2 (C1 fallback), run only when `turn-load` kept nothing: the model reads the turn's retrieved chunks with
- * sub-project 1's prompt, the grounding check keeps the facts whose numbers appear in the chunks they cite (R6 to R12),
+ * sub-project 1's prompt, the grounding check keeps the facts whose numbers appear in the chunks they cite (R6 to R12: sub-project 1's grounding rules),
  * at most 16, sealed in `turn_visual_facts`. A refusal or no grounded fact is done with none.
  */
 export function turnExtractEffect(deps: TurnExtractDeps): Effect<TurnRef, StepResult> {
@@ -1929,7 +2035,7 @@ export function turnFactsEffect(deps: TurnFactsDeps): Effect<TurnFactsInput, Tur
 }
 ```
 
-Imports to add at the top of `steps.ts`: `LLM_BACKOFF_CAP_MS` from `../ingest-document/stepEffect`. The `guard` of `turn-facts` receives the full `TurnFactsInput` (a superset of `TurnRef`), which `PgTurnGuard` accepts.
+The `guard` of `turn-facts` receives the full `TurnFactsInput` (a superset of `TurnRef`), which `PgTurnGuard` accepts.
 
 - [ ] **Step 4: Run the tests (new and the existing extract suite) and the typecheck**
 
@@ -1952,6 +2058,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 
 **Files:**
 - Modify: `VD/lineage.ts` (`commitPlanTo`; `commitPlan` delegates)
+- Modify: `VD/plan.ts` (`composeVisuals`, the one `planner.compose` call; `planVisuals` uses it), `VD/commit.ts` (`committing`, the lineage-error mapping `commitEffect` uses), `VD/testing.ts` (`scriptedFigurePlan`; `aPlan` uses it)
 - Create: `VT/plan.ts`
 - Create: `VT/commit.ts`
 - Create: `VT/testing.ts`
@@ -1965,14 +2072,15 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
   - `commitPlanTo(lineage: Lineage, target: { experienceId: string; intent: Intent; sourceKind: string }, plan: CommitPlan, now: () => string): Promise<{ head: string }>` (the body of `commitPlan`, generalised; `commitPlan(lineage, ref, plan, now)` calls it with the document target: output unchanged)
   - `TURN_INTENT: Intent` = `{ objective: "Illustrate this answer for its reader. Choose nothing if no visual adds understanding.", source: "application", sensitivity: "sensitive" }`
   - `planTurn(planner: Planner, offered: readonly OfferedFact[], ctx: DecideContext): Promise<PlanResult>`
-  - `TurnCommitInput = TurnRef & { outcome: "visualized" | "nothing"; announce: boolean; ops: Operation[]; summary?: string; summaryClass?: PlanResult["summaryClass"]; report?: PlanReport }`
+  - `composeVisuals(planner: Planner, intent: Intent, capabilities: CapabilityRef[], ctx: DecideContext): Promise<PlanResult>` (`VD/plan.ts`, the body `planVisuals` had); `committing<T>(commit: () => Promise<T>): Promise<T>` (`VD/commit.ts`: maps `LineErasedError` to `DocumentGoneError` and `LineageRefusedError`/`LineUnreadableError` to `VisualsLineageError`); `scriptedFigurePlan(nodeId, label, summary, run)` (`VD/testing.ts`)
+  - `TurnCommitInput = TurnRef & { outcome: "visualized" | "nothing"; ops: Operation[]; summary?: string; summaryClass?: PlanResult["summaryClass"]; report?: PlanReport }` (`report` is present whenever the outcome is `visualized`)
   - `turnCommitEffect(deps: { guard: StepGuard<TurnRef>; lineage: Lineage; now: () => string; bus: Pick<ChatBus, "publish"> } & StepSeams): Effect<TurnCommitInput, StepResult>`
   - `LiveChatEvent` gains `{ kind: "visuals"; ord: number; outcome: "visualized" | "nothing" }`
-  - `ChatStreamEvent` gains `{ kind: "visuals", ord: Count, outcome: "visualized" | "nothing" (default "visualized") }`; the frame carries no content.
+  - `ChatStreamEvent` gains `{ kind: "visuals", ord: RecordOrd, outcome: "visualized" | "nothing" (default "visualized") }`; the frame carries no content.
   - Test helper `aTurnPlan(nodeId: string, label: string, summary?: string): Promise<PlanResult>` in `VT/testing.ts`: a real `PlanResult` from the reference planner on a scripted model, one `KeyFigure` bound to an extracted turn fact.
 - Consumes: `factCapabilities` (Task 3), `VISUALS_CATALOG`, `scriptedPlannerModel`, `recording` (`VD/testing.ts`), `plannerProvenance`, `HeadMovedError`, `LineageRefusedError` (`VD/lineage.ts`), `VisualsLineageError`, `DocumentGoneError` (`ID/errors.ts`).
 
-Plan decision: the `turn-commit` step also covers the "nothing" outcome. For an on-demand run (`announce: true`) it writes nothing to the lineage and publishes `visuals {ord, outcome: "nothing"}`, so the web can say "Nothing to visualize" without learning anything from the execution; an automatic run that ends "nothing" is silent (the message just shows the action). Reason: the runner cannot publish (replay), and the client needs the outcome of the run it asked for.
+Plan decision (spec section 5, ruling P9): the `turn-commit` step also covers the "nothing" outcome. For every run that ends `nothing`, automatic or on demand, it writes nothing to the lineage and publishes `visuals {ord, outcome: "nothing"}`, so an on-demand click resolves and the web can say "Nothing to visualize" without learning anything from the execution. Reason: the runner cannot publish (replay), and the client needs the outcome of the run it asked for.
 
 Plan decision: the frame carries `outcome` (a fixed word, not content) beside `ord`; the spec's `visuals {ord}` has no way to say "nothing".
 
@@ -2045,11 +2153,14 @@ describe("planTurn", () => {
       ctx,
     );
     expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
-    const pins = Object.values(plan.ops.flatMap((o) => (o.type === "remapProvider" || o.type === "addProvider" ? [o] : [])).map((o) => (o as { spec: { executionGraph: { toolSchemaHash: string }[] } }).spec.executionGraph[0]?.toolSchemaHash));
-    expect(pins.sort()).toEqual([`docmind:visual.facts@1#${A}/fact-0`, `docmind:visual.facts@1#${B}/fact-0`].sort());
-    // replay: the second compose makes no model call
+    // `remapProvider` is the planner's provider operation (`Operation` of @loom-ui/core has no other provider-adding member)
+    const pins = plan.ops.flatMap((o) => (o.type === "remapProvider" ? [o.spec.executionGraph[0]?.toolSchemaHash] : [])).sort();
+    expect(pins).toEqual([`docmind:visual.facts@1#${A}/fact-0`, `docmind:visual.facts@1#${B}/fact-0`].sort());
+    // replay: composing again with the same decision context is served from it, with no further model call
+    const before = model.calls;
     await planTurn(new ReferencePlanner({ model, modelId: "test" }), [{ fact: fig(0, "Revenue"), origin: { kind: "doc", documentId: A } }, { fact: fig(0, "Margin"), origin: { kind: "doc", documentId: B } }], ctx);
-    expect(model.calls).toBe(1);
+    expect(model.calls).toBe(before);
+    expect(before).toBe(1);
   });
   it("states the fixed intent and carries no answer text", () => {
     expect(TURN_INTENT.objective).toBe("Illustrate this answer for its reader. Choose nothing if no visual adds understanding.");
@@ -2058,7 +2169,7 @@ describe("planTurn", () => {
 });
 ```
 
-If the planner's op names for providers differ from `remapProvider`/`addProvider`, take the op type names from `@loom-ui/core`'s `Operation` union; the point of the assertion is that every provider step carries the pin of its capability.
+The assertion is that every provider the plan adds carries the pin of its capability: `remapProvider` (`loom-ui/packages/core/src/operations.ts`) is the planner's op for it (`materialize.ts` emits it); a type with no overlap with `Operation["type"]` would fail `typecheck:tests`.
 
 `VT/commit.test.ts` (mirror `VD/commit.test.ts`):
 
@@ -2077,9 +2188,9 @@ const ref = () => ({ tenantId: randomUUID(), userId: randomUUID(), chatId: rando
 const lineage = () => new Lineage({ events: new InMemoryLineageStore(), content: new InMemoryContentStore() });
 const make = (l: Lineage, bus: Pick<ChatBus, "publish">) =>
   turnCommitEffect({ guard: { begin: async () => {} }, lineage: l, bus, now: () => "2026-11-08T10:00:00.000Z" });
-const visualized = async (r: ReturnType<typeof ref>, announce = false): Promise<TurnCommitInput> => {
+const visualized = async (r: ReturnType<typeof ref>): Promise<TurnCommitInput> => {
   const plan = await aTurnPlan("headline", "Zebra-Secret-Label", "Zebra-Secret-Summary");
-  return { ...r, outcome: "visualized", announce, ops: [...plan.ops], report: plan.report, ...(plan.summary && { summary: plan.summary }) };
+  return { ...r, outcome: "visualized", ops: [...plan.ops], report: plan.report, ...(plan.summary && { summary: plan.summary }) };
 };
 
 describe("turn-commit", () => {
@@ -2090,7 +2201,7 @@ describe("turn-commit", () => {
     const input = await visualized(r);
     const out = await make(l, { publish: (c, e) => void seen.push([c, e]) }).execute(input, undefined as never);
     expect(out).toEqual({ outcome: "done", count: input.ops.length });
-    expect((await l.head(turnExperienceId(r))).ok).toBe(true);
+    expect(await l.head(turnExperienceId(r))).toMatchObject({ ok: true, value: expect.any(String) });
     expect(seen).toEqual([[r.chatId, { kind: "visuals", ord: 6, outcome: "visualized" }]]);
   });
   it("is idempotent: a second commit of the same plan writes nothing new and still announces", async () => {
@@ -2105,17 +2216,14 @@ describe("turn-commit", () => {
     expect(await l.head(turnExperienceId(r))).toEqual(head1);
     expect(publish).toHaveBeenCalledTimes(2);
   });
-  it("writes nothing for 'nothing', and announces it only for an on-demand run", async () => {
+  it("writes nothing to the lineage for 'nothing', and announces it (every run that ends nothing publishes)", async () => {
     const l = lineage();
     const r = ref();
     const publish = vi.fn();
-    const effect = make(l, { publish });
-    await effect.execute({ ...r, outcome: "nothing", announce: false, ops: [] }, undefined as never);
-    expect(publish).not.toHaveBeenCalled();
-    await effect.execute({ ...r, outcome: "nothing", announce: true, ops: [] }, undefined as never);
+    await make(l, { publish }).execute({ ...r, outcome: "nothing", ops: [] }, undefined as never);
+    expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith(r.chatId, { kind: "visuals", ord: 6, outcome: "nothing" });
-    const head = await l.head(turnExperienceId(r));
-    expect(head.ok && head.value).toBeFalsy();
+    expect(await l.head(turnExperienceId(r))).toEqual({ ok: true, value: null }); // a real read of an absent line, not a failed read
   });
   it("never fails the step when the bus does", async () => {
     const r = ref();
@@ -2150,7 +2258,7 @@ it("delivers a visuals event to the chat's subscribers only", () => {
 ```ts
 it("a visuals frame without an outcome means visualized, and refuses ord 0 or an unknown outcome", () => {
   expect(ChatStreamEvent.parse({ kind: "visuals", ord: 6 })).toEqual({ kind: "visuals", ord: 6, outcome: "visualized" });
-  expect(ChatStreamEvent.safeParse({ kind: "visuals", ord: -1 }).success).toBe(false);
+  expect(ChatStreamEvent.safeParse({ kind: "visuals", ord: 0 }).success).toBe(false);
   expect(ChatStreamEvent.safeParse({ kind: "visuals", ord: 6, outcome: "other" }).success).toBe(false);
 });
 ```
@@ -2160,20 +2268,13 @@ In `CH/streamLive.pg.test.ts` add one case in the style of its existing `tool` f
 `VT/testing.ts`:
 
 ```ts
-import { randomUUID } from "node:crypto";
-import { ReferencePlanner } from "@loom-ui/planner";
 import type { PlanResult } from "@loom-ui/planner";
-import type { Fact } from "../visualize-document/facts";
-import { recording, scriptedPlannerModel } from "../visualize-document/testing";
+import { scriptedFigurePlan } from "../visualize-document/testing";
 import { planTurn } from "./plan";
 
 /** A real `PlanResult` (one KeyFigure `nodeId`, labelled `label`, binding an extracted turn fact), made by the reference planner on a scripted model. */
-export async function aTurnPlan(nodeId: string, label: string, summary = "A headline figure"): Promise<PlanResult> {
-  const fact: Fact = { kind: "figure", label, value: 4242, unit: "USD", chunkIds: [randomUUID()], ordinal: 0 };
-  const node = { id: nodeId, type: "KeyFigure", label, span: 4, props: {}, binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" } };
-  const model = scriptedPlannerModel([JSON.stringify({ summary, nodes: [node] })]);
-  return planTurn(new ReferencePlanner({ model, modelId: "test" }), [{ fact, origin: { kind: "turn" } }], recording());
-}
+export const aTurnPlan = (nodeId: string, label: string, summary = "A headline figure"): Promise<PlanResult> =>
+  scriptedFigurePlan(nodeId, label, summary, (planner, fact, ctx) => planTurn(planner, [{ fact, origin: { kind: "turn" } }], ctx));
 ```
 
 - [ ] **Step 2: Run them and check they fail**
@@ -2211,12 +2312,62 @@ export const commitPlan = (lineage: Lineage, ref: VisualizeRef, plan: CommitPlan
 
 (import `type Intent` from `@loom-ui/core`.)
 
+`VD/plan.ts`: the body of `planVisuals` becomes one exported function both flows call (the document flow keeps its output unchanged):
+
+```ts
+import type { CapabilityRef } from "@loom-ui/planner"; // add to the file's existing @loom-ui/planner import
+
+/** One `ctx.decide` (the planner's own): the model's plan for `intent` over `capabilities`, recorded and replayable. */
+export const composeVisuals = (planner: Planner, intent: Intent, capabilities: CapabilityRef[], ctx: DecideContext): Promise<PlanResult> =>
+  planner.compose({ intent, catalog: VISUALS_CATALOG, capabilities, containers: [], surface: "web", contextClass: "sensitive" }, ctx);
+
+export const planVisuals = (planner: Planner, facts: readonly Fact[], ctx: DecideContext): Promise<PlanResult> =>
+  composeVisuals(planner, VISUALS_INTENT, capabilitiesOf(facts), ctx);
+```
+
+`VD/testing.ts`: `aPlan` and `aTurnPlan` share one scripted-planner body:
+
+```ts
+/** A real `PlanResult` with one KeyFigure `nodeId` binding `fact-0`, made by the reference planner on a scripted model; `run` composes it (document or turn flavour). */
+export async function scriptedFigurePlan(
+  nodeId: string,
+  label: string,
+  summary: string,
+  run: (planner: ReferencePlanner, fact: Fact, ctx: ReturnType<typeof recording>) => Promise<PlanResult>,
+): Promise<PlanResult> {
+  const fact: Fact = { kind: "figure", label, value: 4242, unit: "USD", chunkIds: [randomUUID()], ordinal: 0 };
+  const node = { id: nodeId, type: "KeyFigure", label, span: 4, props: {}, binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" } };
+  const model = scriptedPlannerModel([JSON.stringify({ summary, nodes: [node] })]);
+  return run(new ReferencePlanner({ model, modelId: "test" }), fact, recording());
+}
+
+export const aPlan = (nodeId: string, label: string, summary = "A headline figure"): Promise<PlanResult> =>
+  scriptedFigurePlan(nodeId, label, summary, (planner, fact, ctx) => planVisuals(planner, [fact], ctx));
+```
+
+`VD/commit.ts`: the try/catch of `commitEffect` becomes one exported helper both commit steps use:
+
+```ts
+/** Runs a lineage commit and maps its failures to the step errors: an erased line is "gone"; a refusal repeats and an unreadable line fails closed (neither is transient). */
+export async function committing<T>(commit: () => Promise<T>): Promise<T> {
+  try {
+    return await commit();
+  } catch (err) {
+    if (err instanceof LineErasedError) throw new DocumentGoneError();
+    if (err instanceof LineageRefusedError || err instanceof LineUnreadableError) throw new VisualsLineageError();
+    throw err;
+  }
+}
+// commitEffect: `await committing(() => commitPlan(deps.lineage, input, input, deps.now));` replaces its try/catch
+```
+
 `VT/plan.ts`:
 
 ```ts
-import { VISUALS_CATALOG, type OfferedFact, factCapabilities } from "@docmind/experiences";
+import { type OfferedFact, factCapabilities } from "@docmind/experiences";
 import type { Intent } from "@loom-ui/core";
 import type { DecideContext, PlanResult, Planner } from "@loom-ui/planner";
+import { composeVisuals } from "../visualize-document/plan";
 
 export const TURN_INTENT: Intent = {
   objective: "Illustrate this answer for its reader. Choose nothing if no visual adds understanding.",
@@ -2225,28 +2376,25 @@ export const TURN_INTENT: Intent = {
 };
 
 /**
- * One `ctx.decide` (the planner's own, keyed by DOCMIND_PLANNER_DECISION_KEY, R19): the model's plan over the turn's
+ * One `ctx.decide` (the planner's own, keyed by DOCMIND_PLANNER_DECISION_KEY; R19: keyed decision ids): the model's plan over the turn's
  * facts, recorded and replayable. The intent holds no answer text; fact values reach the model only as fenced data.
  */
-export async function planTurn(planner: Planner, offered: readonly OfferedFact[], ctx: DecideContext): Promise<PlanResult> {
-  return planner.compose(
-    { intent: TURN_INTENT, catalog: VISUALS_CATALOG, capabilities: factCapabilities(offered), containers: [], surface: "web", contextClass: "sensitive" },
-    ctx,
-  );
-}
+export const planTurn = (planner: Planner, offered: readonly OfferedFact[], ctx: DecideContext): Promise<PlanResult> =>
+  composeVisuals(planner, TURN_INTENT, factCapabilities(offered), ctx);
 ```
 
 `VT/commit.ts`:
 
 ```ts
 import type { Operation } from "@loom-ui/core";
-import { LineErasedError, LineUnreadableError, type Lineage } from "@loom-ui/lineage";
+import type { Lineage } from "@loom-ui/lineage";
 import type { PlanReport, PlanResult } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { ChatBus } from "../../chats/bus";
-import { DocumentGoneError, VisualsLineageError } from "../ingest-document/errors";
+import { VisualsLineageError } from "../ingest-document/errors";
 import { type StepGuard, StepResult, type StepSeams, ingestStepOptions, stepEffectOf } from "../ingest-document/stepEffect";
-import { LineageRefusedError, commitPlanTo } from "../visualize-document/lineage";
+import { committing } from "../visualize-document/commit";
+import { commitPlanTo } from "../visualize-document/lineage";
 import { type TurnRef, turnExperienceId } from "./ids";
 import { TURN_RETRY } from "./model";
 import { TURN_INTENT } from "./plan";
@@ -2257,8 +2405,6 @@ import { TURN_INTENT } from "./plan";
  */
 export type TurnCommitInput = TurnRef & {
   outcome: "visualized" | "nothing";
-  /** An on-demand run: the owner asked, so a "nothing" outcome is announced too. */
-  announce: boolean;
   ops: Operation[];
   summary?: string;
   summaryClass?: PlanResult["summaryClass"];
@@ -2266,10 +2412,10 @@ export type TurnCommitInput = TurnRef & {
 };
 
 /**
- * "visualized": replaces the head of the turn's line (sealed under the user's key, R18; an identical head is returned with
- * nothing written), then publishes `visuals` on the chat's bus (idempotent commit or not). "nothing": writes nothing, and
- * publishes only for an on-demand run. A bus that fails is logged by class and never fails the step. A line whose owner
- * was erased is "gone"; a refusal or an unreadable line is the visuals lineage error (not transient).
+ * "visualized": replaces the head of the turn's line (sealed under the user's key; R18: a sealed, idempotent commit; an identical head is returned with
+ * nothing written). "nothing": writes nothing. Either way it then publishes `visuals` on the chat's bus (idempotent commit or
+ * not): every run that ends `nothing` announces it too (spec section 5). A bus that fails is logged by class and never fails
+ * the step. A line whose owner was erased is "gone"; a refusal or an unreadable line is the visuals lineage error (not transient).
  */
 export function turnCommitEffect(
   deps: { guard: StepGuard<TurnRef>; lineage: Lineage; now: () => string; bus: Pick<ChatBus, "publish"> } & StepSeams,
@@ -2279,25 +2425,15 @@ export function turnCommitEffect(
     deps.guard,
     async (input) => {
       if (input.outcome === "visualized") {
-        try {
-          await commitPlanTo(
-            deps.lineage,
-            { experienceId: turnExperienceId(input), intent: TURN_INTENT, sourceKind: "turn-visuals" },
-            { ops: input.ops, report: input.report as PlanReport, summary: input.summary, summaryClass: input.summaryClass } as never,
-            deps.now,
-          );
-        } catch (err) {
-          if (err instanceof LineErasedError) throw new DocumentGoneError();
-          if (err instanceof LineageRefusedError || err instanceof LineUnreadableError) throw new VisualsLineageError();
-          throw err;
-        }
+        const { report } = input;
+        if (!report) throw new VisualsLineageError(); // the flow always sends it; without one there is nothing to commit
+        const target = { experienceId: turnExperienceId(input), intent: TURN_INTENT, sourceKind: "turn-visuals" };
+        await committing(() => commitPlanTo(deps.lineage, target, { ...input, report }, deps.now));
       }
-      if (input.outcome === "visualized" || input.announce) {
-        try {
-          deps.bus.publish(input.chatId, { kind: "visuals", ord: input.ord, outcome: input.outcome });
-        } catch (err) {
-          console.error("turn visuals event not published", err instanceof Error ? err.constructor.name : typeof err);
-        }
+      try {
+        deps.bus.publish(input.chatId, { kind: "visuals", ord: input.ord, outcome: input.outcome });
+      } catch (err) {
+        console.error("turn visuals event not published", err instanceof Error ? err.constructor.name : typeof err);
       }
       return { count: input.ops.length };
     },
@@ -2313,7 +2449,7 @@ export function turnCommitEffect(
 export type LiveChatEvent =
   | { kind: "tool"; turnKey: number; step: ChatToolStep }
   | { kind: "reset"; turnKey: number }
-  /** A turn's visuals were committed (or an on-demand run found nothing). Ids and a fixed word only. */
+  /** A turn's visuals were committed, or its run found nothing. Ids and a fixed word only. */
   | { kind: "visuals"; ord: number; outcome: "visualized" | "nothing" };
 ```
 
@@ -2334,12 +2470,12 @@ Check `S/chats/wiring.ts`/other code that switches on `LiveChatEvent["kind"]` (`
 ```ts
 z.object({
   kind: z.literal("visuals"),
-  ord: z.number().int().min(1),
+  ord: RecordOrd,
   outcome: z.enum(["visualized", "nothing"]).default("visualized"),
 }),
 ```
 
-and extend its doc comment: `visuals` is live like `tool`, carries `ord` (the assistant record's ordinal, `ChatMessageDto.id`) and no content.
+and extend its doc comment: `visuals` is live like `tool`, carries `ord` (the assistant record's ordinal, `ChatMessageDto.id`; `RecordOrd`, defined in Task 3) and no content.
 
 - [ ] **Step 4: Run the tests and the typechecks**
 
@@ -2363,15 +2499,15 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 **Files:**
 - Create: `VT/flow.ts`, `VT/deps.ts`, `VT/trigger.ts`, `VT/start.ts`
 - Create: `S/observers.ts` (compose several `onDurableEvent` observers into one)
-- Modify: `S/security.ts` (grants), `S/config.ts` (`FlowDeps.visualizeTurn`, `FlowDeps.onDurableEvent`), `S/compose.ts`, `S/bootIngest.ts` (`recoveryOwns`)
-- Test: `VT/flow.test.ts`, `VT/trigger.test.ts`, `VT/start.test.ts`, `S/observers.test.ts`, `S/security.test.ts`, `S/bootIngest.test.ts` (or the file that tests `recoveryOwns`), `S/compose.pg.test.ts` (if one exists; otherwise the e2e in Task 12 covers the wiring)
+- Modify: `S/security.ts` (grants), `S/config.ts` (`FlowDeps.visualizeTurn`, `FlowDeps.onDurableEvent`), `S/compose.ts` (builds the starter and returns it as `turns`), `S/bootIngest.ts` (`recoveryOwns`; `turns.idle()` in the shutdown `startsIdle` list)
+- Test: `VT/flow.test.ts`, `VT/trigger.test.ts`, `VT/start.test.ts`, `S/observers.test.ts`, `S/security.test.ts`, `S/bootIngest.test.ts` (`recoveryOwns`, and the pinned shutdown order), `S/compose.pg.test.ts` (if one exists; otherwise the e2e in Task 12 covers the wiring)
 
 **Interfaces:**
 - Produces:
   - `TurnOutput` (`{ outcome: "visualized" | "nothing" }`, strict), the four step definitions, `TURN_STEPS`, `visualizeTurnFlow(planner: () => Planner | undefined = () => undefined): RegisteredFlow`, `runVisualizeTurn(planner): FlowRunner<TurnRef, TurnOutput>`
   - `TurnVisualizeDeps extends StepSeams { guard: StepGuard<TurnRef>; turn: { read(ref: TurnRef, signal?: AbortSignal): Promise<TurnRead | null> }; stored: VisualFactStore; turnFacts: TurnFactStore; passages: TurnExtractDeps["passages"]; summaryMaxChars: number; lineage: Lineage; bus: Pick<ChatBus, "publish">; now: () => string; llm?: LlmProvider; planner?: Planner }` and `turnEffects(deps): Record<string, Effect>`
-  - `turnToVisualize(e: TurnSettledEvent, d: TriggerDeps): Promise<TurnRef | null>` (the pure trigger filter)
-  - `loomTurnStarter(runtime: Pick<WorkflowRuntime, "start">, flow: RegisteredFlow, o: TurnStarterOptions): TurnVisualsStarter` where `TurnVisualsStarter { onSettled(e: TurnSettledEvent): void; visualize(ref: TurnRef): Promise<VisualizeStart>; running(ref: TurnRef): boolean; idle(): Promise<void> }` and `VisualizeStart = { kind: "started"; rerun: number } | { kind: "running" } | { kind: "disabled" }`
+  - `turnToVisualize(e: TurnSettledEvent, d: TriggerDeps): Promise<TurnRef | null>` (the pure trigger filter; `TriggerDeps.tenantOf(chatId)` calls `docmind_chat_tenant`)
+  - `loomTurnStarter(runtime: Pick<WorkflowRuntime, "start">, flow: RegisteredFlow, o: TurnStarterOptions): TurnVisualsStarter` where `TurnVisualsStarter { onSettled(e: TurnSettledEvent): void; visualize(ref: TurnRef): Promise<VisualizeStart>; running(ref: TurnRef): boolean; idle(): Promise<void> }` (`idle()` awaits the checks and `runtime.start` calls in flight, never an execution's completion: the chat-title pattern, `flows/chat-title/start.ts`) and `VisualizeStart = { kind: "started"; rerun: number } | { kind: "running" } | { kind: "disabled" }`
   - `composeDurableObservers(...observers: ((e: EventEnvelope) => void | Promise<void>)[]): (e: EventEnvelope) => void`
   - `FlowDeps.visualizeTurn?: { flow: RegisteredFlow; deps: TurnVisualizeDeps }`, `FlowDeps.onDurableEvent?: (e: EventEnvelope) => void | Promise<void>` (passed to `observability.onDurableEvent`)
 - Consumes: `turnSettledObserver`, `TurnSettledEvent` (`@loom/conversation`, Task 1), `chatIdOfConversation`, `CHAT_FLOW_ID`, `CHAT_GK_FLOW_ID` (`CH/ids.ts`), `newVisualizeGate()` (`VD/deps.ts`), `planTurn`, `turnCommitEffect`, the steps of Tasks 5 to 7.
@@ -2380,7 +2516,9 @@ Plan decision: the visuals gate is `newVisualizeGate()`'s one instance, shared b
 
 Plan decision: the flow is registered whenever chat is on, but the starter's `enabled` is "the `visuals` role is on". A role switched off after an execution started leaves a registered flow to resume; its steps then end with no work (`turn-extract` returns model `none`, no planner), never an error.
 
-Plan decision: an invalid or empty plan, a role gone off mid-run, an uncited turn and a gone chat all end as `nothing` (C7: the strip stays hidden). Only exhausted step retries fail the execution (R20).
+Plan decision: an invalid or empty plan, a role gone off mid-run, an uncited turn and a gone chat all end as `nothing` (C7: no strip). Every one of them goes through `turn-commit`, which publishes the `nothing` frame (ruling P9, spec section 5): the run's outcome reaches the browser whether the run was automatic or on demand. Only exhausted step retries fail the execution (R20: with the visuals error type).
+
+Plan decision (ruling P2): the starter tracks an in-flight execution only to answer `running`; `idle()` does not wait for it. A shutdown therefore no longer waits for running visualize-turn executions: they resume on the next boot through Loom recovery (`recoveryOwns`), like every other flow.
 
 Plan decision: on demand, the next re-run number is found by probing `-r1`, `-r2`, … with `runtime.start` (Loom refuses an existing id with `ExecutionAlreadyExistsError`), starting after the highest number this process has used for the turn. No new table: the id space is the counter. "Running" is process-local (the executions this process started and has not seen finish); a run resumed by recovery after a restart is not tracked, so a click in the first seconds could start a second run, which is harmless: both commit idempotently and the later head wins.
 
@@ -2419,7 +2557,9 @@ const deps = (over: Partial<TriggerDeps> = {}): TriggerDeps => ({
 
 describe("turnToVisualize", () => {
   it("starts a complete, cited answer of a live chat, with the chat resolved from the conversation id", async () => {
-    expect(await turnToVisualize(event(), deps())).toEqual({ tenantId: tenant, userId: user, chatId: chat, ord: 4 });
+    const d = deps();
+    expect(await turnToVisualize(event(), d)).toEqual({ tenantId: tenant, userId: user, chatId: chat, ord: 4 });
+    expect(d.tenantOf).toHaveBeenCalledWith(chat);
   });
   it("resolves the chat of a rotated generation too", async () => {
     const e = event({ conversationId: chatConversationId(user, chat), executionId: `${chatConversationId(user, chat)}~2` });
@@ -2523,12 +2663,15 @@ describe("the turn starter: the hook", () => {
     for (const o of [options({ enabled: () => false }), options({ backlog: () => 20 })]) {
       const s = loomTurnStarter(f.runtime, flow, o);
       s.onSettled(settled());
-      await s.idle();
+      await s.idle(); // the check has settled: a start would have been made by now
     }
     const s = loomTurnStarter(f.runtime, flow, options());
     s.onSettled({ ...settled(), status: "interrupted" });
     await s.idle();
     expect(f.start).not.toHaveBeenCalled();
+    s.onSettled(settled()); // the control: the same starter does start a complete, cited turn
+    await s.idle();
+    expect(f.start).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2539,7 +2682,7 @@ describe("the turn starter: on demand", () => {
     const s = loomTurnStarter(f.runtime, flow, options());
     expect(await s.visualize(ref)).toEqual({ kind: "started", rerun: 2 });
     f.finish(turnExecutionId(user, chat, 4, 2));
-    await s.idle();
+    await vi.waitFor(() => expect(s.running(ref)).toBe(false)); // idle() does not wait for the run's end
     expect(await s.visualize(ref)).toEqual({ kind: "started", rerun: 3 });
   });
   it("answers running while a run of the turn is in flight (automatic or on demand), and frees the turn when it ends", async () => {
@@ -2557,6 +2700,13 @@ describe("the turn starter: on demand", () => {
     const s = loomTurnStarter(fake().runtime, flow, options({ enabled: () => false }));
     expect(await s.visualize(ref)).toEqual({ kind: "disabled" });
   });
+  it("idle() settles while an execution is still running (shutdown does not wait for whole runs)", async () => {
+    const f = fake(); // its waitForCompletion never resolves until finish()
+    const s = loomTurnStarter(f.runtime, flow, options());
+    s.onSettled(settled());
+    await s.idle();
+    expect(s.running(ref)).toBe(true);
+  });
 });
 ```
 
@@ -2567,6 +2717,7 @@ import { randomUUID } from "node:crypto";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
+import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { afterEach, describe, expect, it } from "vitest";
@@ -2664,11 +2815,12 @@ describe("visualize-turn flow", () => {
     expect(s.model.requests).toHaveLength(2); // one extract window, one planner call
   });
 
-  it("is nothing for an uncited answer, with no model call and no frame", async () => {
+  it("is nothing for an uncited answer: no model call, no lineage head, and the nothing frame", async () => {
     const s = stack({ replies: [plan()], turn: { ...CITED, citations: [] } });
     expect(await s.run()).toEqual({ outcome: "nothing" });
     expect(s.model.requests).toHaveLength(0);
-    expect(s.frames).toEqual([]);
+    expect(await s.lineage.head(turnExperienceId(s.ref))).toEqual({ ok: true, value: null });
+    expect(s.frames).toEqual([[s.ref.chatId, { kind: "visuals", ord: 4, outcome: "nothing" }]]);
   });
 
   it("is nothing when the model finds no grounded fact or plans no widget", async () => {
@@ -2676,16 +2828,24 @@ describe("visualize-turn flow", () => {
     expect(await none.run()).toEqual({ outcome: "nothing" });
     const empty = stack({ replies: [JSON.stringify({ nodes: [] })], storedFacts: [stored] });
     expect(await empty.run()).toEqual({ outcome: "nothing" });
-    expect((await empty.lineage.head(turnExperienceId(empty.ref))).ok && false).toBe(false);
+    expect(await empty.lineage.head(turnExperienceId(empty.ref))).toEqual({ ok: true, value: null }); // a real read of an absent line
   });
 
-  it("announces 'nothing' for an on-demand run only", async () => {
-    const auto = stack({ replies: [JSON.stringify({ nodes: [] })], storedFacts: [stored] });
-    await auto.run();
-    expect(auto.frames).toEqual([]);
-    const manual = stack({ replies: [JSON.stringify({ nodes: [] })], storedFacts: [stored], rerun: 1 });
-    await manual.run();
-    expect(manual.frames).toEqual([[manual.ref.chatId, { kind: "visuals", ord: 4, outcome: "nothing" }]]);
+  it("announces 'nothing' for every run that ends nothing, automatic or on demand, and writes no head", async () => {
+    for (const rerun of [undefined, 1]) {
+      const s = stack({ replies: [JSON.stringify({ nodes: [] })], storedFacts: [stored], ...(rerun && { rerun }) });
+      expect(await s.run()).toEqual({ outcome: "nothing" });
+      expect(s.frames).toEqual([[s.ref.chatId, { kind: "visuals", ord: 4, outcome: "nothing" }]]);
+      expect(await s.lineage.head(turnExperienceId(s.ref))).toEqual({ ok: true, value: null });
+    }
+  });
+
+  it("starting the same execution id again is refused by Loom and makes no model call (the hook's idempotency key)", async () => {
+    const s = stack({ replies: [plan()], storedFacts: [stored] });
+    await s.run();
+    const before = s.model.requests.length;
+    await expect(s.run()).rejects.toBeInstanceOf(ExecutionAlreadyExistsError);
+    expect(s.model.requests.length).toBe(before);
   });
 
   it("holds no fact label, value or planner text unsealed in the raw log", async () => {
@@ -2726,18 +2886,18 @@ describe("composeDurableObservers", () => {
 });
 ```
 
-`S/security.test.ts` (append): `expect(authorizer` allows the four turn steps under `visualize-turn` and refuses a visualize-document step under it. Mirror the file's `request(workflowId, toolId)` + whichever method that file uses to check a grant (read the nearest existing `visualize-document` assertion in the file; if there is none, use `authorizer.check(request(...))` as the neighbouring tests do):
+`S/security.test.ts` (append in the "the effect grants" describe; the file's `request(workflowId, toolId)` helper and `authorizer.authorize(...)`, the method its neighbouring tests call):
 
 ```ts
 it("grants visualize-turn exactly its four steps", () => {
   for (const tool of ["turn-load", "turn-extract", "turn-facts", "turn-commit"])
-    expect(authorizer.check(request("visualize-turn", tool)).allowed).toBe(true);
-  expect(authorizer.check(request("visualize-turn", "visualize-extract")).allowed).toBe(false);
-  expect(authorizer.check(request("visualize-document", "turn-load")).allowed).toBe(false);
+    expect(authorizer.authorize(request("visualize-turn", tool)).allowed).toBe(true);
+  expect(authorizer.authorize(request("visualize-turn", "visualize-extract")).allowed).toBe(false);
+  expect(authorizer.authorize(request("visualize-document", "turn-load")).allowed).toBe(false);
 });
 ```
 
-`recoveryOwns` test (in the file that tests `bootIngest`, `S/bootIngest.test.ts` if it exists, else create it):
+`recoveryOwns` test (in `S/bootIngest.test.ts`, which already tests `recoveryOwns`):
 
 ```ts
 it("re-drives a turn visualize execution and still refuses an unrelated one", () => {
@@ -2748,6 +2908,8 @@ it("re-drives a turn visualize execution and still refuses an unrelated one", ()
   expect(recoveryOwns(`u_${u}:something-else`)).toBe(false);
 });
 ```
+
+The same file pins the shutdown order (`startsIdle` is awaited in sequence in `bootIngest.ts`, L221-225): add `turns: { idle: async () => void calls.push("turnsIdle") }` to the `built` literal in `parts()` (next to `titles`), and put `"turnsIdle"` between `"titlesIdle"` and `"visualsIdle"` in the expected call list of the shutdown test.
 
 - [ ] **Step 2: Run them and check they fail**
 
@@ -2764,7 +2926,7 @@ import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "../ingest-document/stepEffect";
-import { parseTurnExecution, type TurnRef } from "./ids";
+import type { TurnRef } from "./ids";
 import { TURN_RETRY, TurnFactsInput, TurnFactsOutput, TurnInput, TurnLoadOutput } from "./model";
 import { planTurn } from "./plan";
 
@@ -2782,7 +2944,6 @@ export const turnFactsStep = step$({ id: "turn-facts", name: "TurnFacts", inputS
 // the shape. STEP_STARTED seals `input.ops|summary|report`.
 const CommitStepInput = TurnInput.extend({
   outcome: z.enum(["visualized", "nothing"]),
-  announce: z.boolean(),
   ops: z.array(z.unknown()),
   summary: z.string().optional(),
   summaryClass: z.string().optional(),
@@ -2795,19 +2956,19 @@ export const TURN_STEPS = [turnLoadStep, turnExtractStep, turnFactsStep, turnCom
 /**
  * load (stored facts that cover the citations; references only) -> extract (only when none: the turn's own chunks) ->
  * facts (the kept facts' content, sealed) -> one planner decision -> commit (the plan to the turn's lineage, then a
- * `visuals` frame). Everything that is not "visualized" ends as "nothing" (C7); only exhausted step retries fail the run.
- * An on-demand run (`-r<n>` in its execution id) also announces "nothing", so the asking browser can say so.
+ * `visuals` frame). Everything that is not "visualized" ends as "nothing" (C7), and goes through the commit step too, which
+ * publishes the `nothing` frame (spec section 5: every run that ends nothing announces it, so an on-demand click resolves);
+ * only exhausted step retries fail the run.
  */
 export const runVisualizeTurn =
   (planner: () => Planner | undefined): FlowRunner<TurnRef, TurnOutput> =>
   async (ctx, input) => {
-    const announce = parseTurnExecution(ctx.executionId)?.rerun !== undefined;
     const nothing = async (): Promise<TurnOutput> => {
-      if (announce) await ctx.run(turnCommitStep, { ...input, outcome: "nothing", announce, ops: [] });
+      await ctx.run(turnCommitStep, { ...input, outcome: "nothing", ops: [] });
       return { outcome: "nothing" };
     };
     const loaded = await ctx.run(turnLoadStep, input);
-    if (loaded.outcome !== "done" || !loaded.cited) return { outcome: "nothing" }; // not a visualizable turn: nothing to announce
+    if (loaded.outcome !== "done" || !loaded.cited) return nothing(); // not a visualizable turn (uncited, not complete, gone)
     if (loaded.refs.length === 0) {
       const extracted = await ctx.run(turnExtractStep, input);
       if (extracted.outcome !== "done" || extracted.model === "none" || (extracted.count ?? 0) === 0) return nothing();
@@ -2821,7 +2982,6 @@ export const runVisualizeTurn =
     const committed = await ctx.run(turnCommitStep, {
       ...input,
       outcome: "visualized",
-      announce,
       ops: [...plan.ops],
       report: plan.report,
       ...(plan.summary && { summary: plan.summary, summaryClass: plan.summaryClass }),
@@ -2842,8 +3002,6 @@ export const visualizeTurnFlow = (planner: () => Planner | undefined = () => und
   runner: runVisualizeTurn(planner) as FlowRunner<unknown, unknown>,
 });
 ```
-
-If `ctx.executionId` is not on the runner context in this Loom version, take it from `FlowContext` in `loom/packages/workflow-runtime/src/types.ts` (the `readonly executionId` at line 217 is its field): the first test run says so.
 
 `VT/deps.ts`:
 
@@ -2875,7 +3033,7 @@ export interface TurnVisualizeDeps extends StepSeams {
   now: () => string;
   /** The `visuals` role's provider; absent when the role is off. */
   llm?: LlmProvider;
-  /** The planner over the same provider (R19); absent when the role is off. */
+  /** The planner over the same provider (R19: keyed decision ids); absent when the role is off. */
   planner?: Planner;
 }
 
@@ -2901,8 +3059,8 @@ export const MAX_WAITING = 20;
 export interface TriggerDeps {
   /** True while the `visuals` role is on. */
   enabled(): boolean;
-  /** The tenant of the user's live chat, or null (unknown, soft-deleted, owner being erased): `docmind_chat_tenant`. */
-  tenantOf(userId: string, chatId: string): Promise<string | null>;
+  /** The tenant of a live chat, or null (unknown, soft-deleted, owner being erased): `docmind_chat_tenant(chat_id)`. */
+  tenantOf(chatId: string): Promise<string | null>;
   turn: { read(ref: TurnRef, signal?: AbortSignal): Promise<TurnRead | null> };
   /** Visuals executions (document and turn) waiting on the shared gate. */
   backlog(): number;
@@ -2918,7 +3076,7 @@ export async function turnToVisualize(e: TurnSettledEvent, d: TriggerDeps): Prom
   if (e.status !== "complete" || !d.enabled()) return null;
   const ids = chatIdOfConversation(e.conversationId);
   if (!ids || d.backlog() >= d.maxWaiting) return null;
-  const tenantId = await d.tenantOf(ids.userId, ids.chatId);
+  const tenantId = await d.tenantOf(ids.chatId);
   if (!tenantId) return null;
   const ref: TurnRef = { tenantId, userId: ids.userId, chatId: ids.chatId, ord: e.ord };
   const turn = await d.turn.read(ref);
@@ -2944,7 +3102,7 @@ export interface TurnVisualsStarter {
   visualize(ref: TurnRef): Promise<VisualizeStart>;
   /** True while a run of this turn that this process started has not finished. */
   running(ref: TurnRef): boolean;
-  /** Resolves when every enqueued check and start has settled (shutdown). */
+  /** Resolves when every enqueued check and `runtime.start` call has settled (shutdown). It never waits for an execution to complete: a run that outlives shutdown resumes on boot through recovery. */
   idle(): Promise<void>;
 }
 
@@ -2968,15 +3126,16 @@ export function loomTurnStarter(
   const keyOf = (r: TurnRef) => `${r.chatId}:${r.ord}`;
   const isRunning = (r: TurnRef) => (inFlight.get(keyOf(r))?.size ?? 0) > 0;
 
+  /** Remembers the run until it ends (only `running` reads this; `idle()` does not wait for it, `pending` holds starts only). */
   const track = (ref: TurnRef, executionId: string, handle: ExecutionHandle) => {
     const key = keyOf(ref);
     const set = inFlight.get(key) ?? new Set<string>();
     inFlight.set(key, set);
     set.add(executionId);
-    const done = handle.waitForCompletion().then(() => undefined, () => undefined); // a failed run frees the turn too
-    pending.add(done);
-    void done.finally(() => {
-      pending.delete(done);
+    void handle.waitForCompletion().then(
+      () => undefined,
+      () => undefined, // a failed run frees the turn too
+    ).finally(() => {
       set.delete(executionId);
       if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
     });
@@ -3140,8 +3299,8 @@ const turns =
   turnRead &&
   loomTurnStarter(app.runtime, visualizeTurn.flow, {
     enabled: () => visualsLlm !== undefined,
-    tenantOf: async (userId, chatId) =>
-      ((await pool.query("SELECT public.docmind_chat_tenant($1::uuid, $2::uuid) AS t", [userId, chatId])).rows[0]?.t as string | null) ?? null,
+    tenantOf: async (chatId) =>
+      ((await pool.query("SELECT public.docmind_chat_tenant($1::uuid) AS t", [chatId])).rows[0]?.t as string | null) ?? null,
     turn: turnRead,
     backlog: () => visualizeGate.waiting,
     maxWaiting: MAX_WAITING,
@@ -3156,7 +3315,18 @@ if (turns) {
 }
 ```
 
-Return `turns` from `buildServer` (next to `titles`/`visuals`), and make shutdown await `turns.idle()` where `titles.idle()` is awaited (`grep -n "titles?.idle\|\.idle()" apps/server/app/*.ts`: add it to the same `startsIdle` list). The `onDurableEvent` is typed to take `(e: EventEnvelope)`; import `EventEnvelope` and `TurnSettledEvent` types. `chatParts.bus` exists on `PreparedChat`.
+Return `turns` from `buildServer` (next to `titles` and `visuals`, in the object `compose.ts` returns, with a doc comment like theirs: `/** Starts visualize-turn runs; absent without chat or the visuals role. idle() is awaited at shutdown with the other starts. */ turns,`). `S/bootIngest.ts` destructures it from `built` (add `turns,` after `titles,` at L93) and awaits it in the `startsIdle` list at L221-225, after `titles`:
+
+```ts
+startsIdle: async () => {
+  await starts.idle();
+  await titles?.idle();
+  await turns?.idle();
+  await visuals.idle();
+},
+```
+
+(`BootIngestParts["built"]` is derived from `buildServer`'s return type, so no type edit is needed beyond the field.) The `onDurableEvent` is typed to take `(e: EventEnvelope)`; import `EventEnvelope` and `TurnSettledEvent` types. `chatParts.bus` exists on `PreparedChat`.
 
 - [ ] **Step 4: Run the tests, the whole server unit suite and the typecheck**
 
@@ -3188,7 +3358,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 
 **Interfaces:**
 - Produces:
-  - `class UserRateLimit { constructor(max?: number /* 10 */, windowMs?: number /* 60_000 */, now?: () => number); tryAcquire(userId: string): boolean }` (sliding window, process-local: DocMind is single-process, spec section 10 of the document-visuals spec)
+  - `class UserRateLimit { constructor(max?: number /* 10 */, windowMs?: number /* 60_000 */, now?: () => number); tryAcquire(userId: string): boolean }` (sliding window, process-local: DocMind runs one server process per database, so the limit needs no shared store)
   - `ChatRouteDeps.visualize?: { starter: Pick<TurnVisualsStarter, "visualize">; turn: { read(ref: TurnRef): Promise<TurnRead | null> }; limiter: Pick<UserRateLimit, "tryAcquire"> }`
   - `chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler>` with `POST /api/chats/:id/turns/:ord/visualize`
   - `VisualizeTurnResponse = z.object({ started: z.literal(true) })`
@@ -3383,7 +3553,7 @@ import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound } from "./access";
 import type { ChatRouteDeps } from "./routes";
 
-const ORD = /^[1-9][0-9]{0,8}$/;
+const ORD = /^[1-9][0-9]{0,14}$/; // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
 
 /** On-demand visuals for one turn (C2). Every check names nothing about another user's chat: those are all 404. */
 export function chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler> {
@@ -3454,9 +3624,10 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 - Modify: `S/ui/routes.ts` (the GET route, the hydrate branch, seams)
 - Modify: `S/ui/readers.ts` (`turnFacts`, `UiReaderDeps.turnFacts`)
 - Create: `CH/turnHeads.ts`
-- Modify: `CH/messages.ts` (`MessageDeps.heads`, `hasVisuals`), `CH/routes.ts` (`ChatRouteDeps.heads`), `CT/chats.ts` (`ChatMessageDto.hasVisuals`)
+- Modify: `CH/messages.ts` (`MessageDeps.heads`, `hasVisuals`), `CH/routes.ts` (`ChatRouteDeps.heads`), `CH/stream.ts` (`ChatStreamDeps` takes `heads` in its `Pick`), `CH/testHarness.ts` (a `heads` option), `CT/chats.ts` (`ChatMessageDto.hasVisuals`)
 - Modify: `S/compose.ts` (build `uiRoutes` with `turnFacts`, `chatRoutes`/`chatStreamRoutes` with `heads`)
-- Test: `PE/views.test.ts`, `S/ui/routes.test.ts`, `S/ui/ui.pg.test.ts`, `CH/turnHeads.test.ts`, `CH/messages.test.ts`, `CH/history.pg.test.ts`, `CT/chats.test.ts`
+- Modify (literals that gain `turnFacts`): `S/ui/ui.pg.test.ts`, `S/documents/testHarness.ts`
+- Test: `PE/views.test.ts`, `S/ui/routes.test.ts`, `S/ui/readers.test.ts`, `CH/turnHeads.test.ts`, `CH/messages.test.ts`, `CH/history.pg.test.ts`, `CT/chats.test.ts`
 
 **Interfaces:**
 - Produces:
@@ -3466,10 +3637,10 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
   - `UiRouteDeps` seams: `ownsChat?(identity, chatId): Promise<boolean>`, `ownedDocuments?(identity, ids: string[]): Promise<Set<string>>`
   - `UiReaderDeps.turnFacts: TurnFactStore`; `UiReaders.turnFacts` reads `turn_visual_facts` for the caller, `null` when the turn has none
   - `interface TurnHeads { has(ref: { userId: string; chatId: string }, ords: readonly number[]): Promise<Set<number>> }`; `lineageTurnHeads(lineage: Pick<Lineage, "head">, concurrency?: number): TurnHeads`
-  - `ChatMessageDto.hasVisuals?: boolean`: set for assistant messages only (`true` when the turn has a head, `false` otherwise), from one batched `heads.has` call per `toMessageDtos` call
+  - `ChatMessageDto.hasVisuals: boolean` (required, spec section 7, ruling P9): `true` for an assistant message whose turn has a head, `false` for every other message and for every message when the server has no `heads`; from one batched `heads.has` call per `toMessageDtos` call
 - Consumes: `turnWithVisuals`/`Views.turnExperience`/`Views.turnPayload`/`hydrateExperience(..., "turn")` (Task 3), `turnExperienceId` (Task 4), `getChat` (`CH/sessions.ts`).
 
-Plan decision: `hasVisuals` is looked up only for assistant replies that are `complete` and have at least one citation (an uncited answer never has visuals), by `Lineage.head` on each such ord with bounded concurrency (8). Loom's lineage has no multi-stream head read, so "one batched lookup" is one `heads.has` call per history page issuing at most 30 independent single-stream reads. A head that cannot be read (erased, unreadable) counts as no visuals.
+Plan decision: `hasVisuals` is looked up only for assistant replies that are `complete` and have at least one citation (an uncited answer never has visuals), taken from the citations `toMessageDtos` already computes for each entry, by `Lineage.head` on each such ord with bounded concurrency (8). Loom's lineage has no multi-stream head read, so "one batched lookup" is one `heads.has` call per history page issuing at most 30 independent single-stream reads. A head that cannot be read (erased, unreadable) counts as no visuals.
 
 Plan decision: a deleted cited document drops its widgets from the compiled view (`liveDocuments`) instead of showing a placeholder, per spec section 7; the route learns which documents are live with one `SELECT ... WHERE owner_id AND id = ANY(...)`.
 
@@ -3492,20 +3663,49 @@ it("lists the distinct documents the planner's providers name, and none for turn
 });
 ```
 
-`S/ui/routes.test.ts` (append; reuse the file's `lineage`, `get`, `post`, `ID`; extend the `uiRoutes({...})` call in `beforeAll` with the two seams and a `turnFacts` reader):
+`S/ui/routes.test.ts` (this file's `lineage`, `get`, `post`, `ID` and `authenticator` exist; the changes below are to its top and to the `uiRoutes({...})` call in `beforeAll`). The owner check must be exercised, so the file gets a second identity (bob, another user of the same tenant) and `ownsChat` decides by the identity it is given:
 
 ```ts
-// in beforeAll's uiRoutes({...}): 
-//   ownsChat: async (_i, id) => id === CHAT,
-//   ownedDocuments: async (_i, ids) => new Set(ids.filter((d) => d !== GONE_DOC)),
-// and in readersFor(): turnFacts: async (a) => (turnFactCalls.push(a), [{ kind: "figure", label: "Revenue", value: 4242, unit: "USD", chunkIds: [], ordinal: 0 }]),
+import { ReferencePlanner } from "@loom-ui/planner";
+import { commitPlanTo } from "../flows/visualize-document/lineage";   // the file imports commitPlan from this module already: extend that import
+import { recording, scriptedPlannerModel } from "../flows/visualize-document/testing"; // aPlan is imported from here already: extend that import
+import { turnExperienceId } from "../flows/visualize-turn/ids";
+import { TURN_INTENT, planTurn } from "../flows/visualize-turn/plan";
+import { aTurnPlan } from "../flows/visualize-turn/testing";
+
+const BOB_ID = { tenantId: ID.tenantId, userId: "1c1c1c1c-1c1c-4c1c-8c1c-1c1c1c1c1c1c" };
+// the file's authenticator, widened: `x-test-user: bob` is a second identity
+//   authenticate: async (req) => (req.headers["x-test-user"] === "alice" ? ID : req.headers["x-test-user"] === "bob" ? BOB_ID : null),
 const CHAT = "00000000-0000-4000-8000-0000000000c1";
 const CHAT_NO_HEAD = "00000000-0000-4000-8000-0000000000c2";
 const GONE_DOC = "00000000-0000-4000-8000-0000000000d9";
+const turnFactCalls: unknown[] = [];
+const ownsCalls: [string, string][] = [];
+const target = (r: { userId: string; chatId: string; ord: number }) => ({ experienceId: turnExperienceId(r), intent: TURN_INTENT, sourceKind: "turn-visuals" });
+const at = () => "2026-11-08T10:00:00.000Z";
+
+// in beforeAll's uiRoutes({...}), next to `owns`:
+//   ownsChat: async (identity, id) => {
+//     ownsCalls.push([identity.userId, id]);
+//     return identity.userId === ID.userId && (id === CHAT || id === CHAT_NO_HEAD); // alice's chats; bob owns none
+//   },
+//   ownedDocuments: async (_identity, ids) => new Set(ids.filter((d) => d !== GONE_DOC)),
+// and in readersFor()'s returned readers:
+//   turnFacts: async (a) => (turnFactCalls.push(a), [{ kind: "figure", label: "Revenue", value: 4242, unit: "USD", chunkIds: [], ordinal: 0 }]),
 
 describe("GET /api/ui/chats/:id/turns/:ord/visuals", () => {
   beforeAll(async () => {
-    await commitPlanTo(lineage, { experienceId: turnExperienceId({ userId: ID.userId, chatId: CHAT, ord: 4 }), intent: TURN_INTENT, sourceKind: "turn-visuals" }, await aTurnPlan("headline", "Revenue"), () => "2026-11-08T10:00:00.000Z");
+    // alice's head, and a head on the same chat id under bob's user id: only the owner check can keep bob out
+    await commitPlanTo(lineage, target({ userId: ID.userId, chatId: CHAT, ord: 4 }), await aTurnPlan("headline", "Revenue"), at);
+    await commitPlanTo(lineage, target({ userId: BOB_ID.userId, chatId: CHAT, ord: 4 }), await aTurnPlan("headline", "Revenue"), at);
+    // a head whose only widget binds a document that is no longer the caller's: it drops out, nothing survives
+    const model = scriptedPlannerModel([JSON.stringify({ summary: "s", nodes: [{ id: "g1", type: "KeyFigure", label: "Gone", span: 4, props: {}, binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" } }] })]);
+    const gone = await planTurn(
+      new ReferencePlanner({ model, modelId: "test" }),
+      [{ fact: { kind: "figure", label: "Gone", value: 1, chunkIds: [], ordinal: 0 }, origin: { kind: "doc", documentId: GONE_DOC } }],
+      recording(),
+    );
+    await commitPlanTo(lineage, target({ userId: ID.userId, chatId: CHAT, ord: 6 }), gone, at);
   });
   it("serves the compiled turn visuals to the owner, uncacheable", async () => {
     const res = await get(`/api/ui/chats/${CHAT}/turns/4/visuals?surface=web`);
@@ -3515,11 +3715,16 @@ describe("GET /api/ui/chats/:id/turns/:ord/visuals", () => {
     expect(body.view).toBe("turn");
     expect(body.inventory.handles.length).toBeGreaterThan(0);
   });
-  it("is 404 for another user, no session, a chat without a head, a malformed id or ord, and an unknown surface is 400", async () => {
+  it("is 404 for a user who does not own the chat even though a head exists under their id: the owner check is what refuses", async () => {
+    ownsCalls.length = 0;
     expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "bob")).status).toBe(404);
+    expect(ownsCalls).toEqual([[BOB_ID.userId, CHAT]]);
+  });
+  it("is 401 without a session, 404 for a chat or turn without a head, a malformed id or ord, and a head none of whose widgets survive; 400 for an unknown surface", async () => {
     expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "")).status).toBe(401);
     expect((await get(`/api/ui/chats/${CHAT_NO_HEAD}/turns/4/visuals`)).status).toBe(404);
     expect((await get(`/api/ui/chats/${CHAT}/turns/5/visuals`)).status).toBe(404); // no head for that ord
+    expect((await get(`/api/ui/chats/${CHAT}/turns/6/visuals`)).status).toBe(404); // its only document is gone
     for (const bad of ["x", "0", "01", "-1"]) expect((await get(`/api/ui/chats/${CHAT}/turns/${bad}/visuals`)).status, bad).toBe(404);
     expect((await get(`/api/ui/chats/not-a-uuid/turns/4/visuals`)).status).toBe(404);
     expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals?surface=paper`)).status).toBe(400);
@@ -3536,15 +3741,39 @@ describe("POST /api/ui/hydrate with a turn", () => {
     expect(results[0]?.state).toBe("ready");
     expect(turnFactCalls).toContainEqual({ chatId: CHAT, ord: 4 });
   });
-  it("is 404 for another user's chat or a turn without a head", async () => {
+  it("is 404 for a user who does not own the chat, and for a turn without a head", async () => {
     const req = { experienceId: "e", versionHash: "h", handle: "fact-0", params: {} };
+    ownsCalls.length = 0;
     expect((await post({ turn: { chatId: CHAT, ord: 4 }, requests: [req] }, "bob")).status).toBe(404);
+    expect(ownsCalls).toEqual([[BOB_ID.userId, CHAT]]);
     expect((await post({ turn: { chatId: CHAT_NO_HEAD, ord: 4 }, requests: [req] })).status).toBe(404);
   });
 });
 ```
 
-(Add the imports `commitPlanTo`, `TURN_INTENT`, `turnExperienceId`, `aTurnPlan`; declare `const turnFactCalls: unknown[] = []` beside the file's other call arrays. `aTurnPlan` binds an extracted turn fact, so the head's providers read `turn.facts`; a second block with a stored-fact plan whose document is `GONE_DOC` proves widgets drop out: build it with `planTurn` over `{ origin: { kind: "doc", documentId: GONE_DOC } }`, commit it to `CHAT` ord 6, and expect 404 from `.../turns/6/visuals` because no widget survives.)
+`S/ui/readers.test.ts` (append; the `turnFacts` reader, in the style of the file's `visualFacts` tests):
+
+```ts
+describe("the turnFacts reader", () => {
+  const identity = { userId: "u", tenantId: "t" } as never;
+  const fact = { kind: "figure", label: "Revenue", value: 4242, chunkIds: [], ordinal: 0 };
+  it("reads the caller's own turn facts, scoped by tenant and user, and answers null when the turn has none", async () => {
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async (ref: { ord: number }) => (ref.ord === 4 ? [fact] : []));
+    const r = readersFor({ turnFacts: { list } } as never, identity);
+    await expect(r.turnFacts({ chatId: "c", ord: 4 })).resolves.toEqual([fact]);
+    await expect(r.turnFacts({ chatId: "c", ord: 5 })).resolves.toBeNull();
+    expect(list).toHaveBeenLastCalledWith({ tenantId: "t", userId: "u", chatId: "c", ord: 5 });
+  });
+  it("rethrows a failure (a destroyed key is not 'no facts')", async () => {
+    const { readersFor } = await import("./readers");
+    const r = readersFor({ turnFacts: { list: vi.fn(async () => { throw new Error("boom"); }) } } as never, identity);
+    await expect(r.turnFacts({ chatId: "c", ord: 4 })).rejects.toThrow("boom");
+  });
+});
+```
+
+(Another user's rows never reach this reader: the store filters by `user_id` and RLS by tenant, proven by `pgTurnFacts.pg.test.ts` in Task 2.)
 
 `CH/turnHeads.test.ts`:
 
@@ -3585,33 +3814,93 @@ describe("lineageTurnHeads", () => {
 });
 ```
 
-`CH/messages.test.ts` (append; reuse this file's helpers that build `deps`/`identity`/history entries; read its top 40 lines for their names and copy the nearest "citations are recomputed" test):
+`CH/messages.test.ts` (append; this file's `entry`, `depsOf`, `FakeItems`, `IDENTITY`, `C`, `REF` exist. `toMessageDtos` reads document titles through `documentTitles`, which needs a database; the file has no pool, so it mocks that one function):
 
 ```ts
-it("marks complete, cited replies with hasVisuals from one batched lookup, and leaves everything else without it", async () => {
-  const has = vi.fn(async (_ref: unknown, ords: readonly number[]) => new Set(ords.filter((o) => o === 4)));
-  // history: user 3 / reply 4 (cited, has a head), user 5 / reply 6 (cited, no head), user 7 / reply 8 (uncited), reply 10 interrupted + cited
-  const out = await toMessageDtos({ ...deps, heads: { has } }, identity, chatId, entries);
-  expect(out.filter((m) => m.role === "assistant").map((m) => [m.id, m.hasVisuals])).toEqual([["4", true], ["6", false], ["8", false], ["10", false]]);
-  expect(out.filter((m) => m.role === "user").every((m) => m.hasVisuals === undefined)).toBe(true);
-  expect(has).toHaveBeenCalledTimes(1);
-  expect(has).toHaveBeenCalledWith({ userId: identity.userId, chatId }, [4, 6]); // only complete, cited replies
-});
-it("sets no hasVisuals at all when the server has no visuals", async () => {
-  const out = await toMessageDtos(deps, identity, chatId, entries);
-  expect(out.every((m) => m.hasVisuals === undefined)).toBe(true);
+vi.mock("./citations", async (orig) => ({
+  ...(await orig<typeof import("./citations")>()),
+  documentTitles: async () => new Map([["7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11", "Q3 report"]]),
+}));
+
+describe("toMessageDtos hasVisuals", () => {
+  const DOC = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";
+  const P1 = "c0ffee00-0000-4000-8000-000000000001";
+  const passage = { passageId: P1, documentId: DOC, locator: { kind: "section" as const, index: 1 }, headingPath: [], snippet: "x" };
+  // the turn key of a reply is its ord minus its turn (turnKeyOf)
+  const history = [
+    entry({ ord: 1, turn: 1, role: "user", text: "q1" }),
+    entry({ ord: 2, turn: 1, text: `Cited and visualised [[${P1}]].` }), // key 1, has a head
+    entry({ ord: 3, turn: 2, role: "user", text: "q2" }),
+    entry({ ord: 4, turn: 2, text: `Cited, no head [[${P1}]].` }), // key 2
+    entry({ ord: 5, turn: 3, role: "user", text: "q3" }),
+    entry({ ord: 6, turn: 3, text: "Not in the documents." }), // key 3: no passages, uncited
+    entry({ ord: 7, turn: 4, role: "user", text: "q4" }),
+    entry({ ord: 8, turn: 4, status: "interrupted", text: `Cut short [[${P1}]].` }), // key 4: cited but not complete
+  ];
+  const items = async () => {
+    const fake = new FakeItems();
+    for (const key of [1, 2, 4]) await fake.put(REF, key, `conv#o${key}#turn:0#p`, { kind: "passages", body: { passages: [passage] } });
+    return fake;
+  };
+  const noReasoning = { forReplies: async () => new Map() };
+
+  it("marks each complete, cited reply from one batched lookup, and every other message false", async () => {
+    const has = vi.fn(async (_ref: unknown, ords: readonly number[]) => new Set(ords.filter((o) => o === 2)));
+    const deps = { ...depsOf(await items(), noReasoning), heads: { has } } as MessageDeps;
+    const out = await toMessageDtos(deps, IDENTITY, C, history);
+    expect(out.map((m) => [m.id, m.hasVisuals])).toEqual([["1", false], ["2", true], ["3", false], ["4", false], ["5", false], ["6", false], ["7", false], ["8", false]]);
+    expect(has).toHaveBeenCalledTimes(1);
+    expect(has).toHaveBeenCalledWith({ userId: IDENTITY.userId, chatId: C }, [2, 4]); // only complete, cited replies
+  });
+  it("makes no lookup when no reply qualifies, and says false everywhere when the server has no heads", async () => {
+    const has = vi.fn(async () => new Set<number>());
+    const uncited = await toMessageDtos({ ...depsOf(new FakeItems(), noReasoning), heads: { has } } as MessageDeps, IDENTITY, C, history);
+    expect(has).not.toHaveBeenCalled();
+    expect(uncited.every((m) => m.hasVisuals === false)).toBe(true);
+    const none = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, C, history);
+    expect(none.every((m) => m.hasVisuals === false)).toBe(true);
+  });
 });
 ```
 
-`CT/chats.test.ts`: the `ChatMessageDto` accepts `hasVisuals: true|false` and an absent one; refuses a non-boolean.
+(`vi.mock` is hoisted: it replaces `documentTitles` for the whole file, whose other tests store no passages and never reach it. Add `vi` is already imported by this file.)
 
-`S/ui/ui.pg.test.ts` (append in the style of its `visualFacts` reader tests): the real `readersFor` with `PgTurnVisualFacts` returns the caller's own turn facts and `null` for another user's chat or a turn with none.
+`CT/chats.test.ts`: `ChatMessageDto` accepts `hasVisuals: true` and `false`, and refuses a missing or non-boolean one. Every `ChatMessageDto` literal in tests and fixtures gains `hasVisuals: false` (the server's `toMessageDtos` is the one producer; `pnpm typecheck:tests` names each literal).
 
-- [ ] **Step 1b: Literals.** Every test that builds `UiReaderDeps` or a `readersFor` result literal (`S/ui/readers.test.ts`, `S/ui/ui.pg.test.ts`, `S/ui/routes.test.ts`) gains `turnFacts` (a `PgTurnVisualFacts` or a stub).
+`CH/history.pg.test.ts` (append inside the `describe`; this file's `startChatServer`, `seedChat`, `seedDoc`, `history`, `ref`, `convOf` and its imports exist; it needs the harness `heads` option below):
+
+```ts
+it("marks complete, cited replies with hasVisuals from the turn heads, and every other message false (also without heads)", async () => {
+  const withHeads = await startChatServer({ heads: { has: async (_ref, ords) => new Set(ords.filter((o) => o === 2)) } });
+  try {
+    const chatId = await seedChat(withHeads, ALICE);
+    const documentId = await seedDoc(withHeads.owner, withHeads.app, withHeads.fields, ALICE, randomBytes(32).toString("hex"), 0);
+    const passageId = randomUUID();
+    const stored: StoredPassage = { passageId, documentId, locator: { kind: "page", page: 2 }, headingPath: ["Terms"], snippet: "Payment is due within 30 days." };
+    withHeads.fake.addTurn(convOf(chatId), { question: "When is payment due?", answer: `Within 30 days [[${passageId}]].` }); // ords 1, 2
+    withHeads.fake.addTurn(convOf(chatId), { question: "And the weather?", answer: "I have no source for that." }); // ords 3, 4
+    await withHeads.wiring.items.put(ref(chatId), 1, "conv#o1#turn:0:tool:0#p", { kind: "passages", body: { passages: [stored] } });
+    const { body } = await history(withHeads, "alice", chatId);
+    expect(body.items.map((m) => [m.role, m.hasVisuals])).toEqual([["user", false], ["assistant", true], ["user", false], ["assistant", false]]);
+    // the same chat on a server with no heads: false everywhere, and still valid against the contract
+    const plainChat = await seedChat(h, ALICE);
+    h.fake.addTurn(convOf(plainChat), { question: "q", answer: "a" });
+    const plain = await history(h, "alice", plainChat);
+    expect(plain.body.items).toHaveLength(2);
+    expect(plain.body.items.every((m) => m.hasVisuals === false)).toBe(true);
+  } finally {
+    await withHeads.close();
+  }
+});
+```
+
+`CH/testHarness.ts`: `startChatServer`'s options gain `heads?: ChatRouteDeps["heads"]`, and the `deps` literal gains `...(o.heads && { heads: o.heads })` (its `chatStreamRoutes({ ...deps, ...o.stream })` then passes it on, because `ChatStreamDeps` includes `heads`, below).
+
+- [ ] **Step 1b: Literals.** The new required `turnFacts` member breaks every `UiReaderDeps` literal. Add `turnFacts: new PgTurnVisualFacts(app, fields)` (import it from `../flows/visualize-turn/pgTurnFacts`) to the literal in `S/documents/testHarness.ts` (`uiRoutes({ ..., readers: { pool: app, fields, status: ingest.status, blobs, registry: wiring.registry, visualFacts: new PgVisualFacts(app, fields) } })`, around L452; every suite that uses that harness breaks without it) and `turnFacts: new PgTurnVisualFacts(h.app, fields)` to the `readersFor({ ..., visualFacts: new PgVisualFacts(h.app, fields) }, ALICE)` literal in `S/ui/ui.pg.test.ts` (around L235). `S/ui/readers.test.ts` and `S/ui/routes.test.ts` build theirs `as never` or through the `readersFor` seam shown above and need nothing more. Run `pnpm --filter @docmind/server typecheck && pnpm --filter @docmind/server typecheck:tests`; any literal it still names gains the member.
 
 - [ ] **Step 2: Run them and check they fail**
 
-Run: `pnpm --filter @docmind/experiences exec vitest run src/views.test.ts && pnpm --filter @docmind/server exec vitest run app/ui/routes.test.ts app/chats/turnHeads.test.ts app/chats/messages.test.ts && pnpm --filter @docmind/contracts exec vitest run src/chats.test.ts`
+Run: `pnpm --filter @docmind/experiences exec vitest run src/views.test.ts && pnpm --filter @docmind/server exec vitest run app/ui/routes.test.ts app/ui/readers.test.ts app/chats/turnHeads.test.ts app/chats/messages.test.ts app/chats/history.pg.test.ts && pnpm --filter @docmind/contracts exec vitest run src/chats.test.ts`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -3658,7 +3947,7 @@ const ownedDocuments =
     );
     return new Set(rows.map((r) => r.id));
   });
-const ORD = /^[1-9][0-9]{0,8}$/;
+const ORD = /^[1-9][0-9]{0,14}$/; // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
 /** The turn's visuals head and the documents of it that are still the caller's; null when there is no head. */
 const turnHead = async (identity: Identity, chatId: string, ord: number) => {
   try {
@@ -3753,24 +4042,23 @@ export function lineageTurnHeads(lineage: Pick<Lineage, "head">, concurrency = 8
 }
 ```
 
-`CH/messages.ts`: `MessageDeps = Pick<ChatRouteDeps, "pool" | "fields" | "chat" | "reasoning" | "heads">`; after `entries.map` inputs are computed and before the final map, compute the batch:
+`CH/messages.ts`: `MessageDeps = Pick<ChatRouteDeps, "pool" | "fields" | "chat" | "reasoning" | "heads">`. The citations are already computed once per reply in the final map; collect the qualifying ords there instead of computing them again, then decorate:
 
 ```ts
-const visualised = new Set<number>();
-if (deps.heads) {
-  const ords = entries.flatMap((e) => {
-    if (e.role !== "assistant" || e.status !== "complete" || e.turn < 1) return [];
-    const key = turnKeyOf(e);
-    const retrieved = (key === undefined ? [] : (items.get(key) ?? [])).flatMap((i) => (i.kind === "passages" ? i.body.passages : []));
-    return citeReply(e.text, retrieved, titles).citations.length > 0 ? [e.ord as number] : [];
-  });
-  if (ords.length > 0) for (const o of await deps.heads.has({ userId: identity.userId, chatId }, ords)) visualised.add(o);
-}
+const citedOrds: number[] = []; // complete replies with at least one citation: the only ones that can have visuals
+const dtos = entries.map((e): ChatMessageDto => {
+  // ...the existing body, with `hasVisuals: false` on the user branch, and in the assistant branch, right after `const cited = citeReply(...)`:
+  if (e.status === "complete" && cited.citations.length > 0) citedOrds.push(e.ord as number);
+  // ...and `hasVisuals: false` in the returned assistant object
+});
+if (!deps.heads || citedOrds.length === 0) return dtos;
+const visualised = await deps.heads.has({ userId: identity.userId, chatId }, citedOrds);
+return dtos.map((m) => (m.role === "assistant" && visualised.has(Number(m.id)) ? { ...m, hasVisuals: true } : m));
 ```
 
-and in the assistant branch of the final map add `...(deps.heads && { hasVisuals: visualised.has(e.ord as number) })` (for every assistant message, `false` when not looked up). `CH/routes.ts`: `heads?: TurnHeads` in `ChatRouteDeps`; `chatStreamRoutes` deps extend `ChatRouteDeps`-like so `toMessageDtos(deps, ...)` in `stream.ts` gets it through the same field (check `ChatStreamDeps` and add `heads?` if it is a separate type).
+`CH/routes.ts`: `heads?: TurnHeads` in `ChatRouteDeps`. `CH/stream.ts`: `ChatStreamDeps` is a `Pick` of `ChatRouteDeps`; add `"heads"` to that `Pick` so `chatStreamRoutes` passes it into `toMessageDtos` (history and the live `message` frames both come from `toMessageDtos`).
 
-`CT/chats.ts` in `ChatMessageDto`: `/** Assistant messages only, when the server makes visuals: whether the turn has a visuals head. */ hasVisuals: z.boolean().optional(),`.
+`CT/chats.ts` in `ChatMessageDto`: `/** Whether the turn has a visuals head: true only for a complete, cited assistant message whose visuals exist; false for every other message. */ hasVisuals: z.boolean(),`.
 
 `S/compose.ts`: `uiRoutes({... readers: { ..., turnFacts }})` using the `turnFacts` built in Task 8; `const heads = lineageTurnHeads(visualsLineageOf)` passed as `heads` to `chatRoutes` and `chatStreamRoutes` (only when `visualsLlm` is on? No: heads are read-only and cheap; pass them whenever chat is on, so a deployment that turned the role off still shows the visuals it made earlier).
 
@@ -3793,37 +4081,38 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 
 ### Task 11: The web: the Visuals strip, the action states and the live frame
 
-> **Blocked on the loom-ui entry slot (spec section 3b).** The strip's placement below (`placeStrips` /
-> `placeVisuals`, the reach into `lu-chat`'s shadow root and the `MutationObserver`) is superseded and must not be
-> built. Before dispatching this task, the controller bumps `LOOM_UI_REF` to the merged loom-ui SHA and rewrites the
-> placement steps against that API. The strip component, its states, the client calls and the live-frame handling
-> stand.
+The strip is placed by loom-ui itself: loom-ui `d036e84` (loom-ui PR #125, pinned in Task 1) lets a host draw content inside one transcript entry through `chatAccessories` (`@loom-ui/renderer-lit/chat`). DocMind implements `ChatEntryAccessories`: a per-page map `entryId -> host-owned strip node`, where the entry id is `t<turn>.assistant`. There is no reach into `lu-chat`'s shadow root, no `MutationObserver` and no reconciler.
 
 **Files:**
-- Modify: `WEB/api/client.ts` (`ViewSource`, `uiTurnVisuals`, `visualizeTurn`), `WEB/ui/session.ts` (`fetchPayload`), `WEB/components/dm-view.ts` (`turn` property)
-- Create: `WEB/chat/visuals.ts` (copy and the pure action rules), `WEB/chat/placeStrips.ts`
-- Modify: `WEB/chat/feedAdapter.ts` (`Extras.hasVisuals`, the `visuals` frame), `WEB/state/chat.ts` (`EntryView`, `ChatController.visualize`)
+- Modify: `WEB/api/client.ts` (`ViewSource`, `uiTurnVisuals`, `visualizeTurn`), `WEB/ui/session.ts` (`fetchPayload`, `mount` takes `chatAccessories` and passes it to `createChatLitRegistry`, the real call site), `WEB/components/dm-view.ts` (`turn` and `chatAccessories` properties)
+- Create: `WEB/chat/visuals.ts` (copy and the pure action rules), `WEB/chat/visualsAccessory.ts` (`VisualsAccessories implements ChatEntryAccessories`)
+- Modify: `WEB/chat/feedAdapter.ts` (`Extras.hasVisuals`, `Extras.visualsRev`, the `visuals` frame), `WEB/state/chat.ts` (`EntryView`, `ChatController.visualize`)
 - Create: `WEB/components/dm-turn-visuals.ts`
-- Modify: `WEB/components/dm-chat-page.ts` (place strips, perform `visualize`), `WEB/components/index.ts` (register)
+- Modify: `WEB/components/dm-chat-page.ts` (creates the accessories per chat, hands them to the chat `dm-view`, keeps them in step with the controller, performs `visualize`, ignores the strips' own `view-ready`), `WEB/components/index.ts` (register)
 - Modify: `WEB/testing/fakeUi.ts` (`emptyReaders.turnFacts`, `uiTurnVisuals`)
-- Test: `WEB/api/client.test.ts`, `WEB/ui/session.test.ts`, `WEB/chat/visuals.test.ts`, `WEB/chat/placeStrips.test.ts`, `WEB/chat/feedAdapter.test.ts`, `WEB/state/chat.test.ts`, `WEB/components/dm-turn-visuals.test.ts`, `WEB/components/dm-chat-page.test.ts`
+- Modify (fixtures): the `msg` helpers of `WEB/chat/feedAdapter.test.ts`, `WEB/state/chat.test.ts`, `WEB/components/dm-chat-page.test.ts`, `WEB/chat/transport.test.ts`, `WEB/testing/fakeServer.ts` and `fakeServer.test.ts` gain `hasVisuals: false` (the field is required; `pnpm --filter @docmind/web typecheck:tests` names every literal)
+- Test: `WEB/api/client.test.ts`, `WEB/ui/session.test.ts`, `WEB/chat/visuals.test.ts`, `WEB/chat/visualsAccessory.test.ts`, `WEB/chat/feedAdapter.test.ts`, `WEB/state/chat.test.ts`, `WEB/components/dm-turn-visuals.test.ts`, `WEB/components/dm-chat-page.test.ts`
 
 **Interfaces:**
 - Produces:
   - `ViewSource = { view: ViewName } | { document: string } | { turn: { chatId: string; ord: number } }`; `Api.uiTurnVisuals(chatId, ord, signal?)`, `Api.visualizeTurn(chatId, ord): Promise<void>` (resolves on 202; rejects with `ApiError`)
   - `VISUALS_COPY`, `VISUALS_TIMEOUT_MS = 60_000`, `visualsViewOf(e: { role: "user" | "assistant"; status: string; citations: readonly unknown[]; hasVisuals: boolean; phase: VisualsPhase }): VisualsView | null` where `VisualsPhase = "idle" | "running" | "limited" | "nothing"` and `VisualsView = { strip: boolean; action: string | null; busy: boolean; note: string | null }`
-  - `EntryView.hasVisuals: boolean`, `EntryView.visuals: VisualsView | null`; `ChatController.visualize(ord: number): Promise<void>`
-  - `ChatFold.drainVisuals(): [ord: number, outcome: "visualized" | "nothing"][]`; `Extras.hasVisuals: boolean`
-  - `placeStrips(log: ParentNode, entries: readonly { turn: number; ord: number; visuals: VisualsView | null }[], make: () => StripHost): void`, `interface StripHost extends HTMLElement { ord: number; chatId: string; view: VisualsView | null }`
-  - `<dm-turn-visuals>`: properties `chatId: string`, `ord: number`, `view: VisualsView | null`; dispatches `visualize` (a `CustomEvent<{ ord: number }>`, `bubbles`, `composed`)
-  - `dm-view` property `turn: { chatId: string; ord: number } | undefined` (a third source beside `name` and `document`)
-- Consumes: `UiViewResponse`, `ChatStreamEvent` (with the `visuals` member), `ChatMessageDto.hasVisuals` (Tasks 7 and 10), `ViewSession`, `ApiError` (`WEB/api/http.ts`).
+  - `EntryView.hasVisuals: boolean`, `EntryView.visualsRev: number`, `EntryView.visuals: VisualsView | null`; `ChatController.visualize(ord: number): Promise<void>`
+  - `ChatFold.drainVisuals(): [ord: number, outcome: "visualized" | "nothing"][]`; `Extras.hasVisuals: boolean`, `Extras.visualsRev: number` (counts the `visualized` frames of the reply, so a re-run reloads the strip)
+  - `class VisualsAccessories implements ChatEntryAccessories` with `constructor(o: { chatId: string; make: () => StripHost; onVisualize(ord: number): void })`, `update(entries: readonly AccessoryEntry[]): void`, `render(entry: ChatEntryRef): Node | null`, `subscribe(changed): () => void`, `dispose(): void`; `interface StripHost extends HTMLElement { chatId: string; ord: number; rev: number; view: VisualsView | null }`; `AccessoryEntry = { id: string; role: "user" | "assistant"; ord?: number; visualsRev: number; visuals: VisualsView | null }`
+  - `<dm-turn-visuals>`: properties `chatId: string`, `ord: number`, `rev: number`, `view: VisualsView | null`; dispatches `visualize` (a `CustomEvent<{ ord: number }>`, `bubbles`, `composed`); stops its nested view's `view-ready` and `view-problem` at itself
+  - `dm-view` properties `turn: { chatId: string; ord: number } | undefined` (a third source beside `name` and `document`) and `chatAccessories: ChatEntryAccessories | undefined` (given to `ViewSession.mount`)
+- Consumes: `UiViewResponse`, `ChatStreamEvent` (with the `visuals` member), `ChatMessageDto.hasVisuals` (Tasks 7 and 10), `ViewSession`, `ApiError` (`WEB/api/http.ts`), `ChatEntryAccessories`, `ChatEntryRef` (`@loom-ui/renderer-lit/chat`, pinned in Task 1).
 
-Plan decision: the `Chat` widget (loom-ui `lu-chat`) has no per-entry slot, so the strip cannot be given to it as data. `dm-chat-page` places one `<dm-turn-visuals>` as the last child of the widget's own `article[data-role="assistant"][data-turn="<n>"]` (a reconciler, `placeStrips`, run on every state change and on a `MutationObserver` over the log, idempotent, ignoring mutations of its own nodes), the same kind of reach into the widget's shadow root `dm-doc-detail` already makes. The clean fix is a generic named slot per entry in loom-ui (`ChatEntry`-keyed), recorded as a follow-up; it is not built here (a loom-ui change needs its own pin bump).
+How the accessory behaves (loom-ui `chatAccessory.ts`, d036e84): `lu-chat` calls `render(entry, chat)` once per entry and status (first appearance, a streaming reply settling) and again on `changed(entryId)`; never on streaming deltas, never for a restricted entry. It draws the returned node inside the entry's `<article>`, after the body, wrapped in `<div data-entry-accessory part="entry-accessory">`. A host-owned node that is returned again is never remounted, so the strip keeps its expanded state and its mounted widgets across the transcript's redraws. A throwing `render` or `subscribe` draws nothing.
 
-Plan decision: the strip's widgets are fetched (payload, then one hydrate) when the strip first scrolls into view (an `IntersectionObserver`; mounted at once where the API is missing), not on first expand. Spec section 8 asks for a collapsed preview (first key figure or first chart row, plus a count), which needs the widgets; expanding then only removes the clip. Cost: one payload and one hydrate per strip that is seen, bounded by the messages on screen.
+Plan decision: `VisualsAccessories` keeps one strip node per entry whose `visuals` view is non-null (a complete, cited assistant answer: the rules of spec section 8 live in `visualsViewOf`) and returns it from `render` for that entry only; every other entry, and every user entry, gets `null`. The page calls `update(entries)` on every controller change, before it publishes the transcript, so the node is in the map when the widget asks. `update` calls `changed(entryId)` when a strip appears or goes away and whenever its view changes (a history page with `hasVisuals`, a `visuals` frame, a button state change); the node is the same, so this only tells the widget to ask again. `subscribe` is how `lu-chat` hands over `changed`; its unsubscribe runs when the widget leaves the page.
 
-Plan decision: after a 429 the note "Try again in a minute" replaces the action for 60 s and then clears; an outcome of `nothing` shows "Nothing to visualize" beside the action (a re-click is allowed: the answer's sources may have been re-indexed).
+Plan decision: the strip's widgets are fetched (payload, then one hydrate) when the strip first scrolls into view (an `IntersectionObserver`; mounted at once where the API is missing), not on first expand. Spec section 8 asks for a collapsed preview (first key figure or first chart row, plus a count), which needs the widgets; expanding then only removes the clip. Cost: one payload and one hydrate per strip that is seen, bounded by the messages on screen. A re-run (`rev` bumped by a `visualized` frame) re-keys the nested view, so it fetches the new head.
+
+Plan decision: after a 429 the note "Try again in a minute" replaces the action for 60 s and then clears; an outcome of `nothing` (from a `nothing` frame, which every run that ends `nothing` publishes, or a 409 `not_visualizable`) shows "Nothing to visualize" beside the action (a re-click is allowed: the answer's sources may have been re-indexed).
+
+Plan decision (ruling P11): a strip mounts its own `dm-view` for the turn. That view's `view-ready` and `view-problem` are `composed` and bubble through `lu-chat`'s shadow root to the `dm-view name="chat"` the page listens on; unhandled, `onReady` would replace the page's chat session with the strip's turn session. Two guards: the strip stops both events at itself, and the page's `onReady` ignores any `view-ready` whose first composed-path node is not the chat view itself.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3864,153 +4153,215 @@ describe("visualsViewOf", () => {
 });
 ```
 
-`WEB/chat/placeStrips.test.ts`:
+`WEB/chat/visualsAccessory.test.ts` (the accessory driven directly, as `lu-chat` drives it):
 
 ```ts
-import { describe, expect, it } from "vitest";
-import { type StripHost, placeStrips } from "./placeStrips";
+import type { ChatEntryRef } from "@loom-ui/renderer-lit/chat";
+import { describe, expect, it, vi } from "vitest";
+import { type AccessoryEntry, type StripHost, VisualsAccessories } from "./visualsAccessory";
+import type { VisualsView } from "./visuals";
 
-const log = (...turns: number[]) => {
-  const root = document.createElement("div");
-  for (const t of turns) {
-    const a = document.createElement("article");
-    a.dataset.role = "assistant";
-    a.dataset.turn = String(t);
-    root.append(a);
-  }
-  const user = document.createElement("article");
-  user.dataset.role = "user";
-  user.dataset.turn = "1";
-  root.prepend(user);
-  return root;
-};
-const make = (): StripHost => Object.assign(document.createElement("div"), { ord: 0, chatId: "", view: null }) as StripHost;
-const view = { strip: true, action: "Re-visualize", busy: false, note: null };
+const view = (over: Partial<VisualsView> = {}): VisualsView => ({ strip: true, action: "Re-visualize", busy: false, note: null, ...over });
+const make = (): StripHost => Object.assign(document.createElement("div"), { chatId: "", ord: 0, rev: 0, view: null }) as StripHost;
+const ref = (id: string, role: "user" | "assistant" = "assistant"): ChatEntryRef => ({ id, turn: 1, role, status: "complete" });
+const entry = (id: string, ord: number, visuals: VisualsView | null, over: Partial<AccessoryEntry> = {}): AccessoryEntry => ({ id, role: "assistant", ord, visualsRev: 0, visuals, ...over });
+const make2 = (onVisualize = vi.fn()) => ({ acc: new VisualsAccessories({ chatId: "c1", make, onVisualize }), onVisualize });
 
-describe("placeStrips", () => {
-  it("puts one strip at the end of the assistant article of each turn that has a view, and none on a user article", () => {
-    const root = log(1, 2);
-    placeStrips(root, [{ turn: 1, ord: 2, visuals: view }, { turn: 2, ord: 4, visuals: null }], make);
-    const strips = root.querySelectorAll("[data-turn-visuals]");
-    expect(strips).toHaveLength(1);
-    const article = strips[0]?.parentElement as HTMLElement;
-    expect([article.dataset.role, article.dataset.turn, article.lastElementChild === strips[0]]).toEqual(["assistant", "1", true]);
-    expect((strips[0] as StripHost).ord).toBe(2);
+describe("VisualsAccessories", () => {
+  it("serves one host-owned strip per assistant entry that has a view, the same node every time, and null for everything else", () => {
+    const { acc } = make2();
+    acc.update([
+      entry("t1.assistant", 2, view()),
+      entry("t2.assistant", 4, null),
+      { id: "m1", role: "user", visualsRev: 0, visuals: null },
+    ]);
+    const strip = acc.render(ref("t1.assistant"));
+    expect(strip).toBeInstanceOf(HTMLElement);
+    expect(acc.render(ref("t1.assistant"))).toBe(strip);
+    expect([acc.render(ref("t2.assistant")), acc.render(ref("m1", "user")), acc.render(ref("t9.assistant"))]).toEqual([null, null, null]);
+    expect(strip).toMatchObject({ chatId: "c1", ord: 2, rev: 0, view: view() });
   });
-  it("is idempotent: a second run keeps the same element and updates its view", () => {
-    const root = log(1);
-    placeStrips(root, [{ turn: 1, ord: 2, visuals: view }], make);
-    const first = root.querySelector("[data-turn-visuals]");
-    placeStrips(root, [{ turn: 1, ord: 2, visuals: { ...view, busy: true } }], make);
-    expect(root.querySelector("[data-turn-visuals]")).toBe(first);
-    expect((first as StripHost).view?.busy).toBe(true);
+  it("keeps the node when the view changes, and updates it in place", () => {
+    const { acc } = make2();
+    acc.update([entry("t1.assistant", 2, view())]);
+    const strip = acc.render(ref("t1.assistant")) as StripHost;
+    acc.update([entry("t1.assistant", 2, view({ busy: true, action: "Visualizing…" }), { visualsRev: 1 })]);
+    expect(acc.render(ref("t1.assistant"))).toBe(strip);
+    expect(strip).toMatchObject({ rev: 1, view: { busy: true } });
   });
-  it("removes a strip whose view went away or whose article is gone", () => {
-    const root = log(1, 2);
-    placeStrips(root, [{ turn: 1, ord: 2, visuals: view }, { turn: 2, ord: 4, visuals: view }], make);
-    placeStrips(root, [{ turn: 1, ord: 2, visuals: null }], make);
-    expect(root.querySelectorAll("[data-turn-visuals]")).toHaveLength(0);
+  it("tells subscribers which entry changed: a strip appearing, changing, or going away, and nothing when nothing changed", () => {
+    const { acc } = make2();
+    const changed = vi.fn();
+    const off = acc.subscribe(changed);
+    acc.update([entry("t1.assistant", 2, null)]);
+    expect(changed).not.toHaveBeenCalled(); // no strip: nothing to redraw
+    acc.update([entry("t1.assistant", 2, view())]);
+    expect(changed).toHaveBeenLastCalledWith("t1.assistant");
+    changed.mockClear();
+    acc.update([entry("t1.assistant", 2, view())]);
+    expect(changed).not.toHaveBeenCalled();
+    acc.update([entry("t1.assistant", 2, view({ note: "Nothing to visualize" }))]);
+    expect(changed).toHaveBeenCalledWith("t1.assistant");
+    changed.mockClear();
+    acc.update([]);
+    expect(changed).toHaveBeenCalledWith("t1.assistant");
+    expect(acc.render(ref("t1.assistant"))).toBeNull();
+    off();
+    acc.update([entry("t1.assistant", 2, view())]);
+    expect(changed).toHaveBeenCalledTimes(1); // unsubscribed: no further calls
+  });
+  it("raises onVisualize with the strip's ord, and stops the event there", () => {
+    const { acc, onVisualize } = make2();
+    acc.update([entry("t1.assistant", 2, view())]);
+    const strip = acc.render(ref("t1.assistant")) as StripHost;
+    const outer = vi.fn();
+    document.body.addEventListener("visualize", outer);
+    strip.dispatchEvent(new CustomEvent("visualize", { detail: { ord: 2 }, bubbles: true, composed: true }));
+    document.body.removeEventListener("visualize", outer);
+    expect(onVisualize).toHaveBeenCalledWith(2);
+    expect(outer).not.toHaveBeenCalled();
+  });
+  it("dispose() drops every strip and subscriber", () => {
+    const { acc } = make2();
+    const changed = vi.fn();
+    acc.subscribe(changed);
+    acc.update([entry("t1.assistant", 2, view())]);
+    acc.dispose();
+    changed.mockClear();
+    expect(acc.render(ref("t1.assistant"))).toBeNull();
+    acc.update([entry("t1.assistant", 2, view())]);
+    expect(changed).not.toHaveBeenCalled();
   });
 });
 ```
 
-`WEB/chat/feedAdapter.test.ts` (append; use this file's own message fixtures, as its existing tests do):
+`WEB/chat/feedAdapter.test.ts` (append; this file's `msg`, `page`, `ev` helpers and the `PASSAGE`/`DOC` constants exist; define the citation next to the new tests):
 
 ```ts
-it("keeps hasVisuals from history, and marks the reply of a visuals frame by its ord", () => {
-  const fold = new ChatFold();
-  fold.applyHistory({ items: [msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited], hasVisuals: false })], nextCursor: null });
-  expect(fold.extrasOf("t1.assistant")?.hasVisuals).toBe(false);
-  fold.applyStream({ kind: "visuals", ord: 2, outcome: "visualized" });
-  expect(fold.extrasOf("t1.assistant")?.hasVisuals).toBe(true);
-  expect(fold.drainVisuals()).toEqual([[2, "visualized"]]);
-  expect(fold.drainVisuals()).toEqual([]);
-});
-it("keeps a nothing frame out of hasVisuals, and ignores a frame for an unknown ord", () => {
-  const fold = new ChatFold();
-  fold.applyHistory({ items: [msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited] })], nextCursor: null });
-  fold.applyStream({ kind: "visuals", ord: 2, outcome: "nothing" });
-  fold.applyStream({ kind: "visuals", ord: 77, outcome: "visualized" });
-  expect(fold.extrasOf("t1.assistant")?.hasVisuals).toBe(false);
-  expect(fold.drainVisuals()).toEqual([[2, "nothing"], [77, "visualized"]]);
+describe("visuals", () => {
+  const citation = { passageId: PASSAGE, documentId: DOC, docTitle: "Doc", locator: { kind: "page" as const, page: 2 }, snippet: "snip" };
+  const folded = () => {
+    const fold = new ChatFold();
+    fold.applyHistory(page([msg(1, "user", 1), msg(2, "assistant", 1, { citations: [citation] })]));
+    return fold;
+  };
+  it("keeps hasVisuals from history, and marks the reply of a visuals frame by its ord", () => {
+    const fold = new ChatFold();
+    fold.applyHistory(page([msg(1, "user", 1), msg(2, "assistant", 1, { citations: [citation], hasVisuals: false })]));
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: false, visualsRev: 0 });
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: true, visualsRev: 1 });
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")?.visualsRev).toBe(2); // a re-run
+    expect(fold.drainVisuals()).toEqual([[2, "visualized"], [2, "visualized"]]);
+    expect(fold.drainVisuals()).toEqual([]);
+  });
+  it("keeps hasVisuals when the same reply arrives again (a reconnect snapshot says false for a reply that has visuals)", () => {
+    const fold = folded();
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "visualized" }));
+    fold.applyStream(ev({ kind: "message", ...msg(2, "assistant", 1, { citations: [citation] }) }));
+    expect(fold.extrasOf("t1.assistant")?.hasVisuals).toBe(true);
+  });
+  it("keeps a nothing frame out of hasVisuals, and still reports a frame for an unknown ord", () => {
+    const fold = folded();
+    fold.applyStream(ev({ kind: "visuals", ord: 2, outcome: "nothing" }));
+    fold.applyStream(ev({ kind: "visuals", ord: 77, outcome: "visualized" }));
+    expect(fold.extrasOf("t1.assistant")).toMatchObject({ hasVisuals: false, visualsRev: 0 });
+    expect(fold.drainVisuals()).toEqual([[2, "nothing"], [77, "visualized"]]);
+  });
 });
 ```
 
-(`msg` and `cited` are that file's fixture helpers; if it names them differently, use its own.)
+`WEB/state/chat.test.ts`: first give this file's `msg` helper `hasVisuals: false`, and give its `setup` a `visualizeTurn` option and api member:
 
-`WEB/state/chat.test.ts` (append; mirror this file's controller setup with a fake `api` and `open`; use `vi.useFakeTimers()`):
+```ts
+type VisualizeFn = (id: string, ord: number) => Promise<void>;
+// setup(over: { ...; visualizeTurn?: VisualizeFn } = {}): in the api literal
+//   visualizeTurn: vi.fn<VisualizeFn>(async () => {}),
+// and after the other overrides:
+//   if (over.visualizeTurn) api.visualizeTurn = vi.fn<VisualizeFn>(over.visualizeTurn);
+```
+
+then append (this file's `setup`, `msg`, `cited`, `frame`, `state` and `ApiError`; real timers while the history loads, fake ones only around the actions):
 
 ```ts
 describe("visuals actions", () => {
-  const setup = async (visualizeTurn: (chatId: string, ord: number) => Promise<void>) => {
+  const history = (over: Partial<ChatMessageDto> = {}) => async () => ({
+    items: [msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited], ...over })],
+    nextCursor: null,
+  });
+  const started = async (visualizeTurn: VisualizeFn = async () => {}, over: Partial<ChatMessageDto> = {}) => {
+    const t = setup({ listMessages: history(over), visualizeTurn });
+    await t.ctl.start();
     vi.useFakeTimers();
-    const sse = fakeSse(); // this file's helper for an injectable stream
-    const api = { ...fakeChatApi([msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited] })]), visualizeTurn: vi.fn(visualizeTurn) };
-    const c = new ChatController({ api, auth: fakeAuth(), chatId: CHAT, open: sse.open });
-    await c.start();
-    const assistant = () => c.state.get().entries.find((e) => e.role === "assistant");
-    return { c, api, sse, assistant };
+    return { ...t, visuals: () => t.state().entries.find((e) => e.role === "assistant")?.visuals };
   };
   afterEach(() => vi.useRealTimers());
 
-  it("202: Visualizing…, then the frame ends the wait and shows the strip", async () => {
-    const { c, sse, assistant } = await setup(async () => {});
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualize", busy: false });
-    await c.visualize(2);
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualizing…", busy: true });
-    sse.frame("visuals", { ord: 2, outcome: "visualized" });
-    expect(assistant()?.visuals).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+  it("202: Visualizing…, then a visuals frame ends the wait and shows the strip", async () => {
+    const t = await started();
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false });
+    await t.ctl.visualize(2);
+    expect(t.api.visualizeTurn).toHaveBeenCalledWith("c1", 2);
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", busy: true });
+    t.frame("visuals", { ord: 2, outcome: "visualized" });
+    expect(t.visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
   });
   it("ends the wait after 60 s with no frame", async () => {
-    const { c, assistant } = await setup(async () => {});
-    await c.visualize(2);
+    const t = await started();
+    await t.ctl.visualize(2);
     vi.advanceTimersByTime(59_999);
-    expect(assistant()?.visuals?.busy).toBe(true);
+    expect(t.visuals()?.busy).toBe(true);
     vi.advanceTimersByTime(1);
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualize", busy: false });
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false });
   });
   it("ignores a second activation while a run is waited on", async () => {
-    const { c, api } = await setup(async () => {});
-    await Promise.all([c.visualize(2), c.visualize(2)]);
-    expect(api.visualizeTurn).toHaveBeenCalledTimes(1);
+    const t = await started();
+    await Promise.all([t.ctl.visualize(2), t.ctl.visualize(2)]);
+    expect(t.api.visualizeTurn).toHaveBeenCalledTimes(1);
   });
   it("409 visualize_running keeps Visualizing…", async () => {
-    const { c, assistant } = await setup(async () => { throw new ApiError(409, "visualize_running"); });
-    await c.visualize(2);
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualizing…", busy: true });
+    const t = await started(async () => { throw new ApiError(409, "visualize_running"); });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", busy: true });
   });
-  it("409 not_visualizable and a nothing frame show Nothing to visualize", async () => {
-    const a = await setup(async () => { throw new ApiError(409, "not_visualizable"); });
-    await a.c.visualize(2);
-    expect(a.assistant()?.visuals?.note).toBe("Nothing to visualize");
-    const b = await setup(async () => {});
-    await b.c.visualize(2);
-    b.sse.frame("visuals", { ord: 2, outcome: "nothing" });
-    expect(b.assistant()?.visuals).toMatchObject({ note: "Nothing to visualize", busy: false });
+  it("409 not_visualizable, and a nothing frame, show Nothing to visualize", async () => {
+    const a = await started(async () => { throw new ApiError(409, "not_visualizable"); });
+    await a.ctl.visualize(2);
+    expect(a.visuals()).toMatchObject({ action: "Visualize", note: "Nothing to visualize" });
+    const b = await started();
+    await b.ctl.visualize(2);
+    b.frame("visuals", { ord: 2, outcome: "nothing" });
+    expect(b.visuals()).toMatchObject({ note: "Nothing to visualize", busy: false });
   });
   it("429 shows Try again in a minute for 60 s, then the action again", async () => {
-    const { c, assistant } = await setup(async () => { throw new ApiError(429, "too_many_requests", 60); });
-    await c.visualize(2);
-    expect(assistant()?.visuals).toEqual({ strip: false, action: null, busy: false, note: "Try again in a minute" });
+    const t = await started(async () => { throw new ApiError(429, "too_many_requests", 60); });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toEqual({ strip: false, action: null, busy: false, note: "Try again in a minute" });
     vi.advanceTimersByTime(60_000);
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualize", note: null });
+    expect(t.visuals()).toMatchObject({ action: "Visualize", note: null });
   });
   it("any other failure puts the action back, silently", async () => {
-    const { c, assistant } = await setup(async () => { throw new ApiError(500, "internal"); });
-    await c.visualize(2);
-    expect(assistant()?.visuals).toMatchObject({ action: "Visualize", busy: false, note: null });
+    const t = await started(async () => { throw new ApiError(500, "internal"); });
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false, note: null });
   });
-  it("shows no action on uncited, interrupted and failed answers", async () => {
-    vi.useFakeTimers();
-    const api = fakeChatApi([msg(1, "user", 1), msg(2, "assistant", 1), msg(3, "user", 2), msg(4, "assistant", 2, { status: "interrupted", citations: [cited] })]);
-    const c = new ChatController({ api: { ...api, visualizeTurn: vi.fn() }, auth: fakeAuth(), chatId: CHAT, open: fakeSse().open });
-    await c.start();
-    expect(c.state.get().entries.filter((e) => e.role === "assistant").map((e) => e.visuals)).toEqual([null, null]);
+  it("shows the strip from history when the reply has visuals", async () => {
+    const t = await started(undefined, { hasVisuals: true });
+    expect(t.visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+  });
+  it("shows no action on an uncited reply, and none on an interrupted or failed one", async () => {
+    const uncited = await started(undefined, { citations: [] });
+    expect(uncited.visuals()).toBeNull();
+    const cut = await started(undefined, { status: "interrupted" });
+    expect(cut.visuals()).toBeNull();
+    const failed = await started(undefined, { status: "failed" });
+    expect(failed.visuals()).toBeNull();
   });
 });
 ```
 
-(`fakeSse`, `fakeChatApi`, `fakeAuth`, `msg`, `cited`, `CHAT` are helpers; use this file's existing ones. If one does not exist under that name, take the closest existing fixture in `state/chat.test.ts` and `chat/transport.test.ts`; do not add a parallel helper.)
+(`afterEach` and `ChatMessageDto` are imported at the top of the file: add `afterEach` to its vitest import.)
 
 `WEB/components/dm-turn-visuals.test.ts`:
 
@@ -4022,7 +4373,7 @@ import type { DmTurnVisuals } from "./dm-turn-visuals";
 const view = (over = {}) => ({ strip: true, action: "Re-visualize", busy: false, note: null, ...over });
 async function mount(props: Partial<DmTurnVisuals> = {}) {
   const el = document.createElement("dm-turn-visuals") as DmTurnVisuals;
-  Object.assign(el, { chatId: "c1", ord: 2, view: view(), ...props });
+  Object.assign(el, { chatId: "c1", ord: 2, rev: 0, view: view(), ...props });
   document.body.append(el);
   await el.updateComplete;
   return el;
@@ -4051,6 +4402,13 @@ describe("dm-turn-visuals", () => {
     expect(q(none, "dm-view")).toBeNull();
     expect(q(none, "[data-toggle]")).toBeNull();
   });
+  it("opens a fresh view when a re-run bumps rev", async () => {
+    const el = await mount();
+    const first = q(el, "dm-view");
+    el.rev = 1;
+    await el.updateComplete;
+    expect(q(el, "dm-view")).not.toBe(first);
+  });
   it("shows the action, disabled and labelled Visualizing… while busy, and raises visualize on a click", async () => {
     const el = await mount({ view: view({ strip: false, action: "Visualize" }) });
     const seen: number[] = [];
@@ -4078,34 +4436,92 @@ describe("dm-turn-visuals", () => {
     await el.updateComplete;
     expect(q(el, "dm-view")).not.toBeNull();
   });
+  it("keeps its nested view's view-ready and view-problem to itself (ruling P11)", async () => {
+    const el = await mount();
+    const outer = vi.fn();
+    document.body.addEventListener("view-ready", outer);
+    document.body.addEventListener("view-problem", outer);
+    const inner = q(el, "dm-view") as HTMLElement;
+    inner.dispatchEvent(new CustomEvent("view-ready", { detail: { session: {} }, bubbles: true, composed: true }));
+    inner.dispatchEvent(new CustomEvent("view-problem", { bubbles: true, composed: true }));
+    document.body.removeEventListener("view-ready", outer);
+    document.body.removeEventListener("view-problem", outer);
+    expect(outer).not.toHaveBeenCalled();
+  });
 });
 ```
 
-`WEB/components/dm-chat-page.test.ts` (append in its style; it mounts the page against `fakeUi`, a fake api with `listMessages`, and a stub SSE):
+`WEB/components/dm-chat-page.test.ts`: give this file's `msg` helper `hasVisuals: false`; in its `setup` api literal add `visualizeTurn: vi.fn(async () => {})` (an `over` key already merges last), and the `uiTurnVisuals` the fakeUi provides arrives through `...ui.api`. Add next to the other DOM helpers:
 
 ```ts
-it("shows the Visuals strip under a reply that has visuals, and the Visualize action under one that does not, and neither under an uncited reply", async () => {
-  const page = await openChat([
-    msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited], hasVisuals: true }),
-    msg(3, "user", 2), msg(4, "assistant", 2, { citations: [cited] }),
-    msg(5, "user", 3), msg(6, "assistant", 3),
-  ]);
-  const strips = [...logOf(page).querySelectorAll("[data-turn-visuals]")] as HTMLElement[];
-  expect(strips.map((s) => [(s.parentElement as HTMLElement).dataset.turn, (s as unknown as { view: { strip: boolean; action: string } }).view.strip, (s as unknown as { view: { action: string } }).view.action])).toEqual([["1", true, "Re-visualize"], ["2", false, "Visualize"]]);
-});
-it("shows the strip after a visuals frame and asks the server when Visualize is clicked", async () => {
-  const { page, sse, api } = await openChatLive([msg(1, "user", 1), msg(2, "assistant", 1, { citations: [cited] })]);
-  (logOf(page).querySelector("[data-turn-visuals]") as HTMLElement).dispatchEvent(new CustomEvent("visualize", { detail: { ord: 2 }, bubbles: true, composed: true }));
-  expect(api.visualizeTurn).toHaveBeenCalledWith(CHAT, 2);
-  sse.frame("visuals", { ord: 2, outcome: "visualized" });
-  await page.updateComplete;
-  expect(((logOf(page).querySelector("[data-turn-visuals]") as unknown) as { view: { strip: boolean } }).view.strip).toBe(true);
+type StripEl = HTMLElement & { ord: number; view: { strip: boolean; action: string | null; busy: boolean } | null };
+/** The strips lu-chat drew: inside each assistant article's accessory slot. */
+const strips = (p: Element) =>
+  Array.from(chatRoot(p)?.querySelectorAll('article[data-role="assistant"] [data-entry-accessory] dm-turn-visuals') ?? []) as StripEl[];
+const turnOf = (s: StripEl) => (s.closest("article") as HTMLElement).dataset.turn;
+const MIXED = async () => ({
+  items: [
+    msg(1, "user", 1), msg(2, "assistant", 1, { text: `Due in 30 days [[${PASSAGE}]].`, citations: [cited], hasVisuals: true }),
+    msg(3, "user", 2), msg(4, "assistant", 2, { text: `Also net 30 [[${PASSAGE}]].`, citations: [cited] }),
+    msg(5, "user", 3), msg(6, "assistant", 3, { text: "Not in the documents." }),
+  ],
+  nextCursor: null,
 });
 ```
 
-(`openChat`, `openChatLive`, `logOf` are small helpers you add at the top of this describe from the file's existing mount code: `logOf(page)` is `page.shadowRoot.querySelector("dm-view[name=chat]").shadowRoot.querySelector("lu-chat").shadowRoot.querySelector(".log")`; wait for `lu-chat` to render its articles with `await vi.waitFor(...)`.)
+and append:
 
-`WEB/api/client.test.ts` (append) and `WEB/ui/session.test.ts` (append):
+```ts
+describe("dm-chat-page: visuals under a reply (loom-ui chatAccessories)", () => {
+  it("lu-chat draws the Visuals strip under a reply that has visuals and the Visualize action under a cited one that does not, and nothing under an uncited reply", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    expect(strips(page).map((s) => [turnOf(s), s.ord, s.view?.strip, s.view?.action])).toEqual([
+      ["1", 2, true, "Re-visualize"],
+      ["2", 4, false, "Visualize"],
+    ]);
+    expect(chatRoot(page)?.querySelector('article[data-turn="3"] [data-entry-accessory]')).toBeNull();
+    expect(chatRoot(page)?.querySelector('article[data-role="user"] [data-entry-accessory]')).toBeNull();
+  });
+  it("keeps the same strip node across a redraw of the transcript", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const first = strips(page)[0];
+    t.frame("status", { state: "open", running: false });
+    await vi.waitFor(() => expect(strips(page)[0]).toBe(first));
+  });
+  it("shows the strip after a visuals frame, and asks the server when Visualize is clicked", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const second = strips(page)[1] as StripEl;
+    second.shadowRoot?.querySelector<HTMLButtonElement>("[data-action]")?.click();
+    await vi.waitFor(() => expect(t.api.visualizeTurn).toHaveBeenCalledWith(CHAT, 4));
+    t.frame("visuals", { ord: 4, outcome: "visualized" });
+    await vi.waitFor(() => expect(strips(page)[1]?.view).toMatchObject({ strip: true, action: "Re-visualize" }));
+    expect(strips(page)[1]).toBe(second); // the same node, updated in place
+  });
+  it("a strip's own view-ready does not replace the chat page's session (ruling P11)", async () => {
+    const t = setup(`/chats/${CHAT}`, { listMessages: MIXED });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(strips(page)).toHaveLength(2));
+    const chatSession = viewOf(page)?.session;
+    expect(chatSession).toBeDefined();
+    const inner = (strips(page)[0] as StripEl).shadowRoot?.querySelector("dm-view") as HTMLElement;
+    inner.dispatchEvent(new CustomEvent("view-ready", { detail: { session: { publish() {} } }, bubbles: true, composed: true }));
+    expect((page as unknown as { session?: unknown }).session).toBe(chatSession);
+    // the page's own event still works: a ready event dispatched on the chat view itself is taken
+    viewOf(page)?.dispatchEvent(new CustomEvent("view-ready", { detail: { session: chatSession }, bubbles: true, composed: true }));
+    expect((page as unknown as { session?: unknown }).session).toBe(chatSession);
+  });
+});
+```
+
+(`t.frame("status", ...)` is a harmless frame; use any frame this file's other tests send as a transcript redraw trigger if the status payload differs.)
+
+`WEB/api/client.test.ts` (append, in the style of its neighbouring `createApi` tests) and `WEB/ui/session.test.ts` (append):
 
 ```ts
 it("visualizeTurn POSTs the turn's visualize route and uiTurnVisuals GETs its visuals, with the chat id escaped", async () => {
@@ -4125,7 +4541,7 @@ it("opens a turn source and hydrates with it", async () => {
 });
 ```
 
-(`httpStub` and `turnViewPayload` are each file's own stub-http helper and a `UiViewResponse` fixture with `view: "turn"`; reuse the neighbouring test's.)
+(`httpStub` and `turnViewPayload` are each file's own stub-http helper and a `UiViewResponse` fixture with `view: "turn"`; reuse the neighbouring test's, and add the fixture next to the existing `UiViewResponse` fixture in the same file.)
 
 - [ ] **Step 2: Run them and check they fail**
 
@@ -4162,28 +4578,41 @@ visualizeTurn: async (chatId, ord) => {
 `WEB/ui/session.ts`: widen the three `Pick<Api, "uiView" | "uiDocumentDetail" ...>` types with `"uiTurnVisuals"` and
 
 ```ts
+import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
+
 const fetchPayload = (api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals">, source: ViewSource, signal: AbortSignal | undefined): Promise<UiViewResponse> =>
   "view" in source
     ? api.uiView(source.view, signal)
     : "document" in source
       ? api.uiDocumentDetail(source.document, signal)
       : api.uiTurnVisuals(source.turn.chatId, source.turn.ord, signal);
+
+// mount(): the third parameter is the real call site of the registry
+mount(host: HTMLElement, onAction: ActionHandler, o: { chatAccessories?: ChatEntryAccessories } = {}): void {
+  // ...unchanged...
+  registry: createChatLitRegistry({ ...(o.chatAccessories && { chatAccessories: o.chatAccessories }) }),
 ```
 
 `name` getter: `return "view" in this.source ? this.source.view : "detail";` stays (a document or a turn is not a named view; no caller of `name` is given a turn session). `uiHydrate` already spreads `source` into the body, which is exactly `{ turn: {...}, requests }`.
 
-`WEB/components/dm-view.ts`: add `turn: { attribute: false }` to `properties`, `declare turn: { chatId: string; ord: number } | undefined;`, and
+`WEB/components/dm-view.ts`: add `turn: { attribute: false }` and `chatAccessories: { attribute: false }` to `properties`, and
 
 ```ts
+import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
+declare turn: { chatId: string; ord: number } | undefined;
+/** Host content drawn under chat entries (a Chat view only): given to the view session's registry. */
+declare chatAccessories: ChatEntryAccessories | undefined;
+
 private get source(): ViewSource | undefined {
   if (this.turn !== undefined) return { turn: this.turn };
   if (this.document !== undefined) return { document: this.document };
   return this.name === undefined ? undefined : { view: this.name };
 }
-// sourceKey(): "view" in source ? `view:${...}` : "document" in source ? `document:${...}` : `turn:${source.turn.chatId}:${source.turn.ord}`
+// sourceKey(): "view" in source ? `view:${source.view}` : "document" in source ? `document:${source.document}` : `turn:${source.turn.chatId}:${source.turn.ord}`
+// open(): session.mount(host, (a) => this.onAct?.(a), this.chatAccessories ? { chatAccessories: this.chatAccessories } : undefined);
 ```
 
-`WEB/testing/fakeUi.ts`: `emptyReaders` gains `turnFacts: async () => null`; the fake `api` gains `uiTurnVisuals` (returns `views.turnPayload(...)` is not possible without a head: take an optional `turnVisuals` argument `(chatId, ord) => UiViewResponse` and call it).
+`WEB/testing/fakeUi.ts`: `emptyReaders` gains `turnFacts: async () => null`; the fake `api` type gains `"uiTurnVisuals"`, with `uiTurnVisuals: (chatId, ord) => { calls.turns.push([chatId, ord]); return new Promise<never>(() => {}); }` (a turn view that never arrives: the page tests need the strip, not a preview), and `calls` gains `turns: [] as [string, number][]`.
 
 `WEB/chat/visuals.ts`:
 
@@ -4232,58 +4661,116 @@ export function visualsViewOf(e: {
 }
 ```
 
-`WEB/chat/placeStrips.ts`:
+`WEB/chat/visualsAccessory.ts`:
 
 ```ts
+import type { ChatEntryAccessories, ChatEntryRef } from "@loom-ui/renderer-lit/chat";
 import type { VisualsView } from "./visuals";
 
+/** The element the page puts under a reply: `<dm-turn-visuals>` in the app, a stand-in in tests. */
 export interface StripHost extends HTMLElement {
-  ord: number;
   chatId: string;
+  ord: number;
+  rev: number;
   view: VisualsView | null;
 }
 
+/** What the accessories need of a transcript entry (a structural subset of `EntryView`). */
+export interface AccessoryEntry {
+  id: string;
+  role: "user" | "assistant";
+  ord?: number;
+  visualsRev: number;
+  visuals: VisualsView | null;
+}
+
+const same = (a: VisualsView | null, b: VisualsView | null) =>
+  a === b || (a !== null && b !== null && a.strip === b.strip && a.action === b.action && a.busy === b.busy && a.note === b.note);
+
 /**
- * Keeps one strip at the end of each assistant article that has a view. `lu-chat` has no slot per entry, so the page
- * puts its strip inside the widget's own article (found by `data-turn`). Idempotent: an existing strip is updated, never
- * recreated; a strip with no view or no article is removed.
+ * loom-ui's `ChatEntryAccessories` for one chat page: a map `entryId -> host-owned strip node` (the id is
+ * `t<turn>.assistant`). `lu-chat` asks `render` once per entry and status and again on `changed(entryId)`; the node
+ * it gets is the same one for the life of the entry, so the strip is never remounted by a redraw. `update` is the
+ * page's side: it creates, updates in place and drops strips from the controller's entries, and tells the widget which
+ * entry to ask about again.
  */
-export function placeStrips(
-  log: ParentNode,
-  entries: readonly { turn: number; ord: number; visuals: VisualsView | null }[],
-  make: () => StripHost,
-  chatId = "",
-): void {
-  const wanted = new Map(entries.filter((e) => e.visuals !== null).map((e) => [String(e.turn), e]));
-  for (const article of log.querySelectorAll<HTMLElement>('article[data-role="assistant"]')) {
-    const entry = wanted.get(article.dataset.turn ?? "");
-    const own = article.querySelector<StripHost>(":scope > [data-turn-visuals]");
-    if (!entry) {
-      own?.remove();
-      continue;
-    }
-    const strip = own ?? make();
-    if (!own) {
-      strip.setAttribute("data-turn-visuals", "");
-      article.append(strip);
-    }
-    strip.chatId = chatId;
-    strip.ord = entry.ord;
-    strip.view = entry.visuals;
+export class VisualsAccessories implements ChatEntryAccessories {
+  private readonly strips = new Map<string, StripHost>();
+  private readonly listeners = new Set<(entryId?: string) => void>();
+  constructor(
+    private readonly o: { chatId: string; make: () => StripHost; onVisualize(ord: number): void },
+  ) {}
+
+  render(entry: ChatEntryRef): Node | null {
+    return entry.role === "assistant" ? (this.strips.get(entry.id) ?? null) : null;
   }
-  // a strip whose article is gone
-  for (const strip of log.querySelectorAll<StripHost>("[data-turn-visuals]"))
-    if (!strip.parentElement?.matches('article[data-role="assistant"]')) strip.remove();
+
+  subscribe(changed: (entryId?: string) => void): () => void {
+    this.listeners.add(changed);
+    return () => void this.listeners.delete(changed);
+  }
+
+  update(entries: readonly AccessoryEntry[]): void {
+    const wanted = new Set<string>();
+    for (const e of entries) {
+      if (e.role !== "assistant" || e.ord === undefined || e.visuals === null) continue;
+      wanted.add(e.id);
+      let strip = this.strips.get(e.id);
+      let changed = false;
+      if (!strip) {
+        strip = this.o.make();
+        strip.chatId = this.o.chatId;
+        strip.addEventListener("visualize", (ev) => {
+          ev.stopPropagation();
+          this.o.onVisualize((ev as CustomEvent<{ ord: number }>).detail.ord);
+        });
+        this.strips.set(e.id, strip);
+        changed = true;
+      }
+      changed ||= !same(strip.view, e.visuals) || strip.rev !== e.visualsRev;
+      strip.ord = e.ord;
+      strip.rev = e.visualsRev;
+      strip.view = e.visuals;
+      if (changed) this.notify(e.id);
+    }
+    for (const id of [...this.strips.keys()])
+      if (!wanted.has(id)) {
+        this.strips.delete(id);
+        this.notify(id);
+      }
+  }
+
+  dispose(): void {
+    this.strips.clear();
+    this.listeners.clear();
+  }
+
+  private notify(entryId: string): void {
+    for (const listener of this.listeners) listener(entryId);
+  }
 }
 ```
-
-The test passes no `chatId`, so the default `""` is fine; the page passes the real one.
 
 `WEB/chat/feedAdapter.ts`:
 
 ```ts
-// Extras: add  hasVisuals: boolean;
-const extrasOf = (m: ChatMessageDto): Extras => ({ ord: Number(m.id), citations: m.citations, steps: m.steps, reasoning: m.reasoning, outcome: m.outcome, hasVisuals: m.hasVisuals === true });
+// Extras: add
+hasVisuals: boolean;
+/** How many `visualized` frames this reply has had: a re-run bumps it, so the strip reloads. */
+visualsRev: number;
+
+const extrasOf = (m: ChatMessageDto, was?: Extras): Extras => ({
+  ord: Number(m.id),
+  citations: m.citations,
+  steps: m.steps,
+  reasoning: m.reasoning,
+  outcome: m.outcome,
+  // A reply that has visuals keeps them when the same reply arrives again (a stream snapshot says false until the head is read).
+  hasVisuals: m.hasVisuals || (was?.hasVisuals ?? false),
+  visualsRev: was?.visualsRev ?? 0,
+});
+
+// applyHistory / applyStream "message": this.extras.set(id, extrasOf(m, this.extras.get(id)))
 
 // ChatFold: a queue of visuals frames the controller settles from, and the marking
 private readonly visualsFrames: [number, "visualized" | "nothing"][] = [];
@@ -4295,7 +4782,11 @@ drainVisuals(): [number, "visualized" | "nothing"][] {
 case "visuals": {
   this.visualsFrames.push([ev.ord, ev.outcome]);
   if (ev.outcome === "visualized")
-    for (const x of this.extras.values()) if (x.ord === ev.ord) x.hasVisuals = true;
+    for (const x of this.extras.values())
+      if (x.ord === ev.ord) {
+        x.hasVisuals = true;
+        x.visualsRev += 1;
+      }
   break;
 }
 ```
@@ -4307,6 +4798,7 @@ import { type VisualsPhase, type VisualsView, VISUALS_TIMEOUT_MS, visualsViewOf 
 
 // EntryView: add
 hasVisuals: boolean;
+visualsRev: number;
 /** What the message shows for visuals; null: neither strip nor action. */
 visuals: VisualsView | null;
 
@@ -4315,6 +4807,7 @@ const hasVisuals = extras?.hasVisuals ?? false;
 const phase = (e.role === "assistant" && extras ? this.phases.get(extras.ord) : undefined) ?? "idle";
 // ...and in the returned object:
 hasVisuals,
+visualsRev: extras?.visualsRev ?? 0,
 visuals: e.role === "assistant" && extras
   ? visualsViewOf({ role: "assistant", status: e.status, citations: extras.citations, hasVisuals, phase })
   : null,
@@ -4360,12 +4853,13 @@ for (const t of this.phaseTimers.values()) clearTimeout(t);
 this.phaseTimers.clear();
 ```
 
-Add `"visualizeTurn"` to the controller's `api` `Pick`: `Pick<Api, "listMessages" | "sendMessage" | "stopChat" | "visualizeTurn">` (and to `TransportDeps.api`'s Pick only if the transport's tests construct the same object; the transport does not call it, so leave `TransportDeps` as is and pass `d.api` through, which still satisfies it).
+Add `"visualizeTurn"` to the controller's `api` `Pick`: `Pick<Api, "listMessages" | "sendMessage" | "stopChat" | "visualizeTurn">` (`TransportDeps.api`'s Pick stays as it is: the transport does not call it, and the controller passes `d.api` through, which still satisfies it).
 
 `WEB/components/dm-turn-visuals.ts`:
 
 ```ts
 import { LitElement, css, html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
 import { VISUALS_COPY, type VisualsView } from "../chat/visuals";
 import { baseStyles } from "../styles/base";
 import "./dm-view";
@@ -4375,6 +4869,7 @@ export class DmTurnVisuals extends LitElement {
   static properties = {
     chatId: { type: String },
     ord: { type: Number },
+    rev: { type: Number },
     view: { attribute: false },
     open: { state: true },
     seen: { state: true },
@@ -4392,6 +4887,7 @@ export class DmTurnVisuals extends LitElement {
   ];
   declare chatId: string;
   declare ord: number;
+  declare rev: number;
   declare view: VisualsView | null;
   declare open: boolean;
   declare seen: boolean;
@@ -4401,6 +4897,7 @@ export class DmTurnVisuals extends LitElement {
     super();
     this.chatId = "";
     this.ord = 0;
+    this.rev = 0;
     this.view = null;
     this.open = false;
     this.seen = false;
@@ -4424,10 +4921,13 @@ export class DmTurnVisuals extends LitElement {
     this.io?.disconnect();
     super.disconnectedCallback();
   }
+  /** The nested view is this strip's own: its readiness is nobody else's (the chat page would swap its session for it). */
   private ready = (e: Event) => {
+    e.stopPropagation();
     const root = (e.target as HTMLElement).shadowRoot;
     this.count = root?.querySelectorAll("[data-widget-kind]").length ?? 0;
   };
+  private problem = (e: Event) => e.stopPropagation();
   render() {
     const v = this.view;
     if (!v) return nothing;
@@ -4437,7 +4937,9 @@ export class DmTurnVisuals extends LitElement {
               ${VISUALS_COPY.strip}${this.count > 0 ? html` <span data-count>(${this.count})</span>` : nothing}
             </button>
             <div id="body" data-body ?data-collapsed=${!this.open}>
-              ${this.seen ? html`<dm-view .turn=${{ chatId: this.chatId, ord: this.ord }} @view-ready=${this.ready}></dm-view>` : nothing}
+              ${this.seen
+                ? keyed(this.rev, html`<dm-view .turn=${{ chatId: this.chatId, ord: this.ord }} @view-ready=${this.ready} @view-problem=${this.problem}></dm-view>`)
+                : nothing}
             </div>`
         : nothing}
       ${v.action
@@ -4452,47 +4954,41 @@ customElements.define("dm-turn-visuals", DmTurnVisuals);
 
 `WEB/components/index.ts`: add `import "./dm-turn-visuals";`.
 
-`WEB/components/dm-chat-page.ts`: in `sync()` (it already calls `requestUpdate`), after `this.guardComposer();` add `this.placeVisuals();`, and add:
+`WEB/components/dm-chat-page.ts`:
 
 ```ts
-import { placeStrips, type StripHost } from "../chat/placeStrips";
+import { VisualsAccessories, type StripHost } from "../chat/visualsAccessory";
 import "./dm-turn-visuals";
 
-private stripWatch: MutationObserver | undefined;
+private accessories: VisualsAccessories | undefined;
 
-/** The widget's own transcript log, once the chat view has drawn it (null before). */
-private logRoot(): ParentNode | null {
-  const chat = this.renderRoot.querySelector("dm-view[name=chat]")?.shadowRoot?.querySelector("lu-chat");
-  return chat?.shadowRoot ?? null;
-}
+// bind(), right after `this.controller = controller;`
+this.accessories = new VisualsAccessories({
+  chatId: id,
+  make: () => document.createElement("dm-turn-visuals") as unknown as StripHost,
+  onVisualize: (ord) => void controller.visualize(ord),
+});
 
-/** Puts the Visuals strip (and the Visualize action) under each assistant reply that has one, and keeps them there across the widget's redraws. */
-private placeVisuals(): void {
-  const root = this.logRoot();
-  const st = this.controller?.state.get();
-  const id = this.chatId;
-  if (!root || !st || !id) return;
-  if (!this.stripWatch) {
-    this.stripWatch = new MutationObserver((records) => {
-      if (records.every((r) => [...r.addedNodes, ...r.removedNodes].every((n) => n instanceof Element && n.hasAttribute("data-turn-visuals")))) return; // our own change
-      this.placeVisuals();
-    });
-    this.stripWatch.observe(root, { childList: true, subtree: true });
-  }
-  placeStrips(
-    root,
-    st.entries.flatMap((e) => (e.role === "assistant" && e.ord !== undefined ? [{ turn: e.turn, ord: e.ord, visuals: e.visuals }] : [])),
-    () => document.createElement("dm-turn-visuals") as unknown as StripHost,
-    id,
-  );
-}
-private onVisualize = (e: Event) => {
-  const ord = (e as CustomEvent<{ ord: number }>).detail.ord;
-  void this.controller?.visualize(ord);
+// release(): drop it with the chat
+this.accessories?.dispose();
+this.accessories = undefined;
+
+// sync(): the strips are in the map before the widget is asked about the transcript
+const st = this.controller?.state.get();
+if (st) this.accessories?.update(st.entries);
+// ...then the existing publish of the transcript
+
+// render(): hand them to the chat view
+<dm-view name="chat" fill .onAct=${this.act} .chatAccessories=${this.accessories} @view-ready=${this.onReady}></dm-view>
+
+// onReady: only the chat view's own readiness
+private onReady = (e: Event) => {
+  if (e.composedPath()[0] !== e.currentTarget) return; // a strip's view inside the transcript is not the chat view
+  // ...unchanged...
 };
 ```
 
-`placeVisuals` must also run once the chat view first renders: call it from `onReady` (the chat view's `view-ready` handler) and `release()` disconnects `stripWatch` (`this.stripWatch?.disconnect(); this.stripWatch = undefined;`). Listen for the strip's event on the page: `this.renderRoot.addEventListener("visualize", this.onVisualize)` in `connectedCallback` (removed in `disconnectedCallback`); the event is `composed`, so it crosses lu-chat's and dm-view's shadow roots.
+There is no reconciler, no `MutationObserver` and no walk of `lu-chat`'s shadow root: loom-ui draws what `render` returns inside the entry. The `visualize` event never reaches the page: `VisualsAccessories` listens on its own strip and stops it.
 
 - [ ] **Step 4: Run the web suites and the typechecks**
 
@@ -4503,7 +4999,7 @@ Expected: PASS.
 
 ```bash
 git add apps/web packages
-git commit -m "feat(visuals): the web Visuals strip, its action states and the live visuals frame
+git commit -m "feat(visuals): the web Visuals strip under a reply (loom-ui chatAccessories), its action states and the live frame
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
@@ -4519,7 +5015,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 - Modify: `README.org` (item 5 of the request path, around line 58), `docs/architecture.md` (new section 7.2 after 7.1, before `## 8. Chat and retrieval`), `docs/codebase-guide.md` (the table row for `visualize-document` at line 59, and the chat walkthrough after line 156), `docs/operations/llm-providers.md` (the `visuals` row at line 24 and the section "Upgrading to document visuals")
 
 **Interfaces:**
-- Consumes: `startIngestStack({ chat: true, visuals: true })` (`documents/ingestStack.ts`: `claude`, `visualsClaude`, `chatReq`, `openChat`, `durable.raw.eventStore`, `db.owner`), `scriptChat`, `collectUntil`, `isReply`, `DOC`, `SENTENCE` (`CH/e2eSupport.ts`), `assertNoPlaintext` (`CH/eventLogProof.ts`), `turnExecutionId`, `turnExperienceId`, `isTurnVisualizeExecution` (`VT/ids.ts`).
+- Consumes: `startIngestStack({ chat: true, visuals: true })` (`documents/ingestStack.ts`: `claude`, `visualsClaude`, `chatReq`, `openChat`, `durable.raw.eventStore`, `db.owner`), `scriptChat`, `collectUntil`, `isReply`, `DOC`, `SENTENCE` (`CH/e2eSupport.ts`), `assertNoPlaintext` (`CH/eventLogProof.ts`), `turnExecutionId`, `turnExperienceId`, `isTurnVisualizeExecution` (`VT/ids.ts`), `isVisualizeExecution` (`S/status/model.ts`), `st.composed.turns` (Task 8's starter, for its `idle()`).
 - Produces: `VISUALS_EVAL_CASES: VisualsEvalCase[]`, `summarizeVisualsEval(results): { stored: number; fallback: number; none: number; wrongFacts: number }`.
 
 Plan decision: the spec says "the M7 retrieval fixture gains questions"; M7's retrieval eval is not built yet (README: "M7 planned"), so there is no fixture to extend. The questions land as a typed fixture file with its own structural test and a scoring function, ready for the M7 harness to import; they are not run against a model here.
@@ -4536,6 +5032,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { isTurnVisualizeExecution, turnExecutionId } from "../flows/visualize-turn/ids";
+import { isVisualizeExecution } from "../status/model";
 import { DOC, collectUntil, isReply, scriptChat } from "./e2eSupport";
 import { assertNoPlaintext } from "./eventLogProof";
 
@@ -4600,6 +5097,20 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
     }
   }
 
+  /** Waits until every visualize-document execution of the stack has ended: its planner call (if it makes one) is then behind us, so a call count taken now is stable. */
+  const documentVisualsSettled = (st: IngestStack) =>
+    vi.waitFor(
+      async () => {
+        const ids = ((await st.durable.raw.eventStore.listExecutions?.()) ?? []).filter(isVisualizeExecution);
+        expect(ids.length).toBeGreaterThan(0);
+        for (const id of ids) {
+          const log = await st.durable.raw.eventStore.read(id);
+          expect(log.some((e) => e.eventType === "EXECUTION_COMPLETED" || e.eventType === "EXECUTION_FAILED"), id).toBe(true);
+        }
+      },
+      { timeout: WAIT, interval: 50 },
+    );
+
   const outcomeOf = async (st: IngestStack, userId: string, chatId: string, ord: number, rerun?: number) => {
     let outcome = "";
     await vi.waitFor(
@@ -4639,6 +5150,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const ada = await st.signUpAndLogIn("ada@example.com");
       const { passageId } = await ready(st, ada.cookie); // visualize-document stores the fact during ingest
       await vi.waitFor(async () => expect((await st.db.owner.query("SELECT count(*)::int AS n FROM visual_facts")).rows[0].n).toBe(1), { timeout: WAIT });
+      await documentVisualsSettled(st); // the document flow's planner call is made before the chat's count starts
       scriptChat(st.claude as FakeAnthropic, () => ({ text: `${LABEL} reached 7391.25 [[${passageId}]].` }));
       const chat = ChatSessionDto.parse(await (await st.chatReq(ada.cookie, "POST", "/api/chats", {})).json());
 
@@ -4660,7 +5172,8 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       expect(results[0]).toMatchObject({ state: "ready" });
       expect(JSON.stringify(results[0])).toContain("7391.25");
 
-      // replay: serving and hydrating again makes no model call
+      // serving and hydrating again read the committed head and never recompose it: no model call, counted before and after
+      // (the flow-level replay claims are proven where they can be: `plan.test` re-composes from the recorded decision, `flow.test` re-starts a finished execution id)
       const served = state.calls;
       await view(st, ada.cookie, chat.id, ord);
       await hydrate(st, ada.cookie, chat.id, ord);
@@ -4679,7 +5192,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
       expect(ids.some(isTurnVisualizeExecution)).toBe(true);
       const raw = (await Promise.all(ids.map((id) => st.durable.raw.eventStore.read(id)))).flat();
-      assertNoPlaintext(raw, [LABEL, "7391.25", "A headline figure"]);
+      assertNoPlaintext(raw, [LABEL, "A headline figure"]); // each at least 12 characters, the helper's minimum
     },
     WAIT * 2,
   );
@@ -4693,7 +5206,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       stubVisuals(st.visualsClaude as FakeAnthropic, state);
       const ada = await st.signUpAndLogIn("ada@example.com");
       const { passageId } = await ready(st, ada.cookie);
-      await vi.waitFor(() => expect(state.calls).toBeGreaterThan(0), { timeout: WAIT });
+      await documentVisualsSettled(st); // the document flow found nothing and has ended
       expect((await st.db.owner.query("SELECT count(*)::int AS n FROM visual_facts")).rows[0].n).toBe(0);
       state.extract = true; // ...but the turn's extraction does
       scriptChat(st.claude as FakeAnthropic, () => ({ text: `${LABEL} reached 7391.25 [[${passageId}]].` }));
@@ -4726,6 +5239,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const chat = ChatSessionDto.parse(await (await st.chatReq(ada.cookie, "POST", "/api/chats", {})).json());
       const reply = await ask(st, ada.cookie, chat.id, "What is the weather?");
       const ord = Number(reply.id);
+      await st.composed.turns?.idle(); // the hook's check for this turn has settled: a run would exist by now
       const res = await st.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/turns/${ord}/visualize`);
       expect(res.status).toBe(409);
       expect(((await res.json()) as { error?: { code?: string } }).error?.code).toBe("not_visualizable");
@@ -4740,6 +5254,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const offChat = ChatSessionDto.parse(await (await off.chatReq(bea.cookie, "POST", "/api/chats", {})).json());
       const offReply = await ask(off, bea.cookie, offChat.id, "What were the takings?");
       expect(offReply.citations).toHaveLength(1);
+      await off.composed.turns?.idle(); // settled: the role is off, so the check ended without a start
       const offIds = (await off.durable.raw.eventStore.listExecutions?.()) ?? [];
       expect(offIds.filter(isTurnVisualizeExecution)).toEqual([]);
       const refused = await off.chatReq(bea.cookie, "POST", `/api/chats/${offChat.id}/turns/${Number(offReply.id)}/visualize`);
@@ -4755,7 +5270,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
 ```ts
 import { describe, expect, it } from "vitest";
 import { grounded } from "../flows/visualize-document/facts";
-import { VISUALS_EVAL_CASES, summarizeVisualsEval } from "./visualsEval.fixture";
+import { EVAL_SUMMARY_MAX_CHARS, VISUALS_EVAL_CASES, summarizeVisualsEval } from "./visualsEval.fixture";
 
 describe("the chat visuals eval fixture", () => {
   it("has unique ids, both source kinds, and questions over documents with known figures", () => {
@@ -4769,6 +5284,12 @@ describe("the chat visuals eval fixture", () => {
     for (const c of VISUALS_EVAL_CASES)
       for (const f of c.figures)
         expect(grounded({ kind: "figure", label: f.label, value: f.value, chunkIds: [chunk] }, new Map([[chunk, c.document]])), `${c.id}: ${f.label}`).toBe(true);
+  });
+  it("sizes each document against the eval's own summary cap: stored cases fit under it, fallback cases state their first figure past it", () => {
+    for (const c of VISUALS_EVAL_CASES) {
+      if (c.expectedSource === "stored") expect(c.document.length, c.id).toBeLessThanOrEqual(EVAL_SUMMARY_MAX_CHARS);
+      else expect(c.document.search(/\d/), c.id).toBeGreaterThan(EVAL_SUMMARY_MAX_CHARS); // the filler holds no digit
+    }
   });
   it("scores the stored and fallback rates and the wrong facts", () => {
     const [a, b, c] = VISUALS_EVAL_CASES;
@@ -4798,7 +5319,10 @@ Expected: FAIL (the fixture module does not exist; the e2e needs Tasks 1 to 10 i
  * which fact source the design expects (spec C1): `stored` (the document is short enough for the summary cap, so
  * sub-project 1 stored its facts) or `fallback` (the figure sits past the cap, or the document yields no stored fact).
  * The eval measures how often each source is used and how many facts are wrong (a fact whose figure is not in `figures`).
+ * Run the eval deployment with `DOCMIND_SUMMARY_MAX_CHARS=EVAL_SUMMARY_MAX_CHARS`: the cases are sized against that cap,
+ * not against the 400000 default (ruling P5).
  */
+export const EVAL_SUMMARY_MAX_CHARS = 20_000;
 export interface VisualsEvalCase {
   id: string;
   /** The document text the model is shown. */
@@ -4809,6 +5333,7 @@ export interface VisualsEvalCase {
   expectedSource: "stored" | "fallback";
 }
 
+/** About 55 characters per repeat, and no digit: the first digit of a case is its first figure. 1000 repeats are about 55,000 characters, well past `EVAL_SUMMARY_MAX_CHARS`. */
 const filler = (n: number) => "The committee reviewed the agenda and noted the minutes. ".repeat(n);
 
 export const VISUALS_EVAL_CASES: VisualsEvalCase[] = [
@@ -4817,9 +5342,9 @@ export const VISUALS_EVAL_CASES: VisualsEvalCase[] = [
   { id: "margin-percent", document: "The gross margin was 42% and the net margin 12%.", question: "What are the margins?", figures: [{ label: "Gross margin", value: 42 }, { label: "Net margin", value: 12 }], expectedSource: "stored" },
   { id: "invoice-terms", document: "Invoices are due within 30 days. Late payment accrues 2% interest per month.", question: "When are invoices due and what does late payment cost?", figures: [{ label: "Days to pay", value: 30 }, { label: "Monthly interest", value: 2 }], expectedSource: "stored" },
   { id: "quarterly-table", document: "Q1 sales 410. Q2 sales 455. Q3 sales 498. Q4 sales 530.", question: "Show sales by quarter.", figures: [{ label: "Q1", value: 410 }, { label: "Q2", value: 455 }, { label: "Q3", value: 498 }, { label: "Q4", value: 530 }], expectedSource: "stored" },
-  { id: "late-figure", document: `${filler(3000)} In the final appendix, total reserves stood at 7,391.25.`, question: "What were the total reserves?", figures: [{ label: "Total reserves", value: 7391.25 }], expectedSource: "fallback" },
-  { id: "late-series", document: `${filler(3000)} Reserves by year: 2022 5,100; 2023 6,250; 2024 7,391.`, question: "How did reserves develop?", figures: [{ label: "2022", value: 5100 }, { label: "2023", value: 6250 }, { label: "2024", value: 7391 }], expectedSource: "fallback" },
-  { id: "late-currency", document: `${filler(3000)} The settlement was $2.4M, paid in two instalments.`, question: "How large was the settlement?", figures: [{ label: "Settlement", value: 2_400_000 }], expectedSource: "fallback" },
+  { id: "late-figure", document: `${filler(1000)} In the final appendix, total reserves stood at 7,391.25.`, question: "What were the total reserves?", figures: [{ label: "Total reserves", value: 7391.25 }], expectedSource: "fallback" },
+  { id: "late-series", document: `${filler(1000)} Reserves by year: 2022 5,100; 2023 6,250; 2024 7,391.`, question: "How did reserves develop?", figures: [{ label: "2022", value: 5100 }, { label: "2023", value: 6250 }, { label: "2024", value: 7391 }], expectedSource: "fallback" },
+  { id: "late-currency", document: `${filler(1000)} The settlement was $2.4M, paid in two instalments.`, question: "How large was the settlement?", figures: [{ label: "Settlement", value: 2_400_000 }], expectedSource: "fallback" },
 ];
 
 export interface VisualsEvalResult {
@@ -4840,7 +5365,7 @@ export function summarizeVisualsEval(results: readonly VisualsEvalResult[]): { s
 }
 ```
 
-If `late-figure` and its siblings are not actually past the summary cap on the dev machine's `DOCMIND_SUMMARY_MAX_CHARS`, the `filler(n)` count (about 55 characters × 3000 = 165,000) is the thing to raise; the fixture test does not depend on it, the eval run does.
+The fixture is sized against `EVAL_SUMMARY_MAX_CHARS` (20,000), not the 400,000 default: `visualsEval.fixture.test.ts` proves every `stored` case fits under it and every `fallback` case states its first figure beyond it. The eval run sets `DOCMIND_SUMMARY_MAX_CHARS=20000` so the expected sources hold.
 
 Docs:
 - `README.org`: after item 5 (the `/api/chats` paragraph) add item 5a text:
@@ -4869,7 +5394,7 @@ flowchart LR
 
 - **The trigger.** Loom's `turnSettledObserver` (one per chat flow, composed into the runtime's single `onDurableEvent`) calls a listener that only enqueues. The queued check starts `visualize-turn-<chatId>-<ord>` for a `complete` answer of a live chat that cites a document the user still owns, while the `visuals` role is on and fewer than 20 visuals executions wait on the shared gate. `ExecutionAlreadyExistsError` is swallowed. No backfill: a turn whose hook call was missed is recovered by the on-demand action.
 - **Facts are layered.** Stored `visual_facts` of the cited documents are kept when they cite a chunk the answer cited (at most 12, in citation order). Only when none survive does the turn extract from its own retrieved chunks (at most 16, same prompt and grounding), sealed in `turn_visual_facts` (RLS, cascade with the chat).
-- **Plan and commit.** Capabilities are `docmind:visual.facts@1#<documentId>/fact-<n>` for a stored fact and `docmind:turn.facts@1#fact-<n>` for an extracted one. The plan replaces the head of `turnvisuals-<userId>-<chatId>-<ord>` (sealed, idempotent) and the step publishes `{kind: "visuals", ord}` on the `ChatBus`.
+- **Plan and commit.** Capabilities are `docmind:visual.facts@1#<documentId>/fact-<n>` for a stored fact and `docmind:turn.facts@1#fact-<n>` for an extracted one. The plan replaces the head of `turnvisuals-<userId>-<chatId>-<ord>` (sealed, idempotent) and the step publishes `{kind: "visuals", ord, outcome}` on the `ChatBus`. A run that ends `nothing` (an invalid or empty plan, no grounded fact, a turn that stopped being cited) writes no head but publishes the same frame with `outcome: "nothing"`, so an on-demand click resolves.
 - **On demand.** `POST /api/chats/:id/turns/:ord/visualize` answers 202, 409 `not_visualizable`, 409 `visualize_running` or 429 (10 per user per minute); re-runs are `-r<n>`.
 - **Serving.** `GET /api/ui/chats/:id/turns/:ord/visuals` and `POST /api/ui/hydrate {turn}` are owner-checked under the owner's `sensitive` clearance; a deleted cited document's widgets drop out. `ChatMessageDto.hasVisuals` comes from one batched head lookup per history page.
 - **Privacy.** Step outputs carry references only; facts, ops and the summary are sealed; ids are plaintext like every execution id. Erasure destroys the key that seals the turn lines.
@@ -4909,20 +5434,23 @@ Spec section to task mapping:
 | 2 C5 one lineage per turn, a re-run replaces its head | 4 (`turnExperienceId`, subject), 7 (`commitPlanTo`) |
 | 2 C6 no backfill, no boot sweep | 8 (no sweep; `recoveryOwns` only resumes interrupted runs), 12 (docs) |
 | 2 C7 optional visuals, failure leaves the strip hidden | 8 (`nothing` outcomes), 11 (strip only with `hasVisuals`) |
+| 3b loom-ui per-entry attachment point | 1 (`LOOM_UI_REF` d036e84, guard test), 11 (`VisualsAccessories` through `chatAccessories`, wired in `ViewSession.mount`) |
 | 3 `turnSettledObserver` (signature, guarantees, write chain, one `onDurableEvent`, forks) | 1, 8 (`composeDurableObservers`, `onSettled` only enqueues, id keyed by chat and ord) |
 | 4 Trigger (status, role, chat live, cited, backpressure 20, ids, swallow, never throws) | 8 (`turnToVisualize`, `loomTurnStarter`), 2 (`docmind_chat_tenant`) |
 | 4 On demand (202, owner, 409 codes, 429 10/min, `-r<n>`, shared gate) | 9, 8 (re-run numbering, shared gate) |
-| 5 Flow `visualize-turn` 1.0.0, input, steps 1 to 4, output, retry | 5, 6, 7, 8 |
-| 6 Storage (`0029`, `turn_visual_facts`, RLS, replace in a transaction, lineage content) | 2 |
-| 7 Serving (GET route, hydrate `{turn}`, owner clearance, deleted document drops, no 500, `hasVisuals`, `visuals` event) | 3 (catalogue, scope `turn`, contract), 7 (frame), 10 |
-| 8 Web (strip, expand in place, action states, copy, 60 s, uncited/interrupted/failed show neither) | 11 |
+| 5 Flow `visualize-turn` 1.0.0, input, steps 1 to 4, output, retry; a run that ends `nothing` also publishes | 5, 6, 7, 8 (every `nothing` path goes through `turn-commit`) |
+| 6 Storage (`0029`, `turn_visual_facts`, RLS, replace in a transaction, lineage content) | 2 (`ord bigint`, one-argument `docmind_chat_tenant`) |
+| 7 Serving (GET route, hydrate `{turn}`, owner clearance, deleted document drops, no 500, `hasVisuals`, `visuals` event) | 3 (catalogue, scope `turn`, `RecordOrd`, contract), 7 (frame with `outcome`), 10 (`hasVisuals: boolean` required) |
+| 8 Web (strip, expand in place, action states, copy, 60 s, uncited/interrupted/failed show neither) | 11 (strip drawn by lu-chat from `VisualsAccessories`; states in `visualsViewOf`; `nothing` frames from every run that ends `nothing`) |
 | 9 Lifecycle and privacy (edits are new turns, soft delete, erasure, no plaintext, ids) | 4 (erasure subject), 7 and 8 (sealed paths, content-free outputs), 10 (soft delete refusal), 12 (raw-log proof) |
 | 10 Testing (unit, Postgres, end to end, web, eval) | every task has its tests; 2 and 9 and 10 Postgres; 12 e2e and eval fixture; 11 web |
 | 11 Out of scope | not built (uncited answers, cross-document combination, diagrams, editing, backfill, shared chats) |
 
-Placeholders: none. The Loom SHA is `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19` (loom PR #776), in Task 1 only.
+Placeholders: none. The Loom SHA is `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19` (loom PR #776) and the loom-ui SHA is `d036e842361226470d5f939aa5e6a01ba6803205` (loom-ui PR #125), in Task 1 only.
+
+Preflight amendments P1 to P14 are mapped to tasks in the "Amendments (preflight)" table under the header.
 
 Points the executor should watch (each is a place where this plan relies on a Loom or loom-ui detail it could not run):
-- Task 8: the runner's `ctx.executionId` field (Loom `FlowContext`), and `Lineage.head` returning `{ ok: true, value: hash | null }` (Tasks 7 and 10): both are read from the code, the first test run confirms them.
+- Tasks 7, 8 and 10: `Lineage.head` returning `{ ok: true, value: hash | null }` (the tests assert that exact shape for an absent line): read from the code, the first test run confirms it.
 - Task 3: the planner accepting `docmind:visual.facts@1#<documentId>/fact-<n>` as a free-text pin (`CapabilityRef.toolSchemaHash` is opaque in `loom-ui/packages/planner/src/spi.ts`); Task 7's `plan.test.ts` proves it against the real `ReferencePlanner`.
-- Task 11: the reach into `lu-chat`'s shadow root (`article[data-role="assistant"][data-turn]`, from `loom-ui/packages/renderer-lit/src/widgets/lu-chat.ts`) is the one piece that depends on a widget's internals; a loom-ui entry slot is the clean follow-up.
+- Task 11: the strip is drawn by loom-ui's `chatAccessories` (`loom-ui/packages/renderer-lit/src/widgets/chatAccessory.ts`), so no widget internals are touched. What the page tests rely on is the wrapper `[data-entry-accessory]` inside `article[data-role="assistant"][data-turn]`, which loom-ui's own `chatAccessory.test.ts` pins.
