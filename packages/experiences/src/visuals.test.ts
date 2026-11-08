@@ -122,6 +122,14 @@ describe("the visual reshapers", () => {
       ],
     });
   });
+  it("treat only YYYY-MM or YYYY-MM-DD as a date for the trend", () => {
+    const series = (x: string): VisualFactRaw => ({
+      ...DATED_SERIES,
+      points: [{ x, y: 1 }],
+    });
+    expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01-xyz")])).toThrow();
+    expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01")])).not.toThrow();
+  });
   it("fail for a fact of the wrong kind or a missing fact", () => {
     expect(() => shape("visual-trend-1", raw)).toThrow();
     expect(() => shape("visual-kpi-1", raw)).toThrow();

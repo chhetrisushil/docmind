@@ -89,6 +89,7 @@ describe("recovering an interrupted visualize execution", () => {
         },
         list: async () => held,
       },
+      summaryMaxChars: 400_000,
       bus: new InMemoryProgressBus(),
       lineage,
       now: () => "2026-11-08T10:00:00.000Z",

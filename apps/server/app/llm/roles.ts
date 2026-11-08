@@ -122,7 +122,8 @@ export function loadLlmRoles(env: NodeJS.ProcessEnv = process.env): LlmRoleSetti
     // The variable that set the provider, so a refusal names the one the operator must change.
     let source = providerName;
     if (provider === undefined) {
-      if (role !== "visionPdf" && shared !== undefined) source = "DOCMIND_LLM_PROVIDER";
+      if (role !== "visionPdf" && role !== "visuals" && shared !== undefined)
+        source = "DOCMIND_LLM_PROVIDER";
       if (role === "visionPdf") {
         // Only a provider that can read a PDF may be the default for it.
         if (shared !== undefined && shared !== "off" && CAN[shared].pdfMaxBytes > 0)
@@ -135,7 +136,9 @@ export function loadLlmRoles(env: NodeJS.ProcessEnv = process.env): LlmRoleSetti
               : geminiKey
                 ? "gemini"
                 : "off";
-      } else provider = shared ?? "ollama";
+      } else if (role === "visuals")
+        provider = "off"; // opt-in: only DOCMIND_VISUALS_PROVIDER turns it on (it needs a key and sweeps every ready document)
+      else provider = shared ?? "ollama";
     }
     if (provider === "off") {
       roles[role] = { provider, model: "" };

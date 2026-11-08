@@ -4,6 +4,7 @@ import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { ProgressBus } from "../../documents/progress";
 import { visualizeGenerationOf } from "../../status/model";
+import { IngestGate } from "../ingest-document/gate";
 import type { ChunkStore } from "../ingest-document/pgChunks";
 import type { StepGuard, StepSeams } from "../ingest-document/stepEffect";
 import { type CommitInput, commitEffect } from "./commit";
@@ -19,6 +20,8 @@ export interface VisualizeDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
   facts: VisualFactStore;
+  /** The extract step's read bound: the summary cap (DOCMIND_SUMMARY_MAX_CHARS). */
+  summaryMaxChars: number;
   lineage: Lineage;
   /** Tells the owner's open browsers the visuals are ready (the commit step publishes). */
   bus: ProgressBus;
@@ -41,3 +44,10 @@ export const visualizeEffects = (seams: VisualizeDeps): Record<string, Effect> =
 };
 
 export type { VisualizeRef };
+
+/**
+ * The visualize steps' own gate, never ingest's: one slot per tenant and two for the process (the boot sweep
+ * runs two executions at most), so an ingest step never queues behind a visualize step.
+ */
+export const newVisualizeGate = (): IngestGate =>
+  new IngestGate({ concurrency: 2, tenantConcurrency: 1 });

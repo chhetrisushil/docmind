@@ -30,6 +30,7 @@ function setup(
   over: {
     llm?: LlmProvider;
     texts?: Record<string, string>;
+    summaryMaxChars?: number;
     sleep?: () => Promise<void>;
   } = {},
 ) {
@@ -56,6 +57,7 @@ function setup(
       read: async (_r: unknown, ids: string[]) => ids.map((id) => ({ id, text: texts[id] ?? "" })),
     },
     facts: store,
+    summaryMaxChars: over.summaryMaxChars ?? 400_000,
     sleep: over.sleep ?? (async () => {}),
     ...(over.llm && { llm: over.llm }),
   };
@@ -125,6 +127,25 @@ describe("visualize-extract step", () => {
     expect(requests).toHaveLength(2);
     const sent = requests.map((r) => ids.filter((id) => JSON.stringify(r).includes(`[[${id}]]`)));
     expect(sent).toEqual([[ids[0], ids[1]], [ids[2]]]);
+  });
+
+  it("reads at most the summary cap of chunk text, in order: later chunks make no window", async () => {
+    const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(10_000)]));
+    const { llm, requests } = scripted(() => '{"facts":[]}');
+    const s = setup({ llm, texts, summaryMaxChars: 20_000 });
+    await run(s);
+    expect(requests).toHaveLength(1);
+    const sent = ids.filter((id) => JSON.stringify(requests[0]).includes(`[[${id}]]`));
+    expect(sent).toEqual([ids[0], ids[1]]);
+  });
+
+  it("logs the dropped-fact count as a number only", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const { llm } = scripted(() => JSON.stringify({ facts: [GOOD, BAD] }));
+    await run(setup({ llm }));
+    expect(info).toHaveBeenCalledWith("visualize-extract dropped ungrounded facts", 1);
+    info.mockRestore();
   });
 
   it("fences the chunk text as untrusted document data", async () => {

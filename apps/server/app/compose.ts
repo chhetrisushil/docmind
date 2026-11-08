@@ -41,6 +41,7 @@ import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { PgChunkStore } from "./flows/ingest-document/pgChunks";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { newVisualizeGate } from "./flows/visualize-document/deps";
 import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { visualsLineage } from "./flows/visualize-document/lineage";
 import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
@@ -199,17 +200,20 @@ export function buildServer(options: ComposeOptions) {
     keys,
     subjectOf: subjectOfExecution,
   });
+  // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
+  const visualizeGate = newVisualizeGate();
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
     deps: {
       guard: new PgVisualizeGuard(pool),
       chunks: new PgChunkStore(pool, fields),
       facts: new PgVisualFacts(pool, fields),
+      summaryMaxChars: options.ingest.summaryMaxChars,
       lineage: visualsLineageOf,
       bus: options.ingest.bus,
       now: () => new Date().toISOString(),
       shutdown: options.ingest.shutdown.signal,
-      gate: options.ingest.gate,
+      gate: visualizeGate,
       ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
       ...(visualsLlm && { llm: visualsLlm }),
       ...(planner && { planner }),
