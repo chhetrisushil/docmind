@@ -47,11 +47,6 @@ const matches =
     status === "all" || (status === "processing" ? PROCESSING.has(state) : state === status);
 
 /**
- * The readers the UI plane serves from, bound to ONE caller. The tenant and the owner come from `identity` (the session)
- * and are applied by `withTenant` and by the owner column of every query; no argument names either. Each reader uses the
- * same functions as the REST route of the same data, so what a user can see here is exactly what the API lets them see.
- */
-/**
  * The facts with the passages they cite attached (`cites`), one owner-scoped lookup for all of them. A chunk that no longer
  * resolves (its document is gone) is dropped; a fact with no chunk ids costs no query.
  */
@@ -77,6 +72,11 @@ async function withCites(
   });
 }
 
+/**
+ * The readers the UI plane serves from, bound to ONE caller. The tenant and the owner come from `identity` (the session)
+ * and are applied by `withTenant` and by the owner column of every query; no argument names either. Each reader uses the
+ * same functions as the REST route of the same data, so what a user can see here is exactly what the API lets them see.
+ */
 export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
   const cipher = () => deps.fields.forUser(identity.userId);
   return {
