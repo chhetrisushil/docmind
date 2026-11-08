@@ -33,8 +33,8 @@ export type StepResult = z.infer<typeof StepResult>;
  * the step events. With `generation`, a document now on another generation is gone too: a
  * superseded execution must not write (D1).
  */
-export interface StepGuard {
-  begin(ref: IngestStartInput, step: string, generation?: number): Promise<void>;
+export interface StepGuard<R = IngestStartInput> {
+  begin(ref: R, step: string, generation?: number): Promise<void>;
 }
 
 /**
@@ -185,17 +185,17 @@ export interface StepOutputSpec<O> {
 
 const STEP_RESULT_SPEC: StepOutputSpec<StepResult> = { schema: StepResult, ended: (end) => end };
 
-export function stepEffect(
+export function stepEffect<R extends { tenantId: string } = IngestStartInput>(
   step: string,
-  guard: StepGuard,
+  guard: StepGuard<R>,
   work: (
-    ref: IngestStartInput,
+    ref: R,
     signal?: AbortSignal,
     progress?: () => void,
   ) => Promise<{ count?: number; model?: string } | undefined>,
   options: StepOptions = {},
-): Effect<IngestStartInput, StepResult> {
-  return stepEffectOf(step, guard, work, STEP_RESULT_SPEC, options);
+): Effect<R, StepResult> {
+  return stepEffectOf<StepResult, R>(step, guard, work, STEP_RESULT_SPEC, options);
 }
 
 /**
@@ -203,22 +203,18 @@ export function stepEffect(
  * Same retry, timeout, gate and failure behaviour; the output is validated by `spec.schema`, and nothing
  * outside it reaches the event log. The work returns the output's fields apart from `outcome`.
  */
-export function stepEffectOf<O>(
+export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInput>(
   step: string,
-  guard: StepGuard,
-  work: (
-    ref: IngestStartInput,
-    signal?: AbortSignal,
-    progress?: () => void,
-  ) => Promise<object | undefined>,
+  guard: StepGuard<R>,
+  work: (ref: R, signal?: AbortSignal, progress?: () => void) => Promise<object | undefined>,
   spec: StepOutputSpec<O>,
   options: StepOptions = {},
-): Effect<IngestStartInput, O> {
+): Effect<R, O> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const sleep = options.sleep ?? defaultSleep;
   const settleMs = options.settleMs ?? ATTEMPT_SETTLE_MS;
   const attemptOnce = async (
-    ref: IngestStartInput,
+    ref: R,
     signal: AbortSignal | undefined,
     progress: () => void,
     generation: number | undefined,

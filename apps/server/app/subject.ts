@@ -5,9 +5,9 @@ import { UUID_PATTERN } from "./chats/ids";
 const UUID = UUID_PATTERN;
 const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** The visuals lineage line of one document: `__loom_ui_lineage__:visuals-<userId>-<documentId>` (ids only). */
+/** The visuals lineage lines: a document's `visuals-<userId>-<documentId>` and a chat turn's `turnvisuals-<userId>-<chatId>-<ord>` (ids only). */
 const VISUALS_LINEAGE = new RegExp(
-  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}visuals-(${UUID})-${UUID}$`,
+  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}(?:visuals-(${UUID})-${UUID}|turnvisuals-(${UUID})-${UUID}-[1-9][0-9]{0,14})$`,
 );
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
 
@@ -50,13 +50,14 @@ export function executionIdFor(userId: string, name: string): UserExecutionId {
  * namespace, and survives user erasure, so every user-owned execution must be started with
  * `executionIdFor`.
  *
- * A lineage line (`__loom_ui_lineage__:visuals-<userId>-<documentId>`) is owned by its user, so its events and
+ * A lineage line (`__loom_ui_lineage__:visuals-<userId>-<documentId>` or `...:turnvisuals-<userId>-<chatId>-<ord>`) is owned by its user, so its events and
  * artifact blobs go under the user's key. Any other id under the lineage prefix resolves to "" (no subject): the
  * encrypting stores refuse to write under it, never seal it under a key erasure would miss.
  */
 export function subjectOfExecution(e: { executionId: string }): string {
   if (e.executionId.startsWith(LINEAGE_STREAM_PREFIX)) {
-    return VISUALS_LINEAGE.exec(e.executionId)?.[1] ?? "";
+    const m = VISUALS_LINEAGE.exec(e.executionId);
+    return m?.[1] ?? m?.[2] ?? "";
   }
   const match = USER_EXECUTION.exec(e.executionId);
   return match?.[1] ?? `x:${e.executionId}`;
