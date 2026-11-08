@@ -402,3 +402,43 @@ describe("ViewSession: a turn source", () => {
     s.dispose();
   });
 });
+
+describe("ViewSession.widgetType", () => {
+  it("names the semantic type of a widget in the served blueprint, and nothing for an unknown id", async () => {
+    const widget = (wid: string, type: string) => ({
+      _tag: "Widget",
+      id: wid,
+      kind: "Table",
+      props: {},
+      source: { type, version: "1.0.0" },
+    });
+    const payload = {
+      view: "detail",
+      surface: "web",
+      experienceId: "e",
+      versionHash: "v",
+      blueprint: {
+        layout: {
+          type: "grid",
+          columns: 12,
+          children: [
+            { span: 6, node: widget("v-rel", "RelatedDocuments") },
+            { node: widget("v-f", "Table") },
+          ],
+        },
+      },
+      inventory: { experienceId: "e", versionHash: "v", handles: [] },
+      fingerprint: { restrictedHandles: [], restrictedProjectionNodes: [], placeholderNodes: [] },
+    };
+    const api = {
+      uiView: vi.fn(),
+      uiDocumentDetail: vi.fn(async () => payload),
+      uiTurnVisuals: vi.fn(),
+      uiHydrate: vi.fn(async () => []),
+    };
+    const s = await ViewSession.open(api as never, { document: "d1" });
+    expect(s.widgetType("v-rel")).toBe("RelatedDocuments");
+    expect(s.widgetType("v-f")).toBe("Table");
+    expect(s.widgetType("nope")).toBeUndefined();
+  });
+});

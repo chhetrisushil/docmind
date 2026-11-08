@@ -237,7 +237,7 @@ describe("intentOf: hostile payloads (actions are untrusted)", () => {
   });
   it("a row action on a view that has no table, and the wrong type for the view, are refused", () => {
     expect(intentOf("chat", row("open", A), held)).toBeUndefined();
-    expect(intentOf("detail", row("open", A), held)).toBeUndefined();
+    expect(intentOf("detail", row("open", A))).toBeUndefined(); // nothing held: a row action means nothing
     expect(intentOf("sources", row("open", A), held)).toBeUndefined();
     expect(
       intentOf("library", { type: "SUBMIT_TEXT", payload: { text: "x", key: "k" } }),
@@ -381,5 +381,27 @@ describe("intentOf: a source marker on a visual (REF_OPEN)", () => {
     expect(intentOf("library", ref(`${D}:${P}`))).toBeUndefined();
     expect(intentOf("sessions", ref(`${D}:${P}`))).toBeUndefined();
     expect(intentOf("chat", ref(`${D}:${P}`))).toBeUndefined();
+  });
+});
+
+describe("intentOf: the document's Related documents table", () => {
+  it("opens a related document whose row key the surface holds, in the held spelling", () => {
+    expect(intentOf("detail", row("open", A), held)).toEqual({ type: "document.open", id: A });
+    expect(intentOf("detail", row("open", A.toUpperCase()), held)).toEqual({
+      type: "document.open",
+      id: A,
+    });
+  });
+  it("refuses a key that was not served, a non-uuid key, and every other row action", () => {
+    expect(
+      intentOf("detail", row("open", "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a99"), held),
+    ).toBeUndefined();
+    expect(intentOf("detail", row("open", "nope"), { rowKeys: ["nope"] })).toBeUndefined();
+    for (const a of ["ask", "retry", "delete", "rename", "__proto__"])
+      expect(intentOf("detail", row(a, A), held)).toBeUndefined();
+    expect(intentOf("detail", row("open", A), { rowKeys: [] })).toBeUndefined();
+  });
+  it("does not make a turn's visuals actionable", () => {
+    expect(intentOf("turn", row("open", A), held)).toBeUndefined();
   });
 });
