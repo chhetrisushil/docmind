@@ -10,10 +10,10 @@ import {
 import type { Blueprint } from "@loom/blueprint-runtime";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { EXPERIENCES } from "./views";
-import { OWNER_READ, mergedCatalog } from "./visuals";
+import { OWNER_READ, TURN_READ, mergedCatalog } from "./visuals";
 
 export interface ViewPayload {
-  view: ViewName;
+  view: ViewName | "turn";
   surface: SurfaceName;
   experienceId: string;
   versionHash: string;
@@ -82,8 +82,13 @@ export function createViewPayloads(o: ViewsOptions) {
     }
   // The per-document detail depends on the model's visuals, so it is compiled on demand and kept in a small LRU.
   const details = new Map<string, ViewPayload>();
-  const compileDetail = (experience: Experience, surface: SurfaceName): ViewPayload => {
-    const key = `${surface}:${experience.versionHash}`;
+  const compileOwned = (
+    experience: Experience,
+    surface: SurfaceName,
+    view: "detail" | "turn",
+    read: typeof OWNER_READ | typeof TURN_READ,
+  ): ViewPayload => {
+    const key = `${surface}:${view}:${experience.versionHash}`;
     const hit = details.get(key);
     if (hit) {
       details.delete(key);
@@ -95,23 +100,23 @@ export function createViewPayloads(o: ViewsOptions) {
       catalog: mergedCatalog(),
       hydrationProjectionId: HYDRATION_PROJECTION_ID,
       hydrationProjectionVersion: HYDRATION_PROJECTION_VERSION,
-      viewer: OWNER_READ.viewer,
-      audience: OWNER_READ.audience,
-      declaredToolClasses: OWNER_READ.declaredToolClasses,
+      viewer: read.viewer,
+      audience: read.audience,
+      declaredToolClasses: read.declaredToolClasses,
       placeholderKey: o.placeholderKey,
     });
     if (!compiled.ok) throw new DetailCompileError(compiled.findings.map((f) => f.code));
     const payload: ViewPayload = {
-      view: "detail",
+      view,
       surface,
       experienceId: experience.experienceId,
       versionHash: experience.versionHash,
       blueprint: compiled.blueprint,
       inventory: handleInventory(experience, {
         revisionOf,
-        viewer: OWNER_READ.viewer,
-        audience: OWNER_READ.audience,
-        declaredToolClasses: OWNER_READ.declaredToolClasses,
+        viewer: read.viewer,
+        audience: read.audience,
+        declaredToolClasses: read.declaredToolClasses,
       }).inventory,
       fingerprint: compiled.fingerprint,
     };
@@ -119,8 +124,11 @@ export function createViewPayloads(o: ViewsOptions) {
     if (details.size > DETAIL_CACHE_SIZE) details.delete(details.keys().next().value as string);
     return payload;
   };
+  const compileDetail = (e: Experience, s: SurfaceName) => compileOwned(e, s, "detail", OWNER_READ);
+  const compileTurn = (e: Experience, s: SurfaceName) => compileOwned(e, s, "turn", TURN_READ);
   return {
     compileDetail,
+    compileTurn,
     names: VIEW_NAMES as readonly ViewName[],
     surfaces: SURFACES as readonly SurfaceName[],
     payload(name: ViewName, surface: SurfaceName): ViewPayload {

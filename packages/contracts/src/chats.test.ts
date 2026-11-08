@@ -10,6 +10,7 @@ import {
   PatchChatRequest,
   ReasoningQuery,
   ReasoningResponse,
+  RecordOrd,
   SendMessageRequest,
   SendMessageResponse,
   StopChatResponse,
@@ -264,4 +265,11 @@ describe("chat contracts", () => {
       ChatStreamEvent.parse({ kind: "message", ...base, failureReason: "quota" }),
     ).toMatchObject({ failureReason: "quota" });
   });
+});
+
+it("RecordOrd is the range of a message id: 1 to 15 digits, an integer", () => {
+  expect(RecordOrd.safeParse(1).success).toBe(true);
+  expect(RecordOrd.safeParse(999_999_999_999_999).success).toBe(true);
+  for (const bad of [0, -1, 1.5, 1_000_000_000_000_000])
+    expect(RecordOrd.safeParse(bad).success, String(bad)).toBe(false);
 });

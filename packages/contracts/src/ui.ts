@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RecordOrd } from "./chats";
 import { Uuid } from "./common";
 
 /** The experiences DocMind composes (Task 186b). */
@@ -20,7 +21,7 @@ const Scalar = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 /** `GET /api/ui/views/:view?surface=`: the compiled blueprint and the handle inventory; never a provider, never data. */
 export const UiViewResponse = z.object({
-  view: ViewName,
+  view: z.union([ViewName, z.literal("turn")]),
   surface: SurfaceName,
   experienceId: z.string(),
   versionHash: z.string(),
@@ -68,6 +69,7 @@ const HandleRequests = z
 export const UiHydrateRequest = z.union([
   z.object({ view: ViewName, requests: HandleRequests }),
   z.object({ document: Uuid, requests: HandleRequests }),
+  z.object({ turn: z.object({ chatId: Uuid, ord: RecordOrd }), requests: HandleRequests }),
 ]);
 export type UiHydrateRequest = z.infer<typeof UiHydrateRequest>;
 

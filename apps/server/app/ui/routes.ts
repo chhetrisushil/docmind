@@ -109,6 +109,9 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
             readers(identity),
             identity.userId,
           );
+        } else if ("turn" in body) {
+          // Task 10 serves a turn's visuals here; until then no turn has any.
+          return sendError(res, 404, "not_found", "turn not found");
         } else {
           const id = body.document.toLowerCase();
           if (!(await owns(identity, id)))

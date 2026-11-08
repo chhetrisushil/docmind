@@ -140,5 +140,10 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         throw err;
       }
     },
+
+    // Task 10 wires this to the turn's stored facts.
+    async turnFacts() {
+      return null;
+    },
   };
 }

@@ -82,25 +82,91 @@ export const OWNER_READ = {
 } as const;
 const TOOL = "visual.facts" as const;
 
-export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[] {
-  return facts.map((f) => ({
-    handle: `fact-${f.ordinal}`,
+export type FactOrigin = { kind: "doc"; documentId: string } | { kind: "turn" };
+export interface OfferedFact {
+  fact: VisualFactRaw;
+  origin: FactOrigin;
+}
+type FactTool = "visual.facts" | "turn.facts";
+
+const describeFact = (f: VisualFactRaw) =>
+  f.kind === "series"
+    ? "a series of numbers from the document"
+    : f.kind === "figure"
+      ? "one headline figure"
+      : "a table of facts";
+
+/** The one capability shape of every fact: only the handle, the tool and the pin differ. */
+function capability(f: VisualFactRaw, handle: string, tool: FactTool, pin: string): CapabilityRef {
+  return {
+    handle,
     kind: KIND,
-    toolName: TOOL,
+    toolName: tool,
     toolVersion: "1.0.0",
-    // One pin per fact: the planner mints its provider handle from the pin, so two facts never share a handle and the
-    // ordinal can be read back from the committed provider (R26). The invoker still checks against `PINS[TOOL]`.
-    toolSchemaHash: `${PINS[TOOL]}#fact-${f.ordinal}`,
-    description:
-      f.kind === "series"
-        ? "a series of numbers from the document"
-        : f.kind === "figure"
-          ? "one headline figure"
-          : "a table of facts",
+    toolSchemaHash: pin,
+    description: describeFact(f),
     sampleOutput: f,
     sensitivity: "sensitive",
-  }));
+  };
 }
+
+export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[] {
+  // One pin per fact: the planner mints its provider handle from the pin, so two facts never share a handle and the
+  // ordinal can be read back from the committed provider (R26: the pin names the fact). The invoker still checks against `PINS[tool]`.
+  return facts.map((f) =>
+    capability(f, `fact-${f.ordinal}`, TOOL, `${PINS[TOOL]}#fact-${f.ordinal}`),
+  );
+}
+
+/**
+ * Capabilities of a chat turn's facts, which may come from several documents (stored facts) or from the turn itself
+ * (extracted). Handles are indexes, because ordinals repeat across documents; the pin names the true source.
+ */
+export function factCapabilities(offered: readonly OfferedFact[]): CapabilityRef[] {
+  return offered.map(({ fact, origin }, i) =>
+    origin.kind === "doc"
+      ? capability(
+          fact,
+          `fact-${i}`,
+          "visual.facts",
+          `${PINS["visual.facts"]}#${origin.documentId}/fact-${fact.ordinal}`,
+        )
+      : capability(fact, `fact-${i}`, "turn.facts", `${PINS["turn.facts"]}#fact-${fact.ordinal}`),
+  );
+}
+
+export type FactRef =
+  | { kind: "detail"; ordinal: number }
+  | { kind: "doc"; documentId: string; ordinal: number }
+  | { kind: "turn"; ordinal: number };
+
+const ORD = "(0|[1-9][0-9]{0,1})";
+const UUID_L = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const DETAIL_PIN = new RegExp(`^docmind:visual\\.facts@1#fact-${ORD}$`);
+const DOC_PIN = new RegExp(`^docmind:visual\\.facts@1#(${UUID_L})/fact-${ORD}$`);
+const TURN_PIN = new RegExp(`^docmind:turn\\.facts@1#fact-${ORD}$`);
+
+/** The fact a committed provider step reads, from its tool and pin; null for anything this module did not mint. */
+export function factRefOfPin(toolName: string, pin: string): FactRef | null {
+  if (toolName === "visual.facts") {
+    const d = DETAIL_PIN.exec(pin);
+    if (d) return { kind: "detail", ordinal: Number(d[1]) };
+    const m = DOC_PIN.exec(pin);
+    return m ? { kind: "doc", documentId: m[1] as string, ordinal: Number(m[2]) } : null;
+  }
+  if (toolName === "turn.facts") {
+    const t = TURN_PIN.exec(pin);
+    return t ? { kind: "turn", ordinal: Number(t[1]) } : null;
+  }
+  return null;
+}
+
+/** How a chat turn's visuals are compiled, inventoried and served: for its authenticated owner (R27: hydration under the owner's `sensitive` clearance), reading both tools. */
+export const TURN_READ = {
+  viewer: { clearance: "sensitive" },
+  audience: "viewer",
+  declaredToolClasses: { "docmind:visual.facts": "sensitive", "docmind:turn.facts": "sensitive" },
+} as const;
 
 export type VisualEntry = "FigureChart" | "FigureTrend" | "KeyFigure" | "FactTable";
 const FAMILY: Record<VisualEntry, string> = {
@@ -172,3 +238,22 @@ export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fro
     ]),
   ),
 );
+
+/** The provider of a fact read for a turn: a stored fact reads its document, an extracted one the turn. */
+export const turnFactProvider = (
+  handle: string,
+  ref: Exclude<FactRef, { kind: "detail" }>,
+  turn: { chatId: string; ord: number },
+  entry: VisualEntry,
+): ProviderSpec =>
+  ref.kind === "doc"
+    ? provider(handle, {
+        target: "visual.facts",
+        args: { id: ref.documentId },
+        reshaper: `${FAMILY[entry]}-${ref.ordinal}`,
+      })
+    : provider(handle, {
+        target: "turn.facts",
+        args: { chatId: turn.chatId, ord: turn.ord },
+        reshaper: `${FAMILY[entry]}-${ref.ordinal}`,
+      });

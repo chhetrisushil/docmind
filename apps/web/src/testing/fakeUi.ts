@@ -14,6 +14,7 @@ export const emptyReaders = (): UiReaders => ({
   source: async () => null,
   chats: async () => [],
   visualFacts: async () => null,
+  turnFacts: async () => null,
 });
 
 /** The server's UI plane in-process: the real compiled views and the real `hydrate`, over the readers a test gives. */

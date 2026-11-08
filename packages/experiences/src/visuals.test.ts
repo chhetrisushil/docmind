@@ -7,7 +7,9 @@ import {
   VISUAL_SHAPES,
   type VisualFactRaw,
   capabilitiesOf,
+  factCapabilities,
   factProvider,
+  factRefOfPin,
 } from "./visuals";
 
 const FIGURE: VisualFactRaw = {
@@ -170,5 +172,70 @@ describe("the visual.facts invoker target", () => {
     await expect(
       inv.invokeTransient(INVOKE_ID, { target: "visual.facts", args: { id: "x" } }),
     ).rejects.toMatchObject({ channel: "invalidArgs" });
+  });
+});
+
+describe("factCapabilities", () => {
+  const A = "00000000-0000-4000-8000-00000000000a";
+  const B = "00000000-0000-4000-8000-00000000000b";
+  const figure = (ordinal: number): VisualFactRaw => ({
+    kind: "figure",
+    label: "Revenue",
+    value: 1200,
+    chunkIds: [A],
+    ordinal,
+  });
+
+  it("gives facts of two documents with the same ordinal distinct handles and pins", () => {
+    const caps = factCapabilities([
+      { fact: figure(0), origin: { kind: "doc", documentId: A } },
+      { fact: figure(0), origin: { kind: "doc", documentId: B } },
+      { fact: figure(1), origin: { kind: "turn" } },
+    ]);
+    expect(caps.map((c) => c.handle)).toEqual(["fact-0", "fact-1", "fact-2"]);
+    expect(caps.map((c) => [c.toolName, c.toolSchemaHash])).toEqual([
+      ["visual.facts", `docmind:visual.facts@1#${A}/fact-0`],
+      ["visual.facts", `docmind:visual.facts@1#${B}/fact-0`],
+      ["turn.facts", "docmind:turn.facts@1#fact-1"],
+    ]);
+    expect(
+      caps.every(
+        (c) => c.sensitivity === "sensitive" && c.kind === "docmind" && c.toolVersion === "1.0.0",
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves sub-project 1's capabilities exactly as they were", () => {
+    const [c] = capabilitiesOf([figure(3)]);
+    expect(c).toMatchObject({
+      handle: "fact-3",
+      toolName: "visual.facts",
+      toolSchemaHash: "docmind:visual.facts@1#fact-3",
+    });
+  });
+
+  it("reads each pin kind back, and refuses anything else", () => {
+    expect(factRefOfPin("visual.facts", "docmind:visual.facts@1#fact-4")).toEqual({
+      kind: "detail",
+      ordinal: 4,
+    });
+    expect(factRefOfPin("visual.facts", `docmind:visual.facts@1#${A}/fact-2`)).toEqual({
+      kind: "doc",
+      documentId: A,
+      ordinal: 2,
+    });
+    expect(factRefOfPin("turn.facts", "docmind:turn.facts@1#fact-7")).toEqual({
+      kind: "turn",
+      ordinal: 7,
+    });
+    for (const [tool, pin] of [
+      ["visual.facts", `docmind:visual.facts@1#${A.toUpperCase()}/fact-2`],
+      ["visual.facts", `docmind:visual.facts@1#${A}/fact-02`],
+      ["visual.facts", "docmind:turn.facts@1#fact-1"],
+      ["turn.facts", `docmind:turn.facts@1#${A}/fact-1`],
+      ["turn.facts", "docmind:turn.facts@2#fact-1"],
+      ["document.get", "docmind:document.get@1"],
+    ] as const)
+      expect(factRefOfPin(tool, pin), pin).toBeNull();
   });
 });

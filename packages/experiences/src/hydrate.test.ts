@@ -1,7 +1,11 @@
 import type { DocumentDto } from "@docmind/contracts";
+import { type Experience, type Operation, type SemanticNode, genesis, replay } from "@loom-ui/core";
+import type { ProviderSpec } from "@loom-ui/core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, MAX_READS_PER_BATCH, type UiReaders, createInvoker } from "./invoker";
+import type { ViewPayload } from "./payload";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP } from "./providers";
+import { provider } from "./providers";
 import { detailWithVisuals } from "./views";
 import { MAX_CONCURRENT_READS, createViews } from "./views-api";
 
@@ -26,6 +30,7 @@ const readers = (over: Partial<UiReaders> = {}): UiReaders => ({
   source: vi.fn(async () => null),
   chats: vi.fn(async () => []),
   visualFacts: vi.fn(async () => null),
+  turnFacts: vi.fn(async () => null),
   ...over,
 });
 const views = (onFinding = vi.fn()) =>
@@ -562,5 +567,96 @@ describe("the per-document detail", () => {
       "user-1",
     );
     expect(out?.state).toBe("ready");
+  });
+});
+
+describe("a turn's visuals", () => {
+  const CHAT = id(40);
+  const fact = (ordinal: number, value: number) => ({
+    kind: "figure" as const,
+    label: "Revenue",
+    value,
+    chunkIds: [id(9)],
+    ordinal,
+  });
+  /** Builds a visuals experience as the planner would have committed it: one KeyFigure per spec entry. */
+  const turnExperienceFor = (
+    v: ReturnType<typeof views>,
+    chatId: string,
+    ord: number,
+    specs: { entry: string; pin: [string, string] }[],
+  ) => {
+    const g = genesis({
+      experienceId: "docmind.turnvisuals",
+      intent: { objective: "Visuals", source: "user" },
+      meta: { author: "planner", createdAt: "2026-11-08T00:00:00Z", sourceKind: "code" },
+    });
+    const ops: Operation[] = [];
+    specs.forEach((s, i) => {
+      const handle = `p-${i}`;
+      const base = provider(handle, {
+        target: s.pin[0] as "visual.facts",
+        args: {},
+        reshaper: "x",
+      });
+      const spec = {
+        ...base,
+        executionGraph: [
+          { ...base.executionGraph[0], toolName: s.pin[0], toolSchemaHash: s.pin[1] },
+        ],
+      } as ProviderSpec;
+      ops.push({ type: "remapProvider", handle, spec } as Operation);
+    });
+    specs.forEach((s, i) => {
+      ops.push({
+        type: "insertNode",
+        parentId: g.root.id,
+        node: {
+          id: `n${i}`,
+          order: String.fromCharCode(0x61 + i),
+          kind: "semantic",
+          type: s.entry,
+          typeVersion: "1.0.0",
+          span: 6,
+          props: {},
+          binding: { handle: `p-${i}`, priority: "P0" },
+        } as SemanticNode,
+      } as Operation);
+    });
+    const r = replay(g, ops);
+    if (!r.ok) throw new Error("fixture does not replay");
+    const visuals = r.value;
+    return {
+      visuals,
+      experience: v.turnExperience({ chatId, ord }, visuals, new Set([id(1)])) as Experience,
+    };
+  };
+  it("hydrates a stored fact from its document and an extracted fact from the turn, under the owner's clearance", async () => {
+    const v = views();
+    const r = readers({
+      visualFacts: vi.fn(async (a) => (a.id === id(1) ? [fact(0, 11), fact(2, 22)] : null)),
+      turnFacts: vi.fn(async () => [fact(0, 33)]),
+    });
+    const exp = turnExperienceFor(v, CHAT, 6, [
+      { entry: "KeyFigure", pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-2`] },
+      { entry: "KeyFigure", pin: ["turn.facts", "docmind:turn.facts@1#fact-0"] },
+    ]);
+    const p = v.turnPayload(
+      { chatId: CHAT, ord: 6 },
+      exp.visuals,
+      new Set([id(1)]),
+      "web",
+    ) as ViewPayload;
+    const requests = Object.keys(exp.experience.providers).map((handle) => ({
+      experienceId: p.experienceId,
+      versionHash: p.versionHash,
+      handle,
+      params: {},
+    }));
+    const out = await v.hydrateExperience(exp.experience, requests, r, "user-1", "turn");
+    expect(out.map((o) => o.state)).toEqual(["ready", "ready"]);
+    expect(out.map((o) => (o as { value: { value: number } }).value.value)).toEqual([22, 33]);
+    expect(r.visualFacts).toHaveBeenCalledTimes(1);
+    expect(r.turnFacts).toHaveBeenCalledWith({ chatId: CHAT, ord: 6 });
   });
 });

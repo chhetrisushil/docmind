@@ -3,7 +3,14 @@ import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loo
 import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
 import { type Child, build, panel, tabs, widget } from "./compose";
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
-import { MAX_VISUAL_FACTS, type VisualEntry, factProvider } from "./visuals";
+import {
+  type FactRef,
+  MAX_VISUAL_FACTS,
+  type VisualEntry,
+  factProvider,
+  factRefOfPin,
+  turnFactProvider,
+} from "./visuals";
 
 const published = (handle: string) =>
   provider(handle, { target: "host.published", args: {}, reshaper: "host-published" });
@@ -187,29 +194,36 @@ const detail = (): Experience =>
 const VISUAL_ENTRIES = new Set<string>(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
 const MAX_SIBLINGS = 26;
 const FACT_HANDLE = /^fact-(0|[1-9]\d*)$/;
-const FACT_PIN = /^docmind:visual\.facts@1#fact-(0|[1-9]\d*)$/;
 
-/** The fact a bound node reads: its `fact-<n>` handle, or the `#fact-<n>` pin of the planner's provider for that handle. */
-function factOrdinal(visuals: Experience, handle: string): number | null {
-  const direct = FACT_HANDLE.exec(handle);
-  if (direct) return Number(direct[1]);
+/** The fact a bound node reads: a direct `fact-<n>` handle (detail only), or the pin on the provider of that handle. */
+function factRefOf(visuals: Experience, handle: string, direct: boolean): FactRef | null {
+  if (direct) {
+    const d = FACT_HANDLE.exec(handle);
+    if (d) return { kind: "detail", ordinal: Number(d[1]) };
+  }
   const step = Object.hasOwn(visuals.providers, handle)
     ? visuals.providers[handle]?.executionGraph[0]
     : undefined;
-  const m = step?.toolName === "visual.facts" ? FACT_PIN.exec(step.toolSchemaHash ?? "") : null;
-  return m ? Number(m[1]) : null;
+  return step ? factRefOfPin(step.toolName, step.toolSchemaHash ?? "") : null;
+}
+
+interface Adopt {
+  refOf(visuals: Experience, handle: string): FactRef | null;
+  /** The provider handle of a distinct fact in the host experience. */
+  baseHandle(ref: FactRef): string;
+  provider(ref: FactRef, entry: VisualEntry): ProviderSpec;
 }
 
 /**
- * The per-document detail: the static detail plus a Visuals tab holding a planner-composed
- * visuals experience's nodes. Providers are always generated here from each node's entry and the
- * real document id; any the planner declared are ignored. Two nodes binding one fact with
- * different entries get separate providers (`fact-n-b`, `-c`, ...). Malformed nodes are dropped,
- * never thrown on: this runs on every detail page load.
+ * Copies the planner's nodes into a host experience. Providers are always generated here from each node's entry and
+ * the real ids; any the planner declared are ignored. Two nodes binding one fact with different entries get separate
+ * providers (`<base>-b`, `-c`, ...). Malformed nodes are dropped, never thrown on: this runs on every page load.
  */
-export function detailWithVisuals(visuals: Experience | null, documentId: string): Experience {
-  if (visuals === null) return EXPERIENCES.detail;
-  const providers: Record<string, ProviderSpec> = detailProviders();
+function adoptVisuals(
+  visuals: Experience,
+  o: Adopt,
+  providers: Record<string, ProviderSpec>,
+): Child[] {
   const entryOf = new Map<string, VisualEntry>();
   const copy = (n: Child): Child | null => {
     if (n.kind === "container") {
@@ -219,29 +233,50 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
         .filter((c): c is Child => c !== null);
       return children.length === 0 ? null : { ...n, id: `v-${n.id}`, children };
     }
-    const ordinal = n.binding ? factOrdinal(visuals, n.binding.handle) : null;
+    const ref = n.binding ? o.refOf(visuals, n.binding.handle) : null;
     if (
       !n.binding ||
-      ordinal === null ||
-      ordinal >= MAX_VISUAL_FACTS ||
+      ref === null ||
+      ref.ordinal >= MAX_VISUAL_FACTS ||
       !VISUAL_ENTRIES.has(n.type)
     )
       return null;
     const entry = n.type as VisualEntry;
-    const base = `fact-${ordinal}`;
+    const base = o.baseHandle(ref);
     let handle = base;
     for (let i = 0; (entryOf.get(handle) ?? entry) !== entry; i++)
       handle = `${base}-${String.fromCharCode(0x62 + i)}`;
     if (!entryOf.has(handle)) {
       entryOf.set(handle, entry);
-      providers[handle] = { ...factProvider(ordinal, documentId, entry), handle };
+      providers[handle] = { ...o.provider(ref, entry), handle };
     }
     return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle } };
   };
-  const kept = (visuals.root as ContainerNode).children
+  return (visuals.root as ContainerNode).children
     .slice(0, MAX_SIBLINGS)
     .map((c) => copy(c as Child))
     .filter((c): c is Child => c !== null);
+}
+
+/**
+ * The per-document detail: the static detail plus a Visuals tab holding a planner-composed
+ * visuals experience's nodes (see `adoptVisuals`). Never throws: this runs on every detail page load.
+ */
+export function detailWithVisuals(visuals: Experience | null, documentId: string): Experience {
+  if (visuals === null) return EXPERIENCES.detail;
+  const providers: Record<string, ProviderSpec> = detailProviders();
+  const kept = adoptVisuals(
+    visuals,
+    {
+      refOf: (v, h) => {
+        const r = factRefOf(v, h, true);
+        return r?.kind === "detail" ? r : null; // a turn pin means nothing on a document's page
+      },
+      baseHandle: (r) => `fact-${r.ordinal}`,
+      provider: (r, entry) => factProvider(r.ordinal, documentId, entry),
+    },
+    providers,
+  );
   if (kept.length === 0) return EXPERIENCES.detail;
   return build({
     id: "docmind.detail",
@@ -249,6 +284,43 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
     children: detailChildren([panel("visuals", "Visuals", kept)]),
     providers,
   });
+}
+
+/**
+ * A chat turn's visuals as an experience of their own (no detail chrome): the planner's nodes, with providers made
+ * from each node's pin (a stored fact reads its document, an extracted fact reads the turn). A stored fact whose
+ * document is no longer the user's (`liveDocuments`) drops out. Null when nothing is left.
+ */
+export function turnWithVisuals(
+  visuals: Experience | null,
+  turn: { chatId: string; ord: number },
+  liveDocuments: ReadonlySet<string>,
+): Experience | null {
+  if (visuals === null) return null;
+  const providers: Record<string, ProviderSpec> = {};
+  const base = new Map<string, string>();
+  const keyOf = (r: FactRef) =>
+    r.kind === "doc" ? `${r.documentId}/${r.ordinal}` : `turn/${r.ordinal}`;
+  const kept = adoptVisuals(
+    visuals,
+    {
+      refOf: (v, h) => {
+        const r = factRefOf(v, h, false);
+        if (r === null || r.kind === "detail") return null;
+        return r.kind === "doc" && !liveDocuments.has(r.documentId) ? null : r;
+      },
+      baseHandle: (r) => {
+        const k = keyOf(r);
+        if (!base.has(k)) base.set(k, `fact-${base.size}`);
+        return base.get(k) as string;
+      },
+      provider: (r, entry) =>
+        turnFactProvider("", r as Exclude<FactRef, { kind: "detail" }>, turn, entry),
+    },
+    providers,
+  );
+  if (kept.length === 0) return null;
+  return build({ id: "docmind.turn", objective: "Answer visuals", children: kept, providers });
 }
 
 const sessions = (): Experience =>

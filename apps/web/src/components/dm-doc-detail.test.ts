@@ -91,6 +91,7 @@ function setup(
     source: async () => null,
     chats: async () => [],
     visualFacts: async () => null,
+    turnFacts: async () => null,
     ...readers,
   });
   const win = {
