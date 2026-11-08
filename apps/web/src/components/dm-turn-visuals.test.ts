@@ -27,6 +27,12 @@ afterEach(() => {
 });
 
 describe("dm-turn-visuals", () => {
+  it("is the containing block of its widgets, so their absolute descendants (a table's sr-only caption) can't stretch the page", async () => {
+    const el = await mount();
+    const body = q(el, "[data-body]");
+    expect(body).not.toBeNull();
+    expect(getComputedStyle(body as HTMLElement).position).toBe("relative");
+  });
   it("is a collapsed strip titled Visuals that expands in place", async () => {
     const el = await mount();
     const toggle = q(el, "[data-toggle]");
