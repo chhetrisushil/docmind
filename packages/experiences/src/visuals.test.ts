@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   TimeSeriesValue,
   checkKindValue,
@@ -518,5 +519,15 @@ describe("the visual reshapers: source references", () => {
       const v = shape(`${family}-${fact.ordinal}`, [withCites(fact, [cite(1)])]);
       expect(checkKindValue(kind, v)).toMatchObject({ ok: true });
     }
+  });
+});
+
+describe("the chat catalogue guard", () => {
+  // Every chat decision id is keyed by this catalogue, so any edit to it silently changes them all. The hash is main's chat
+  // catalogue; change it only together with a deliberate chat re-plan.
+  it("FACT_VISUALS_CATALOG still hashes to main's chat catalogue", () => {
+    expect(createHash("sha256").update(JSON.stringify(FACT_VISUALS_CATALOG)).digest("hex")).toBe(
+      "e9096cf41a01d1b87ef45b3eba3744600ae81e36d78fff476f6117f1455af080",
+    );
   });
 });

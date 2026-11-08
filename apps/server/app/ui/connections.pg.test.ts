@@ -150,6 +150,26 @@ describe.skipIf(!PG_URL)("readConnections (needs DOCMIND_TEST_PG_URL)", () => {
     expect(titles).toEqual([...titles].sort());
   });
 
+  it("ranks entities by rarity (every other document of the owner, ready or not): a rarer one first, a hub last or cut", async () => {
+    for (const n of ["a", "b", "c", "d"]) await seed(n, { chunks: 1 });
+    await seed("n1", { chunks: 1, ready: false });
+    await seed("n2", { chunks: 1, ready: false });
+    // created hub first, so neither creation order nor id order can explain the result
+    const hub = await entity("Hub", [ch("a", 0), ch("b", 0), ch("c", 0), ch("d", 0), ch("n1", 0)]);
+    // one ready document shares it, but two unready ones count too: 3 other documents
+    const crowded = await entity("Crowded", [ch("a", 0), ch("b", 0), ch("n1", 0), ch("n2", 0)]);
+    const pair = await entity("Pair", [ch("a", 0), ch("b", 0), ch("c", 0)]); // 2 other documents
+    const rare = await entity("Rare", [ch("a", 0), ch("d", 0)]); // 1 other document
+    const got = await read("a");
+    expect(got?.entities.map((e) => e.entityId)).toEqual([rare, pair, crowded, hub]);
+    // with every candidate slot taken by rarer entities, the hub is cut
+    for (let i = 0; i < 36; i++) await entity(`R${i}`, [ch("a", 0), ch("b", 0), ch("c", 0)]);
+    const cut = await read("a");
+    expect(cut?.entities).toHaveLength(12);
+    expect(cut?.entities.some((e) => e.entityId === hub)).toBe(false);
+    expect(cut?.entities[0]?.entityId).toBe(rare);
+  });
+
   it("drops an entity whose name does not open, and a document whose title does not open", async () => {
     await seed("a");
     await seed("b");
@@ -283,6 +303,23 @@ describe.skipIf(!PG_URL)(
            FROM generate_series(1, 20000)`,
           [U2],
         );
+        // This document names 50 entities, more than the candidates the query walks (3 times the cap of 12).
+        await c.query(
+          `INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id)
+         SELECT mc.tenant_id, mc.id, e.id
+           FROM (SELECT id, tenant_id FROM documents ORDER BY id LIMIT 1) d
+           JOIN chunks mc ON mc.document_id = d.id
+           JOIN seed_entities e ON e.rn <= 50 AND e.rn % 4 = mc.ordinal
+         ON CONFLICT DO NOTHING`,
+        );
+        // A hub: one entity on every chunk of the library, so on this document too.
+        await c.query(
+          `INSERT INTO entities (id, tenant_id, owner_id, kind, name_enc, name_key)
+         VALUES (gen_random_uuid(), $1::uuid, $2::uuid, 'organization', '{"x":1}'::jsonb, lpad(to_hex(100000), 64, '0'))`,
+          [T1, U1],
+        );
+        await c.query(`INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id)
+        SELECT c.tenant_id, c.id, e.id FROM chunks c, entities e WHERE e.name_key = lpad(to_hex(100000), 64, '0')`);
         await c.query("ANALYZE");
       } finally {
         c.release();
@@ -323,7 +360,7 @@ describe.skipIf(!PG_URL)(
 
     it.each([
       ["related", RELATED_SQL, [U1, 8]],
-      ["entities", ENTITIES_SQL, [U1, 12, 5]],
+      ["entities", ENTITIES_SQL, [U1, 12, 5, 36]],
     ] as const)(
       "the %s query walks out from this document and never scans the library, under default planner settings",
       async (_n, sql, rest) => {

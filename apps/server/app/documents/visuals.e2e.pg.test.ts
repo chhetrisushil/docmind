@@ -616,7 +616,9 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     ).toBe(true);
 
     // No re-plan of A: the same visualize executions and the same served experience.
-    expect(await visualizeRuns()).toEqual(runsBefore);
+    const runsAfter = await visualizeRuns();
+    expect(runsAfter).toEqual(runsBefore);
+    expect(runsAfter).toHaveLength(runsBefore.length);
     expect(await versionOf()).toBe(versionBefore);
 
     // Another user cannot read A's connections.
