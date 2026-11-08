@@ -7,7 +7,7 @@ import {
   ViewName,
 } from "@docmind/contracts";
 import { Uuid } from "@docmind/contracts";
-import { type UiReaders, type Views, detailWithVisuals } from "@docmind/experiences";
+import type { UiReaders, Views } from "@docmind/experiences";
 import type { Experience } from "@loom-ui/core";
 import type { Lineage } from "@loom-ui/lineage";
 import { withTenant } from "../db/tenant";
@@ -114,10 +114,11 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
           if (!(await owns(identity, id)))
             return sendError(res, 404, "not_found", "document not found");
           results = await deps.views.hydrateExperience(
-            detailWithVisuals(await headOf(identity, id), id),
+            deps.views.documentExperience(id, await headOf(identity, id)),
             body.requests,
             readers(identity),
             identity.userId,
+            "document",
           );
         }
         json(res, 200, { results } satisfies UiHydrateResponse);

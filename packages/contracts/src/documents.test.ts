@@ -61,6 +61,16 @@ describe("document contracts", () => {
     ).toBe(false);
   });
 
+  it("requires a visuals event to be ready at finalize", () => {
+    const base = { documentId: ID, visuals: "ready" };
+    expect(
+      DocumentProgressEvent.safeParse({ ...base, status: "parsing", step: "finalize" }).success,
+    ).toBe(false);
+    expect(
+      DocumentProgressEvent.safeParse({ ...base, status: "ready", step: "embed" }).success,
+    ).toBe(false);
+  });
+
   it("only accepts known ingest steps in progress events", () => {
     const event = { documentId: ID, step: "embed", status: "embedding" };
     expect(DocumentProgressEvent.parse(event)).toEqual(event);

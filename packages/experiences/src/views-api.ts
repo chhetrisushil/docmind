@@ -9,12 +9,18 @@ import {
 } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { DOCMIND_CATALOG } from "./catalog";
+import { SURFACES } from "./catalog";
 import { INVOKE_ID, type UiReaders, createInvoker } from "./invoker";
-import { type ViewPayload, type ViewsOptions, createViewPayloads } from "./payload";
+import {
+  DetailCompileError,
+  type ViewPayload,
+  type ViewsOptions,
+  createViewPayloads,
+} from "./payload";
 import { KIND, PINS } from "./providers";
 import { reshapers } from "./reshapers";
 import { EXPERIENCES, detailWithVisuals } from "./views";
-import { mergedCatalog } from "./visuals";
+import { OWNER_READ, mergedCatalog } from "./visuals";
 
 const MAX_BATCH = 32;
 /** Reads in flight at once for one POST: the app pool is shared with every other user. */
@@ -45,12 +51,22 @@ export interface Views {
     visuals: Experience | null,
     surface: SurfaceName,
   ): ViewPayload;
-  /** Answers handle loads for an experience the caller was served (a static view's, or a document's `detailWithVisuals`). */
+  /**
+   * The experience a document's detail page is served as: the static detail plus its visuals, or the static detail
+   * alone when there are none or they do not compile (on any surface). `documentPayload` and a `{ document }` hydrate
+   * both use this one decision, so the version hash a client holds is the one hydrate validates against.
+   */
+  documentExperience(documentId: string, visuals: Experience | null): Experience;
+  /**
+   * Answers handle loads for an experience the caller was served. `scope` "view" (default) is a static view;
+   * "document" is a `documentExperience`, served to its owner under their clearance (R27).
+   */
   hydrateExperience(
     experience: Experience,
     requests: readonly HandleLoadRequest[],
     readers: UiReaders,
     principalId: string,
+    scope?: "view" | "document",
   ): Promise<HandleLoadResult[]>;
   /** Answers handle loads for one view with the caller's readers. Surface-independent: values do not depend on how a view is drawn. */
   hydrate(
@@ -68,18 +84,22 @@ export function createViews(o: ViewsOptions): Views {
     requests,
     readers,
     principalId,
+    scope = "view",
   ) => {
-    // A per-document detail uses the merged catalogue (it holds the visuals entries); a static view the plain one.
-    const catalog = Object.values(EXPERIENCES).includes(experience)
-      ? DOCMIND_CATALOG
-      : mergedCatalog();
+    // A per-document detail uses the merged catalogue (it holds the visuals entries) and its owner's clearance.
+    const document = scope === "document";
     return [
       ...(await serveHandles(experience, requests, {
         invoker: createInvoker(readers),
         providers,
         reshapers,
         contentRefArgs: "none",
-        outputKinds: { catalog, surface: "web" },
+        outputKinds: { catalog: document ? mergedCatalog() : DOCMIND_CATALOG, surface: "web" },
+        ...(document && {
+          viewer: OWNER_READ.viewer,
+          audience: OWNER_READ.audience,
+          declaredToolClasses: OWNER_READ.declaredToolClasses,
+        }),
         principalId,
         now: Date.now(),
         maxBatch: MAX_BATCH,
@@ -92,12 +112,31 @@ export function createViews(o: ViewsOptions): Views {
       })),
     ];
   };
+  const documentExperience: Views["documentExperience"] = (documentId, visuals) => {
+    if (visuals === null) return EXPERIENCES.detail;
+    try {
+      const experience = detailWithVisuals(visuals, documentId);
+      for (const surface of SURFACES) base.compileDetail(experience, surface);
+      return experience;
+    } catch (err) {
+      // A model-derived experience that will not compile is not a server error: the page serves without it.
+      // Finding codes only, never a message (it may name the model's labels).
+      o.onFinding?.(
+        UNBOUND,
+        err instanceof DetailCompileError
+          ? err.codes.join(",") || "compile-failed"
+          : "compile-failed",
+      );
+      return EXPERIENCES.detail;
+    }
+  };
   return {
     names: base.names,
     surfaces: base.surfaces,
     payload: base.payload,
+    documentExperience,
     documentPayload: (documentId, visuals, surface) =>
-      base.compileDetail(detailWithVisuals(visuals, documentId), surface),
+      base.compileDetail(documentExperience(documentId, visuals), surface),
     hydrateExperience,
     async hydrate(name, requests, readers, principalId) {
       if (!Object.hasOwn(EXPERIENCES, name)) {

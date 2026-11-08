@@ -125,6 +125,9 @@ export const DocumentProgressEvent = z
   })
   .refine((e) => e.step !== undefined || e.status === "failed", {
     message: "an event without a step must be failed",
+  })
+  .refine((e) => e.visuals === undefined || (e.status === "ready" && e.step === "finalize"), {
+    message: "a visuals event must be ready at finalize",
   });
 export type DocumentProgressEvent = z.infer<typeof DocumentProgressEvent>;
 

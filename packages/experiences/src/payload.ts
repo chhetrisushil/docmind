@@ -10,7 +10,7 @@ import {
 import type { Blueprint } from "@loom/blueprint-runtime";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { EXPERIENCES } from "./views";
-import { mergedCatalog } from "./visuals";
+import { OWNER_READ, mergedCatalog } from "./visuals";
 
 export interface ViewPayload {
   view: ViewName;
@@ -33,9 +33,18 @@ export interface ViewsOptions {
 /** Compiled per-document payloads kept at once (each is keyed by the experience's version hash). */
 const DETAIL_CACHE_SIZE = 256;
 
+/** A model-derived per-document experience that does not compile. Carries finding CODES only. */
+export class DetailCompileError extends Error {
+  constructor(readonly codes: readonly string[]) {
+    super(`document detail does not compile: ${codes.join(",")}`);
+    this.name = "DetailCompileError";
+  }
+}
+
 export const VIEW_NAMES = Object.keys(EXPERIENCES) as ViewName[];
 
-/** The sealed, compiled view per (name, surface) with its handle inventory: built once, content-free, the same for everyone. */
+/** The sealed, compiled view per (name, surface) with its handle inventory: built once, content-free, the same for everyone.
+ * (The per-document detail compiled on demand below is NOT content-free: its labels come from the model; the LRU keeps them in memory until eviction.) */
 export function createViewPayloads(o: ViewsOptions) {
   for (const [name, key] of [
     ["placeholderKey", o.placeholderKey],
@@ -86,20 +95,24 @@ export function createViewPayloads(o: ViewsOptions) {
       catalog: mergedCatalog(),
       hydrationProjectionId: HYDRATION_PROJECTION_ID,
       hydrationProjectionVersion: HYDRATION_PROJECTION_VERSION,
-      viewer: {},
+      viewer: OWNER_READ.viewer,
+      audience: OWNER_READ.audience,
+      declaredToolClasses: OWNER_READ.declaredToolClasses,
       placeholderKey: o.placeholderKey,
     });
-    if (!compiled.ok)
-      throw new Error(
-        `document detail does not compile: ${compiled.findings.map((f) => f.code).join(",")}`,
-      );
+    if (!compiled.ok) throw new DetailCompileError(compiled.findings.map((f) => f.code));
     const payload: ViewPayload = {
       view: "detail",
       surface,
       experienceId: experience.experienceId,
       versionHash: experience.versionHash,
       blueprint: compiled.blueprint,
-      inventory: handleInventory(experience, { revisionOf }).inventory,
+      inventory: handleInventory(experience, {
+        revisionOf,
+        viewer: OWNER_READ.viewer,
+        audience: OWNER_READ.audience,
+        declaredToolClasses: OWNER_READ.declaredToolClasses,
+      }).inventory,
       fingerprint: compiled.fingerprint,
     };
     details.set(key, payload);
