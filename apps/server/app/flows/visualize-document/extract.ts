@@ -50,7 +50,7 @@ export interface ExtractDeps extends StepSeams {
   runs?: Pick<VisualRuns, "last">;
   /**
    * Execution ids of re-runs the starter began right after a `done` run (it knew the previous state before the new run
-   * overwrote it in visual_runs). In-process only; after a restart the reader is the fallback.
+   * overwrote it in visual_runs). In-process only: a run recovered after a crash has no note and may extract once.
    */
   afterDone?: Set<string>;
 }
@@ -147,7 +147,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
         const stored = await deps.facts.list(ref);
         if (stored.length > 0) return { count: stored.length, model };
         // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
-        // is the sure source, the reader answers when the previous run is still the last one (or after a restart).
+        // is the sure source; the reader only helps if it runs before this run's own `running` record lands.
         const noted = deps.afterDone?.has(executionId) === true;
         const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
         if (noted || (last?.state === "done" && last.run < rerun)) return { count: 0, model };
