@@ -20,14 +20,19 @@ export type VisualsStateReader = (
 export function visualsStateReader(o: {
   pool: Pool;
   runs: Pick<VisualRuns, "last">;
-  starter: Pick<VisualsStarter, "running">;
+  starter: Pick<VisualsStarter, "running" | "reconcile">;
 }): VisualsStateReader {
   return async (identity, documentId, hasHead) => {
-    if (o.starter.running({ userId: identity.userId, documentId })) return "running";
     const doc = await withTenant(o.pool, identity.tenantId, (tx) =>
       getDocument(tx, identity.userId, documentId),
     );
-    const last = doc ? await o.runs.last(identity, documentId, doc.ingest_generation) : null;
+    if (!doc) return hasHead ? "ready" : "none";
+    const ref = { tenantId: identity.tenantId, userId: identity.userId, documentId };
+    if (o.starter.running(ref, doc.ingest_generation)) return "running";
+    let last = await o.runs.last(identity, documentId, doc.ingest_generation);
+    // A `running` row this process is not tracking may be a lost end event: ask Loom and repair it, so it never sticks.
+    if (last?.state === "running")
+      last = await o.starter.reconcile(ref, doc.ingest_generation, last);
     if (last?.state === "running") return "running";
     if (hasHead) return "ready";
     return last?.state === "failed" ? "failed" : "none";

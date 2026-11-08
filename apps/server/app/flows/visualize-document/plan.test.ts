@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { VISUALS_CATALOG, capabilitiesOf } from "@docmind/experiences";
+import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { ReferencePlanner, checkPlannerConformance } from "@loom-ui/planner";
 import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
@@ -10,7 +11,7 @@ import { executionIdFor, subjectOfExecution } from "../../subject";
 import { DocumentGoneError } from "../ingest-document/errors";
 import type { Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
-import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals } from "./plan";
+import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals, plannerUnavailable } from "./plan";
 import { recording, scriptedPlannerModel } from "./testing";
 
 const FIGURE: Fact = {
@@ -200,5 +201,49 @@ describe("sealing", () => {
         expect((value as { __loomEnc?: string } | undefined)?.__loomEnc, `choice.${key}`).toBe(
           "loom/aes-256-gcm",
         );
+  });
+});
+
+describe("plannerUnavailable pins the planner's finding shape", () => {
+  const failing = (err: () => Error) =>
+    new ReferencePlanner({
+      model: {
+        complete: async () => {
+          throw err();
+        },
+      },
+      modelId: "test",
+    });
+
+  it("a model that stays unavailable ends with a model-error finding that quotes LlmUnavailableError's fixed message, plus plan-failed", async () => {
+    const plan = await planVisuals(
+      failing(() => new LlmUnavailableError(503)),
+      [FIGURE],
+      recording(),
+    );
+    // If @loom-ui/planner changes these codes or the message prefix, this fails loudly (and plannerUnavailable with it).
+    expect(plan.findings.map((f) => [f.code, f.severity])).toEqual([
+      ["model-error", "error"],
+      ["plan-failed", "error"],
+    ]);
+    expect(plan.findings[0]?.message).toBe(
+      "model call failed: the language model is unavailable (HTTP 503)",
+    );
+    expect(plannerUnavailable(plan)).toBe(true);
+  });
+
+  it("a permanent model error, or a malformed plan, is not 'unavailable'", async () => {
+    const permanent = await planVisuals(
+      failing(() => new LlmRequestError(400)),
+      [FIGURE],
+      recording(),
+    );
+    expect(plannerUnavailable(permanent)).toBe(false);
+    const malformed = await planVisuals(
+      new ReferencePlanner({ model: scriptedPlannerModel(["not json"]), modelId: "test" }),
+      [FIGURE],
+      recording(),
+    );
+    expect(plannerUnavailable(malformed)).toBe(false);
   });
 });

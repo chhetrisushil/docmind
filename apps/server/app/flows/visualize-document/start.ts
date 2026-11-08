@@ -7,12 +7,14 @@ import {
 } from "@loom/workflow-runtime";
 import type { Pool } from "pg";
 import { type UserExecutionId, executionIdFor } from "../../subject";
+import { MAX_RERUNS } from "../rerunTracker";
+import { rerunTracker } from "../rerunTracker";
 import { VisualizeInput } from "./flow";
 import type { VisualizeRef } from "./pgFacts";
-import type { VisualRuns } from "./runs";
+import { type VisualRun, type VisualRuns, outcomeOfState } from "./runs";
 
 const MAX_GENERATION = 999_999_999; // the execution-id pattern (status/model.ts) allows 9 digits
-export const MAX_RERUNS = 999; // `-r<n>`: the execution-id pattern (status/model.ts) allows 3 digits
+export { MAX_RERUNS } from "../rerunTracker";
 
 /**
  * The visualize execution of one ingest generation: `visualize-<doc>` for generation 1, `visualize-<doc>.<gen>`
@@ -74,6 +76,35 @@ export const pgReadyDocuments = readyFrom("docmind_ready_documents");
 /** `docmind_visual_retry_documents` (migration 0030): ready documents whose last visualize run ended `visuals-model-unavailable`. */
 export const pgRetryDocuments = readyFrom("docmind_visual_retry_documents");
 
+/** A run recorded as `running` (the boot reconcile's source). */
+export interface RunningRun extends ReadyDocument {
+  run: number;
+}
+export type RunningRuns = (after: string, limit: number) => Promise<RunningRun[]>;
+
+/** `docmind_visual_running_runs` (migration 0030): ids and the run number only, across tenants, keyset-paged by document id. */
+export const pgRunningRuns =
+  (pool: Pick<Pool, "query">): RunningRuns =>
+  async (after, limit) => {
+    const { rows } = await pool.query<{
+      tenant_id: string;
+      owner_id: string;
+      id: string;
+      generation: number;
+      run: number;
+    }>(
+      "SELECT tenant_id, owner_id, id, generation, run FROM docmind_visual_running_runs($1::uuid, $2::integer)",
+      [after, limit],
+    );
+    return rows.map((r) => ({
+      tenantId: r.tenant_id,
+      userId: r.owner_id,
+      documentId: r.id,
+      generation: Number(r.generation),
+      run: Number(r.run),
+    }));
+  };
+
 /** What a re-run request answers: started (the `-r<n>` it took), a run of the document is in flight, or the visuals role is off. */
 export type VisualsRerun =
   | { kind: "started"; rerun: number }
@@ -89,14 +120,21 @@ export interface VisualsStarter {
    * extracts only when there are none. Throws on a Loom failure other than an id already taken.
    */
   rerun(ref: VisualizeRef, generation: number): Promise<VisualsRerun>;
-  /** True while a run of this document that this process started has not ended. */
-  running(ref: Pick<VisualizeRef, "userId" | "documentId">): boolean;
+  /** True while a run of this document's `generation` that this process started has not ended. */
+  running(ref: Pick<VisualizeRef, "userId" | "documentId">, generation: number): boolean;
+  /**
+   * A run recorded as `running` that this process is not tracking may have ended with its end event lost (the feed is live
+   * only, and its writes are dropped at shutdown). Asks Loom for the execution's state and, when it is terminal, repairs
+   * the row from the output (ids and enums only) and answers the repaired run; otherwise answers `last` unchanged. Never throws.
+   */
+  reconcile(ref: VisualizeRef, generation: number, last: VisualRun): Promise<VisualRun>;
   /** `start` that never throws and is awaited by `idle`: for event callbacks. */
   fire(ref: VisualizeRef, generation: number): void;
   /** Resolves when every fired start has settled (shutdown). */
   idle(): Promise<void>;
   /**
-   * Boot sweep: starts every ready document that has no visualize execution for its generation, then re-runs once every
+   * Boot sweep: first reconciles the runs recorded as `running` (their end may have been lost), then starts every ready
+   * document that has no visualize execution for its generation, then re-runs once every
    * ready document whose last run ended `visuals-model-unavailable`, page by page, with at most SWEEP_EXECUTIONS executions
    * running at once (it resolves when they have all completed).
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
@@ -116,7 +154,9 @@ export interface VisualsStarterOptions {
   ready?: ReadyDocuments;
   /** The boot sweep's second source: documents to re-run (their last run ended `visuals-model-unavailable`); absent: none. */
   retry?: ReadyDocuments;
-  /** Records a re-run as `running` (so a page shows it and the sweep leaves it alone); absent: nothing is recorded. */
+  /** The boot reconcile's source: runs recorded as `running`; absent: none. */
+  running?: RunningRuns;
+  /** Records a run as `running` when it starts (so a page shows it and a retry waits for it); absent: nothing is recorded. */
   runs?: Pick<VisualRuns, "record" | "last">;
   /**
    * False while the `visuals` role is off: nothing starts (`start` answers null, the sweep fires nothing), so a
@@ -130,13 +170,14 @@ export interface VisualsStarterOptions {
 }
 
 export function loomVisualsStarter(
-  runtime: Pick<WorkflowRuntime, "start" | "cancel">,
+  runtime: Pick<WorkflowRuntime, "start" | "cancel"> & Partial<Pick<WorkflowRuntime, "loadState">>,
   flow: RegisteredFlow,
   options: VisualsStarterOptions = {},
 ): VisualsStarter {
   const {
     ready,
     retry,
+    running: runningSource,
     runs,
     enabled = true,
     pageSize = READY_PAGE,
@@ -146,25 +187,10 @@ export function loomVisualsStarter(
   // Pending starts by user and lower-cased document id (never logged), for `settle`.
   const byDocument = new Map<string, Set<Promise<unknown>>>();
   const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.toLowerCase()}`;
-  // Executions this process started and has not seen end, by user and lower-cased document id: what `rerun` reads as "running".
-  const inFlight = new Map<string, Set<string>>();
-  const lastRerun = new Map<string, number>(); // `<user>:<doc>.<gen>` -> the highest `-r<n>` this process started
-  const track = (key: string, executionId: string, handle: ExecutionHandle) => {
-    if (typeof handle.waitForCompletion !== "function") return;
-    const set = inFlight.get(key) ?? new Set<string>();
-    inFlight.set(key, set);
-    set.add(executionId);
-    void handle
-      .waitForCompletion()
-      .then(
-        () => undefined,
-        () => undefined, // a failed run frees the document too
-      )
-      .finally(() => {
-        set.delete(executionId);
-        if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
-      });
-  };
+  const tracker = rerunTracker();
+  // One key per (user, document, ingest generation): the in-flight runs and the highest `-r<n>` taken are per generation.
+  const genKey = (userId: string, documentId: string, generation: number) =>
+    `${keyOf(userId, documentId)}.${generation}`;
   const startOne = async (
     ref: VisualizeRef,
     generation: number,
@@ -178,21 +204,21 @@ export function loomVisualsStarter(
     });
     const executionId = visualizeExecutionId(input.userId, input.documentId, generation, rerun);
     try {
-      // The run is recorded as running once Loom has it: a fast end (recorded by the event feed) is never overwritten, because
-      // the table never reopens a finished run.
       const handle = await runtime.start(flow, input, {
         // One execution per (document, generation, run): Loom starts a caller-chosen id once. No content in the name.
         executionId,
         principal: { tenant: input.tenantId, actor: input.userId },
       });
-      track(keyOf(input.userId, input.documentId), executionId, handle);
-      if (rerun !== undefined)
-        await runs
-          ?.record(
-            { userId: input.userId, documentId: input.documentId, generation, run: rerun },
-            "running",
-          )
-          .catch(onError);
+      tracker.track(genKey(input.userId, input.documentId, generation), executionId, handle);
+      // Every run (the automatic one is run 0) is recorded as running once Loom has it, so a restart while Loom recovers it
+      // never lets a retry start another beside it. A fast end (recorded by the event feed) is never overwritten: the table
+      // does not reopen a finished run.
+      await runs
+        ?.record(
+          { userId: input.userId, documentId: input.documentId, generation, run: rerun ?? 0 },
+          "running",
+        )
+        .catch(onError);
       return handle;
     } catch (err) {
       if (err instanceof ExecutionAlreadyExistsError) return null;
@@ -200,60 +226,104 @@ export function loomVisualsStarter(
     }
   };
   const start = (ref: VisualizeRef, generation: number) => startOne(ref, generation);
-  const isRunning = (ref: Pick<VisualizeRef, "userId" | "documentId">) =>
-    (inFlight.get(keyOf(ref.userId, ref.documentId))?.size ?? 0) > 0;
+  const isRunning = (ref: Pick<VisualizeRef, "userId" | "documentId">, generation: number) =>
+    tracker.running(genKey(ref.userId, ref.documentId, generation));
+
+  const reconcile = async (
+    ref: VisualizeRef,
+    generation: number,
+    last: VisualRun,
+  ): Promise<VisualRun> => {
+    if (last.state !== "running" || isRunning(ref, generation)) return last; // this process is on it
+    if (typeof runtime.loadState !== "function") return last;
+    try {
+      const executionId = visualizeExecutionId(
+        ref.userId,
+        ref.documentId,
+        generation,
+        last.run === 0 ? undefined : last.run,
+      );
+      const state = await runtime.loadState(executionId, {
+        principal: { tenant: ref.tenantId, actor: ref.userId },
+      });
+      const end = state ? outcomeOfState(state) : null;
+      if (!end) return last; // not started, or still going: recovery or the live feed will finish it
+      await runs?.record(
+        { userId: ref.userId, documentId: ref.documentId, generation, run: last.run },
+        end.state,
+        end.code,
+      );
+      return { run: last.run, state: end.state, code: end.code ?? null };
+    } catch (err) {
+      onError(err);
+      return last;
+    }
+  };
+
   const rerunWith = async (
     ref: VisualizeRef,
     generation: number,
   ): Promise<VisualsRerun & { handle?: ExecutionHandle }> => {
     if (!enabled) return { kind: "disabled" };
-    if (isRunning(ref)) return { kind: "running" };
-    const last = await runs?.last(ref, ref.documentId, generation);
-    if (last?.state === "running") return { kind: "running" }; // a run this process did not start (recovered after a restart)
-    const key = `${keyOf(ref.userId, ref.documentId)}.${generation}`;
-    for (let n = (lastRerun.get(key) ?? 0) + 1; n <= MAX_RERUNS; n++) {
-      const handle = await startOne(ref, generation, n);
-      if (handle) {
-        lastRerun.set(key, n);
-        return { kind: "started", rerun: n, handle };
-      }
-    }
-    return { kind: "running" }; // every re-run number is taken: nothing more can start, so the document answers as busy (never a 500)
+    const key = genKey(ref.userId, ref.documentId, generation);
+    // One re-run request at a time per document and generation: the checks, the probe and the start are one step.
+    return tracker.exclusive(key, async () => {
+      if (tracker.running(key)) return { kind: "running" };
+      let last = (await runs?.last(ref, ref.documentId, generation)) ?? null;
+      if (last?.state === "running") last = await reconcile(ref, generation, last);
+      if (last?.state === "running") return { kind: "running" }; // a run this process does not track, still going (recovered after a restart)
+      const out = await tracker.probe(key, last?.run ?? 0, (n) => startOne(ref, generation, n));
+      return out.kind === "started" ? out : { kind: "running" };
+    });
+  };
+  /** Registers a pending operation of the document for `idle` and `settle`; a failure still reaches the caller, not `idle`. */
+  const pend = <T>(
+    ref: Pick<VisualizeRef, "userId" | "documentId">,
+    op: Promise<T>,
+  ): Promise<T> => {
+    const mark = op.then(
+      () => undefined,
+      () => undefined,
+    );
+    pending.add(mark);
+    const key = keyOf(ref.userId, ref.documentId);
+    const set = byDocument.get(key) ?? new Set<Promise<unknown>>();
+    byDocument.set(key, set);
+    set.add(mark);
+    void mark.finally(() => {
+      pending.delete(mark);
+      set.delete(mark);
+      if (set.size === 0 && byDocument.get(key) === set) byDocument.delete(key);
+    });
+    return op;
   };
   /** Runs a start that never throws, is awaited by `idle` and by `settle` of its document. */
   const fireWith = (
     ref: VisualizeRef,
     make: () => Promise<ExecutionHandle | null>,
-  ): Promise<ExecutionHandle | null> => {
-    const run = make().then(
-      (handle) => handle,
-      (err: unknown) => {
-        onError(err);
-        return null;
-      },
+  ): Promise<ExecutionHandle | null> =>
+    pend(
+      ref,
+      make().then(
+        (handle) => handle,
+        (err: unknown) => {
+          onError(err);
+          return null;
+        },
+      ),
     );
-    pending.add(run);
-    const key = keyOf(ref.userId, ref.documentId);
-    const set = byDocument.get(key) ?? new Set<Promise<unknown>>();
-    byDocument.set(key, set);
-    set.add(run);
-    void run.finally(() => {
-      pending.delete(run);
-      set.delete(run);
-      if (set.size === 0 && byDocument.get(key) === set) byDocument.delete(key);
-    });
-    return run;
-  };
   const fire = (ref: VisualizeRef, generation: number) =>
     fireWith(ref, () => start(ref, generation));
+  // The route's re-run is tracked like every other start: a delete's `settle` waits for it, then cancels the run it started.
   const rerun = async (ref: VisualizeRef, generation: number): Promise<VisualsRerun> => {
-    const { handle: _handle, ...answer } = await rerunWith(ref, generation);
+    const { handle: _handle, ...answer } = await pend(ref, rerunWith(ref, generation));
     return answer;
   };
   return {
     start,
     rerun,
     running: isRunning,
+    reconcile,
     fire: (ref, generation) => void fire(ref, generation),
     async settle(identity, documentId) {
       while (true) {
@@ -298,6 +368,20 @@ export function loomVisualsStarter(
         }
       };
       try {
+        // First: runs recorded as running whose end event was lost are repaired from Loom's state (a run that is still
+        // going stays running). A repaired `visuals-model-unavailable` is then picked up by the retry pass below.
+        if (runningSource) {
+          for (let after = NIL_UUID; !signal?.aborted; ) {
+            const page = await runningSource(after, pageSize);
+            for (const d of page) {
+              if (signal?.aborted) break;
+              await reconcile(d, d.generation, { run: d.run, state: "running", code: null });
+            }
+            const last = page[page.length - 1];
+            if (!last || page.length < pageSize) break;
+            after = last.documentId;
+          }
+        }
         await pass(ready, (d) => fire(d, d.generation));
         // Once per boot: a document whose last run ended `visuals-model-unavailable` is re-run (the keyset never revisits it,
         // so a run that fails the same way waits for the next boot or the user's retry).
@@ -331,9 +415,8 @@ export function loomVisualsStarter(
       for (let g = Math.max(1, generation - 1); g <= generation; g++) {
         await cancelOne(visualizeExecutionId(identity.userId, documentId, g));
         // The re-runs: numbers are taken in order, up to the highest one this process started or the table recorded.
-        const key = `${keyOf(identity.userId, documentId)}.${g}`;
         const top = Math.max(
-          lastRerun.get(key) ?? 0,
+          tracker.last(genKey(identity.userId, documentId, g)),
           (await runs?.last(identity, documentId, g))?.run ?? 0,
         );
         for (let n = 1; n <= Math.min(top, MAX_RERUNS); n++)

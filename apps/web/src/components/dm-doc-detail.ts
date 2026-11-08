@@ -123,6 +123,22 @@ export class DmDocDetail extends LitElement {
     await session?.reload();
     if (session && this.session === session) this.visualsState = session.visuals?.state ?? "none";
   }
+  /**
+   * "Retrying…" (asked here, or reported by the server as running) ends 60 s after it began without a `visuals` event, and
+   * the page falls back to reading the state again: a run that ended with no event (a missed frame) must not freeze the note.
+   * A state still running then is watched again.
+   */
+  private armWatch(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      this.retrying = false;
+      void this.reloadSession().then(() => {
+        if (this.visualsState === "running" && this.isConnected && !this.retryTimer)
+          this.armWatch();
+      });
+    }, VISUALS_RETRY_TIMEOUT_MS);
+  }
   private stopRetrying(): void {
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
@@ -177,6 +193,7 @@ export class DmDocDetail extends LitElement {
       this.served = state === "ready";
       if (this.served) this.everServed = true;
       this.visualsState = this.served ? (session.visuals?.state ?? "none") : this.visualsState;
+      if (this.visualsState === "running" && this.retryTimer === undefined) this.armWatch();
       const status = session.valueOf("doc-status") as { level?: unknown } | undefined;
       this.failed = this.served && status?.level === "critical";
       this.selectContentTab();
@@ -269,11 +286,7 @@ export class DmDocDetail extends LitElement {
     if (id === undefined || !api || this.retrying) return;
     this.retrying = true;
     this.retryNote = null;
-    clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => {
-      this.stopRetrying();
-      void this.reloadSession(); // the run may have ended without the page hearing of it
-    }, VISUALS_RETRY_TIMEOUT_MS);
+    this.armWatch();
     void api.retryDocumentVisuals(id).catch((err: unknown) => {
       if (this.route?.id !== id) return;
       // Still being made: keep waiting for its event. Anything else gives the button back, with a fixed note.

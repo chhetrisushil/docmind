@@ -465,14 +465,14 @@ describe("rerun and the retry sweep", () => {
     const starter = loomVisualsStarter(f.runtime, flow);
     const r = ref();
     await starter.start(r, 1); // the automatic run
-    expect(starter.running(r)).toBe(true);
+    expect(starter.running(r, 1)).toBe(true);
     expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
     f.finish(visualizeExecutionId(r.userId, r.documentId, 1));
-    await vi.waitFor(() => expect(starter.running(r)).toBe(false));
+    await vi.waitFor(() => expect(starter.running(r, 1)).toBe(false));
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 1 });
     expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
     f.finish(visualizeExecutionId(r.userId, r.documentId, 1, 1));
-    await vi.waitFor(() => expect(starter.running(r)).toBe(false));
+    await vi.waitFor(() => expect(starter.running(r, 1)).toBe(false));
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 }); // this process remembers its last number
   });
 
@@ -588,5 +588,207 @@ describe("rerun and the retry sweep", () => {
     const off = loomVisualsStarter(f.runtime, flow, { retry: one, enabled: false });
     expect(await off.sweep()).toBe(0);
     expect(f.started).toEqual([]);
+  });
+});
+
+describe("rerun: concurrency, numbering and settle", () => {
+  const flow = visualizeDocumentFlow();
+  const base = () => {
+    const started: string[] = [];
+    const gate = { release: () => {}, wait: Promise.resolve() as Promise<void> };
+    const runtime = {
+      start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        await gate.wait;
+        if (started.includes(o.executionId)) throw new ExecutionAlreadyExistsError(o.executionId);
+        started.push(o.executionId);
+        return {
+          executionId: o.executionId,
+          waitForCompletion: () => new Promise(() => {}),
+        } as never;
+      }),
+      cancel: vi.fn(async () => {}),
+    };
+    return { runtime, started, gate };
+  };
+  const runsStore = (last: { run: number; state: string; code: string | null } | null = null) => ({
+    record: vi.fn(async () => {}),
+    last: vi.fn(async () => last as never),
+  });
+
+  it("two concurrent retries start exactly one run; the other answers running", async () => {
+    const f = base();
+    const starter = loomVisualsStarter(f.runtime as never, flow, { runs: runsStore() });
+    const r = ref();
+    const answers = await Promise.all([starter.rerun(r, 1), starter.rerun(r, 1)]);
+    expect(answers.map((a) => a.kind).sort()).toEqual(["running", "started"]);
+    expect(f.started).toHaveLength(1);
+  });
+
+  it("a taken id found while another request started a run ends in running, not a second run", async () => {
+    const f = base();
+    const r = ref();
+    // Loom has -r1 already (started by another path), and this process tracks a run of the document: no probing on.
+    f.started.push(visualizeExecutionId(r.userId, r.documentId, 1, 1));
+    const starter = loomVisualsStarter(f.runtime as never, flow);
+    await starter.start(r, 1); // the automatic run is in flight
+    expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
+    expect(f.started).toHaveLength(2);
+  });
+
+  it("numbers from the table's last run, with no probing of the numbers below it", async () => {
+    const f = base();
+    const starter = loomVisualsStarter(f.runtime as never, flow, {
+      runs: runsStore({ run: 5, state: "failed", code: "visuals-plan-invalid" }),
+    });
+    const r = ref();
+    expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 6 });
+    expect(f.runtime.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("records every start as running, the automatic run (run 0) included", async () => {
+    const f = base();
+    const runs = runsStore();
+    const starter = loomVisualsStarter(f.runtime as never, flow, { runs });
+    const r = ref();
+    await starter.start(r, 2);
+    expect(runs.record).toHaveBeenCalledWith(
+      { userId: r.userId, documentId: r.documentId, generation: 2, run: 0 },
+      "running",
+    );
+  });
+
+  it("settle waits for a route's re-run, so a delete cancels the run it started", async () => {
+    const f = base();
+    let release: () => void = () => {};
+    f.gate.wait = new Promise<void>((r) => {
+      release = r;
+    });
+    const starter = loomVisualsStarter(f.runtime as never, flow);
+    const r = ref();
+    const answer = starter.rerun(r, 1);
+    let settled = false;
+    const done = starter
+      .settle({ tenantId: r.tenantId, userId: r.userId }, r.documentId)
+      .then(() => {
+        settled = true;
+      });
+    await new Promise((x) => setTimeout(x, 10));
+    expect(settled).toBe(false);
+    release();
+    await done;
+    expect(await answer).toEqual({ kind: "started", rerun: 1 });
+    expect(f.started).toHaveLength(1);
+  });
+});
+
+describe("a lost end event never leaves a run stuck at running", () => {
+  const flow = visualizeDocumentFlow();
+  const runningRow = { run: 1, state: "running" as const, code: null };
+  const setup = (loadState?: (id: string) => Promise<unknown>) => {
+    const started: string[] = [];
+    const runtime = {
+      start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        started.push(o.executionId);
+        return {
+          executionId: o.executionId,
+          waitForCompletion: () => new Promise(() => {}),
+        } as never;
+      }),
+      cancel: vi.fn(async () => {}),
+      ...(loadState && { loadState: vi.fn(loadState) }),
+    };
+    const record = vi.fn(async () => {});
+    const runs = { record, last: vi.fn(async () => runningRow as never) };
+    return { runtime, started, record, runs };
+  };
+  const completed = (output: unknown) => async () => ({
+    status: "completed",
+    variables: { _output: output },
+  });
+
+  it("rerun repairs the row from the execution's output and then starts the next run", async () => {
+    const s = setup(completed({ outcome: "failed", code: "visuals-model-unavailable" }));
+    const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+    const r = ref();
+    expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 });
+    expect(s.runtime.loadState).toHaveBeenCalledWith(
+      visualizeExecutionId(r.userId, r.documentId, 1, 1),
+      expect.anything(),
+    );
+    expect(s.record).toHaveBeenCalledWith(
+      { userId: r.userId, documentId: r.documentId, generation: 1, run: 1 },
+      "failed",
+      "visuals-model-unavailable",
+    );
+  });
+
+  it("a failed or cancelled execution is repaired as failed/internal; an output outside the schema too", async () => {
+    for (const load of [
+      async () => ({ status: "failed", variables: {} }),
+      async () => ({ status: "cancelled", variables: {} }),
+      completed({ outcome: "done", extra: "x" }),
+    ]) {
+      const s = setup(load);
+      const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+      const r = ref();
+      const fixed = await starter.reconcile(r, 1, runningRow);
+      expect(fixed).toEqual({ run: 1, state: "failed", code: "internal" });
+      expect(s.record).toHaveBeenCalledWith(expect.anything(), "failed", "internal");
+    }
+  });
+
+  it("leaves a run that is still going, a missing execution, a failing lookup and a tracked run as running", async () => {
+    const r = ref();
+    for (const load of [
+      async () => ({ status: "running", variables: {} }),
+      async () => null,
+      async () => {
+        throw new RangeError("down");
+      },
+    ]) {
+      const errors: unknown[] = [];
+      const s = setup(load);
+      const starter = loomVisualsStarter(s.runtime as never, flow, {
+        runs: s.runs,
+        onError: (e) => errors.push(e),
+      });
+      expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
+      expect(s.record).not.toHaveBeenCalled();
+      expect(s.started).toEqual([]);
+    }
+    const s = setup(completed({ outcome: "done" }));
+    const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+    await starter.start(r, 1);
+    expect(await starter.reconcile(r, 1, runningRow)).toEqual(runningRow); // this process is on it: Loom is not asked
+    expect(s.runtime.loadState).not.toHaveBeenCalled();
+  });
+
+  it("the boot sweep reconciles every running row, paged, before it starts anything, then retries a repaired unavailable one", async () => {
+    const docs = Array.from({ length: 3 }, () => ({ ...ref(), generation: 1, run: 0 }));
+    const s = setup(completed({ outcome: "failed", code: "visuals-model-unavailable" }));
+    const page = async (after: string, limit: number) => {
+      const from =
+        after === "00000000-0000-0000-0000-000000000000"
+          ? 0
+          : docs.findIndex((d) => d.documentId === after) + 1;
+      return docs.slice(from, from + limit);
+    };
+    const order: string[] = [];
+    s.record.mockImplementation(async () => void order.push("record"));
+    s.runtime.start.mockImplementation(async (_f, _i, o) => {
+      order.push("start");
+      return { executionId: o.executionId, waitForCompletion: async () => {} } as never;
+    });
+    const starter = loomVisualsStarter(s.runtime as never, flow, {
+      running: page,
+      retry: async (after) =>
+        after === "00000000-0000-0000-0000-000000000000" ? [docs[0] as never] : [],
+      runs: { record: s.record, last: vi.fn(async () => null as never) },
+      pageSize: 2,
+    });
+    await starter.sweep();
+    expect(s.runtime.loadState).toHaveBeenCalledTimes(3);
+    expect(s.record.mock.calls.filter((c) => (c as unknown[])[1] === "failed")).toHaveLength(3);
+    expect(order.slice(0, 3)).toEqual(["record", "record", "record"]);
   });
 });

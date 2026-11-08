@@ -5,6 +5,7 @@ import {
   type RegisteredFlow,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
+import { rerunTracker } from "../rerunTracker";
 import { type TurnRef, turnExecutionId } from "./ids";
 import { TurnInput } from "./model";
 import { type TriggerDeps, turnToVisualize } from "./trigger";
@@ -29,7 +30,6 @@ export interface TurnStarterOptions extends TriggerDeps {
   onError?: (err: unknown) => void;
 }
 
-const MAX_RERUNS = 999;
 const logClass = (err: unknown) =>
   console.error(
     "visualize-turn start failed",
@@ -43,28 +43,9 @@ export function loomTurnStarter(
 ): TurnVisualsStarter {
   const onError = o.onError ?? logClass;
   const pending = new Set<Promise<unknown>>();
-  const inFlight = new Map<string, Set<string>>(); // `<chatId>:<ord>` -> execution ids running
-  const lastRerun = new Map<string, number>();
+  const tracker = rerunTracker();
   const keyOf = (r: TurnRef) => `${r.chatId}:${r.ord}`;
-  const isRunning = (r: TurnRef) => (inFlight.get(keyOf(r))?.size ?? 0) > 0;
-
-  /** Remembers the run until it ends (only `running` reads this; `idle()` does not wait for it, `pending` holds starts only). */
-  const track = (ref: TurnRef, executionId: string, handle: ExecutionHandle) => {
-    const key = keyOf(ref);
-    const set = inFlight.get(key) ?? new Set<string>();
-    inFlight.set(key, set);
-    set.add(executionId);
-    void handle
-      .waitForCompletion()
-      .then(
-        () => undefined,
-        () => undefined, // a failed run frees the turn too
-      )
-      .finally(() => {
-        set.delete(executionId);
-        if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
-      });
-  };
+  const isRunning = (r: TurnRef) => tracker.running(keyOf(r));
 
   /** Starts one execution id; null when Loom already has it. */
   const startOne = async (ref: TurnRef, rerun?: number): Promise<ExecutionHandle | null> => {
@@ -80,7 +61,7 @@ export function loomTurnStarter(
         executionId,
         principal: { tenant: input.tenantId, actor: input.userId },
       });
-      track(ref, executionId, handle);
+      tracker.track(keyOf(ref), executionId, handle);
       return handle;
     } catch (err) {
       if (err instanceof ExecutionAlreadyExistsError) return null;
@@ -108,17 +89,14 @@ export function loomTurnStarter(
         }),
       );
     },
-    async visualize(ref) {
-      if (!o.enabled()) return { kind: "disabled" };
-      if (isRunning(ref)) return { kind: "running" };
-      for (let n = (lastRerun.get(keyOf(ref)) ?? 0) + 1; n <= MAX_RERUNS; n++) {
-        if (await startOne(ref, n)) {
-          lastRerun.set(keyOf(ref), n);
-          return { kind: "started", rerun: n };
-        }
-      }
-      return { kind: "running" }; // every re-run number is taken: nothing more can start, so the turn answers as busy (never a 500)
-    },
+    visualize: (ref) =>
+      // One request at a time per turn: the check, the probe and the start are one step, so two clicks start one run.
+      tracker.exclusive(keyOf(ref), async () => {
+        if (!o.enabled()) return { kind: "disabled" };
+        if (isRunning(ref)) return { kind: "running" };
+        const out = await tracker.probe(keyOf(ref), 0, (n) => startOne(ref, n));
+        return out.kind === "started" ? { kind: "started", rerun: out.rerun } : { kind: "running" };
+      }),
     running: isRunning,
     async idle() {
       while (pending.size > 0) await Promise.all([...pending]);

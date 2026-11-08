@@ -34,6 +34,9 @@ export const ExtractResult = StepResult.extend({
 });
 export type ExtractResult = z.infer<typeof ExtractResult>;
 
+/** The extract step's own end: the model stayed unavailable through every attempt. */
+export type ModelUnavailableEnd = { outcome: "failed"; code: "visuals-model-unavailable" };
+
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
@@ -121,7 +124,7 @@ export async function askForFacts(
  * untrusted data; the answer is parsed, grounded against the chunks, and the survivors stored sealed.
  */
 export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractResult> {
-  return stepEffectOf<ExtractResult, VisualizeRef>(
+  return stepEffectOf<ExtractResult, VisualizeRef, ModelUnavailableEnd>(
     "visualize-extract",
     deps.guard,
     async (ref, signal, _progress, executionId) => {

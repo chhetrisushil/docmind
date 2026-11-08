@@ -26,6 +26,7 @@ const APP_EXECUTABLE = [
   "docmind_record_visual_run(uuid,uuid,integer,integer,text,text)",
   "docmind_stale_uploads_v2(interval,interval,integer)",
   "docmind_visual_retry_documents(uuid,integer)",
+  "docmind_visual_running_runs(uuid,integer)",
   "key_destroy(text)",
   "key_get(text)",
   "key_put(text,bytea,text)",

@@ -58,6 +58,7 @@ import {
   loomVisualsStarter,
   pgReadyDocuments,
   pgRetryDocuments,
+  pgRunningRuns,
 } from "./flows/visualize-document/start";
 import { visualsStateReader } from "./flows/visualize-document/state";
 import { visualizeTurnFlow } from "./flows/visualize-turn/flow";
@@ -312,6 +313,7 @@ export function buildServer(options: ComposeOptions) {
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
+    running: pgRunningRuns(pool),
     runs: visualRuns,
     enabled: visualsLlm !== undefined,
   });
