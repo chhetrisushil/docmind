@@ -1,6 +1,17 @@
 export * from "./catalog";
 export * from "./compose";
 export * from "./providers";
+export {
+  CONNECTIONS_HANDLE,
+  CONNECTION_ENTRIES,
+  CONNECTION_HANDLE,
+  bindsConnections,
+  clipConnections,
+  connectionsCapability,
+  connectionsProvider,
+  isConnectionEntry,
+} from "./connections";
+export type { ConnectionEntry } from "./connections";
 export * from "./views";
 export * from "./a2ui";
 export * from "./payload";
@@ -12,6 +23,7 @@ export {
   capabilitiesOf,
   factCapabilities,
   factProvider,
+  visualCapabilities,
   factRefOfPin,
   mergedCatalog,
 } from "./visuals";

@@ -308,6 +308,7 @@ export class FakeServer {
           .filter((c) => (c.title ?? "New chat").toLowerCase().includes(q.toLowerCase())),
       visualFacts: async () => null,
       turnFacts: async () => null,
+      connections: async () => null,
     };
   }
 

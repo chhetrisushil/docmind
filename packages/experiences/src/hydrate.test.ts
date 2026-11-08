@@ -40,6 +40,7 @@ const readers = (over: Partial<UiReaders> = {}): UiReaders => ({
   chats: vi.fn(async () => []),
   visualFacts: vi.fn(async () => null),
   turnFacts: vi.fn(async () => null),
+  connections: vi.fn(async () => null),
   ...over,
 });
 const views = (onFinding = vi.fn()) =>

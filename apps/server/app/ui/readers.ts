@@ -20,6 +20,7 @@ import type { VisualFactStore } from "../flows/visualize-document/pgFacts";
 import type { TurnFactStore } from "../flows/visualize-turn/pgTurnFacts";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { STATUS_MESSAGES, UPLOADED } from "../status/model";
+import { readConnections } from "./connections";
 import { type ResolvedCite, resolveCites } from "./factCites";
 
 export interface UiReaderDeps {
@@ -180,6 +181,8 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         throw err;
       }
     },
+
+    connections: ({ documentId }) => readConnections(deps, identity, documentId),
 
     async turnFacts({ chatId, ord }) {
       const facts = await deps.turnFacts.list({

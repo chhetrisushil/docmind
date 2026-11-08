@@ -1,6 +1,7 @@
 import { type ProviderSpec, type SemanticCatalog, defineSemanticCatalog } from "@loom-ui/core";
 import type { CapabilityRef } from "@loom-ui/planner";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
+import { connectionsCapability } from "./connections";
 import { KIND, PINS, provider } from "./providers";
 
 /**
@@ -89,7 +90,10 @@ export const MAX_VISUAL_FACTS = 16;
 export const OWNER_READ = {
   viewer: { clearance: "sensitive" },
   audience: "viewer",
-  declaredToolClasses: { "docmind:visual.facts": "sensitive" },
+  declaredToolClasses: {
+    "docmind:visual.facts": "sensitive",
+    "docmind:doc.connections": "sensitive",
+  },
 } as const;
 const TOOL = "visual.facts" as const;
 
@@ -128,6 +132,12 @@ export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[]
     capability(f, `fact-${f.ordinal}`, TOOL, `${PINS[TOOL]}#fact-${f.ordinal}`),
   );
 }
+
+/** What the document planner is offered: one capability per stored fact, then the live connections (always, even with no facts). */
+export const visualCapabilities = (facts: readonly VisualFactRaw[]): CapabilityRef[] => [
+  ...capabilitiesOf(facts),
+  connectionsCapability(),
+];
 
 /**
  * Capabilities of a chat turn's facts, which may come from several documents (stored facts) or from the turn itself
