@@ -15,10 +15,10 @@ bound by the planner once, not snapshot facts revised whenever another document 
 |---|---|
 | K1 | Connections only. Comparing figures across documents is out of scope. |
 | K2 | Live binding. A new provider `doc.connections` is read at hydrate time; the planner binds it once. Another document's ingest or deletion needs no re-run, no model call and no change signal. |
-| K3 | Built from existing data only: `chunk_links`, `chunk_entities`, `entities`, `chunks`, `documents`. No extraction, no new tables and no new stored data; one migration (0032, K6) replaces a function. |
+| K3 | Built from existing data only: `chunk_links`, `chunk_entities`, `entities`, `chunks`, `documents`. No extraction, no new tables and no new stored data; two migrations (0032 replaces a function; 0033 adds a narrow one, K6). |
 | K4 | Two catalogue entries: `RelatedDocuments` (Table) and `ConnectionMap` (Diagram, network layout). The planner chooses table, map, both or neither. |
 | K5 | The capability is always offered, and the widgets show an empty state, so a document uploaded first still gets the section and fills it in later. |
-| K6 | The fact-format fingerprint gains the connections pin; for this release, done runs with a NULL fingerprint also count as stale, so every visualized document is re-planned once (no extraction) to add the section. |
+| K6 | The fact-format fingerprint gains the connections pin; for this release, done runs with a NULL fingerprint also count as stale, and ready documents with no run row at all but a visuals lineage head (visualized before migration 0030) are re-planned too, so every visualized document is re-planned once (no extraction) to add the section. |
 | K7 | Document visuals only. Chat-turn visuals do not offer connections. |
 | K8 | Connections are planned even when extraction finds no facts. `visualize-document` then runs the planner with only the connections capability (one planner call, no extraction), so a text-only document gets a Connections section. If the planner emits nothing, the outcome stays `empty`. |
 
@@ -58,13 +58,14 @@ Rejected:
 
 - `visualize-document` always adds the connections capability (handle `connections`, one per document) next to the fact capabilities.
 - On the document page the served providers are `connections-table` and `connections-map` (one per entry, generated from the planner's `connections` binding, nothing overridable).
-- This release adds one migration, 0032 (`CREATE OR REPLACE` of the stale-format definer so a NULL-format done run counts as stale, K6). No new tables and no new stored data.
+- This release adds two migrations: 0032 (`CREATE OR REPLACE` of the stale-format definer so a NULL-format done run counts as stale, K6) and 0033 (`docmind_visual_unrecorded_documents`, a narrow definer for ready documents with no `visual_runs` row for their generation, K6). No new tables and no new stored data.
 - When extraction finds no facts (including a model refusal, which still clears the stored facts), the flow does not end `empty` before planning (K8). It skips the load step, runs one planner call whose capabilities are only `connections`, and commits the plan. If that planner call emits nothing (or an invalid plan), the outcome is `empty`; an unreachable model is still `failed` (`visuals-model-unavailable`).
 - `VISUALS_INTENT` gains one sentence: connections are live and may grow; include a compact Connections section when the document has, or is likely to gain, related material. As planned: its last sentence is rewritten, since "Every widget binds one fact." would contradict the connections widgets: "Every widget binds one fact, except RelatedDocuments and ConnectionMap, which bind the live connections capability: ...".
 - `factFormatFingerprint()` includes the connections pin.
 - For this release, the boot stale pass treats done runs with a NULL format as stale, so each visualized document is re-planned once:
   - over its stored facts (no extraction), one planner call each, at most 2 at a time;
   - then stamped, so it runs once.
+  - Documents visualized before migration 0030 created `visual_runs` have no row at all, so the stale pass never lists them. A further boot pass lists ready current-generation documents with no row (migration 0033: ids only, keyset-paged, 500 cap, users being erased excluded) and the starter keeps those whose visuals lineage has a head (`lineage.head`, read per document under its owner; a failed read skips that document). Each is re-run through the same lock and 2-slot gate, noted as after-done so it never extracts even with zero stored facts, and the run records a row (any outcome), so it is never listed again. A ready document with no row and no head never produced visuals and is left alone.
   - a document with no facts that already has a `done` run is re-planned the same way (connections only, no extraction); the starter notes the previous state in-process, since a new run overwrites it in `visual_runs`, and the run reader is the fallback after a restart. A zero-fact re-run recovered after a crash has no note and may extract once (accepted).
 - Accepted costs:
   - A retry after a planner-unavailable failure on a zero-fact document may extract once per boot (bounded).
@@ -94,7 +95,7 @@ Rejected:
 - The two accepted costs of section 5 stand as written: a zero-fact retry after a planner outage may extract once per boot, and a document whose last pre-release run ended `empty` gets no Connections section until it is re-ingested or retried.
 - loom-ui is pinned at 3b4d046 (PR #130: widget hosts contain their sr-only and absolute descendants).
 - The chat catalogue keeps the id `docmind.visuals.v1` (chat decisions unchanged); the document catalogue is `docmind.visuals.v2`.
-- The first boot after this release re-plans every visualized document once (migration 0032): one planner call each, at most 2 at a time, no extraction (see docs/operations/cloud-deploy.md).
+- The first boot after this release re-plans every visualized document once (migration 0032, plus documents visualized before 0030 that have a lineage head, migration 0033): one planner call each, at most 2 at a time, no extraction (see docs/operations/cloud-deploy.md).
 - The end-to-end test (`documents/visuals.e2e.pg.test.ts`) covers upload A then B sharing an entity (no re-plan of A), deleting B, a text-only document with zero facts still getting its Connections section, another user's 404, and no plaintext title or entity name in the event log.
 - Shared entities: candidates are the 36 rarest entities of this document by chunk mentions (3 × the 12-entity cap); only those go through the readiness join, so a document naming one entity everywhere stays index-bound. Mentions are a proxy for document rarity, and when the readiness join drops many candidates fewer than 12 entities can come back (accepted).
 

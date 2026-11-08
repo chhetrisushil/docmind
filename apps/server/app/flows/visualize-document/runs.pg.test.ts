@@ -16,6 +16,7 @@ import {
   pgRetryDocuments,
   pgRunningRuns,
   pgStaleFormatDocuments,
+  pgUnrecordedDocuments,
   visualizeExecutionId,
 } from "./start";
 
@@ -304,6 +305,53 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     );
   });
 
+  it("docmind_visual_unrecorded_documents lists ready current-generation documents with no visual_runs row, across tenants, paged, ids only, not for erasing users", async () => {
+    await owner.query("DELETE FROM documents");
+    const a = await readyDoc();
+    const b = await readyDoc(BOB);
+    const withRow = await readyDoc();
+    const moved = await readyDoc(); // its row is for the OLD generation: the current one has none, so it is listed
+    const bumped = await readyDoc(); // never had a row
+    const notReady = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+    const at = (who: string, d: { id: string; g: number }, g = d.g) => ({
+      userId: who,
+      documentId: d.id,
+      generation: g,
+      run: 0,
+    });
+    await runs.record(at(U1, withRow), "failed", "visuals-plan-invalid");
+    await runs.record(at(U1, moved), "done", undefined, "old");
+    await owner.query(
+      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      [moved.id],
+    );
+    await seedRow(owner, ingestExecutionId(U1, moved.id, moved.g + 1), moved.id, U1, ready);
+    const expected = [a.id, b.id, moved.id, bumped.id].sort();
+    const list = pgUnrecordedDocuments(app);
+    const all = await list(NIL, 100);
+    expect(all.map((d) => d.documentId)).toEqual(expected);
+    expect(all.find((d) => d.documentId === a.id)).toEqual({
+      tenantId: ALICE.tenantId,
+      userId: U1,
+      documentId: a.id,
+      generation: a.g,
+    });
+    expect(all.find((d) => d.documentId === moved.id)?.generation).toBe(moved.g + 1);
+    expect(all.map((d) => d.documentId)).not.toContain(notReady);
+    expect(all.map((d) => d.documentId)).not.toContain(withRow.id);
+    const first = await list(NIL, 2);
+    const second = await list(first[1]?.documentId as string, 2);
+    expect([...first, ...second].map((d) => d.documentId)).toEqual(expected);
+    expect(await list(second[1]?.documentId as string, 2)).toEqual([]);
+    expect(
+      (await app.query("SELECT * FROM docmind_visual_unrecorded_documents(NULL, 10)")).rows,
+    ).toEqual([]);
+    expect(
+      (await app.query("SELECT * FROM docmind_visual_unrecorded_documents($1, 1000)", [NIL])).rows
+        .length,
+    ).toBe(4);
+  });
+
   it("lists a NULL-format done run for the current fingerprint until a done run stamps it, then never again (the re-plan happens once)", async () => {
     await owner.query("DELETE FROM documents");
     const d = await readyDoc();
@@ -399,7 +447,10 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
 
   it("records nothing for a user being erased (final: erasing_at cannot be undone)", async () => {
     const { id, g } = await readyDoc(BOB);
+    expect((await pgUnrecordedDocuments(app)(NIL, 100)).map((d) => d.documentId)).toContain(id);
     await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U2]);
+    // The unrecorded list leaves out a user being erased too.
+    expect((await pgUnrecordedDocuments(app)(NIL, 100)).map((d) => d.documentId)).not.toContain(id);
     await runs.record({ userId: U2, documentId: id, generation: g, run: 0 }, "failed");
     expect(await rowOf(id)).toEqual([]);
   });

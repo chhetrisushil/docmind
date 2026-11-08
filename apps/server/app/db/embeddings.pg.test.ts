@@ -9,7 +9,7 @@ import { MIGRATIONS_DIR, migrate, setAppRolePassword } from "./migrate";
 import { withTenant } from "./tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
 
-// The non-extension functions docmind_app may execute: granted on purpose by 0002, 0005, 0006, 0007, 0015, 0016, 0024, 0025, 0028, 0029, 0030, 0032.
+// The non-extension functions docmind_app may execute: granted on purpose by 0002, 0005, 0006, 0007, 0015, 0016, 0024, 0025, 0028, 0029, 0030, 0032, 0033.
 const APP_EXECUTABLE = [
   "app_tenant_id()",
   "auth_find_login(text)",
@@ -28,6 +28,7 @@ const APP_EXECUTABLE = [
   "docmind_visual_retry_documents(uuid,integer)",
   "docmind_visual_running_runs(uuid,integer)",
   "docmind_visual_stale_format_documents(uuid,integer,text)",
+  "docmind_visual_unrecorded_documents(uuid,integer)",
   "key_destroy(text)",
   "key_get(text)",
   "key_put(text,bytea,text)",

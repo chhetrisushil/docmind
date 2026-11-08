@@ -1,5 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import { factFormatFingerprint } from "@docmind/experiences";
+import type { Lineage } from "@loom-ui/lineage";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
@@ -11,6 +12,7 @@ import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS } from "../rerunTracker";
 import { rerunTracker } from "../rerunTracker";
 import { VisualizeInput } from "./flow";
+import { experienceIdOf } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { type VisualRun, type VisualRuns, outcomeOfState } from "./runs";
 
@@ -101,6 +103,20 @@ export const pgStaleFormatDocuments =
     }));
   };
 
+/**
+ * `docmind_visual_unrecorded_documents` (migration 0033): ready documents with NO `visual_runs` row for their current generation
+ * (visualized before migration 0030 created the table, or never). Ids only; the starter keeps those that have a visuals lineage head.
+ */
+export const pgUnrecordedDocuments = readyFrom("docmind_visual_unrecorded_documents");
+
+/** True when the document's visuals line has a head (it was visualized with visuals). A refusal or an unreadable line throws. */
+export const hasVisualsHead =
+  (lineage: Pick<Lineage, "head">) =>
+  async (ref: VisualizeRef): Promise<boolean> => {
+    const head = await lineage.head(experienceIdOf(ref));
+    return head.ok && head.value !== null;
+  };
+
 /** A run recorded as `running` (the boot reconcile's source). */
 export interface RunningRun extends ReadyDocument {
   run: number;
@@ -161,7 +177,8 @@ export interface VisualsStarter {
    * Boot sweep: first reconciles the runs recorded as `running` (their end may have been lost), then starts every ready
    * document that has no visualize execution for its generation, then re-runs once every
    * ready document whose last run ended `visuals-model-unavailable`, then once every document whose last run was committed over an
-   * older fact format (migration 0030's stamp; a NULL stamp counts as stale, migration 0032), page by page, with at most SWEEP_EXECUTIONS executions
+   * older fact format (migration 0030's stamp; a NULL stamp counts as stale, migration 0032), then once every ready document with no run row
+   * whose visuals line has a head (visualized before migration 0030; migration 0033), page by page, with at most SWEEP_EXECUTIONS executions
    * running at once (it resolves when they have all completed).
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
    */
@@ -185,6 +202,13 @@ export interface VisualsStarterOptions {
    * the current fingerprint); each is re-run once per boot. Absent: none.
    */
   stale?: ReadyDocuments;
+  /**
+   * The boot sweep's fourth source: ready documents with no `visual_runs` row for their generation. Each is re-planned once
+   * per boot when `visualized` says it has a visuals lineage head (documents visualized before migration 0030). Needs both; absent: none.
+   */
+  unrecorded?: ReadyDocuments;
+  /** Whether a listed document was ever visualized (has a lineage head), read under its owner. A throw skips that document (class logged). */
+  visualized?: (ref: VisualizeRef) => Promise<boolean>;
   /** The boot reconcile's source: runs recorded as `running`; absent: none. */
   running?: RunningRuns;
   /** Records a run as `running` when it starts (so a page shows it and a retry waits for it); absent: nothing is recorded. */
@@ -214,6 +238,8 @@ export function loomVisualsStarter(
     ready,
     retry,
     stale,
+    unrecorded,
+    visualized,
     running: runningSource,
     runs,
     afterDone,
@@ -301,6 +327,7 @@ export function loomVisualsStarter(
   const rerunWith = async (
     ref: VisualizeRef,
     generation: number,
+    assumeDone = false,
   ): Promise<VisualsRerun & { handle?: ExecutionHandle }> => {
     if (!enabled) return { kind: "disabled" };
     const key = genKey(ref.userId, ref.documentId, generation);
@@ -310,7 +337,8 @@ export function loomVisualsStarter(
       let last = (await runs?.last(ref, ref.documentId, generation)) ?? null;
       if (last?.state === "running") last = await reconcile(ref, generation, last);
       if (last?.state === "running") return { kind: "running" }; // a run this process does not track, still going (recovered after a restart)
-      const wasDone = last?.state === "done";
+      // `assumeDone`: a document visualized before the runs table has no row but a lineage head; it never extracts.
+      const wasDone = assumeDone || last?.state === "done";
       const out = await tracker.probe(key, last?.run ?? 0, (n) => {
         if (wasDone && afterDone) {
           if (afterDone.size >= 1000) afterDone.clear(); // ids only; a lost note just means one extraction
@@ -389,11 +417,14 @@ export function loomVisualsStarter(
       const pass = async (
         source: ReadyDocuments | undefined,
         go: (d: ReadyDocument) => Promise<ExecutionHandle | null>,
+        keep?: (d: ReadyDocument) => Promise<boolean>,
       ) => {
         if (!source) return;
         for (let after = NIL_UUID; !signal?.aborted; ) {
           const page = await source(after, pageSize);
           for (const d of page) {
+            if (signal?.aborted) break;
+            if (keep && !(await keep(d))) continue;
             while (running.size >= SWEEP_EXECUTIONS && !signal?.aborted)
               await Promise.race(running);
             if (signal?.aborted) break;
@@ -461,6 +492,31 @@ export function loomVisualsStarter(
           );
         } catch (err) {
           logClass("visuals stale-format pass failed")(err);
+        }
+        // Once per boot: a ready document with no run row whose visuals line has a head (visualized before migration 0030) is
+        // re-planned over its stored facts, never extracting. The re-run records a row (any outcome), so it is never listed again.
+        // Documents that never produced visuals have no head and are left alone. Its own try, like the others.
+        try {
+          if (visualized) {
+            await pass(
+              unrecorded,
+              (d) =>
+                fireWith(d, async () => {
+                  const answer = await rerunWith(d, d.generation, true);
+                  return answer.kind === "started" ? (answer.handle ?? null) : null;
+                }),
+              async (d) => {
+                try {
+                  return await visualized(d);
+                } catch (err) {
+                  logClass("visuals head check failed")(err);
+                  return false;
+                }
+              },
+            );
+          }
+        } catch (err) {
+          logClass("visuals unrecorded pass failed")(err);
         }
       } catch (err) {
         logClass("visualize sweep failed")(err);
