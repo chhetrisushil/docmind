@@ -32,6 +32,7 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M5        | Erasure: =DELETE /api/me=, crypto-shredding end to end | merged                 |
 | M6        | Web UI (=apps/web=, =packages/experiences=)    | merged                         |
 | LLM       | Pluggable LLM providers (Ollama, Gemini, Claude per role), see [[file:docs/operations/llm-providers.md][the runbook]] | merged |
+| Visuals   | Document visuals: facts extracted by the =visuals= role, planned into a Visuals panel on the document detail | merged |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
 The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
@@ -49,6 +50,9 @@ Data flow as built:
 3. After the upload commits, the server starts the =ingest-document= flow on Loom (ids only in the
    input and event log): parse (sandboxed child process), chunk, embed (Ollama, pgvector), analyze,
    summarize (language model, optional), link. Deleting a document cancels every generation of the flow first.
+   When a document turns =ready=, the =visualize-document= flow runs (only while the =visuals= role is on):
+   it extracts grounded facts (sealed in =visual_facts=), plans a Visuals panel from them and commits it to a
+   per-user sealed lineage that the document detail serves.
 4. =GET /api/documents= (keyset paging), =GET /api/documents/:id= and =DELETE /api/documents/:id=
    complete the API; =POST /api/documents/:id/retry= re-runs a failed document. Auth routes: =POST /api/auth/sign-up=, =/login=, =/logout=, =GET /api/me=.
 
@@ -83,6 +87,9 @@ DocMind's screens are loom-ui experiences, not hand-built views. The design is i
   Both are authenticated. The readers behind the providers are bound to the caller's identity by the server,
   so no parameter names a user, and every read is owner-scoped. A hydrate request may start at most 8
   distinct reads, 4 at a time; the rest are refused.
+- The document detail also carries a Visuals panel when the document has visuals:
+  =GET /api/ui/documents/:id/detail= (owner-checked, 404 otherwise) serves the detail with the committed plan, and
+  hydrate reads its =fact-<n>= handles under the owner's clearance.
 - =apps/web= is a thin web surface: a loom-ui Lit host (=dm-view=), the shell, the auth forms, the dialog,
   the upload zone and the pages that host a view (=dm-*= elements, only for what loom-ui does not draw).
   It performs actions through the surface-neutral intents of =@docmind/contracts= (=intentOf=, with the data the
@@ -225,7 +232,8 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =DOCMIND_INGEST_CONCURRENCY=, =DOCMIND_INGEST_TENANT_CONCURRENCY= | Ingest steps at once overall (default 4) and per tenant (default 2) |
 | =DOCMIND_OLLAMA_URL=, =DOCMIND_EMBED_MODEL=, =DOCMIND_EMBED_DIMENSIONS=, =DOCMIND_EMBED_TIMEOUT_MS= | Embeddings through Ollama (optional; dimensions must match the vector column) |
 | =DOCMIND_TEST_PG_URL=                        | Enables the Postgres test suites                      |
-| =DOCMIND_LLM_PROVIDER=, =DOCMIND_{CHAT,TITLE,SUMMARY,VISION,VISION_PDF}_PROVIDER= and =_MODEL= | Provider (=ollama=, =gemini=, =anthropic=, =off=) and model per role; unset means Ollama's =gemma4:31b-cloud= (a =-cloud= model sends document text, prompts and images to Ollama's cloud), and scanned PDF pages use Gemini when =GEMINI_API_KEY= is set. Full list, boot errors and limits: [[file:docs/operations/llm-providers.md][LLM providers runbook]] |
+| =DOCMIND_LLM_PROVIDER=, =DOCMIND_{CHAT,TITLE,SUMMARY,VISUALS,VISION,VISION_PDF}_PROVIDER= and =_MODEL= | Provider (=ollama=, =gemini=, =anthropic=, =off=) and model per role; unset means Ollama's =gemma4:31b-cloud= (a =-cloud= model sends document text, prompts and images to Ollama's cloud), and scanned PDF pages use Gemini when =GEMINI_API_KEY= is set. Full list, boot errors and limits: [[file:docs/operations/llm-providers.md][LLM providers runbook]] |
+| =DOCMIND_PLANNER_DECISION_KEY= (or =_FILE=)  | Base64 of 32 or more random bytes; required while the =visuals= role is on, see the [[file:docs/operations/llm-providers.md][runbook]] |
 | =GEMINI_API_KEY=, =GEMINI_BASE_URL=, =DOCMIND_GEMINI_THINKING_BUDGET= | Gemini credentials (copy the key into this repo's =.env=, never commit it), optional base URL, and thinking budget (default 0) |
 | =ANTHROPIC_API_KEY=, =ANTHROPIC_BASE_URL=    | Claude, used only by roles set to =anthropic=; a key alone enables nothing |
 | =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request timeout for summaries (default 60000) |

@@ -67,6 +67,7 @@ Shutdown drains the HTTP server, stops background work and aborts in-flight mode
 | `auth/` | Sign-up, login, logout, sessions (HTTP-only cookie, only a hash stored), login throttling |
 | `documents/` | Document API, content sniffing, quotas, starting ingestion, progress SSE, sweeps |
 | `flows/ingest-document/` | The ingestion flow and its seven steps |
+| `flows/visualize-document/` | Extracts facts from a ready document, plans visuals from them and commits the plan to the visuals lineage |
 | `flows/chat-title/` | Names a chat from its first question |
 | `chats/` | Chat sessions, the `doc-chat` conversation and agent, five tools, linked retrieval, citations, SSE stream, reasoning |
 | `ui/` | Compiled experiences (`GET /api/ui/views/:view`) and their data (`POST /api/ui/hydrate`) |
@@ -165,6 +166,22 @@ flowchart LR
 - **Recovery.** `recovery.ts` re-drives executions whose process died, and Loom replays completed steps from the log. An execution that makes no progress across repeated re-drives is given up. The upload sweeper restarts uploads whose flow never started.
 - **Retry and delete.** A retry increments the generation and starts a new execution. A delete cancels every generation first, then removes the row (chunks cascade) and the blob.
 
+### 7.1 Visuals
+
+```mermaid
+flowchart LR
+  ready(["status: ready"]) --> extract["visualize-extract<br/>LLM facts, grounding check"]
+  extract --> load["visualize-load"] --> plan["planner ctx.decide<br/>keyed decision id"] --> commit["visualize-commit<br/>lineage head, SSE"]
+```
+
+- **The trigger.** `IngestStatus.onReady` starts the `visualize-document` flow once per ingest generation, and a boot sweep starts it for ready documents that have none. Both need the `visuals` role on and `DOCMIND_PLANNER_DECISION_KEY` set; with the role off no execution is recorded.
+- **Extract.** The `visuals` model reads the chunks in windows as fenced, untrusted data. A fact survives only if every number it states appears in the chunks it cites. Survivors are sealed per user in `visual_facts` (RLS, cascade with the document).
+- **Plan.** A loom-ui planner decides the nodes through `ctx.decide`, so a resumed execution replays the recorded plan. The decision id is keyed by the deployment secret, because it is logged in plaintext.
+- **Commit.** The plan becomes the head of the document's lineage line, which replaces the previous head and is idempotent. Its events go through the sealing event store and its artifacts through a per-user sealed Postgres content store (`lineage_content`). The step then publishes `{status: ready, step: finalize, visuals: ready}` so an open detail page reloads.
+- **Outcomes.** `done`, `empty` (no facts or an empty plan), `skipped`, `failed`. A failure never changes the document's ingest status.
+- **Serving.** `GET /api/ui/documents/:id/detail` is owner-checked (404 otherwise) and adds the Visuals panel. Its `fact-<n>` handles are classified and hydrate only under the owner's clearance, through the `visual.facts` read.
+- **Delete and erasure.** Deleting a document cancels its visualize executions with its ingest ones, and the facts cascade. Erasing a user destroys the key that seals their lineage, so the line reads `line-erased` and nothing in the log or `lineage_content` is readable.
+
 ## 8. Chat and retrieval
 
 ```mermaid
@@ -233,6 +250,8 @@ The background `Eraser` then runs these steps in order:
 5. **`blobs`.** Delete the user's blob directory.
 6. **`key`.** Destroy the key again and check that it's gone.
 7. **`done`.**
+
+The user's visuals lineage needs no step of its own: it is sealed under the same key, so the `shred` step makes it unreadable, and the user's visualize executions are stopped in `stop`.
 
 Each step is idempotent and recorded, and SQL enforces the order. A crash resumes at the first unrecorded step, and pending erasures resume at boot. An advisory lock keeps one runner per user across processes. `GET /api/erasure/:receipt` reports `pending` or `done`.
 
