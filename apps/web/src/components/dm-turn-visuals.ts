@@ -26,7 +26,9 @@ export class DmTurnVisuals extends LitElement {
       :host { display: block; margin-top: 8px; }
       [data-toggle] { display: flex; align-items: center; gap: 8px; }
       [data-body][data-collapsed] { max-height: 112px; overflow: hidden; }
-      [data-body] { margin-top: 8px; }
+      /* A containing block: a widget's absolutely positioned descendants (lu-table's sr-only caption) must not be laid out
+         against the page, where overflow:hidden doesn't clip them and they stretch its scroll height. */
+      [data-body] { margin-top: 8px; position: relative; }
       [data-note] { color: var(--dm-muted); margin-left: 8px; }
     `,
   ];
