@@ -205,7 +205,7 @@ retry once, then fail.
 | Model unavailable / plan invalid | flow `failed`, `visuals-plan-invalid` (step (a) does not re-run it; deferred); tab hidden; ingest status untouched |
 | A fact fails grounding | that fact dropped; others kept |
 | A fact row gone at read time | per-widget error placeholder |
-| Pin mismatch (`schemaDrift`) | per-widget placeholder (deferred: re-run `visualize-document`); served providers always carry the current pin |
+| Pin mismatch (`schemaDrift`) | per-widget placeholder; cannot occur from stored data, because served providers are rebuilt at every hydrate with the current pin. Handled instead by the format stamp below (as built) |
 
 **Delete and erasure.** Deleting a document cancels the flow (both cancel points of the delete
 route) and its `visual_facts` rows go with the document by FK cascade; the lineage line is left to
@@ -248,4 +248,24 @@ Visuals in chat answers (sub-project 2); user editing or pinning of visuals; int
 inside charts; facts spanning documents before step (b).
 
 Deferred from step (a) after the final review (owner to schedule): citation markers in widget captions;
-re-running on `schemaDrift`; reclaiming erased or orphaned `lineage_content` rows.
+reclaiming erased or orphaned `lineage_content` rows.
+
+
+### As built: re-planning over a changed fact format (instead of re-running on `schemaDrift`)
+
+Re-running on a hydrate-time `schemaDrift` was dropped: the pins a hydrate checks are never read from storage. The served
+experience is rebuilt on every hydrate (`detailWithVisuals`, `turnExperience`, `factProvider`) and its providers carry the
+CURRENT `PINS`, so the invoker's check always passes; a `PINS` bump changes both sides at once and a stale client fails on its
+version hash, not on a pin. What can go stale is the stored plan, made over an older fact format. So:
+
+- `factFormatFingerprint()` (packages/experiences) is the canonical string of `PINS["visual.facts"]` and `PINS["turn.facts"]`.
+- A visualize run that ends `done` (a lineage head was written) is stamped with it in `visual_runs.format` (migration 0030; set
+  by the event-feed sink only, not by the boot reconcile, which cannot know which code wrote a run). A run that ends empty,
+  skipped or failed leaves the last stamp as it was.
+- The boot sweep's third pass (`docmind_visual_stale_format_documents`, own try, as the running pass) re-runs once per boot,
+  through `rerun(ref, generation)` (shared lock and `-r<n>` probe, so it never duplicates a user's retry), each ready document
+  whose last run is `done` with a non-NULL `format` different from the current fingerprint. It re-plans over the stored facts
+  and stamps the new fingerprint on commit. Bounded by the shared gate (2 in flight); nothing while the `visuals` role is off.
+- Rows from before the column (format NULL) are NOT stale: they are re-planned only on the user's Retry, or by a later format
+  bump after a re-run stamped them.
+- Chat turns record no format: they are re-made lazily, only by the Visualize action.

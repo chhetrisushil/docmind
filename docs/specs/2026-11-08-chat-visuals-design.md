@@ -227,3 +227,9 @@ of existing turns; shared or multi-user chats; references to visuals from the an
   `turn-extract`: up to three scans per click, each bounded at 5000 records and the whole bounded by the visualize
   limiter (10 per minute). Passing the found position along would need a cursor the reader does not expose by `ord`
   (see C2), so it is left as is.
+
+### As built: no fact-format re-plan for turns
+
+Document visuals are re-planned at boot when their stored plan was made over an older fact format (see the document-visuals
+spec, "As built"). Turns record no format and are not re-planned: they are lazy, remade only when the user presses Visualize
+on the answer. (Served providers carry the current pin on every hydrate, so a turn's strip never fails on a pin.)

@@ -1,4 +1,5 @@
 import type { Identity } from "@docmind/auth";
+import { factFormatFingerprint } from "@docmind/experiences";
 import type { EventEnvelope } from "@loom/core";
 import type { Pool } from "pg";
 import { withTenant } from "../../db/tenant";
@@ -17,11 +18,15 @@ export interface VisualRun {
 }
 
 export interface VisualRuns {
-  /** Records a run's state (migration 0030 keeps the newest run and never reopens a finished one). Ids, enums and a code only. */
+  /**
+   * Records a run's state (migration 0030 keeps the newest run and never reopens a finished one). Ids, enums, a code and the
+   * fact-format fingerprint only; the fingerprint is kept only for a `done` run (any other state leaves the last stamp).
+   */
   record(
     r: { userId: string; documentId: string; generation: number; run: number },
     state: VisualRunState,
     code?: VisualRunCode,
+    format?: string,
   ): Promise<void>;
   /** The last run of the generation, owner-scoped; null when none was recorded. */
   last(
@@ -38,10 +43,19 @@ export class PgVisualRuns implements VisualRuns {
     r: { userId: string; documentId: string; generation: number; run: number },
     state: VisualRunState,
     code?: VisualRunCode,
+    format?: string,
   ): Promise<void> {
     await this.pool.query(
-      "SELECT public.docmind_record_visual_run($1::uuid, $2::uuid, $3::integer, $4::integer, $5, $6)",
-      [r.userId, r.documentId.toLowerCase(), r.generation, r.run, state, code ?? null],
+      "SELECT public.docmind_record_visual_run($1::uuid, $2::uuid, $3::integer, $4::integer, $5, $6, $7)",
+      [
+        r.userId,
+        r.documentId.toLowerCase(),
+        r.generation,
+        r.run,
+        state,
+        code ?? null,
+        format ?? null,
+      ],
     );
   }
 
@@ -102,6 +116,9 @@ export function visualRunRecorder(o: {
             },
             end.state,
             end.code,
+            ...(end.state === "done" ? [factFormatFingerprint()] : []),
+            // A committed run (outcome done) is stamped with the format it planned over. Only this live feed stamps: a run
+            // repaired at boot (`reconcile`) is not, since that process cannot know which code wrote it (NULL is never stale).
           );
           if (end.state === "failed" && end.notify)
             o.bus.publish(

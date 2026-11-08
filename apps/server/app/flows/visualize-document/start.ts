@@ -1,4 +1,5 @@
 import type { Identity } from "@docmind/auth";
+import { factFormatFingerprint } from "@docmind/experiences";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
@@ -76,6 +77,30 @@ export const pgReadyDocuments = readyFrom("docmind_ready_documents");
 /** `docmind_visual_retry_documents` (migration 0030): ready documents whose last visualize run ended `visuals-model-unavailable`. */
 export const pgRetryDocuments = readyFrom("docmind_visual_retry_documents");
 
+/**
+ * `docmind_visual_stale_format_documents` (migration 0030): ready documents whose last run ended `done` with a recorded format
+ * other than `format` (default: the current fingerprint). A NULL format is not stale.
+ */
+export const pgStaleFormatDocuments =
+  (pool: Pick<Pool, "query">, format: string = factFormatFingerprint()): ReadyDocuments =>
+  async (after, limit) => {
+    const { rows } = await pool.query<{
+      tenant_id: string;
+      owner_id: string;
+      id: string;
+      generation: number;
+    }>(
+      "SELECT tenant_id, owner_id, id, generation FROM docmind_visual_stale_format_documents($1::uuid, $2::integer, $3::text)",
+      [after, limit, format],
+    );
+    return rows.map((r) => ({
+      tenantId: r.tenant_id,
+      userId: r.owner_id,
+      documentId: r.id,
+      generation: Number(r.generation),
+    }));
+  };
+
 /** A run recorded as `running` (the boot reconcile's source). */
 export interface RunningRun extends ReadyDocument {
   run: number;
@@ -135,7 +160,8 @@ export interface VisualsStarter {
   /**
    * Boot sweep: first reconciles the runs recorded as `running` (their end may have been lost), then starts every ready
    * document that has no visualize execution for its generation, then re-runs once every
-   * ready document whose last run ended `visuals-model-unavailable`, page by page, with at most SWEEP_EXECUTIONS executions
+   * ready document whose last run ended `visuals-model-unavailable`, then once every document whose last run was committed over an
+   * older fact format (migration 0030's stamp; a NULL stamp is never stale), page by page, with at most SWEEP_EXECUTIONS executions
    * running at once (it resolves when they have all completed).
    * Never throws (a failed page is logged by class and ends the sweep). Returns how many it fired.
    */
@@ -154,6 +180,11 @@ export interface VisualsStarterOptions {
   ready?: ReadyDocuments;
   /** The boot sweep's second source: documents to re-run (their last run ended `visuals-model-unavailable`); absent: none. */
   retry?: ReadyDocuments;
+  /**
+   * The boot sweep's third source: documents whose last run ended `done` over an older fact format (the stamp differs from
+   * the current fingerprint); each is re-run once per boot. Absent: none.
+   */
+  stale?: ReadyDocuments;
   /** The boot reconcile's source: runs recorded as `running`; absent: none. */
   running?: RunningRuns;
   /** Records a run as `running` when it starts (so a page shows it and a retry waits for it); absent: nothing is recorded. */
@@ -177,6 +208,7 @@ export function loomVisualsStarter(
   const {
     ready,
     retry,
+    stale,
     running: runningSource,
     runs,
     enabled = true,
@@ -396,6 +428,18 @@ export function loomVisualsStarter(
             return answer.kind === "started" ? (answer.handle ?? null) : null;
           }),
         );
+        // Once per boot: a document planned over an older fact format is re-planned over its stored facts (and stamped with the
+        // new format when it commits). Its own try, like the running pass: a failing source must not stop the other passes.
+        try {
+          await pass(stale, (d) =>
+            fireWith(d, async () => {
+              const answer = await rerunWith(d, d.generation);
+              return answer.kind === "started" ? (answer.handle ?? null) : null;
+            }),
+          );
+        } catch (err) {
+          logClass("visuals stale-format pass failed")(err);
+        }
       } catch (err) {
         logClass("visualize sweep failed")(err);
       }

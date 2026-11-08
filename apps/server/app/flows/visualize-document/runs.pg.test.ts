@@ -7,7 +7,7 @@ import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSu
 import { ingestExecutionId } from "../../documents/ingest";
 import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
 import { PgVisualRuns } from "./runs";
-import { pgReadyDocuments, pgRetryDocuments, pgRunningRuns } from "./start";
+import { pgReadyDocuments, pgRetryDocuments, pgRunningRuns, pgStaleFormatDocuments } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
@@ -210,6 +210,84 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     );
   });
 
+  const formatOf = async (id: string) =>
+    (await owner.query("SELECT format FROM visual_runs WHERE document_id = $1", [id])).rows[0]
+      ?.format ?? null;
+
+  it("stamps the format only on a run that ends done; any other run keeps the last stamp", async () => {
+    await owner.query("DELETE FROM documents");
+    const d = await readyDoc();
+    const at = (run: number) => ({ userId: U1, documentId: d.id, generation: d.g, run });
+    await runs.record(at(0), "running", undefined, "fmt-a");
+    expect(await formatOf(d.id)).toBeNull(); // a non-done state never stores a format
+    await runs.record(at(0), "done", undefined, "fmt-a");
+    expect(await formatOf(d.id)).toBe("fmt-a");
+    await runs.record(at(1), "running");
+    await runs.record(at(1), "failed", "visuals-model-unavailable", "fmt-b");
+    expect(await formatOf(d.id)).toBe("fmt-a");
+    await runs.record(at(2), "empty");
+    expect(await formatOf(d.id)).toBe("fmt-a");
+    await runs.record(at(3), "done", undefined, "fmt-b");
+    expect(await formatOf(d.id)).toBe("fmt-b");
+    await runs.record(at(4), "done"); // no format given: keeps the stamp
+    expect(await formatOf(d.id)).toBe("fmt-b");
+  });
+
+  it("docmind_visual_stale_format_documents lists done runs with a different non-null format, across tenants, paged, ids only", async () => {
+    await owner.query("DELETE FROM documents");
+    const stale = await readyDoc();
+    const staleB = await readyDoc(BOB);
+    const current = await readyDoc();
+    const unstamped = await readyDoc(); // done, format NULL (a row from before the column): not stale
+    const empty = await readyDoc();
+    const failed = await readyDoc();
+    const notReady = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+    const at = (who: string, d: { id: string; g: number }) => ({
+      userId: who,
+      documentId: d.id,
+      generation: d.g,
+      run: 0,
+    });
+    await runs.record(at(U1, stale), "done", undefined, "old");
+    await runs.record(at(U2, staleB), "done", undefined, "old");
+    await runs.record(at(U1, current), "done", undefined, "now");
+    await runs.record(at(U1, unstamped), "done");
+    await runs.record(at(U1, empty), "empty");
+    await runs.record(at(U1, failed), "done", undefined, "old");
+    await runs.record({ ...at(U1, failed), run: 1 }, "failed", "visuals-plan-invalid");
+    await owner.query(
+      "INSERT INTO visual_runs (document_id, generation, tenant_id, owner_id, run, state, format) SELECT id, ingest_generation, tenant_id, owner_id, 0, 'done', 'old' FROM documents WHERE id = $1",
+      [notReady],
+    );
+    const list = pgStaleFormatDocuments(app, "now");
+    const all = await list(NIL, 100);
+    expect(all.map((d) => d.documentId)).toEqual([stale.id, staleB.id].sort());
+    expect(all.find((d) => d.documentId === stale.id)).toEqual({
+      tenantId: ALICE.tenantId,
+      userId: U1,
+      documentId: stale.id,
+      generation: stale.g,
+    });
+    const first = await list(NIL, 1);
+    const second = await list(first[0]?.documentId as string, 1);
+    expect([first[0]?.documentId, second[0]?.documentId]).toEqual([stale.id, staleB.id].sort());
+    expect(await list(second[0]?.documentId as string, 1)).toEqual([]);
+    expect(
+      (await app.query("SELECT * FROM docmind_visual_stale_format_documents(NULL, 10, 'now')"))
+        .rows,
+    ).toEqual([]);
+    expect(
+      (await app.query("SELECT * FROM docmind_visual_stale_format_documents($1, 10, NULL)", [NIL]))
+        .rows,
+    ).toEqual([]);
+    // A document whose generation moved on is left out (a user being erased: see the final retry test).
+    await owner.query(
+      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      [stale.id],
+    );
+    expect((await list(NIL, 100)).map((d) => d.documentId)).toEqual([staleB.id]);
+  });
+
   it("the retry list leaves out a document whose generation moved on, a user being erased, and answers nothing to a null (STRICT)", async () => {
     await owner.query("DELETE FROM documents");
     const d = await readyDoc();
@@ -232,8 +310,16 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       [d.id],
     );
     expect(await pgRetryDocuments(app)(NIL, 10)).toHaveLength(1);
+    await runs.record(
+      { userId: U1, documentId: d.id, generation: d.g, run: 0 },
+      "done",
+      undefined,
+      "old",
+    );
+    expect(await pgStaleFormatDocuments(app, "now")(NIL, 10)).toHaveLength(1);
     await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U1]); // final: last in this file
     expect(await pgRetryDocuments(app)(NIL, 10)).toEqual([]);
+    expect(await pgStaleFormatDocuments(app, "now")(NIL, 10)).toEqual([]); // the stale-format list leaves out a user being erased too
   });
 
   it("records nothing for a user being erased (final: erasing_at cannot be undone)", async () => {
