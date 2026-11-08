@@ -19,6 +19,7 @@ import { PgChunkStore } from "../flows/ingest-document/pgChunks";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import { ingestRun } from "../status/testing";
+import { resolveCites } from "./factCites";
 import { readersFor } from "./readers";
 
 interface Value {
@@ -242,6 +243,50 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
     expect(opened).toBe(0);
     expect((await readers.documents({ limit: 1, status: "all" })).items).toHaveLength(1);
     expect(opened).toBe(2); // one document: its title and its filename
+  });
+
+  it("resolves a fact's chunks to the owner's documents with a title-and-place label, and nothing for another user's, an unknown or a deleted document", async () => {
+    const chunkIdsOf = async (doc: string) =>
+      (
+        await h.owner.query<{ id: string }>(
+          "SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal",
+          [doc],
+        )
+      ).rows.map((r) => r.id);
+    const [c0, c1] = await chunkIdsOf(mine);
+    const doomed = await seedDoc(h.owner, h.app, fields, ALICE, "e".repeat(64), 10);
+    await new PgChunkStore(h.app, fields).replace(
+      { tenantId: ALICE.tenantId, userId: ALICE.userId, documentId: doomed },
+      [chunk(0)],
+    );
+    const [gone] = await chunkIdsOf(doomed);
+    const bobsChunks = await new PgChunkStore(h.app, fields).replace(
+      { tenantId: BOB.tenantId, userId: BOB.userId, documentId: bobs },
+      [chunk(0)],
+    );
+    expect(bobsChunks).toBeDefined();
+    const [theirs] = await chunkIdsOf(bobs);
+    const deps = { pool: h.app, fields };
+    const got = await resolveCites(deps, ALICE, [
+      c0 as string,
+      c1 as string,
+      theirs as string,
+      randomUUID(),
+      gone as string,
+    ]);
+    expect([...got.keys()].sort()).toEqual([c0, c1, gone].sort());
+    expect(got.get(c0 as string)).toEqual({
+      documentId: mine,
+      label: "sentinel-title-alice, Page 1",
+    });
+    expect(got.get(c1 as string)?.label).toBe("sentinel-title-alice, Page 2");
+    // the label is a title and a place: never a chunk's text
+    for (const v of got.values()) expect(v.label).not.toContain("sentinel-passage");
+    await h.owner.query("DELETE FROM documents WHERE id = $1", [doomed]);
+    const after = await resolveCites(deps, ALICE, [c0 as string, gone as string]);
+    expect([...after.keys()]).toEqual([c0]);
+    // read as Bob, Alice's chunk is invisible
+    expect((await resolveCites(deps, BOB, [c0 as string])).size).toBe(0);
   });
 
   it("serves the per-document detail only to its owner (404 for a colleague's or Bob's, never 403)", async () => {

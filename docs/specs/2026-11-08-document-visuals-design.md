@@ -247,7 +247,8 @@ catalogue entry.
 Visuals in chat answers (sub-project 2); user editing or pinning of visuals; interactive filtering
 inside charts; facts spanning documents before step (b).
 
-Deferred from step (a) after the final review (owner to schedule): citation markers in widget captions;
+Deferred from step (a) after the final review (owner to schedule): citation markers in widget captions (done, see
+"As built: source markers on visuals" below);
 reclaiming erased or orphaned `lineage_content` rows (done, see "As built: reclaiming `lineage_content`" below).
 
 
@@ -285,3 +286,14 @@ version hash, not on a pin. What can go stale is the stored plan, made over an o
   blob a promote, a branch or a put touched while the roots were read survives. Loom refuses to erase without `touch` and `touchClock`.
 - Completeness rests on the visuals Lineage being the only user of the store; `storage/contentUsers.test.ts` pins that.
 - Fail closed also on an empty root set. Logs: counts and error classes only.
+
+
+### As built: source markers on visuals
+
+loom-ui's value-level `refs` (PR #129, pin 9bcf82b) replace the caption idea: every `Kpi`, `BarChart`, `TimeSeries` and
+`Table` value carries numbered markers, one per passage its fact cites. A fact's `chunkIds` are passage ids, so no
+mapping is needed. The readers attach `cites` (document id, passage id, "<title>, <place>" label) after one owner-scoped
+lookup, and the reshaper turns them into `refs` with id `<documentId>:<passageId>` (deduplicated, in order, at most 16,
+omitted when empty). A deleted document's chunks are gone, so its markers are dropped. Activating a marker raises
+`REF_OPEN`; `intentOf` maps it to `source.open` and the page opens `/documents/<id>?passage=<passageId>`. Chat turn
+visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no other action).

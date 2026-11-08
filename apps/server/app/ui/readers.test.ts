@@ -83,3 +83,51 @@ describe("the turnFacts reader", () => {
     await expect(r.turnFacts({ chatId: "c", ord: 4 })).rejects.toThrow("boom");
   });
 });
+
+describe("citations on facts", () => {
+  const D = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+  const C1 = "7f6d1b8e-3b0a-4a56-8f2f-000000000001";
+  const C2 = "7f6d1b8e-3b0a-4a56-8f2f-000000000002";
+  const C3 = "7f6d1b8e-3b0a-4a56-8f2f-000000000003";
+  const fact = (ordinal: number, chunkIds: string[]) => ({
+    kind: "figure" as const,
+    label: "Revenue",
+    value: 1,
+    chunkIds,
+    ordinal,
+  });
+  const identity = { userId: "u", tenantId: "t" } as never;
+  it("attaches, in the fact's own order and without repeats, the resolved chunks; an unresolved chunk (a deleted document) is dropped", async () => {
+    vi.resetModules();
+    const resolve = vi.fn(async () => {
+      return new Map([
+        [C1, { documentId: D, label: "Report, Page 1" }],
+        [C3, { documentId: D, label: "Report, Page 3" }],
+      ]);
+    });
+    vi.doMock("./factCites", () => ({ resolveCites: resolve }));
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async () => [fact(0, [C3, C1, C2, C1]), fact(1, [C2])]);
+    const r = readersFor({ visualFacts: { list }, pool: {}, fields: {} } as never, identity);
+    const out = (await r.visualFacts({ id: D })) as { cites?: unknown[] }[];
+    expect(out[0]?.cites).toEqual([
+      { documentId: D, passageId: C3, label: "Report, Page 3" },
+      { documentId: D, passageId: C1, label: "Report, Page 1" },
+    ]);
+    expect(out[1]?.cites).toEqual([]);
+    expect(resolve).toHaveBeenCalledTimes(1); // one lookup for every fact
+    vi.doUnmock("./factCites");
+  });
+  it("does the same for a turn's facts", async () => {
+    vi.resetModules();
+    vi.doMock("./factCites", () => ({
+      resolveCites: vi.fn(async () => new Map([[C1, { documentId: D, label: "Report, Page 1" }]])),
+    }));
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async () => [fact(0, [C1])]);
+    const r = readersFor({ turnFacts: { list }, pool: {}, fields: {} } as never, identity);
+    const out = (await r.turnFacts({ chatId: D, ord: 1 })) as { cites?: unknown[] }[];
+    expect(out[0]?.cites).toEqual([{ documentId: D, passageId: C1, label: "Report, Page 1" }]);
+    vi.doUnmock("./factCites");
+  });
+});

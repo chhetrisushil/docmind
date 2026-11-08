@@ -86,6 +86,24 @@ describe("planner output to a served, hydrated detail (R26)", () => {
     expect(JSON.stringify(b)).toContain("99");
     expect(visualFacts).toHaveBeenCalledTimes(1);
 
+    // A fact that cites a passage hydrates with a source marker for it (the reader attaches `cites`).
+    const passage = randomUUID();
+    const cited = facts.map((f) => ({
+      ...f,
+      cites: [{ documentId: ref.documentId, passageId: passage, label: "Report, Page 2" }],
+    }));
+    const [c] = await views.hydrateExperience(
+      exp,
+      [load("fact-0")],
+      { visualFacts: vi.fn(async () => cited as never) } as unknown as UiReaders,
+      "u",
+      "document",
+    );
+    expect(c).toMatchObject({
+      state: "ready",
+      value: { refs: [{ id: `${ref.documentId}:${passage}`, label: "Report, Page 2" }] },
+    });
+
     // Without the owner's clearance the same experience is refused: the fact handles are classified (R27).
     const noClearance = await views.hydrateExperience(exp, [load("fact-0")], readers, "u");
     expect(noClearance[0]?.state).toBe("error");

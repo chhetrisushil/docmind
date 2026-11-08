@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Router } from "../router";
+import { createServices } from "../services";
+import { mountWith } from "../testing/mount";
 import "./dm-turn-visuals";
 import type { DmTurnVisuals } from "./dm-turn-visuals";
 
@@ -139,5 +142,44 @@ describe("dm-turn-visuals", () => {
     await el.updateComplete;
     expect(q(el, "[data-toggle]")).not.toBeNull();
     expect(q(el, "[data-count]")).toBeNull();
+  });
+});
+
+describe("dm-turn-visuals: a source marker on a widget", () => {
+  const D = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+  const P = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";
+  const withServices = async () => {
+    const win = {
+      location: { pathname: "/chats/c1", search: "" },
+      history: { pushState() {}, replaceState() {} },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const router = new Router(win as never);
+    const services = createServices({ router });
+    const el = await mountWith<DmTurnVisuals>(services, "dm-turn-visuals", {
+      chatId: "c1",
+      ord: 2,
+      rev: 0,
+      view: view(),
+    });
+    const inner = q(el, "dm-view") as unknown as {
+      onAct: (a: unknown) => Promise<{ ok: boolean }>;
+    };
+    return { router, inner, start: router.route };
+  };
+  const ref = (refId: unknown) => ({ type: "REF_OPEN", widgetId: "w", payload: { refId, n: 1 } });
+  it("opens the cited passage of the cited document", async () => {
+    const { router, inner } = await withServices();
+    expect(await inner.onAct(ref(`${D}:${P}`))).toMatchObject({ ok: true });
+    expect(router.route).toEqual({ name: "document", id: D, passage: P });
+  });
+  it("refuses a malformed ref and any other action, and goes nowhere", async () => {
+    const { router, inner, start } = await withServices();
+    expect(await inner.onAct(ref("nope"))).toMatchObject({ ok: false });
+    expect(await inner.onAct({ type: "A2UI_ACTION", payload: { action: "x" } })).toMatchObject({
+      ok: false,
+    });
+    expect(router.route).toBe(start);
   });
 });

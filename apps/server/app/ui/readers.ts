@@ -1,6 +1,13 @@
 import type { Identity } from "@docmind/auth";
 import type { DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { CHAT_LIST_CAP, CONTENT_CAP, type UiReaders, citedWindow } from "@docmind/experiences";
+import {
+  CHAT_LIST_CAP,
+  CONTENT_CAP,
+  type FactCite,
+  type UiReaders,
+  type VisualFactRaw,
+  citedWindow,
+} from "@docmind/experiences";
 import type { Pool } from "pg";
 import { listChatsPage } from "../chats/routes";
 import type { FieldCrypto } from "../crypto/fields";
@@ -13,6 +20,7 @@ import type { VisualFactStore } from "../flows/visualize-document/pgFacts";
 import type { TurnFactStore } from "../flows/visualize-turn/pgTurnFacts";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { STATUS_MESSAGES, UPLOADED } from "../status/model";
+import { type ResolvedCite, resolveCites } from "./factCites";
 
 export interface UiReaderDeps {
   pool: Pool;
@@ -43,6 +51,32 @@ const matches =
  * and are applied by `withTenant` and by the owner column of every query; no argument names either. Each reader uses the
  * same functions as the REST route of the same data, so what a user can see here is exactly what the API lets them see.
  */
+/**
+ * The facts with the passages they cite attached (`cites`), one owner-scoped lookup for all of them. A chunk that no longer
+ * resolves (its document is gone) is dropped; a fact with no chunk ids costs no query.
+ */
+async function withCites(
+  deps: Pick<UiReaderDeps, "pool" | "fields">,
+  identity: Identity,
+  facts: readonly { chunkIds: readonly string[] }[],
+): Promise<VisualFactRaw[]> {
+  const all = [...new Set(facts.flatMap((f) => f.chunkIds))];
+  const found =
+    all.length === 0 ? new Map<string, ResolvedCite>() : await resolveCites(deps, identity, all);
+  return facts.map((f) => {
+    if (f.chunkIds.length === 0) return f as unknown as VisualFactRaw;
+    const seen = new Set<string>();
+    const cites: FactCite[] = [];
+    for (const id of f.chunkIds) {
+      const c = found.get(id.toLowerCase());
+      if (c === undefined || seen.has(id.toLowerCase())) continue;
+      seen.add(id.toLowerCase());
+      cites.push({ documentId: c.documentId, passageId: id.toLowerCase(), label: c.label });
+    }
+    return { ...f, cites } as unknown as VisualFactRaw;
+  });
+}
+
 export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
   const cipher = () => deps.fields.forUser(identity.userId);
   return {
@@ -132,11 +166,15 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
 
     async visualFacts({ id }) {
       try {
-        return await deps.visualFacts.list({
-          tenantId: identity.tenantId,
-          userId: identity.userId,
-          documentId: id,
-        });
+        return await withCites(
+          deps,
+          identity,
+          await deps.visualFacts.list({
+            tenantId: identity.tenantId,
+            userId: identity.userId,
+            documentId: id,
+          }),
+        );
       } catch (err) {
         if (isDocumentGone(err)) return null;
         throw err;
@@ -150,7 +188,7 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         chatId,
         ord,
       });
-      return facts.length === 0 ? null : facts;
+      return facts.length === 0 ? null : withCites(deps, identity, facts);
     },
   };
 }

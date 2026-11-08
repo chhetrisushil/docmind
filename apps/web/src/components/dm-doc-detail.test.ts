@@ -301,6 +301,22 @@ describe("dm-doc-detail", () => {
     expect(t.api.createChat).toHaveBeenCalledTimes(1);
   });
 
+  it("a source marker on a Visuals widget opens the cited passage; a malformed ref goes nowhere", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(questionButtons(page).length).toBeGreaterThan(0));
+    const P = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";
+    expect(await act(page, { refId: "nope", n: 1 }, "REF_OPEN")).toMatchObject({ ok: false });
+    expect(await act(page, { refId: `${id(1)}:nope`, n: 1 }, "REF_OPEN")).toMatchObject({
+      ok: false,
+    });
+    expect(t.services.router.route).toEqual({ name: "document", id: id(1) });
+    expect(await act(page, { refId: `${id(1)}:${P}`, n: 1 }, "REF_OPEN")).toMatchObject({
+      ok: true,
+    });
+    expect(t.services.router.route).toEqual({ name: "document", id: id(1), passage: P });
+  });
+
   it("nothing is held until the document was served: an action before that makes no call", async () => {
     const t = setup({ name: "document", id: id(9) }, null);
     const page = await t.mount();

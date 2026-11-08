@@ -345,3 +345,41 @@ describe("intentOf: fix round 1", () => {
     expect(intentOf("detail", a, { list: ["x".repeat(4000)] })).toBeTruthy();
   });
 });
+
+describe("intentOf: a source marker on a visual (REF_OPEN)", () => {
+  const D = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+  const P = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";
+  const ref = (refId: unknown, n: unknown = 1) => ({ type: "REF_OPEN", payload: { refId, n } });
+  it.each(["detail", "turn"] as const)(
+    "opens the passage a ref names, on the %s surface",
+    (view) => {
+      expect(intentOf(view, ref(`${D}:${P}`))).toEqual({
+        type: "source.open",
+        documentId: D,
+        passageId: P,
+      });
+    },
+  );
+  it("refuses an id that is not <documentId>:<passageId>, or a payload without one", () => {
+    for (const bad of [
+      P,
+      `${D}:`,
+      `:${P}`,
+      `${D}:${P}:x`,
+      `${D}:nope`,
+      `nope:${P}`,
+      `${D}/${P}`,
+      42,
+      undefined,
+      null,
+    ])
+      expect(intentOf("detail", ref(bad))).toBeUndefined();
+    expect(intentOf("detail", { type: "REF_OPEN" })).toBeUndefined();
+    expect(intentOf("detail", { type: "REF_OPEN", payload: "x" })).toBeUndefined();
+  });
+  it("is not an action of any other view", () => {
+    expect(intentOf("library", ref(`${D}:${P}`))).toBeUndefined();
+    expect(intentOf("sessions", ref(`${D}:${P}`))).toBeUndefined();
+    expect(intentOf("chat", ref(`${D}:${P}`))).toBeUndefined();
+  });
+});

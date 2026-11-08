@@ -3,8 +3,18 @@ import type { CapabilityRef } from "@loom-ui/planner";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { KIND, PINS, provider } from "./providers";
 
-/** A fact the visualize step extracted from a document; structurally the server's `Fact`, which experiences does not depend on. */
-export type VisualFactRaw =
+/**
+ * One passage a fact was read from, resolved by the server's reader (owner-scoped, so a deleted document's passage is absent):
+ * the passage (a chunk id is a passage id) and its document, and a label of title and place. Never the passage's text.
+ */
+export interface FactCite {
+  documentId: string;
+  passageId: string;
+  label: string;
+}
+
+/** A fact the visualize step extracted from a document; structurally the server's `Fact` (which experiences does not depend on) plus the reader's `cites`. */
+export type VisualFactRaw = (
   | {
       kind: "series";
       label: string;
@@ -29,7 +39,8 @@ export type VisualFactRaw =
       rows: string[][];
       chunkIds: string[];
       ordinal: number;
-    };
+    }
+) & { cites?: readonly FactCite[] };
 
 const ENTRIES = [
   ["FigureChart", "BarChart"],
@@ -264,6 +275,23 @@ const formatOf = (f: { unit?: string }, values: number[]) =>
         },
       }
     : {};
+const MAX_REFS = 16; // loom-ui's MAX_WIDGET_REFS
+const MAX_REF_LABEL = 200; // loom-ui's MAX_WIDGET_REF_LABEL
+/** A ref id is `<documentId>:<passageId>` (73 characters, inside loom-ui's id rule); the web reads both halves back from it. */
+export const refIdOf = (c: { documentId: string; passageId: string }) =>
+  `${c.documentId}:${c.passageId}`;
+/** A fact's citations as loom-ui source markers: in the fact's order, one per passage, at most 16; nothing at all when there are none. */
+const refsOf = (f: VisualFactRaw) => {
+  const seen = new Set<string>();
+  const refs: { id: string; label: string }[] = [];
+  for (const c of f.cites ?? []) {
+    const id = refIdOf(c);
+    if (seen.has(id) || refs.length >= MAX_REFS) continue;
+    seen.add(id);
+    refs.push({ id, label: c.label.slice(0, MAX_REF_LABEL) });
+  }
+  return refs.length > 0 ? { refs } : {};
+};
 const wrong = (): never => {
   throw new Error("visual fact does not fit this widget");
 };
@@ -277,6 +305,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
           value: toLoom(f, f.value),
           ...unitOf(f),
           ...formatOf(f, [f.value]),
+          ...refsOf(f),
           ...(f.compare &&
             f.compare.value !== 0 && {
               deltaPct: (f.value - f.compare.value) / Math.abs(f.compare.value),
@@ -292,6 +321,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
             f.points.map((p) => p.y),
           ),
           bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })),
+          ...refsOf(f),
         },
   "visual-trend": (f) => {
     const points = f.kind === "series" ? chronological(f.points) : null;
@@ -299,6 +329,7 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
       ? wrong()
       : {
           timeFormat: { granularity: coarsest(points) },
+          ...refsOf(f),
           series: [
             {
               label: f.label,
@@ -312,7 +343,8 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
           ],
         };
   },
-  "visual-table": (f) => (f.kind !== "factTable" ? wrong() : { columns: f.columns, rows: f.rows }),
+  "visual-table": (f) =>
+    f.kind !== "factTable" ? wrong() : { columns: f.columns, rows: f.rows, ...refsOf(f) },
 };
 
 export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fromEntries(
