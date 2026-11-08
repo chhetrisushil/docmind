@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { PINS, createViews, detailWithVisuals, factProvider } from "@docmind/experiences";
+import {
+  OWNER_READ,
+  PINS,
+  capabilitiesOf,
+  createViews,
+  detailWithVisuals,
+  factProvider,
+} from "@docmind/experiences";
 import type { UiReaders } from "@docmind/experiences";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
+import { declaredToolClassesFrom } from "@loom-ui/planner";
 import { ReferencePlanner } from "@loom-ui/planner";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { describe, expect, it, vi } from "vitest";
@@ -72,10 +80,60 @@ describe("planner output to a served, hydrated detail (R26)", () => {
       [load("fact-0"), load("fact-1")],
       readers,
       "u",
+      "document",
     );
-    expect(JSON.stringify(a), "a").toContain("4242");
     expect(JSON.stringify(a)).toContain("4242");
     expect(JSON.stringify(b)).toContain("99");
     expect(visualFacts).toHaveBeenCalledTimes(1);
+
+    // Without the owner's clearance the same experience is refused: the fact handles are classified (R27).
+    const noClearance = await views.hydrateExperience(exp, [load("fact-0")], readers, "u");
+    expect(noClearance[0]?.state).toBe("error");
+    expect(visualFacts).toHaveBeenCalledTimes(1); // never invoked
+    // The table equals what the capabilities declare.
+    expect(declaredToolClassesFrom(capabilitiesOf(facts as never))).toEqual(
+      OWNER_READ.declaredToolClasses,
+    );
+    // For the owner nothing is redacted.
+    expect(p.fingerprint.restrictedHandles).toEqual([]);
+    expect(p.inventory.handles.map((h) => h.handle)).toEqual(
+      expect.arrayContaining(["fact-0", "fact-1"]),
+    );
+  });
+
+  it("serves the static detail, under the same hash, when the head's nodes do not compile", async () => {
+    const facts = [fact(0, "Revenue", 4242)];
+    const model = scriptedPlannerModel([
+      JSON.stringify({ summary: "One", nodes: [node("rev", "Revenue", 0)] }),
+    ]);
+    const plan = await planVisuals(
+      new ReferencePlanner({ model, modelId: "t" }),
+      facts,
+      recording(),
+    );
+    const lineage = new Lineage({
+      events: new InMemoryLineageStore(),
+      content: new InMemoryContentStore(),
+    });
+    const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
+    await commitPlan(lineage, ref, plan, () => "2026-11-08T10:00:00.000Z");
+    const head = await lineage.resolveLatest(experienceIdOf(ref));
+    if (!head.ok) throw new Error("no head");
+    // An invalid prop on the planned node (a span the layout does not allow) makes the compile fail.
+    const bad = JSON.parse(JSON.stringify(head.value));
+    bad.root.children[0].props = { value: { nested: "invalid" } };
+    bad.root.children[0].span = 99;
+    const onFinding = vi.fn();
+    const views = createViews({
+      placeholderKey: "k".repeat(32),
+      revisionKey: "r".repeat(32),
+      onFinding,
+    });
+    const stat = views.payload("detail", "web");
+    const served = views.documentPayload(ref.documentId, bad, "web");
+    const hydrated = views.documentExperience(ref.documentId, bad);
+    expect(hydrated.versionHash).toBe(served.versionHash);
+    expect(served.versionHash).toBe(stat.versionHash);
+    expect(onFinding).toHaveBeenCalledWith("unbound", expect.any(String));
   });
 });

@@ -236,10 +236,7 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
       entryOf.set(handle, entry);
       providers[handle] = { ...factProvider(ordinal, documentId, entry), handle };
     }
-    // The planner marks its bindings `sensitive` (so its summary is not withheld); served to the document's owner, that
-    // class would make hydration treat the handle as restricted and refuse it, so the served binding does not carry it.
-    const { sensitivity: _dropped, ...binding } = n.binding;
-    return { ...n, id: `v-${n.id}`, binding: { ...binding, handle } };
+    return { ...n, id: `v-${n.id}`, binding: { ...n.binding, handle } };
   };
   const kept = (visuals.root as ContainerNode).children
     .slice(0, MAX_SIBLINGS)

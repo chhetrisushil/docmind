@@ -88,7 +88,8 @@ export class DmDocDetail extends LitElement {
   private onProgress(e: DocumentProgressEvent | "resync"): void {
     if (e !== "resync" && e.documentId !== this.route?.id) return;
     // The visuals were committed: the document's experience itself changed, so fetch it again (not just its data).
-    if (e !== "resync" && e.visuals === "ready") void this.session?.reload();
+    // A resync may have missed a visuals event, so it reloads too.
+    if (e === "resync" || e.visuals === "ready") void this.session?.reload();
     else this.session?.invalidate();
   }
   disconnectedCallback(): void {

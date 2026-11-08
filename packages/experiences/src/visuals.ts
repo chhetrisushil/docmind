@@ -69,6 +69,17 @@ export const mergedCatalog = (): SemanticCatalog =>
   });
 
 export const MAX_VISUAL_FACTS = 16;
+
+/**
+ * How the per-document detail is compiled, inventoried and served (R27): for its authenticated owner, who may read
+ * their own `sensitive` facts. The table is the host's read floor for the `visual.facts` tool (`toolKey`:
+ * `<kind>:<name>`); it equals `declaredToolClassesFrom(capabilitiesOf(...))`. Static views are served without it.
+ */
+export const OWNER_READ = {
+  viewer: { clearance: "sensitive" },
+  audience: "viewer",
+  declaredToolClasses: { "docmind:visual.facts": "sensitive" },
+} as const;
 const TOOL = "visual.facts" as const;
 
 export function capabilitiesOf(facts: readonly VisualFactRaw[]): CapabilityRef[] {
