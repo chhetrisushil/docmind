@@ -696,12 +696,73 @@ describe("visuals actions", () => {
     vi.advanceTimersByTime(60_000);
     expect(t.visuals()).toMatchObject({ action: "Visualize", note: null });
   });
-  it("any other failure puts the action back, silently", async () => {
+  it("a click that fails (404, 5xx or the network) says so for a few seconds and keeps the action", async () => {
+    for (const err of [
+      new ApiError(500, "internal"),
+      new ApiError(404, "not_found"),
+      new TypeError("offline"),
+    ]) {
+      const t = await started(async () => {
+        throw err;
+      });
+      await t.ctl.visualize(2);
+      expect(t.visuals()).toEqual({
+        strip: false,
+        action: "Visualize",
+        busy: false,
+        note: "Could not start. Try again.",
+      });
+      vi.advanceTimersByTime(8_000);
+      expect(t.visuals()).toMatchObject({ action: "Visualize", note: null });
+    }
+  });
+  it("the failure note goes with the next click", async () => {
+    let fail = true;
     const t = await started(async () => {
-      throw new ApiError(500, "internal");
+      if (fail) throw new ApiError(500, "internal");
     });
     await t.ctl.visualize(2);
-    expect(t.visuals()).toMatchObject({ action: "Visualize", busy: false, note: null });
+    expect(t.visuals()?.note).toBe("Could not start. Try again.");
+    fail = false;
+    await t.ctl.visualize(2);
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", note: null });
+  });
+  it("a nothing note lasts only until the next click or frame: it never outlives them", async () => {
+    const t = await started();
+    await t.ctl.visualize(2);
+    t.frame("visuals", { ord: 2, outcome: "nothing" });
+    expect(t.visuals()?.note).toBe("Nothing to visualize");
+    t.frame("visuals", { ord: 2, outcome: "nothing" }); // another tab's run: not a click here, so the note clears
+    expect(t.visuals()?.note).toBeNull();
+    await t.ctl.visualize(2);
+    t.frame("visuals", { ord: 2, outcome: "nothing" });
+    await t.ctl.visualize(2); // the next click
+    expect(t.visuals()).toMatchObject({ action: "Visualizing…", note: null });
+    t.frame("visuals", { ord: 2, outcome: "visualized" });
+    expect(t.visuals()?.note).toBeNull();
+  });
+  it("a visuals frame lost while the stream was down: on reconnect the strip shows and Visualizing… ends", async () => {
+    let calls = 0;
+    const t = setup({
+      listMessages: async () => ({
+        items: [
+          msg(1, "user", 1),
+          msg(2, "assistant", 1, { citations: [cited], hasVisuals: ++calls > 1 }),
+        ],
+        nextCursor: null,
+      }),
+    });
+    await t.ctl.start();
+    vi.useFakeTimers();
+    const visuals = () => t.state().entries.find((e) => e.role === "assistant")?.visuals;
+    t.sse.opts?.onOpen?.(); // first open
+    await t.ctl.visualize(2);
+    expect(visuals()).toMatchObject({ strip: false, action: "Visualizing…", busy: true });
+    // ...the stream drops, the frame is published to nobody, the stream reopens
+    t.sse.opts?.onOpen?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(visuals()).toEqual({ strip: true, action: "Re-visualize", busy: false, note: null });
+    expect(t.state().entries.find((e) => e.role === "assistant")?.visualsRev).toBe(1);
   });
   it("shows the strip from history when the reply has visuals", async () => {
     const t = await started(undefined, { hasVisuals: true });

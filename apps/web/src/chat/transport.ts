@@ -46,6 +46,19 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
   let closed = false;
   let stream: { close(): void } | undefined;
   let loadingOlder = false;
+  let opened = false;
+
+  /** After a reconnect: read the newest page again for visuals that became ready while the stream was down. */
+  const resyncVisuals = async () => {
+    try {
+      const page = await d.api.listMessages(d.chatId, undefined);
+      if (closed) return;
+      d.fold.refreshVisuals(page);
+      d.onChange();
+    } catch (err) {
+      report("chat-visuals-resync", err); // the strip then waits for the next frame or a reload
+    }
+  };
 
   const failure = (err: unknown): "load" | "gone" =>
     err instanceof ApiError && err.status === 404 ? "gone" : "load";
@@ -88,6 +101,9 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
           if (closed) return;
           d.fold.resetLive();
           d.onChange();
+          // The first open follows the history just read; a later one is a reconnect.
+          if (opened) void resyncVisuals();
+          opened = true;
         },
         onFrame,
         onClose: (reason) => {
