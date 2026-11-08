@@ -120,8 +120,11 @@ export const DocumentProgressEvent = z
     step: IngestStep.optional(),
     status: DocumentStatus,
     detail: ProgressDetail.optional(),
-    /** The document's visuals were committed: an open detail page reloads its experience. */
-    visuals: z.literal("ready").optional(),
+    /**
+     * The document's visuals were committed (`ready`: an open detail page reloads its experience) or its last run ended
+     * failed (`failed`: the page offers a retry).
+     */
+    visuals: z.enum(["ready", "failed"]).optional(),
   })
   .refine((e) => e.step !== undefined || e.status === "failed", {
     message: "an event without a step must be failed",
@@ -161,3 +164,7 @@ export const DocumentSourceResponse = z
   })
   .strict();
 export type DocumentSourceResponse = z.infer<typeof DocumentSourceResponse>;
+
+/** `POST /api/documents/:id/visuals/retry`: a re-run of the document's visuals was started. */
+export const RetryVisualsResponse = z.object({ started: z.literal(true) });
+export type RetryVisualsResponse = z.infer<typeof RetryVisualsResponse>;

@@ -17,8 +17,11 @@ import {
   ingestScopeOf,
   ingestStatus,
   isIngestExecution,
+  isVisualizeExecution,
+  parseVisualizeExecution,
   progressOf,
   viewOf,
+  visualizeGenerationOf,
 } from "./model";
 import { MemoryLog, evt, ingestRun } from "./testing";
 
@@ -345,5 +348,42 @@ describe("an execution recovery gave up on", () => {
   it("does not reopen or change a terminal state", () => {
     const log = [...ingestRun(exec(), "failed:too_large"), cancelled(RECOVERY_EXHAUSTED_REASON)];
     expect(foldIngestStatus(log)).toMatchObject({ status: "failed", code: "too_large" });
+  });
+});
+
+describe("visualize execution ids", () => {
+  const user = randomUUID();
+  const doc = randomUUID();
+  const base = `u_${user}:visualize-${doc}`;
+
+  it("parses the generation and the re-run, and nothing else", () => {
+    expect(parseVisualizeExecution(base)).toEqual({
+      userId: user,
+      documentId: doc,
+      generation: 1,
+      rerun: 0,
+    });
+    expect(parseVisualizeExecution(`${base}.4-r12`)).toEqual({
+      userId: user,
+      documentId: doc,
+      generation: 4,
+      rerun: 12,
+    });
+    expect(visualizeGenerationOf(`${base}-r3`)).toBe(1);
+    expect(visualizeGenerationOf(`${base}.7-r3`)).toBe(7);
+    for (const bad of [
+      `${base}-r0`,
+      `${base}-r1000`,
+      `${base}-r01`,
+      `${base}-r`,
+      `${base}-r1-r2`,
+      `${base}.0`,
+    ])
+      expect(isVisualizeExecution(bad), bad).toBe(false);
+  });
+
+  it("is never an ingest execution", () => {
+    expect(isIngestExecution(`${base}-r1`)).toBe(false);
+    expect(foldIngestStatus([evt(`${base}-r1`, 0, "EXECUTION_FAILED", {})])).toEqual({});
   });
 });

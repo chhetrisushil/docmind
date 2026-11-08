@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import type { UiViewResponse, ViewName } from "@docmind/contracts";
+import type { UiViewResponse, ViewName, VisualsState } from "@docmind/contracts";
 import type { UiReaders } from "@docmind/experiences";
 import type { Api, ViewSource } from "../api/client";
 
@@ -29,6 +29,8 @@ export function fakeUi(readers: UiReaders = emptyReaders()) {
     hydrate: [] as { source: ViewSource; handles: string[] }[],
     turns: [] as [string, number][],
   };
+  /** What the detail response says about the document's visuals (absent: it says nothing, as a server without the flow). */
+  const detail: { visuals?: VisualsState } = {};
   const api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals" | "uiHydrate"> = {
     async uiView(name) {
       calls.views.push(name);
@@ -36,7 +38,10 @@ export function fakeUi(readers: UiReaders = emptyReaders()) {
     },
     async uiDocumentDetail(id) {
       calls.documents.push(id);
-      return structuredClone(views.documentPayload(id, null, "web")) as unknown as UiViewResponse;
+      return {
+        ...structuredClone(views.documentPayload(id, null, "web")),
+        ...(detail.visuals && { visuals: { state: detail.visuals } }),
+      } as unknown as UiViewResponse;
     },
     uiTurnVisuals(chatId, ord) {
       calls.turns.push([chatId, ord]);
@@ -55,5 +60,5 @@ export function fakeUi(readers: UiReaders = emptyReaders()) {
           );
     },
   };
-  return { api, views, calls };
+  return { api, views, calls, detail };
 }

@@ -38,13 +38,29 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // Exactly `executionIdFor(user, "ingest-<doc>")` plus an optional positive `.<generation>` (no leading zero).
 const INGEST_EXECUTION = new RegExp(`^u_(${UUID}):ingest-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`);
 
-// Exactly `executionIdFor(user, "visualize-<doc>")` plus an optional positive `.<generation>`: the visuals flow of one ingest generation.
+// Exactly `executionIdFor(user, "visualize-<doc>")` plus an optional positive `.<generation>` and an optional `-r<n>`
+// (an on-demand re-run, n from 1 to 999): the visuals flow of one ingest generation.
 const VISUALIZE_EXECUTION = new RegExp(
-  `^u_(${UUID}):visualize-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`,
+  `^u_(${UUID}):visualize-(${UUID})(?:\\.([1-9][0-9]{0,8}))?(?:-r([1-9][0-9]{0,2}))?$`,
 );
 /** A visualize-document execution. Never an ingest one: its events must not move a document's ingest status. */
 export const isVisualizeExecution = (executionId: string): boolean =>
   VISUALIZE_EXECUTION.test(executionId);
+
+/** The parts of a visualize execution id (`rerun` is 0 for the automatic run, n for `-r<n>`); null for an id that is not one. */
+export const parseVisualizeExecution = (
+  executionId: string,
+): { userId: string; documentId: string; generation: number; rerun: number } | null => {
+  const m = VISUALIZE_EXECUTION.exec(executionId);
+  return m
+    ? {
+        userId: m[1] as string,
+        documentId: m[2] as string,
+        generation: Number(m[3] ?? 1),
+        rerun: Number(m[4] ?? 0),
+      }
+    : null;
+};
 
 /** The ingest generation a visualize execution ran for (no suffix is 1); `undefined` for an id that is not one. */
 export const visualizeGenerationOf = (executionId: string): number | undefined => {

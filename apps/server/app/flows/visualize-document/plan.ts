@@ -1,4 +1,5 @@
 import { VISUALS_CATALOG, capabilitiesOf } from "@docmind/experiences";
+import { LlmUnavailableError } from "@docmind/llm-anthropic";
 import type { Intent } from "@loom-ui/core";
 import type { CapabilityRef, DecideContext, PlanResult, Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
@@ -69,3 +70,19 @@ export const planVisuals = (
   facts: readonly Fact[],
   ctx: DecideContext,
 ): Promise<PlanResult> => composeVisuals(planner, VISUALS_INTENT, capabilitiesOf(facts), ctx);
+
+const UNAVAILABLE = `model call failed: ${new LlmUnavailableError().message.replace(/ \(HTTP \d+\)$/, "")}`;
+
+/**
+ * True when the planner gave up because its model stayed unreachable: every error finding of its last attempt is the
+ * planner's own `model-error` for a transient `LlmUnavailableError` (the planner swallows a model failure into a finding
+ * and retries it, so a run that ends here has exhausted its attempts), besides the `plan-failed` summary it adds. Any other
+ * error finding (a malformed plan, a permanent model error) is not this.
+ */
+export const plannerUnavailable = (plan: Pick<PlanResult, "findings">): boolean => {
+  const errors = plan.findings.filter((f) => f.severity === "error" && f.code !== "plan-failed");
+  return (
+    errors.length > 0 &&
+    errors.every((f) => f.code === "model-error" && f.message.startsWith(UNAVAILABLE))
+  );
+};

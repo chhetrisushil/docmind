@@ -1,5 +1,11 @@
-import { type DocumentProgressEvent, type Intent, intentOf } from "@docmind/contracts";
+import {
+  type DocumentProgressEvent,
+  type Intent,
+  type VisualsState,
+  intentOf,
+} from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
+import { ApiError } from "../api/http";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
 import { performIntent } from "../surface/perform";
@@ -9,6 +15,9 @@ import "./dm-icon";
 import "./dm-view";
 
 type Params = Record<string, string | number>;
+
+/** "Retrying…" lasts until a `visuals` event or this long: a run that ended with no event (a missed frame) must not freeze the note. */
+export const VISUALS_RETRY_TIMEOUT_MS = 60_000;
 
 /** Which Content-tab widget shows: once `doc-source` settled its choice holds while it refetches (pending). */
 export function contentChoice(
@@ -27,6 +36,9 @@ export class DmDocDetail extends LitElement {
     broken: { state: true },
     served: { state: true },
     failed: { state: true },
+    visualsState: { state: true },
+    retrying: { state: true },
+    retryNote: { state: true },
   };
   static styles = [
     baseStyles,
@@ -44,6 +56,13 @@ export class DmDocDetail extends LitElement {
   /** The server answered for this route's document: only then does the page hold its id. */
   declare served: boolean;
   declare failed: boolean;
+  /** Where the document's visuals stand, as the server last said (`none` until it did). */
+  declare visualsState: VisualsState;
+  /** A retry of the visuals was asked and no `visuals` event has answered yet (or 60 s have passed). */
+  declare retrying: boolean;
+  /** A fixed note after a retry that was refused ("limited", "busy"), or null. */
+  declare retryNote: string | null;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly ctx = new ServicesController(this, (s) => [s.router]);
   private session: ViewSession | undefined;
   private unwatch: (() => void) | undefined;
@@ -64,6 +83,9 @@ export class DmDocDetail extends LitElement {
     this.broken = false;
     this.served = false;
     this.failed = false;
+    this.visualsState = "none";
+    this.retrying = false;
+    this.retryNote = null;
   }
   private get route() {
     const r = this.ctx.services?.router.get();
@@ -89,10 +111,25 @@ export class DmDocDetail extends LitElement {
     if (e !== "resync" && e.documentId !== this.route?.id) return;
     // The visuals were committed: the document's experience itself changed, so fetch it again (not just its data).
     // A resync may have missed a visuals event, so it reloads too.
-    if (e === "resync" || e.visuals === "ready") void this.session?.reload();
-    else this.session?.invalidate();
+    if (e === "resync" || e.visuals === "ready" || e.visuals === "failed") {
+      // A visuals event answers a retry; a resync may have missed that event, so it ends the wait too.
+      this.stopRetrying();
+      void this.reloadSession();
+    } else this.session?.invalidate();
+  }
+  /** Reloads the view and takes the visuals state it came with. */
+  private async reloadSession(): Promise<void> {
+    const session = this.session;
+    await session?.reload();
+    if (session && this.session === session) this.visualsState = session.visuals?.state ?? "none";
+  }
+  private stopRetrying(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.retrying = false;
   }
   disconnectedCallback(): void {
+    this.stopRetrying();
     this.leaving.abort();
     this.started = false;
     this.ctx.services?.uploads.stopEvents();
@@ -139,6 +176,7 @@ export class DmDocDetail extends LitElement {
       }
       this.served = state === "ready";
       if (this.served) this.everServed = true;
+      this.visualsState = this.served ? (session.visuals?.state ?? "none") : this.visualsState;
       const status = session.valueOf("doc-status") as { level?: unknown } | undefined;
       this.failed = this.served && status?.level === "critical";
       this.selectContentTab();
@@ -224,6 +262,31 @@ export class DmDocDetail extends LitElement {
     const id = this.heldId();
     if (id !== undefined) void this.run({ type: "document.retry", id });
   }
+  /** Asks for the document's visuals again. "Retrying…" holds until a `visuals` event or 60 s. */
+  private retryVisuals(): void {
+    const id = this.heldId();
+    const api = this.ctx.services?.api;
+    if (id === undefined || !api || this.retrying) return;
+    this.retrying = true;
+    this.retryNote = null;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.stopRetrying();
+      void this.reloadSession(); // the run may have ended without the page hearing of it
+    }, VISUALS_RETRY_TIMEOUT_MS);
+    void api.retryDocumentVisuals(id).catch((err: unknown) => {
+      if (this.route?.id !== id) return;
+      // Still being made: keep waiting for its event. Anything else gives the button back, with a fixed note.
+      if (err instanceof ApiError && err.status === 409 && err.code === "visualize_running") return;
+      this.stopRetrying();
+      this.retryNote =
+        err instanceof ApiError && err.status === 429
+          ? "Too many retries. Try again in a minute."
+          : err instanceof ApiError && err.status === 409
+            ? "Visuals can't be made for this document."
+            : "Couldn't retry. Try again.";
+    });
+  }
   private removeDocument(): void {
     const id = this.heldId();
     const router = this.ctx.services?.router;
@@ -249,6 +312,9 @@ export class DmDocDetail extends LitElement {
     this.broken = false;
     this.served = false;
     this.failed = false;
+    this.visualsState = "none";
+    this.stopRetrying();
+    this.retryNote = null;
     this.everServed = false;
     this.upto = 20;
     this.tabDone = false;
@@ -259,6 +325,17 @@ export class DmDocDetail extends LitElement {
   private tryAgain(): void {
     this.missing = false;
     this.broken = false;
+  }
+
+  /** Above the view: the visuals failed (with a retry), or a retry is under way. Nothing otherwise. */
+  private visualsBanner() {
+    const quiet = this.visualsState !== "failed" && this.visualsState !== "running";
+    if (!this.served || (quiet && !this.retrying)) return null;
+    if (this.retrying || this.visualsState === "running")
+      return html`<p class="muted" data-visuals-retrying role="status">Retrying…</p>`;
+    return html`<p class="muted" data-visuals-failed role="status">Visuals couldn't be made.
+      <button class="btn secondary" data-visuals-retry @click=${() => this.retryVisuals()}>Retry</button>
+      ${this.retryNote ? html`<span data-visuals-note>${this.retryNote}</span>` : null}</p>`;
   }
 
   render() {
@@ -282,7 +359,7 @@ export class DmDocDetail extends LitElement {
           ? html`<div data-not-found><h1>Document not found.</h1><p class="muted">It may have been deleted, or the read failed.</p><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
           : this.broken
             ? html`<div data-load-failed><h1>Couldn't load this document.</h1><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
-            : html`<dm-view .document=${route.id} .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
+            : html`${this.visualsBanner()}<dm-view .document=${route.id} .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
       }`;
   }
 }

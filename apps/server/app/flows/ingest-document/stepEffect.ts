@@ -117,6 +117,12 @@ export interface StepOptions {
   shutdown?: AbortSignal;
   /** Each attempt waits here first. The wait is outside the attempt's timeout, and a cancel or shutdown aborts it. */
   gate?: Pick<IngestGate, "run">;
+  /**
+   * An error that exhausted the step's attempts (a transient one that kept failing) and that this flow ends as a
+   * recorded failure instead of a thrown one. Returns the ended output, or undefined to fail as usual. Never called for
+   * an abort, a fatal error or a document-gone one.
+   */
+  exhausted?: (err: unknown) => ExhaustedEnd | undefined;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -174,6 +180,9 @@ export const ingestStepOptions = (
 /** A step's non-done outcomes, as the plain fields every output shape mirrors. */
 export type StepEnd = { outcome: "document_gone" } | { outcome: "failed"; code: FailureCode };
 
+/** What a step's `exhausted` option may answer: a failed outcome with a code of the flow's own (its output schema must allow it). */
+export type ExhaustedEnd = { outcome: "failed"; code: "visuals-model-unavailable" };
+
 /**
  * How `stepEffectOf` builds a step's output: `schema` validates what the work returned (merged over
  * `outcome: "done"`), and `ended` shapes a document-gone or permanent-failure outcome into that same output.
@@ -206,7 +215,12 @@ export function stepEffect<R extends { tenantId: string } = IngestStartInput>(
 export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInput>(
   step: string,
   guard: StepGuard<R>,
-  work: (ref: R, signal?: AbortSignal, progress?: () => void) => Promise<object | undefined>,
+  work: (
+    ref: R,
+    signal?: AbortSignal,
+    progress?: () => void,
+    executionId?: string,
+  ) => Promise<object | undefined>,
   spec: StepOutputSpec<O>,
   options: StepOptions = {},
 ): Effect<R, O> {
@@ -218,6 +232,7 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
     signal: AbortSignal | undefined,
     progress: () => void,
     generation: number | undefined,
+    executionId: string | undefined,
   ): Promise<O> => {
     const bound = options.timeoutMs;
     const run = async (inner: AbortSignal | undefined): Promise<O> => {
@@ -225,7 +240,7 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
       // The result is written to the event log: nothing outside the output schema may reach it.
       const parsed = spec.schema.safeParse({
         outcome: "done",
-        ...((await work(ref, inner, progress)) ?? {}),
+        ...((await work(ref, inner, progress, executionId)) ?? {}),
       });
       if (!parsed.success) throw new StepResultError();
       return parsed.data;
@@ -279,6 +294,7 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
                 made.value = true;
               },
               generation,
+              ctx?.executionId,
             );
           return await (options.gate
             ? options.gate.run(ref.tenantId, waitSignal, attemptNow)
@@ -294,7 +310,13 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
           // has at most n progressing attempts, plus at most maxAttempts non-progressing ones in a row.
           if (err instanceof StepTimeoutError && made.value) attempt = 0;
           if (total >= ceiling) throw failure(step, err);
-          if (isAbort(err) || isFatal(err) || attempt >= maxAttempts) throw failure(step, err);
+          if (isAbort(err) || isFatal(err)) throw failure(step, err);
+          if (attempt >= maxAttempts) {
+            const end = options.exhausted?.(err);
+            // The spec's schema parse refuses a code it does not list, so a flow that sets `exhausted` lists it.
+            if (end) return endedOutput(end as unknown as StepEnd);
+            throw failure(step, err);
+          }
           if (
             err instanceof StepTimeoutError &&
             !(await settledWithin(err.settled, settleMs, waitSignal))

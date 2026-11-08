@@ -483,3 +483,68 @@ describe("POST /api/ui/hydrate with a turn", () => {
     );
   });
 });
+
+describe("a document's detail says where its visuals stand", () => {
+  const STATE_DOC = "00000000-0000-4000-8000-0000000000e1";
+  const calls: [string, string, boolean][] = [];
+  let answer: "none" | "ready" | "failed" | "running" = "failed";
+  let headNow = async () => {};
+  let serverUrl = "";
+  let stop = async () => {};
+  beforeAll(async () => {
+    const lin = new Lineage({
+      events: new InMemoryLineageStore(),
+      content: new InMemoryContentStore(),
+    });
+    headNow = async () => {
+      await commitPlan(
+        lin,
+        { tenantId: ID.tenantId, userId: ID.userId, documentId: STATE_DOC },
+        await aPlan("revenue", "Revenue"),
+        at,
+      );
+    };
+    const server = createHttpServer(
+      uiRoutes({
+        authenticator,
+        views: createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) }),
+        readers: {} as never,
+        lineage: lin,
+        owns: async (identity, id) => identity.userId === ID.userId && id === STATE_DOC,
+        visualsState: async (identity, id, hasHead) => {
+          calls.push([identity.userId, id, hasHead]);
+          return answer;
+        },
+      }),
+    );
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    serverUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    stop = () => new Promise<void>((r) => server.close(() => r()));
+  });
+  afterAll(() => stop());
+  const detailOf = (id: string, user = "alice") =>
+    fetch(`${serverUrl}/api/ui/documents/${id}/detail?surface=web`, {
+      headers: { "x-test-user": user },
+    });
+
+  it("adds visuals.state for the owner, asked with the caller's identity and whether a head exists", async () => {
+    for (const state of ["none", "ready", "failed", "running"] as const) {
+      answer = state;
+      const body = UiViewResponse.parse(await (await detailOf(STATE_DOC)).json());
+      expect(body.visuals).toEqual({ state });
+    }
+    expect(calls.at(-1)).toEqual([ID.userId, STATE_DOC, false]);
+    await headNow();
+    answer = "ready";
+    await detailOf(STATE_DOC);
+    expect(calls.at(-1)).toEqual([ID.userId, STATE_DOC, true]);
+  });
+
+  it("is owner-only: another user's, an unknown and a malformed id are the same 404 and the state is never asked", async () => {
+    calls.length = 0;
+    expect((await detailOf(STATE_DOC, "bob")).status).toBe(404);
+    expect((await detailOf("00000000-0000-4000-8000-0000000000ff")).status).toBe(404);
+    expect((await detailOf("not-a-uuid")).status).toBe(404);
+    expect(calls).toEqual([]);
+  });
+});

@@ -12,6 +12,7 @@ import {
   ListDocumentsQuery,
   type ListDocumentsResponse,
   type RetryDocumentResponse,
+  type RetryVisualsResponse,
   type UploadDocumentResponse,
   Uuid,
 } from "@docmind/contracts";
@@ -67,6 +68,11 @@ export interface DocumentRoutesDeps {
   ingest: IngestPort;
   /** Cancels the document's visualize executions on delete. Absent: none are composed (tests that never start one). */
   visuals?: Pick<VisualsStarter, "cancel" | "settle">;
+  /** Re-runs the document's visuals on demand (`POST /api/documents/:id/visuals/retry`), at most 10 per user per minute. Absent: no such route. */
+  visualize?: {
+    starter: Pick<VisualsStarter, "rerun">;
+    limiter: { tryAcquire(userId: string): boolean };
+  };
   /** Test seam: how long a delete waits for a pending start before cancelling anyway. */
   settleTimeoutMs?: number;
   /** Fires flow starts after the upload commits, without making the response wait for them. */
@@ -400,6 +406,8 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       },
     ),
 
+    ...(deps.visualize && visualsRetryRoute(deps, deps.visualize)),
+
     "DELETE /api/documents/:id": requireAuth(
       deps.authenticator,
       async (_req, res, identity, ctx) => {
@@ -478,6 +486,54 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         }
         res.writeHead(204);
         res.end();
+      },
+    ),
+  };
+}
+
+/** The re-run of a document's visuals. A foreign, unknown, malformed or deleted document all answer the same 404. */
+function visualsRetryRoute(
+  deps: DocumentRoutesDeps,
+  v: NonNullable<DocumentRoutesDeps["visualize"]>,
+): Record<string, Handler> {
+  return {
+    "POST /api/documents/:id/visuals/retry": requireAuth(
+      deps.authenticator,
+      async (_req, res, identity, ctx) => {
+        const parsed = Uuid.safeParse(ctx.params.id);
+        const id = parsed.success ? parsed.data.toLowerCase() : null;
+        const row = id
+          ? await withTenant(deps.pool, identity.tenantId, (tx) =>
+              getDocument(tx, identity.userId, id),
+            )
+          : undefined;
+        if (!row) return sendError(res, 404, "not_found", "document not found");
+        if (!v.limiter.tryAcquire(identity.userId)) {
+          res.setHeader("retry-after", "60");
+          return sendError(
+            res,
+            429,
+            "too_many_requests",
+            "too many visuals requests; try again in a minute",
+          );
+        }
+        const status = await deps.status.forDocument(identity, row.id, row.ingest_generation);
+        if (status.status !== "ready")
+          return sendError(res, 409, "not_visualizable", "this document is not ready for visuals");
+        const started = await v.starter.rerun(
+          { tenantId: identity.tenantId, userId: identity.userId, documentId: row.id },
+          row.ingest_generation,
+        );
+        if (started.kind === "disabled")
+          return sendError(res, 409, "not_visualizable", "visuals are not available");
+        if (started.kind === "running")
+          return sendError(
+            res,
+            409,
+            "visualize_running",
+            "visuals for this document are being made",
+          );
+        json(res, 202, { started: true } satisfies RetryVisualsResponse);
       },
     ),
   };

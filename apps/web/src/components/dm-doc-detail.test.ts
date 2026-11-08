@@ -1,12 +1,13 @@
 import type { DocumentDto, DocumentPassage } from "@docmind/contracts";
 import type { UiReaders } from "@docmind/experiences";
 import { describe, expect, it, vi } from "vitest";
+import { ApiError } from "../api/http";
 import { Router } from "../router";
 import { createServices } from "../services";
 import { UploadsStore } from "../state/uploads";
 import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
-import { contentChoice } from "./dm-doc-detail";
+import { VISUALS_RETRY_TIMEOUT_MS, contentChoice } from "./dm-doc-detail";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const summary = {
@@ -107,6 +108,7 @@ function setup(
     createChat: vi.fn(async () => ({ id: "c1" })),
     deleteDocument: vi.fn(async () => {}),
     retryDocument: vi.fn(async () => ({})),
+    retryDocumentVisuals: vi.fn(async () => {}),
   };
   const sse: {
     onFrame?: (f: { event: string; data: string; id: undefined }) => void;
@@ -542,5 +544,127 @@ describe("dm-doc-detail: rendered content", () => {
     expect(contentChoice(undefined, false, "list")).toBe("list");
     expect(contentChoice("error", false, "prose")).toBe("list");
     expect(contentChoice("ready", true, "list")).toBe("prose");
+  });
+
+  describe("visuals that failed", () => {
+    const failedNote = (p: Element) => p.shadowRoot?.querySelector("[data-visuals-failed]");
+    const retryButton = (p: Element) =>
+      p.shadowRoot?.querySelector<HTMLButtonElement>("button[data-visuals-retry]");
+    const retrying = (p: Element) => p.shadowRoot?.querySelector("[data-visuals-retrying]");
+    const ready = async (t: ReturnType<typeof setup>) => {
+      const page = await t.mount();
+      await vi.waitFor(() => expect(view(page).session?.statusOf("doc-status")).toBe("ready"));
+      return page;
+    };
+
+    it("says nothing while the visuals are none, ready or running-free", async () => {
+      for (const state of [undefined, "none", "ready"] as const) {
+        const t = setup({ name: "document", id: id(1) });
+        if (state) t.ui.detail.visuals = state;
+        const page = await ready(t);
+        expect(failedNote(page)).toBeNull();
+        expect(retrying(page)).toBeNull();
+        page.remove();
+      }
+    });
+
+    it("failed: says so with a Retry that asks the server and then shows Retrying", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "failed";
+      const page = await ready(t);
+      await vi.waitFor(() =>
+        expect(failedNote(page)?.textContent).toContain("Visuals couldn't be made."),
+      );
+      expect(retryButton(page)?.textContent?.trim()).toBe("Retry");
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(t.api.retryDocumentVisuals).toHaveBeenCalledWith(id(1)));
+      await vi.waitFor(() => expect(retrying(page)?.textContent).toContain("Retrying…"));
+      expect(retryButton(page)).toBeNull();
+    });
+
+    it("running on load shows Retrying with no button", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "running";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      expect(retryButton(page)).toBeNull();
+    });
+
+    it("a visuals:ready event ends Retrying and reloads the view", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "failed";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      const before = t.ui.calls.documents.length;
+      t.ui.detail.visuals = "ready";
+      t.progress(id(1), "ready", { visuals: "ready" });
+      await vi.waitFor(() => expect(retrying(page)).toBeNull());
+      await vi.waitFor(() => expect(t.ui.calls.documents.length).toBeGreaterThan(before));
+      expect(failedNote(page)).toBeNull();
+    });
+
+    it("a visuals:failed event ends Retrying and gives the Retry back", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "failed";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      t.progress(id(1), "ready", { visuals: "failed" });
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      expect(retrying(page)).toBeNull();
+    });
+
+    it("an event of another document changes nothing", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "failed";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      t.progress(id(2), "ready", { visuals: "ready" });
+      expect(retrying(page)).not.toBeNull();
+    });
+
+    it("Retrying gives up after 60 s", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "failed";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+        retryButton(page)?.click();
+        await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+        await vi.advanceTimersByTimeAsync(VISUALS_RETRY_TIMEOUT_MS / 2);
+        expect(retrying(page)).not.toBeNull();
+        await vi.advanceTimersByTimeAsync(VISUALS_RETRY_TIMEOUT_MS / 2 + 100);
+        await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+        expect(retrying(page)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("429 gives the button back with a note; 409 visualize_running keeps waiting", async () => {
+      const t = setup({ name: "document", id: id(1) });
+      t.ui.detail.visuals = "failed";
+      const page = await ready(t);
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(429, "too_many_requests"));
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(retryButton(page)).not.toBeNull());
+      await vi.waitFor(() =>
+        expect(page.shadowRoot?.querySelector("[data-visuals-note]")?.textContent).toContain(
+          "Too many",
+        ),
+      );
+      t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(409, "visualize_running"));
+      retryButton(page)?.click();
+      await vi.waitFor(() => expect(retrying(page)).not.toBeNull());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(retrying(page)).not.toBeNull();
+    });
   });
 });

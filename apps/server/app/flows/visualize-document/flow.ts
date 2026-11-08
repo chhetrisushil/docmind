@@ -4,8 +4,9 @@ import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { LLM_RETRY, STEP_RETRY, StepResult } from "../ingest-document/stepEffect";
+import { ExtractResult } from "./extract";
 import type { VisualizeRef } from "./pgFacts";
-import { LoadOutput, planVisuals } from "./plan";
+import { LoadOutput, planVisuals, plannerUnavailable } from "./plan";
 
 /** Ids only, strict: the same shape as the ingest start. The execution id is `visualizeExecutionId(...)` (start.ts). */
 export const VisualizeInput = z
@@ -16,7 +17,9 @@ export const VisualizeInput = z
 export const VisualizeOutput = z
   .object({
     outcome: z.enum(["done", "empty", "skipped", "failed", "document_gone"]),
-    code: z.enum([...FAILURE_CODES, "visuals-plan-invalid"]).optional(),
+    code: z
+      .enum([...FAILURE_CODES, "visuals-plan-invalid", "visuals-model-unavailable"])
+      .optional(),
   })
   .strict();
 export type VisualizeOutput = z.infer<typeof VisualizeOutput>;
@@ -27,7 +30,7 @@ export const visualizeExtractStep = step$({
   id: "visualize-extract",
   name: "VisualizeExtract",
   inputSchema: VisualizeInput,
-  outputSchema: StepResult,
+  outputSchema: ExtractResult,
   retry: LLM_RETRY, // it calls the visuals model
 });
 
@@ -75,6 +78,7 @@ export const runVisualize =
     const p = planner();
     if (!p) return { outcome: "skipped" };
     const plan = await planVisuals(p, loaded.facts, ctx);
+    if (plannerUnavailable(plan)) return { outcome: "failed", code: "visuals-model-unavailable" };
     if (plan.findings.some((f) => f.severity === "error"))
       return { outcome: "failed", code: "visuals-plan-invalid" };
     if (plan.ops.length === 0) return { outcome: "empty" };
