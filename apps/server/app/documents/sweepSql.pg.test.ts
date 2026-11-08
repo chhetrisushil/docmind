@@ -9,6 +9,7 @@ import { ingestExecutionId } from "./ingest";
 import { ALICE, BOB, T1, T2, U1, U2, seedDoc, seedRow, seedUsers } from "./testHarness";
 
 const DEFINERS = [
+  "docmind_chat_tenant",
   "docmind_delete_empty_tenant",
   "docmind_erasure_mark",
   "docmind_erasure_pending",
