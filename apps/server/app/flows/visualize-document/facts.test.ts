@@ -45,6 +45,40 @@ describe("admit", () => {
     expect(r.facts.map((f) => f.ordinal)).toEqual([...Array(16).keys()]);
     expect(r.dropped).toBe(1);
   });
+  it("stores a percent that grounded only as a fraction in the document's form", () => {
+    const fig: DraftFact = {
+      kind: "figure",
+      label: "g",
+      value: 0.38,
+      unit: "%",
+      compare: { label: "p", value: 0.3 },
+      chunkIds: [C1],
+    };
+    const ser: DraftFact = {
+      kind: "series",
+      label: "s",
+      unit: "%",
+      points: [
+        { x: "a", y: 0.41 },
+        { x: "b", y: 46 },
+      ],
+      chunkIds: [C1],
+    };
+    const r = admit([fig, ser], text("up 38% from 30%; margin 41% then 46%"), new Set([C1]));
+    expect(r.facts[0]).toMatchObject({ value: 38, compare: { value: 30 } });
+    expect(r.facts[1]).toMatchObject({
+      points: [
+        { x: "a", y: 41 },
+        { x: "b", y: 46 },
+      ],
+    });
+  });
+  it("leaves a written percent and every non-percent unit unchanged", () => {
+    const pct: DraftFact = { kind: "figure", label: "g", value: 38, unit: "%", chunkIds: [C1] };
+    const eur: DraftFact = { kind: "figure", label: "g", value: 38, unit: "EUR", chunkIds: [C1] };
+    const r = admit([pct, eur], text("38% and EUR 38"), new Set([C1]));
+    expect(r.facts.map((f) => (f.kind === "figure" ? f.value : null))).toEqual([38, 38]);
+  });
   it("numbersOf lists series points, figure values and numeric table cells", () => {
     expect(
       numbersOf({

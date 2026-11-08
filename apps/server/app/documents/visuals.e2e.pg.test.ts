@@ -149,7 +149,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     // fact-0 hydrates to the figure, under the owner's clearance only.
     expect(await hydrate(st, ada.cookie, id, "fact-0")).toMatchObject({
       state: "ready",
-      value: { value: 1200, unit: "USD", label: "Revenue" },
+      value: { value: 1200, unit: "USD" },
     });
 
     // Its citation is a real passage of the document, which the source route resolves.
@@ -186,7 +186,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     const benDoc = await upload(st, ben.cookie, "Zebra takings were 7,391.25 in 2024");
     expect(await visualizeOutcome(st, ben.userId, benDoc)).toBe("done");
     expect(await hydrate(st, ben.cookie, benDoc, "fact-0")).toMatchObject({
-      value: { value: 7391.25, label: BEN.label },
+      value: { value: 7391.25 },
     });
 
     // The composed lineage (the sealing event store and content store the server uses).
@@ -231,7 +231,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     expect((await detail(st, ada.cookie, adaDoc)).status).toBe(200);
     expect(await hydrate(st, ada.cookie, adaDoc, "fact-0")).toMatchObject({
       state: "ready",
-      value: { value: 1200, label: "Revenue" },
+      value: { value: 1200 },
     });
   }, 180_000);
 

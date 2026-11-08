@@ -149,6 +149,26 @@ export function grounded(f: DraftFact, chunkTexts: ReadonlyMap<string, string>):
   );
 }
 
+/**
+ * Stored "%" facts are always in the document's form (38 for "38%"). Grounding also accepts the fraction (0.38), so a
+ * data value that grounded only as a fraction of a written percentage is rewritten to that written number.
+ */
+function inDocumentForm(f: DraftFact, chunkTexts: ReadonlyMap<string, string>): DraftFact {
+  if (f.kind === "factTable" || f.unit !== "%") return f;
+  const pool = f.chunkIds.flatMap((id) => sourcePool(chunkTexts.get(id) ?? ""));
+  const fix = (n: number): number => {
+    if (pool.some((p) => close(p.value, n))) return n;
+    return pool.find((p) => p.percent && close(p.value / 100, n))?.value ?? n;
+  };
+  return f.kind === "figure"
+    ? {
+        ...f,
+        value: fix(f.value),
+        ...(f.compare && { compare: { ...f.compare, value: fix(f.compare.value) } }),
+      }
+    : { ...f, points: f.points.map((p) => ({ ...p, y: fix(p.y) })) };
+}
+
 export function admit(
   drafts: readonly DraftFact[],
   chunkTexts: ReadonlyMap<string, string>,
@@ -162,7 +182,8 @@ export function admit(
       dropped++;
       continue;
     }
-    if (facts.length < MAX_FACTS) facts.push({ ...d, ordinal: facts.length });
+    if (facts.length < MAX_FACTS)
+      facts.push({ ...inDocumentForm(d, chunkTexts), ordinal: facts.length });
   }
   return { facts, dropped };
 }

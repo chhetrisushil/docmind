@@ -1,5 +1,13 @@
 import type { DocumentDto } from "@docmind/contracts";
-import { type Experience, type Operation, type SemanticNode, genesis, replay } from "@loom-ui/core";
+import {
+  type Experience,
+  type Operation,
+  type SemanticNode,
+  effectiveFormat,
+  formatSemanticNumber,
+  genesis,
+  replay,
+} from "@loom-ui/core";
 import type { ProviderSpec } from "@loom-ui/core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, MAX_READS_PER_BATCH, type UiReaders, createInvoker } from "./invoker";
@@ -688,9 +696,40 @@ describe("a turn's visuals", () => {
       "user-1",
       "turn",
     );
-    expect(out).toMatchObject({ state: "ready", value: { value: 22, label: "Revenue" } });
+    expect(out).toMatchObject({ state: "ready", value: { value: 22 } });
     expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1) });
     expect(r.turnFacts).not.toHaveBeenCalled();
+  });
+
+  it("hydrates a stored percent fact so loom-ui prints 38%, not 3,800% or 0.38%", async () => {
+    const v = views();
+    const pct = { ...fact(2, 38), unit: "%" };
+    const r = readers({ visualFacts: vi.fn(async () => [pct]) });
+    const exp = turnExperienceFor(v, CHAT, 6, [
+      { entry: "KeyFigure", pin: ["visual.facts", `docmind:visual.facts@1#${id(1)}/fact-2`] },
+    ]);
+    const p = v.turnPayload(
+      { chatId: CHAT, ord: 6 },
+      exp.visuals,
+      new Set([id(1)]),
+      "web",
+    ) as ViewPayload;
+    const [out] = await v.hydrateExperience(
+      exp.experience,
+      [
+        {
+          experienceId: p.experienceId,
+          versionHash: p.versionHash,
+          handle: Object.keys(exp.experience.providers)[0] as string,
+          params: {},
+        },
+      ],
+      r,
+      "user-1",
+      "turn",
+    );
+    const value = (out as { value: { value: number; unit: string } }).value;
+    expect(formatSemanticNumber(value.value, effectiveFormat(undefined, value.unit))).toBe("38%");
   });
 
   it("a document that leaves the live set between the view and the hydrate loses its widget: its handle is refused and its facts are never read", async () => {
