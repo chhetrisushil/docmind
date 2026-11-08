@@ -305,6 +305,13 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     );
   });
 
+  /** Loom's neutral row for a visualize execution of the document's generation. */
+  const visualizeStarted = (who: string, d: { id: string }, g: number) =>
+    owner.query(
+      "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')",
+      [visualizeExecutionId(who, d.id, g)],
+    );
+
   it("docmind_visual_unrecorded_documents lists ready current-generation documents with no visual_runs row, across tenants, paged, ids only, not for erasing users", async () => {
     await owner.query("DELETE FROM documents");
     const a = await readyDoc();
@@ -313,6 +320,28 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     const moved = await readyDoc(); // its row is for the OLD generation: the current one has none, so it is listed
     const bumped = await readyDoc(); // never had a row
     const notReady = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+    const reingested = await readyDoc(); // ready at generation 2, but only generation 1 was visualized (the ready pass owns it)
+    const unstarted = await readyDoc(); // ready, never visualized at all
+    for (const [who, d] of [
+      [U1, a],
+      [U2, b],
+      [U1, withRow],
+      [U1, moved],
+      [U1, bumped],
+      [U1, reingested],
+    ] as const)
+      await visualizeStarted(who, d, d.g);
+    await owner.query(
+      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      [reingested.id],
+    );
+    await seedRow(
+      owner,
+      ingestExecutionId(U1, reingested.id, reingested.g + 1),
+      reingested.id,
+      U1,
+      ready,
+    );
     const at = (who: string, d: { id: string; g: number }, g = d.g) => ({
       userId: who,
       documentId: d.id,
@@ -326,6 +355,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       [moved.id],
     );
     await seedRow(owner, ingestExecutionId(U1, moved.id, moved.g + 1), moved.id, U1, ready);
+    await visualizeStarted(U1, moved, moved.g + 1);
     const expected = [a.id, b.id, moved.id, bumped.id].sort();
     const list = pgUnrecordedDocuments(app);
     const all = await list(NIL, 100);
@@ -338,6 +368,12 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     });
     expect(all.find((d) => d.documentId === moved.id)?.generation).toBe(moved.g + 1);
     expect(all.map((d) => d.documentId)).not.toContain(notReady);
+    expect(all.map((d) => d.documentId)).not.toContain(reingested.id);
+    expect(all.map((d) => d.documentId)).not.toContain(unstarted.id);
+    // A recorded run (even `running`) takes the document off the list at once.
+    await runs.record(at(U1, a), "running");
+    expect((await list(NIL, 100)).map((d) => d.documentId)).not.toContain(a.id);
+    await owner.query("DELETE FROM visual_runs WHERE document_id = $1", [a.id]);
     expect(all.map((d) => d.documentId)).not.toContain(withRow.id);
     const first = await list(NIL, 2);
     const second = await list(first[1]?.documentId as string, 2);
@@ -447,6 +483,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
 
   it("records nothing for a user being erased (final: erasing_at cannot be undone)", async () => {
     const { id, g } = await readyDoc(BOB);
+    await visualizeStarted(U2, { id }, g);
     expect((await pgUnrecordedDocuments(app)(NIL, 100)).map((d) => d.documentId)).toContain(id);
     await owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [U2]);
     // The unrecorded list leaves out a user being erased too.

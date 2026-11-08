@@ -263,6 +263,7 @@ describe("visualize-extract step", () => {
       };
       expect(await extractEffect(d).execute(s.ref, ctx)).toMatchObject({ count: 0 });
       expect(requests).toEqual([]);
+      expect(afterDone.size).toBe(0); // the note is consumed
     });
 
     it("a zero-fact document whose last run failed (or never ran) extracts", async () => {
