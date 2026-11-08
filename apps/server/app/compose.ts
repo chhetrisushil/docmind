@@ -207,7 +207,8 @@ export function buildServer(options: ComposeOptions) {
     : undefined;
   // The visuals flow. Its lineage lives over the SEALED content store only (`visualsLineage` refuses any other) and the
   // sealing event store; the planner calls the visuals provider directly, so its prompt (the facts) writes no event.
-  const lineageContent = sealedLineageContent(new PgContentStore(pool), keys);
+  const rawLineageContent = new PgContentStore(pool);
+  const lineageContent = sealedLineageContent(rawLineageContent, keys);
   const visualsLlm = options.ingest.llm.visuals;
   if (visualsLlm && !options.plannerDecisionKey)
     throw new StartupConfigError(
@@ -562,6 +563,11 @@ export function buildServer(options: ComposeOptions) {
      * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.
      */
     lineageContent,
+    /**
+     * What the lineage content collector needs (`storage/pgLineageGc.ts`): THE visuals `Lineage` (all lines) and the raw
+     * store under the sealing wrapper, which alone has the sweep set. Not for any reader or writer of blobs.
+     */
+    lineageGc: { lineage: visualsLineageOf, store: rawLineageContent },
     /** `GET /readyz`: shutdown calls `beginShutdown()` as its first step. */
     readiness,
     store,

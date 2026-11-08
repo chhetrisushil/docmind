@@ -29,6 +29,7 @@ async function main(): Promise<void> {
     shutdownDeadlineMs,
     shutdownDelayMs,
     snapshotPruneIntervalMs,
+    lineageGcIntervalMs,
   } = await setupServer();
   gate.booting(shutdownDeadlineMs);
 
@@ -42,6 +43,7 @@ async function main(): Promise<void> {
     recoveryOwner: randomUUID(),
     shutdownDelayMs,
     snapshotPruneIntervalMs,
+    lineageGcIntervalMs,
     listen: async () => {
       await listen(built.server, port, host);
       console.log(`docmind server listening on http://${host}:${port}`);

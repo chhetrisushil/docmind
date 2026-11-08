@@ -33,6 +33,8 @@ export const CHAT_TEST_ENVELOPE_KEY = "chat-envelope-key-for-tests-0123456789"; 
 export interface IngestStackOptions {
   /** Runs the snapshot pruner every this many ms (the production default is an hour; omitted: off). */
   snapshotPruneIntervalMs?: number;
+  /** Runs the lineage content collector every this many ms (omitted: off). */
+  lineageGcIntervalMs?: number;
   /** A Claude key and a FakeAnthropic for the chat only; ingest stays keyless. */
   chat?: boolean;
   /** Reuse an earlier stack's database, key-encryption key and blob root: a restart over the same event store. */
@@ -209,6 +211,9 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     const boot = await bootIngest({
       ...(options.snapshotPruneIntervalMs !== undefined && {
         snapshotPruneIntervalMs: options.snapshotPruneIntervalMs,
+      }),
+      ...(options.lineageGcIntervalMs !== undefined && {
+        lineageGcIntervalMs: options.lineageGcIntervalMs,
       }),
       built: composed,
       ingest: wiring,

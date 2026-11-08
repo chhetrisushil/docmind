@@ -22,6 +22,7 @@ import { loadSnapshotPruneIntervalMs } from "./snapshots/pruner";
 import { StartupConfigError } from "./startupError";
 import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "./status/pgStores";
 import { openDurableStorage } from "./storage";
+import { loadLineageGcIntervalMs } from "./storage/lineageGc";
 
 const HOUR_MS = 60 * 60 * 1000;
 // Uploads older than this that never finished are leftovers of a crash.
@@ -62,6 +63,7 @@ export async function setupServer() {
   const shutdownDeadlineMs = loadShutdownDeadlineMs(); // before anything opens
   const shutdownDelayMs = loadShutdownDelayMs(env, shutdownDeadlineMs); // must fit inside the deadline
   const snapshotPruneIntervalMs = loadSnapshotPruneIntervalMs(env); // before anything opens
+  const lineageGcIntervalMs = loadLineageGcIntervalMs(env); // before anything opens
   const deadlineWarning = shutdownDeadlineWarning(shutdownDeadlineMs);
   if (deadlineWarning) console.warn(deadlineWarning);
   const appPoolMax = loadPoolMax(env, "DOCMIND_APP_POOL_MAX");
@@ -168,5 +170,6 @@ export async function setupServer() {
     shutdownDeadlineMs,
     shutdownDelayMs,
     snapshotPruneIntervalMs,
+    lineageGcIntervalMs,
   };
 }
