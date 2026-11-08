@@ -142,6 +142,73 @@ describe("the starter", () => {
     expect(never).not.toHaveBeenCalled();
   });
 
+  it("cancel records the caller's reason", async () => {
+    const f = fake();
+    const r = ref();
+    await loomVisualsStarter(f.runtime, flow).cancel(
+      { tenantId: r.tenantId, userId: r.userId },
+      r.documentId,
+      1,
+      "erased",
+    );
+    expect(f.cancel.mock.calls[0]?.[1]).toBe("erased");
+  });
+
+  it("settle waits for a fired start of that document only, so a cancel never runs before the start lands", async () => {
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const runtime = {
+      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        await gate;
+        order.push("start");
+        return { executionId: o.executionId } as never;
+      },
+      cancel: async () => void order.push("cancel"),
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const starter = loomVisualsStarter(runtime, flow);
+    const r = ref();
+    const other = ref();
+    starter.fire(r, 2);
+    const id = { tenantId: r.tenantId, userId: r.userId };
+    let settledOther = false;
+    await starter
+      .settle({ tenantId: other.tenantId, userId: other.userId }, other.documentId)
+      .then(() => {
+        settledOther = true;
+      });
+    expect(settledOther).toBe(true); // unrelated document: no wait
+    const done = starter
+      .settle(id, r.documentId.toUpperCase())
+      .then(() => starter.cancel(id, r.documentId, 2, "x"));
+    release();
+    await done;
+    expect(order.slice(0, 2)).toEqual(["start", "cancel"]);
+  });
+
+  it("sweep awaits each page's starts before reading the next page", async () => {
+    const seen: string[] = [];
+    const runtime = {
+      start: async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        await new Promise((r) => setTimeout(r, 5));
+        seen.push("started");
+        return { executionId: o.executionId } as never;
+      },
+      cancel: async () => {},
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const docs: ReadyDocument[] = [0, 1].map(() => ({ ...ref(), generation: 2 }));
+    const ready = async (after: string) => {
+      seen.push("page");
+      if (after === "00000000-0000-0000-0000-000000000000") return docs.slice(0, 1);
+      return after === docs[0]?.documentId ? docs.slice(1) : [];
+    };
+
+    await loomVisualsStarter(runtime, flow, { ready, pageSize: 1 }).sweep();
+    expect(seen).toEqual(["page", "started", "page", "started", "page"]);
+  });
+
   it("cancel covers the generation and the one before it and tolerates 'No execution found'", async () => {
     const f = fake();
     f.cancel.mockImplementation(async (id: string) => {
@@ -149,16 +216,16 @@ describe("the starter", () => {
     });
     const starter = loomVisualsStarter(f.runtime, flow);
     const r = ref();
-    await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 4);
+    await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 4, "why");
     expect(f.cancel.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
       visualizeExecutionId(r.userId, r.documentId, 3),
       visualizeExecutionId(r.userId, r.documentId, 4),
     ]);
-    await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 1);
+    await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 1, "why");
     expect(f.cancel).toHaveBeenCalledTimes(3); // generation 1 has no earlier one
     f.cancel.mockRejectedValueOnce(new RangeError("db down"));
     await expect(
-      starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 2),
+      starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 2, "why"),
     ).rejects.toThrow(RangeError);
   });
 });
@@ -253,5 +320,40 @@ describe("IngestStatus onReady starts the visualize flow", () => {
     await s.settle();
     expect(s.created).toEqual([]);
     await s.app.close();
+  });
+});
+
+describe("a start still pending when the cancel runs", () => {
+  it("leaves no live execution: settle lets the start land, then the cancel ends it", async () => {
+    const { InMemoryLineageStore, Lineage } = await import("@loom-ui/lineage");
+    const { InMemoryContentStore } = await import("@loom/plugin-content");
+    const hang = new Promise<never>(() => {});
+    const flow = visualizeDocumentFlow();
+    const app = buildApp({ kind: "memory" }, undefined, {
+      visualize: {
+        flow,
+        deps: {
+          guard: { begin: () => hang },
+          chunks: { sectionsOf: async () => [], read: async () => [] },
+          facts: { replace: async () => 0, list: async () => [] },
+          lineage: new Lineage({
+            events: new InMemoryLineageStore(),
+            content: new InMemoryContentStore(),
+          }),
+          now: () => "2026-11-08T10:00:00.000Z",
+        },
+      },
+    });
+    const starter = loomVisualsStarter(app.runtime, flow);
+    const r = ref();
+    const id = { tenantId: r.tenantId, userId: r.userId };
+    starter.fire(r, 2); // still pending: the cancel below would otherwise find no execution
+    await starter.settle(id, r.documentId);
+    await starter.cancel(id, r.documentId, 2, "document-deleted");
+    const state = await app.runtime.loadState(visualizeExecutionId(r.userId, r.documentId, 2), {
+      principal: { tenant: r.tenantId, actor: r.userId },
+    });
+    expect(state?.status).toBe("cancelled");
+    await app.close();
   });
 });

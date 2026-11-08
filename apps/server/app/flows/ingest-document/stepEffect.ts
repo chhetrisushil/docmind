@@ -151,6 +151,8 @@ export interface StepSeams {
   attemptSettleMs?: number;
   /** Every attempt waits for the ingest gate (per-tenant fair share of the process). */
   gate?: Pick<IngestGate, "run">;
+  /** Reads the generation from the execution id (default: the ingest one); the visualize flow supplies its own. */
+  generationOf?: (executionId: string) => number | undefined;
 }
 
 /** The retry, per-attempt timeout and shutdown options every ingest step runs under. */
@@ -166,6 +168,7 @@ export const ingestStepOptions = (
   ...(deps.sleep && { sleep: deps.sleep }),
   ...(deps.shutdown && { shutdown: deps.shutdown }),
   ...(deps.gate && { gate: deps.gate }),
+  ...(deps.generationOf && { generationOf: deps.generationOf }),
 });
 
 /** A step's non-done outcomes, as the plain fields every output shape mirrors. */

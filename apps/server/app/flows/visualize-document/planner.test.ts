@@ -51,6 +51,9 @@ describe("loadPlannerDecisionKey (R19)", () => {
   it("with the role off, the key is not required (a bad one is not read either)", () => {
     expect(loadPlannerDecisionKey({}, false)).toBeUndefined();
     expect(loadPlannerDecisionKey({ [VAR]: "  " }, false)).toBeUndefined();
+    for (const bad of ["not*base64!", b64(8)])
+      expect(() => loadPlannerDecisionKey({ [VAR]: bad }, false)).not.toThrow();
+    expect(loadPlannerDecisionKey({ [VAR]: b64(8) }, false)).toBeUndefined();
   });
 
   it("can be mounted as a file like the other secrets", () => {

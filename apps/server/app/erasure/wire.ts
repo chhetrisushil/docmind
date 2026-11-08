@@ -33,7 +33,7 @@ export interface ErasureParts {
   starts: Pick<StartScheduler, "settle">;
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
-  visuals: Pick<VisualsStarter, "cancel">;
+  visuals: Pick<VisualsStarter, "cancel" | "settle" | "idle">;
   /** Absent when chat is not composed: there are no conversations to stop. */
   chat?: {
     stops: Pick<ChatWiring["stops"], "stop">;
@@ -63,12 +63,21 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
     ...p.sql,
     closeStreams: p.closeStreams,
     settleStart: (identity, documentId) =>
-      drainWithin(p.starts.settle(identity, documentId), SETTLE_MS),
-    settleTitles: async () => void (await p.titles?.idle()),
+      drainWithin(
+        Promise.all([
+          p.starts.settle(identity, documentId),
+          p.visuals.settle(identity, documentId),
+        ]).then(() => undefined),
+        SETTLE_MS,
+      ),
+    settleTitles: async () => {
+      await p.titles?.idle();
+      await p.visuals.idle(); // a fired visualize start has landed (and is cancelled by cancelVisualize) before the shred
+    },
     cancelIngest: (identity, documentId, generation) =>
       p.ingest.cancel(identity, documentId, generation),
     cancelVisualize: (identity, documentId, generation) =>
-      p.visuals.cancel(identity, documentId, generation),
+      p.visuals.cancel(identity, documentId, generation, ERASED),
     async stopChat(identity: Identity, chatId: string) {
       if (!p.chat) return;
       const conversationId = chatConversationId(identity.userId, chatId);

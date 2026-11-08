@@ -66,7 +66,7 @@ export interface DocumentRoutesDeps {
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
   /** Cancels the document's visualize executions on delete. Absent: none are composed (tests that never start one). */
-  visuals?: Pick<VisualsStarter, "cancel">;
+  visuals?: Pick<VisualsStarter, "cancel" | "settle">;
   /** Test seam: how long a delete waits for a pending start before cancelling anyway. */
   settleTimeoutMs?: number;
   /** Fires flow starts after the upload commits, without making the response wait for them. */
@@ -262,10 +262,12 @@ const isDeadlock = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "40P01";
 
 /** How long a delete waits for that document's pending flow start before it cancels anyway. */
-export const SETTLE_TIMEOUT_MS = 5000;
+export // Recorded in the log, so a fixed word that never names the document.
+const CANCEL_REASON = "document-deleted";
+const SETTLE_TIMEOUT_MS = 5000;
 
 async function settleWithin(
-  starts: StartScheduler,
+  starts: { settle(identity: Identity, documentId: string): Promise<void> },
   identity: Identity,
   documentId: string,
   ms: number,
@@ -421,8 +423,15 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           mine.id,
           deps.settleTimeoutMs ?? SETTLE_TIMEOUT_MS,
         );
+        if (deps.visuals)
+          await settleWithin(
+            deps.visuals,
+            identity,
+            mine.id,
+            deps.settleTimeoutMs ?? SETTLE_TIMEOUT_MS,
+          );
         await deps.ingest.cancel(identity, mine.id, mine.ingest_generation);
-        await deps.visuals?.cancel(identity, mine.id, mine.ingest_generation);
+        await deps.visuals?.cancel(identity, mine.id, mine.ingest_generation, CANCEL_REASON);
 
         // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
         //    upload of the same bytes cannot slip between the two (the store's contract). If COMMIT
@@ -451,7 +460,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         // A retry may have bumped the generation after step 1 read it; that run is still live.
         if (outcome.generation > mine.ingest_generation) {
           await deps.ingest.cancel(identity, mine.id, outcome.generation);
-          await deps.visuals?.cancel(identity, mine.id, outcome.generation);
+          await deps.visuals?.cancel(identity, mine.id, outcome.generation, CANCEL_REASON);
         }
         if (!outcome.removed) return sendError(res, 404, "not_found", "document not found");
 

@@ -38,7 +38,7 @@ function parts(over: Partial<Parameters<typeof erasureDeps>[0]> = {}) {
     },
     starts: { settle: async () => {} },
     ingest: { cancel: async () => {} },
-    visuals: { cancel: async () => {} },
+    visuals: { cancel: async () => {}, settle: async () => {}, idle: async () => {} },
     chat: {
       stops: {
         stop: (id: string) => {
@@ -98,11 +98,31 @@ describe("erasureDeps", () => {
   });
 
   it("cancels the document's visualize executions through the visuals port, once per call", async () => {
-    const cancel = vi.fn(async (_who: unknown, _doc: string, _generation: number) => {});
-    const { parts: p } = parts({ visuals: { cancel } });
+    const cancel = vi.fn(
+      async (_who: unknown, _doc: string, _generation: number, _reason: string) => {},
+    );
+    const { parts: p } = parts({
+      visuals: { cancel, settle: async () => {}, idle: async () => {} },
+    });
     await erasureDeps(p).cancelVisualize(who, "d", 3);
     expect(cancel).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledWith(who, "d", 3);
+    expect(cancel).toHaveBeenCalledWith(who, "d", 3, "erased");
+  });
+
+  it("settles the document's pending visualize starts with its ingest start, and awaits the visuals starter with the titles", async () => {
+    const calls: string[] = [];
+    const { parts: p } = parts({
+      starts: { settle: async () => void calls.push("starts.settle") },
+      visuals: {
+        cancel: async () => {},
+        settle: async () => void calls.push("visuals.settle"),
+        idle: async () => void calls.push("visuals.idle"),
+      },
+    });
+    const deps = erasureDeps(p);
+    await deps.settleStart(who, "d");
+    await deps.settleTitles();
+    expect(calls).toEqual(["starts.settle", "visuals.settle", "visuals.idle"]);
   });
 
   it("rethrows any other failure so the step is retried", async () => {
