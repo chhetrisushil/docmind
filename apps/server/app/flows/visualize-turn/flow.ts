@@ -35,15 +35,19 @@ export const turnFactsStep = step$({
   retry: TURN_RETRY,
 });
 
-// The commit step's input is the plan (ops, summary, report): loose here, the effect (commit.ts `TurnCommitInput`) holds
-// the shape. STEP_STARTED seals `input.ops|summary|report`.
-const CommitStepInput = TurnInput.extend({
-  outcome: z.enum(["visualized", "nothing"]),
-  ops: z.array(z.unknown()).optional(),
-  summary: z.string().optional(),
-  summaryClass: z.string().optional(),
-  report: z.unknown().optional(),
-});
+// The commit step's input is the plan (ops, summary, report): loose on the plan's inner shape, the effect (commit.ts
+// `TurnCommitInput`) holds it. The outcome selects the shape, as in `TurnCommitInput`: "visualized" carries ops, "nothing"
+// carries nothing. STEP_STARTED seals `input.ops|summary|report`.
+const CommitStepInput = z.discriminatedUnion("outcome", [
+  TurnInput.extend({
+    outcome: z.literal("visualized"),
+    ops: z.array(z.unknown()),
+    summary: z.string().optional(),
+    summaryClass: z.string().optional(),
+    report: z.unknown().optional(),
+  }),
+  TurnInput.extend({ outcome: z.literal("nothing") }),
+]);
 export const turnCommitStep = step$({
   id: "turn-commit",
   name: "TurnCommit",

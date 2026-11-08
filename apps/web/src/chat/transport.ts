@@ -40,6 +40,8 @@ export interface TransportDeps {
   onProblem(p: "load" | "stream" | "gone"): void;
   /** An older page failed to load: the chat itself still works. Without it the failure is a "load" problem. */
   onOlderFailed?(): void;
+  /** True while a visualize click is waiting on its result: a reconnect then re-reads the page to learn the outcome. */
+  visualizing?(): boolean;
 }
 
 export function createChatTransport(d: TransportDeps): ChatTransport {
@@ -47,9 +49,13 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
   let stream: { close(): void } | undefined;
   let loadingOlder = false;
   let opened = false;
+  let resyncing = false;
 
   /** After a reconnect: read the newest page again for visuals that became ready while the stream was down. */
   const resyncVisuals = async () => {
+    // One read at a time, and only when a frame could have been missed: a reply that may get visuals and has none, or a click waiting.
+    if (resyncing || !(d.fold.hasPendingVisuals() || d.visualizing?.())) return;
+    resyncing = true;
     try {
       const page = await d.api.listMessages(d.chatId, undefined);
       if (closed) return;
@@ -57,6 +63,8 @@ export function createChatTransport(d: TransportDeps): ChatTransport {
       d.onChange();
     } catch (err) {
       report("chat-visuals-resync", err); // the strip then waits for the next frame or a reload
+    } finally {
+      resyncing = false;
     }
   };
 

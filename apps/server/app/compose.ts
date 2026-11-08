@@ -215,7 +215,8 @@ export function buildServer(options: ComposeOptions) {
     keys,
     subjectOf: subjectOfExecution,
   });
-  // Read-only and cheap, so it serves whenever chat is on: a deployment that turned the visuals role off still shows earlier visuals.
+  // Read-only, so it serves whenever chat is on: a deployment that turned the visuals role off still shows earlier visuals.
+  // Not free: `hasVisuals` loads and unseals each head (`resolveLatest`), at most 30 per history page, 8 in flight (chats/turnHeads.ts).
   const heads = lineageTurnHeads(visualsLineageOf);
   // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
   const visualizeGate = newVisualizeGate();

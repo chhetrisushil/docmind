@@ -97,8 +97,14 @@ describe("createChatTransport", () => {
     expect(t.fold.value().entries.at(-1)).toMatchObject({ id: "t2.assistant", status: "complete" });
   });
 
+  const pendingPage = () =>
+    vi.fn(async () => ({
+      items: [msg(1, "user", 1), msg(2, "assistant", 1, { visualizable: true })],
+      nextCursor: "1.5" as string | null,
+    }));
+
   it("on a reconnect (not the first open) reads the newest page again and takes the visuals it missed, leaving the older-page cursor alone", async () => {
-    const t = setup();
+    const t = setup(pendingPage());
     await t.transport.start();
     t.sse.opts?.onOpen?.(); // the first open follows the history just read
     expect(t.listMessages).toHaveBeenCalledTimes(1);
@@ -120,7 +126,7 @@ describe("createChatTransport", () => {
   });
 
   it("a failed re-read after a reconnect is not a problem of the chat", async () => {
-    const t = setup();
+    const t = setup(pendingPage());
     await t.transport.start();
     t.sse.opts?.onOpen?.();
     t.listMessages.mockRejectedValueOnce(new Error("offline"));
@@ -128,6 +134,65 @@ describe("createChatTransport", () => {
     await vi.waitFor(() => expect(t.listMessages).toHaveBeenCalledTimes(2));
     await Promise.resolve();
     expect(t.onProblem).not.toHaveBeenCalled();
+  });
+
+  it("flapping reconnects while a re-read is in flight make one fetch", async () => {
+    const t = setup(pendingPage());
+    await t.transport.start();
+    t.sse.opts?.onOpen?.();
+    let release: (v: { items: ChatMessageDto[]; nextCursor: string | null }) => void = () => {};
+    t.listMessages.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          release = r;
+        }),
+    );
+    t.sse.opts?.onOpen?.();
+    t.sse.opts?.onOpen?.();
+    t.sse.opts?.onOpen?.();
+    expect(t.listMessages).toHaveBeenCalledTimes(2);
+    release({
+      items: [msg(2, "assistant", 1, { hasVisuals: true, visualizable: true })],
+      nextCursor: null,
+    });
+    await vi.waitFor(() => expect(t.fold.extrasOf("t1.assistant")?.hasVisuals).toBe(true));
+    t.fold.refreshVisuals({
+      items: [msg(2, "assistant", 1, { hasVisuals: true })],
+      nextCursor: null,
+    });
+    t.sse.opts?.onOpen?.(); // the guard is released and nothing is pending now
+    expect(t.listMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("a reconnect with nothing pending reads nothing", async () => {
+    const t = setup(); // the held reply is not visualizable
+    await t.transport.start();
+    t.sse.opts?.onOpen?.();
+    t.sse.opts?.onOpen?.();
+    expect(t.listMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("a reconnect while a visualize phase runs reads the page even with nothing else pending", async () => {
+    const listMessages = setup().listMessages;
+    const fold = new ChatFold();
+    const sse: { opts?: SseOptions } = {};
+    const transport = createChatTransport({
+      api: { listMessages, sendMessage: vi.fn(), stopChat: vi.fn() } as never,
+      auth: { epoch: 1, expired: vi.fn() },
+      chatId: "c1",
+      fold,
+      open: ((o: SseOptions) => {
+        sse.opts = o;
+        return { close() {} };
+      }) as never,
+      onChange: vi.fn(),
+      onProblem: vi.fn(),
+      visualizing: () => true,
+    });
+    await transport.start();
+    sse.opts?.onOpen?.();
+    sse.opts?.onOpen?.();
+    await vi.waitFor(() => expect(listMessages).toHaveBeenCalledTimes(2));
   });
 
   it("drops a frame that is not one of ours, without applying it and without throwing", async () => {
