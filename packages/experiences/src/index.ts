@@ -16,7 +16,14 @@ export {
   mergedCatalog,
 } from "./visuals";
 export type { FactCite, FactOrigin, FactRef, OfferedFact, VisualFactRaw } from "./visuals";
-export type { RawContent, RawDocuments, SourceResult, UiReaders } from "./invoker";
+export type {
+  ConnectionDocument,
+  RawConnections,
+  RawContent,
+  RawDocuments,
+  SourceResult,
+  UiReaders,
+} from "./invoker";
 export * from "./reshapers";
 export * from "./format";
 export * from "./views-api";
