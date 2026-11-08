@@ -229,6 +229,8 @@ export function buildServer(options: ComposeOptions) {
   const heads = lineageTurnHeads(visualsLineageOf);
   // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
   const visualizeGate = newVisualizeGate();
+  const visualRuns = new PgVisualRuns(pool);
+  const afterDone = new Set<string>();
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
     deps: {
@@ -241,6 +243,8 @@ export function buildServer(options: ComposeOptions) {
       now: () => new Date().toISOString(),
       shutdown: options.ingest.shutdown.signal,
       gate: visualizeGate,
+      runs: visualRuns,
+      afterDone,
       ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
       ...(visualsLlm && { llm: visualsLlm }),
       ...(planner && { planner }),
@@ -311,13 +315,13 @@ export function buildServer(options: ComposeOptions) {
     },
   });
   const titles = options.chat && loomTitleStarter(app.runtime);
-  const visualRuns = new PgVisualRuns(pool);
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
     stale: pgStaleFormatDocuments(pool),
     running: pgRunningRuns(pool),
     runs: visualRuns,
+    afterDone,
     enabled: visualsLlm !== undefined,
   });
   const turns =

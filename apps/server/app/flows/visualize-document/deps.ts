@@ -11,6 +11,7 @@ import { type CommitInput, commitEffect } from "./commit";
 import { extractEffect } from "./extract";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
 import { loadEffect } from "./plan";
+import type { VisualRuns } from "./runs";
 
 /**
  * What the visualize flow's steps and runner need from the outside world. Built per app by the composition root;
@@ -28,6 +29,9 @@ export interface VisualizeDeps extends StepSeams {
   now: () => string;
   /** The `visuals` role's provider; absent when the role is off (the extract step then ends `skipped`). */
   llm?: LlmProvider;
+  /** The run reader and the starter's note of re-runs after a `done` run: a zero-fact document is re-planned without extraction. */
+  runs?: Pick<VisualRuns, "last">;
+  afterDone?: Set<string>;
   /** The planner over the same provider (R19: keyed decision ids); absent when the role is off. */
   planner?: Planner;
 }

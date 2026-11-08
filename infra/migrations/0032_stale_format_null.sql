@@ -1,6 +1,6 @@
 -- 0032: for this release a done visualize run with NO recorded format counts as stale (document connections, K6). The fact-format
 -- fingerprint gained the connections pin, and every visualized document needs one re-plan (over its stored facts, no extraction)
--- to add the Connections section: the runs that predate the `format` column have a NULL format and 0030's function skipped them.
+-- to add the Connections section: the `done` runs with a NULL format (recorded before stamping existed, or by a boot reconcile, which does not stamp) were skipped by 0030's function.
 -- A re-plan that ends `done` stamps the new fingerprint (the event feed), so each document is listed once. Same signature and
 -- columns as 0030's function (CREATE OR REPLACE keeps the grants); only the format test changes, from
 -- `format IS NOT NULL AND format <> p_format` to `format IS DISTINCT FROM p_format`. STRICT still answers nothing to a NULL argument.
