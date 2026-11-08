@@ -63,7 +63,14 @@ describe("chat contracts", () => {
     outcome: null,
     createdAt: "2026-10-18T10:00:00.000Z",
     hasVisuals: false,
+    visualizable: false,
   };
+
+  it("requires visualizable as a boolean", () => {
+    expect(ChatMessageDto.parse({ ...message, visualizable: true }).visualizable).toBe(true);
+    const { visualizable: _omit, ...missing } = message;
+    expect(ChatMessageDto.safeParse(missing).success).toBe(false);
+  });
 
   it("requires hasVisuals as a boolean", () => {
     expect(ChatMessageDto.parse({ ...message, hasVisuals: true }).hasVisuals).toBe(true);
@@ -271,6 +278,7 @@ describe("chat contracts", () => {
       outcome: null,
       createdAt: "2026-10-21T10:00:00.000Z",
       hasVisuals: false,
+      visualizable: false,
     };
     for (const failureReason of [
       "rate-limited",

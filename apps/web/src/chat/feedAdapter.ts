@@ -19,6 +19,8 @@ export interface Extras {
   reasoning: ChatReasoningDto | null;
   outcome: ChatOutcome | null;
   hasVisuals: boolean;
+  /** The server's word that "Visualize" can be offered (role on, complete, cited). */
+  visualizable: boolean;
   /** How many `visualized` frames this reply has had: a re-run bumps it, so the strip reloads. */
   visualsRev: number;
 }
@@ -78,6 +80,7 @@ const extrasOf = (m: ChatMessageDto, was?: Extras): Extras => ({
   outcome: m.outcome,
   // A reply that has visuals keeps them when the same reply arrives again (a stream snapshot says false until the head is read).
   hasVisuals: m.hasVisuals || (was?.hasVisuals ?? false),
+  visualizable: m.visualizable,
   visualsRev: was?.visualsRev ?? 0,
 });
 

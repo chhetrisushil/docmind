@@ -123,6 +123,8 @@ export const ChatMessageDto = z.object({
   createdAt: IsoDateTime,
   /** Whether the turn has a visuals head: true only for a complete, cited assistant message whose visuals exist; false for every other message. */
   hasVisuals: z.boolean(),
+  /** Whether "Visualize" can be offered: the visuals role is on AND the message is a complete, cited assistant answer. */
+  visualizable: z.boolean(),
 });
 export type ChatMessageDto = z.infer<typeof ChatMessageDto>;
 

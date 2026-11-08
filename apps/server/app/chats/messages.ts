@@ -13,7 +13,10 @@ export const HISTORY_PAGE = 30;
 /** Calls to Loom's reader for one page: each scans a bounded number of events, so a busy log needs several. */
 const MAX_ROUNDS = 20;
 
-export type MessageDeps = Pick<ChatRouteDeps, "pool" | "fields" | "chat" | "reasoning" | "heads">;
+export type MessageDeps = Pick<
+  ChatRouteDeps,
+  "pool" | "fields" | "chat" | "reasoning" | "heads" | "visualsOn"
+>;
 
 /** The turn key of a history entry (the `<o>` of its turn's step ids). Undefined without a record ordinal. */
 export const turnKeyOf = (e: HistoryEntry): number | undefined =>
@@ -118,6 +121,7 @@ export async function toMessageDtos(
         steps: [],
         outcome: null,
         hasVisuals: false,
+        visualizable: false,
       };
     }
     const turnItems = items.get(keyOf(e) ?? -1) ?? [];
@@ -130,7 +134,8 @@ export async function toMessageDtos(
       else outcome = item.body.kind;
     }
     const cited = citeReply(e.text, retrieved, titles);
-    if (e.status === "complete" && cited.citations.length > 0) citedOrds.push(e.ord as number);
+    const visualizable = e.status === "complete" && cited.citations.length > 0;
+    if (visualizable) citedOrds.push(e.ord as number);
     // A complete, empty reply with no recorded outcome is a loop that ran out of iterations (H11).
     if (outcome === null && e.status === "complete" && e.text.trim() === "")
       outcome = "max_iterations";
@@ -142,6 +147,7 @@ export async function toMessageDtos(
       steps,
       outcome,
       hasVisuals: false,
+      visualizable: deps.visualsOn === true && visualizable,
       ...(e.status === "failed" && { failureReason: failureReasonOf(e.reason) }),
     };
   });

@@ -36,27 +36,76 @@ export function loadPlannerDecisionKey(
   return bytes;
 }
 
+/** Planner calls in flight, process-wide, across both visuals flows (the step gate does not cover `ctx.decide`). */
+export const PLANNER_CONCURRENCY = 2;
+
+/** A counting semaphore: `acquire` resolves with a release function; an aborted waiter leaves the queue and rejects. */
+class Semaphore {
+  private free: number;
+  private readonly waiting: (() => void)[] = [];
+  constructor(slots: number) {
+    this.free = slots;
+  }
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    signal?.throwIfAborted();
+    if (this.free > 0) this.free--;
+    else
+      await new Promise<void>((resolve, reject) => {
+        const wake = () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        const onAbort = () => {
+          this.waiting.splice(this.waiting.indexOf(wake), 1);
+          reject(signal?.reason);
+        };
+        this.waiting.push(wake);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiting.shift();
+      if (next)
+        next(); // the slot passes straight on
+      else this.free++;
+    };
+  }
+}
+
+const plannerSlots = new Semaphore(PLANNER_CONCURRENCY);
+
 /**
  * The planner's model over the `visuals` provider, called DIRECTLY (not through the decide scope's
  * `invokeTransient`): the call writes no event, so the prompt (which holds the facts) never reaches the log. The
- * planner fences the document data itself; `guardRequest` is Loom's own request check.
+ * planner fences the document data itself; `guardRequest` is Loom's own request check. Every call holds one of the
+ * process-wide planner slots, so at most `PLANNER_CONCURRENCY` planner calls are in flight across both visuals flows.
  */
 export function plannerModelOf(llm: LlmProvider): PlannerModel {
   return {
     async complete(request, opts) {
-      const guarded = guardRequest({
-        ...(request.system !== undefined && { system: request.system }),
-        messages: request.messages.map((m) => ({
-          role: m.role,
-          content: typeof m.content === "string" ? m.content : [...m.content],
-        })) as never,
-        temperature: 0,
-      });
-      const res = await llm.complete({ ...guarded, ...(opts?.signal && { signal: opts.signal }) });
-      return {
-        content: res.content,
-        ...(res.usage && { usage: res.usage }),
-      };
+      const release = await plannerSlots.acquire(opts?.signal);
+      try {
+        const guarded = guardRequest({
+          ...(request.system !== undefined && { system: request.system }),
+          messages: request.messages.map((m) => ({
+            role: m.role,
+            content: typeof m.content === "string" ? m.content : [...m.content],
+          })) as never,
+          temperature: 0,
+        });
+        const res = await llm.complete({
+          ...guarded,
+          ...(opts?.signal && { signal: opts.signal }),
+        });
+        return {
+          content: res.content,
+          ...(res.usage && { usage: res.usage }),
+        };
+      } finally {
+        release();
+      }
     },
   };
 }

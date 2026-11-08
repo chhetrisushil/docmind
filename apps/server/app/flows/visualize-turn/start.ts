@@ -17,7 +17,7 @@ export type VisualizeStart =
 export interface TurnVisualsStarter {
   /** For `turnSettledObserver`: enqueues the check and returns. Never throws. */
   onSettled(e: TurnSettledEvent): void;
-  /** On demand: starts `-r<n>` with the next free number, unless a run of the turn is in flight. */
+  /** On demand: starts `-r<n>` with the next free number, unless a run of the turn is in flight (or every number is taken: also `running`). */
   visualize(ref: TurnRef): Promise<VisualizeStart>;
   /** True while a run of this turn that this process started has not finished. */
   running(ref: TurnRef): boolean;
@@ -99,8 +99,9 @@ export function loomTurnStarter(
 
   return {
     onSettled(e) {
-      // Only an async function's synchronous prefix runs here (status, role, conversation id, backlog): the runtime calls
-      // this on its write chain, so everything that touches the database or Loom is behind the first await.
+      // Only an async function's synchronous prefix runs here (status, role, conversation id, backlog, and the dispatch of
+      // `tenantOf`'s query, which is not awaited here): the runtime calls this on its write chain, so nothing blocks it;
+      // everything after that first await runs later.
       enqueue(
         turnToVisualize(e, o).then(async (ref) => {
           if (ref) await startOne(ref);
@@ -116,7 +117,7 @@ export function loomTurnStarter(
           return { kind: "started", rerun: n };
         }
       }
-      throw new RangeError("too many re-runs of one turn");
+      return { kind: "running" }; // every re-run number is taken: nothing more can start, so the turn answers as busy (never a 500)
     },
     running: isRunning,
     async idle() {

@@ -21,6 +21,7 @@ const extras = (o: Partial<Extras> = {}): Extras => ({
   reasoning: null,
   outcome: null,
   hasVisuals: false,
+  visualizable: false,
   visualsRev: 0,
   ...o,
 });

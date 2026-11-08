@@ -149,10 +149,11 @@ does. An upgraded deployment therefore boots as before, with no new key and no n
 3. Start the server. **The first boot after enabling sweeps every ready document through the model.** The sweep is
    bounded (at most two visualize executions at once, on a gate of their own that ingest never waits behind), and each
    document reads at most `DOCMIND_SUMMARY_MAX_CHARS` of its text, but a large library still takes a while and costs
-   model calls.
+   model calls. Planner calls (both document and chat visuals) additionally share one process-wide limit of two in
+   flight, so a burst of visuals work queues rather than flooding the `visuals` provider.
 4. Keep the key stable from then on (see the rotation note above).
 
-The same role (and the same `DOCMIND_PLANNER_DECISION_KEY`) turns on chat visuals; it adds one table (`turn_visual_facts`, migration 0029) and needs a Loom build that exports `turnSettledObserver` (the `LOOM_REF` in CI). Chat turns that settled while the role was off, or before the upgrade, are not backfilled: the "Visualize" action on the answer makes them.
+The same role (and the same `DOCMIND_PLANNER_DECISION_KEY`) turns on chat visuals; it adds one table (`turn_visual_facts`, migration 0029) and needs a Loom build that exports `turnSettledObserver` (the `LOOM_REF` in CI). Chat turns that settled while the role was off, or before the upgrade, are not backfilled: the "Visualize" action on the answer makes them (it is offered only while the role is on; with the role off an existing strip still shows, with no action).
 
 ## What users see
 

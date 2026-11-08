@@ -124,6 +124,13 @@ describe("the turn starter: on demand", () => {
     await vi.waitFor(() => expect(s.running(ref)).toBe(false));
     expect(await s.visualize(ref)).toEqual({ kind: "started", rerun: 1 });
   });
+  it("answers running (never throws) once every re-run number is taken", async () => {
+    const f = fake();
+    f.start.mockRejectedValue(new ExecutionAlreadyExistsError("taken"));
+    const s = loomTurnStarter(f.runtime, flow, options());
+    expect(await s.visualize(ref)).toEqual({ kind: "running" });
+    expect(f.start).toHaveBeenCalledTimes(999);
+  });
   it("is disabled while the visuals role is off", async () => {
     const s = loomTurnStarter(fake().runtime, flow, options({ enabled: () => false }));
     expect(await s.visualize(ref)).toEqual({ kind: "disabled" });

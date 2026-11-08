@@ -31,6 +31,7 @@ const msg = (
   outcome: null,
   createdAt: "2026-10-21T10:00:00.000Z",
   hasVisuals: false,
+  visualizable: true,
   ...over,
 });
 
@@ -669,6 +670,11 @@ describe("visuals actions", () => {
     await b.ctl.visualize(2);
     b.frame("visuals", { ord: 2, outcome: "nothing" });
     expect(b.visuals()).toMatchObject({ note: "Nothing to visualize", busy: false });
+  });
+  it("an automatic run that ends nothing (a nothing frame with no click) shows no note", async () => {
+    const t = await started();
+    t.frame("visuals", { ord: 2, outcome: "nothing" });
+    expect(t.visuals()).toEqual({ strip: false, action: "Visualize", busy: false, note: null });
   });
   it("a nothing frame for a turn that already has a strip keeps the strip and returns Re-visualize (ruling C1)", async () => {
     const t = await started(undefined, { hasVisuals: true });

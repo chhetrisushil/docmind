@@ -64,7 +64,7 @@ Data flow as built:
    =POST /api/chats/:id/turns/:ord/visualize= makes or remakes one on demand.
    The =visuals= frame carries an =outcome= (=visualized= or =nothing=); a re-run that finds nothing keeps the earlier
    visuals. Chat visuals need no settings beyond =DOCMIND_VISUALS_PROVIDER= and =DOCMIND_PLANNER_DECISION_KEY=, and
-   answers from before the upgrade are not backfilled (their Visualize button makes them).
+   answers from before the upgrade are not backfilled (their Visualize button makes them; it shows only while the role is on).
 6. =DELETE /api/me= (body =password=) erases the account: it records a durable request, logs the user out
    everywhere, frees the email, answers 202 with a receipt, and a background =Eraser= stops the user's work,
    destroys the user's key (which makes every event, snapshot, sealed column and blob unreadable),

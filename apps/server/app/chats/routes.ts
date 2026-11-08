@@ -54,6 +54,8 @@ export interface ChatRouteDeps {
   titles?: Pick<TitleStarter, "fire">;
   /** Which turns have visuals (absent without the visuals lineage): marks `hasVisuals` on history and live messages. */
   heads?: TurnHeads;
+  /** The visuals role is on: complete, cited replies are then `visualizable` (the web offers "Visualize" only for those). */
+  visualsOn?: boolean;
   /** On-demand visuals (absent without the visuals flow): the starter, the turn reader and the per-user limiter. */
   visualize?: {
     starter: Pick<TurnVisualsStarter, "visualize">;

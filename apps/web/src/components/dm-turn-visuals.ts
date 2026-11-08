@@ -14,6 +14,7 @@ export class DmTurnVisuals extends LitElement {
     open: { state: true },
     seen: { state: true },
     count: { state: true },
+    broken: { state: true },
   };
   static styles = [
     baseStyles,
@@ -32,6 +33,7 @@ export class DmTurnVisuals extends LitElement {
   declare open: boolean;
   declare seen: boolean;
   declare count: number;
+  declare broken: boolean;
   private io: IntersectionObserver | undefined;
   constructor() {
     super();
@@ -42,6 +44,10 @@ export class DmTurnVisuals extends LitElement {
     this.open = false;
     this.seen = false;
     this.count = 0;
+    this.broken = false;
+  }
+  willUpdate(changed: Map<string, unknown>): void {
+    if (changed.has("rev")) this.broken = false; // a re-run opens a fresh view: try again
   }
   connectedCallback(): void {
     super.connectedCallback();
@@ -71,13 +77,18 @@ export class DmTurnVisuals extends LitElement {
   private toggle = () => {
     this.open = !this.open;
   };
-  private problem = (e: Event) => e.stopPropagation();
+  /** A strip whose widgets cannot load is hidden (no toggle, no alert): the answer stands without it; the action stays. */
+  private problem = (e: Event) => {
+    e.stopPropagation();
+    this.broken = true;
+    this.count = 0;
+  };
   render() {
     const v = this.view;
     if (!v) return nothing;
     return html`
       ${
-        v.strip
+        v.strip && !this.broken
           ? html`<button class="btn ghost" data-toggle aria-expanded=${String(this.open)} aria-controls="body" @click=${this.toggle}>
               ${VISUALS_COPY.strip}${this.count > 0 ? html` <span data-count>(${this.count})</span>` : nothing}
             </button>

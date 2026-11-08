@@ -127,15 +127,21 @@ function stack(o: {
     ord: 4,
   };
   const executionId = turnExecutionId(ref.userId, ref.chatId, ref.ord, o.rerun);
-  const run = async () => {
+  const run = async (rerun?: number) => {
     const handle = await app.runtime.start(
       visualizeTurnFlow(() => planner),
       ref,
-      { executionId, principal: { tenant: ref.tenantId, actor: ref.userId } },
+      {
+        executionId:
+          rerun === undefined
+            ? executionId
+            : turnExecutionId(ref.userId, ref.chatId, ref.ord, rerun),
+        principal: { tenant: ref.tenantId, actor: ref.userId },
+      },
     );
     return TurnOutput.parse((await handle.waitForCompletion()).variables._output);
   };
-  return { inner, sealed, lineage, frames, model, ref, executionId, run };
+  return { inner, sealed, lineage, frames, model, ref, executionId, run, heldFacts: () => held };
 }
 
 describe("visualize-turn flow", () => {
@@ -166,6 +172,20 @@ describe("visualize-turn flow", () => {
     const s = stack({ replies: [EXTRACTED, plan()], storedFacts: [] });
     expect(await s.run()).toEqual({ outcome: "visualized" });
     expect(s.model.requests).toHaveLength(2); // one extract window, one planner call
+  });
+
+  it("a re-run ending nothing keeps the head's facts: a turn that already has facts is re-planned, never re-extracted", async () => {
+    const s = stack({
+      replies: [EXTRACTED, plan(), JSON.stringify({ nodes: [] })],
+      storedFacts: [],
+    });
+    expect(await s.run()).toEqual({ outcome: "visualized" });
+    const before = s.heldFacts();
+    expect(before).toHaveLength(1);
+    expect(await s.run(1)).toEqual({ outcome: "nothing" });
+    expect(s.heldFacts()).toEqual(before); // the head's `fact-0` still points at the same row
+    const latest = await s.lineage.resolveLatest(turnExperienceId(s.ref));
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
   });
 
   it("is nothing for an uncited answer: no model call, no lineage head, and the nothing frame", async () => {

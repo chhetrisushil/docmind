@@ -6,6 +6,7 @@ const base = {
   status: "complete",
   citations: [{}],
   hasVisuals: false,
+  visualizable: true,
   phase: "idle" as const,
 };
 
@@ -61,6 +62,20 @@ describe("visualsViewOf", () => {
     expect(visualsViewOf({ ...base, hasVisuals: true, phase: "nothing" })).toEqual({
       strip: true,
       action: "Re-visualize",
+      busy: false,
+      note: null,
+    });
+  });
+  it("offers no action when the server says the answer is not visualizable (role off), but keeps an existing strip", () => {
+    expect(visualsViewOf({ ...base, visualizable: false })).toEqual({
+      strip: false,
+      action: null,
+      busy: false,
+      note: null,
+    });
+    expect(visualsViewOf({ ...base, visualizable: false, hasVisuals: true })).toEqual({
+      strip: true,
+      action: null,
       busy: false,
       note: null,
     });

@@ -195,6 +195,7 @@ export class ChatController {
               status: e.status,
               citations: extras.citations,
               hasVisuals,
+              visualizable: extras.visualizable,
               phase,
             })
           : null,
@@ -210,8 +211,12 @@ export class ChatController {
 
   private publish(): void {
     if (this.stopped) return;
+    // "Nothing to visualize" answers a click: an automatic run that ends nothing says nothing.
     for (const [ord, outcome] of this.fold.drainVisuals())
-      this.setPhase(ord, outcome === "visualized" ? "idle" : "nothing");
+      this.setPhase(
+        ord,
+        outcome === "nothing" && this.phases.get(ord) === "running" ? "nothing" : "idle",
+      );
     const value = this.fold.value();
     const entries = value.entries
       .filter((e) => e.role === "user" || e.role === "assistant")

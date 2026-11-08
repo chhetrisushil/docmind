@@ -6,7 +6,7 @@ import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildServer } from "../../compose";
 import { loadBlobRoot, loadLimits } from "../../documents/limits";
 import { SECRET_VARIABLES } from "../../secrets";
@@ -82,6 +82,67 @@ describe("plannerModelOf", () => {
     expect(out).toEqual({ content: "{}", usage: { inputTokens: 3, outputTokens: 4 } });
     expect(seen[0]).toMatchObject({ system: "SYS", temperature: 0, signal: abort.signal });
     expect(seen[0]?.messages).toEqual([{ role: "user", content: "hello" }]);
+  });
+});
+
+describe("plannerModelOf concurrency", () => {
+  it("holds at most two planner calls in flight process-wide: a third waits until one finishes, across models", async () => {
+    const started: string[] = [];
+    const gates = new Map<string, () => void>();
+    const providerFor = (name: string): LlmProvider => ({
+      complete: async () => {
+        started.push(name);
+        await new Promise<void>((resolve) => gates.set(name, resolve));
+        return { content: name, stopReason: "end_turn" };
+      },
+    });
+    const ask = (name: string, signal?: AbortSignal) =>
+      plannerModelOf(providerFor(name)).complete(
+        { messages: [{ role: "user", content: "x" }] },
+        signal ? { signal } : undefined,
+      );
+    const a = ask("a");
+    const b = ask("b");
+    const c = ask("c");
+    await vi.waitFor(() => expect(started).toEqual(["a", "b"]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(started).toEqual(["a", "b"]); // c is queued
+    gates.get("a")?.();
+    expect((await a).content).toBe("a");
+    await vi.waitFor(() => expect(started).toEqual(["a", "b", "c"]));
+    gates.get("b")?.();
+    gates.get("c")?.();
+    expect((await Promise.all([b, c])).map((r) => r.content)).toEqual(["b", "c"]);
+  });
+  it("lets an aborted waiter leave the queue without taking a slot, and frees the slot when a call throws", async () => {
+    const gates: (() => void)[] = [];
+    const slow: LlmProvider = {
+      complete: async () => {
+        await new Promise<void>((resolve) => gates.push(resolve));
+        return { content: "slow", stopReason: "end_turn" };
+      },
+    };
+    const boom: LlmProvider = {
+      complete: async () => {
+        throw new Error("model down");
+      },
+    };
+    const msg = { messages: [{ role: "user" as const, content: "x" }] };
+    const a = plannerModelOf(slow).complete(msg);
+    const b = plannerModelOf(slow).complete(msg);
+    const abort = new AbortController();
+    const waiter = plannerModelOf(slow).complete(msg, { signal: abort.signal });
+    await vi.waitFor(() => expect(gates).toHaveLength(2));
+    abort.abort(new Error("stopped"));
+    await expect(waiter).rejects.toThrow("stopped");
+    gates[0]?.();
+    gates[1]?.();
+    await Promise.all([a, b]);
+    await expect(plannerModelOf(boom).complete(msg)).rejects.toThrow("model down");
+    const after = plannerModelOf(slow).complete(msg); // both slots are free again
+    await vi.waitFor(() => expect(gates).toHaveLength(3));
+    gates[2]?.();
+    expect((await after).content).toBe("slow");
   });
 });
 

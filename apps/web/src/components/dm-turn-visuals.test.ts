@@ -104,4 +104,19 @@ describe("dm-turn-visuals", () => {
     document.body.removeEventListener("view-problem", outer);
     expect(outer).not.toHaveBeenCalled();
   });
+  it("hides the strip when its view cannot load: no toggle, no body, no alert, the count reset, the action kept", async () => {
+    const el = await mount();
+    const inner = q(el, "dm-view") as HTMLElement;
+    inner.dispatchEvent(new CustomEvent("view-problem", { bubbles: true, composed: true }));
+    await el.updateComplete;
+    expect(q(el, "[data-toggle]")).toBeNull();
+    expect(q(el, "[data-body]")).toBeNull();
+    expect(q(el, "dm-view")).toBeNull();
+    expect(q(el, '[role="alert"]')).toBeNull();
+    expect(q(el, "[data-count]")).toBeNull();
+    expect(q(el, "[data-action]")?.textContent).toContain("Re-visualize");
+    el.rev = 1; // a re-run's fresh view gets another try
+    await el.updateComplete;
+    expect(q(el, "[data-toggle]")).not.toBeNull();
+  });
 });
