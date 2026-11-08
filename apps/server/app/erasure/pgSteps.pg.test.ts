@@ -228,6 +228,7 @@ describe.skipIf(!PG_URL)("the Postgres steps of the eraser (needs DOCMIND_TEST_P
       settleStart: noop,
       settleTitles: noop,
       cancelIngest: noop,
+      cancelVisualize: noop,
       stopChat: noop,
       cancelTitle: noop,
       eraseSubject: async () => ({ outcome: "unknown" }),

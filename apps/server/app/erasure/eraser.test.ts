@@ -109,6 +109,7 @@ function fakeDeps(initial: ErasureRequest[], k: Knobs = {}, erased: string[] = [
     settleStart: async (_i, d) => void note(`settleStart:${d === DOC}`),
     settleTitles: async () => void note("settleTitles"),
     cancelIngest: async (_i, d, g) => void note(`cancelIngest:${d === DOC}:${g}`),
+    cancelVisualize: async (_i, d, g) => void note(`cancelVisualize:${d === DOC}:${g}`),
     stopChat: async (_i, c) => void note(`stopChat:${c === CHAT}`),
     cancelTitle: async (_i, c) => void note(`cancelTitle:${c === CHAT}`),
     eraseSubject: async () => {
@@ -151,6 +152,7 @@ describe("Eraser", () => {
       "work",
       "settleStart:true",
       "cancelIngest:true:2",
+      "cancelVisualize:true:2",
       "stopChat:true",
       "cancelTitle:true",
       "settleTitles",

@@ -37,6 +37,12 @@ export interface IngestStatusOptions {
   bus: ProgressBus;
   /** User erasure's narrow read of the user's remaining rows (Task 167). Absent: `forgetUser` purges by scope only. */
   userExecutions?: UserExecutionLister;
+  /**
+   * A document's ingest turned `ready` (called once per such event, after its fold drained and its progress event was
+   * published, on the same chain). The ref comes from the execution's own start input (ids only). It never throws
+   * into `onEvent`: a failure goes to `onError`. The visualize flow starts from here.
+   */
+  onReady?(ref: { tenantId: string; userId: string; documentId: string }, generation: number): void;
   onError?(err: unknown): void;
 }
 
@@ -95,8 +101,29 @@ export class IngestStatus implements DocumentStatusReads {
     this.publishing = this.publishing
       .then(() => this.service.drain())
       .then(() => this.o.bus.publish({ userId: derived.userId }, derived.progress))
+      .then(() => {
+        if (derived.progress.status === "ready") return this.ready(event.executionId);
+      })
       .catch((err) => this.report(err));
   };
+
+  /** The ready hook: the start input holds the tenant (the execution id and the event hold none). Never throws. */
+  private async ready(executionId: string): Promise<void> {
+    const { onReady } = this.o;
+    const generation = generationOf(executionId);
+    if (!onReady || generation === undefined) return;
+    try {
+      const [first] = await this.o.source.readFrom(executionId, 0);
+      const input = (first?.payload as { input?: Record<string, unknown> } | undefined)?.input;
+      const tenantId = input?.tenantId;
+      const userId = ingestScopeOf(executionId);
+      const documentId = ingestKeyOf(executionId);
+      if (typeof tenantId !== "string" || userId === undefined || documentId === undefined) return;
+      onReady({ tenantId, userId, documentId }, generation);
+    } catch (err) {
+      this.report(err);
+    }
+  }
 
   /**
    * One query for one page of documents, under the caller's tenant: absent documents are simply

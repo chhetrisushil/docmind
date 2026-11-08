@@ -38,6 +38,7 @@ function parts(over: Partial<Parameters<typeof erasureDeps>[0]> = {}) {
     },
     starts: { settle: async () => {} },
     ingest: { cancel: async () => {} },
+    visuals: { cancel: async () => {} },
     chat: {
       stops: {
         stop: (id: string) => {
@@ -94,6 +95,14 @@ describe("erasureDeps", () => {
     await expect(deps.stopChat(who, CHAT)).resolves.toBeUndefined(); // InboxClosedError
     await expect(deps.stopChat(who, CHAT_A)).resolves.toBeUndefined(); // ConversationNotFoundError
     await expect(deps.cancelTitle(who, CHAT)).resolves.toBeUndefined();
+  });
+
+  it("cancels the document's visualize executions through the visuals port, once per call", async () => {
+    const cancel = vi.fn(async (_who: unknown, _doc: string, _generation: number) => {});
+    const { parts: p } = parts({ visuals: { cancel } });
+    await erasureDeps(p).cancelVisualize(who, "d", 3);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledWith(who, "d", 3);
   });
 
   it("rethrows any other failure so the step is retried", async () => {

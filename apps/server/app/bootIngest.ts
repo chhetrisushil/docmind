@@ -14,10 +14,14 @@ import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
 import { snapshotPruneDeps } from "./snapshots/pgPruner";
 import { startSnapshotPruner } from "./snapshots/pruner";
 import { bootStatus } from "./status/boot";
-import { isIngestExecution } from "./status/model";
+import { isIngestExecution, isVisualizeExecution } from "./status/model";
 import type { DurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
+
+/** The executions boot recovery re-drives: ingest, the visuals flow, and the chat's conversations and titles. */
+export const recoveryOwns = (id: string): boolean =>
+  isIngestExecution(id) || isVisualizeExecution(id) || isRecoverableChatExecution(id);
 
 export interface BootIngestParts {
   built: ReturnType<typeof buildServer>;
@@ -87,6 +91,7 @@ export async function bootIngest(
     detachStatusFeed,
     chat,
     titles,
+    visuals,
     eraser,
     erasureLocks,
   } = built;
@@ -132,6 +137,7 @@ export async function bootIngest(
   // Hash the decoy now so the first unknown-email login is not measurably slower.
   await primeDecoy();
 
+  const sweepAbort = new AbortController();
   let recovery!: ReturnType<typeof startRecovery>;
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
   let uploadSweeper: ReturnType<typeof startSweeper> | undefined;
@@ -139,13 +145,17 @@ export async function bootIngest(
   const afterListen = () => {
     // Resume what the last process left running, then keep looking. Not awaited: the server must not wait to listen.
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
-      // Ingest, and the chat: a conversation mid-turn at a crash, and an interrupted title flow (P5).
-      owns: (id) => isIngestExecution(id) || isRecoverableChatExecution(id),
+      // Ingest, the visuals flow, and the chat: a conversation mid-turn at a crash, and an interrupted title flow (P5).
+      owns: recoveryOwns,
       // After the boot scan, a crash is found through its expired lease, not by reading every execution.
       ...(durable.storage.leaseStore && {
         leases: { store: durable.storage.leaseStore, owner: recoveryOwner },
       }),
     });
+    // Visualize the documents that turned ready with no visualize execution (a crash between ready and its start, or
+    // the role switched on later). After recovery has started, so a half-run execution is resumed, not restarted.
+    // Not awaited; a fired start is joined to the shutdown through `visuals.idle()`.
+    void visuals.sweep(sweepAbort.signal);
     // Resume erasures the last process left unfinished, after recovery has started (a cancelled-by-erasure
     // owner must not be re-driven by recovery first) and after the read models booted. Not awaited.
     void eraser?.resumeAll();
@@ -192,6 +202,7 @@ export async function bootIngest(
       if (shutdownDelayMs > 0)
         await new Promise<void>((resolve) => setTimeout(resolve, shutdownDelayMs));
       if (sweepTimer) clearInterval(sweepTimer);
+      sweepAbort.abort(); // no visualize start may be fired once the drain begins
       recovery.stop();
       const sweeperStopped = uploadSweeper?.stop() ?? Promise.resolve(); // idempotent; no sweep may fire a start once the drain begins
       // A prune in progress finishes its current execution (one DELETE) and releases its lock connection to the
@@ -210,6 +221,7 @@ export async function bootIngest(
             startsIdle: async () => {
               await starts.idle();
               await titles?.idle();
+              await visuals.idle();
             },
             closeIngest: () => closeIngest(ingest),
             ...(chat && { closeChat: () => chat.close() }),

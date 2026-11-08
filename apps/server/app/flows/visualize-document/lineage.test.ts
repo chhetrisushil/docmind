@@ -171,3 +171,29 @@ describe("a line whose key is gone", () => {
     });
   });
 });
+
+describe("visualsLineage", () => {
+  it("refuses a content store that does not seal (fails closed)", () => {
+    const keys = new InMemoryKeyStore();
+    expect(() =>
+      visualsLineage({
+        events: new InMemoryAsyncEventStore() as never,
+        content: new InMemoryContentStore(),
+        keys,
+        subjectOf: subjectOfExecution,
+      }),
+    ).toThrow(/sealsContent/);
+  });
+
+  it("accepts the sealing store", () => {
+    const keys = new InMemoryKeyStore();
+    expect(
+      visualsLineage({
+        events: new InMemoryAsyncEventStore() as never,
+        content: sealedContent(new InMemoryContentStore(), keys),
+        keys,
+        subjectOf: subjectOfExecution,
+      }),
+    ).toBeInstanceOf(Lineage);
+  });
+});

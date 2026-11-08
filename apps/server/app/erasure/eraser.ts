@@ -78,6 +78,8 @@ export interface ErasureDeps {
   settleStart(identity: Identity, documentId: string): Promise<void>;
   settleTitles(): Promise<void>;
   cancelIngest(identity: Identity, documentId: string, generation: number): Promise<void>;
+  /** Cancels the document's visualize executions (its generation and the one before); none running is fine. */
+  cancelVisualize(identity: Identity, documentId: string, generation: number): Promise<void>;
   /** Fires the chat's stop signal, then closes its conversation; tolerates a conversation that is gone. */
   stopChat(identity: Identity, chatId: string): Promise<void>;
   cancelTitle(identity: Identity, chatId: string): Promise<void>;
@@ -438,6 +440,7 @@ export class Eraser {
     for (const doc of work.documents) {
       await deps.settleStart(identity, doc.id);
       await deps.cancelIngest(identity, doc.id, doc.generation);
+      await deps.cancelVisualize(identity, doc.id, doc.generation);
     }
     for (const chatId of work.chatIds) {
       await deps.stopChat(identity, chatId);

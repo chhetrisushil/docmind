@@ -7,6 +7,7 @@ import { chatConversationId } from "../chats/ids";
 import type { ChatWiring } from "../chats/wiring";
 import type { IngestPort } from "../documents/ingest";
 import type { StartScheduler } from "../documents/startScheduler";
+import type { VisualsStarter } from "../flows/visualize-document/start";
 import { drainWithin } from "../shutdown";
 import { executionIdFor } from "../subject";
 import type { ErasureDeps } from "./eraser";
@@ -32,6 +33,7 @@ export interface ErasureParts {
   starts: Pick<StartScheduler, "settle">;
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
+  visuals: Pick<VisualsStarter, "cancel">;
   /** Absent when chat is not composed: there are no conversations to stop. */
   chat?: {
     stops: Pick<ChatWiring["stops"], "stop">;
@@ -65,6 +67,8 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
     settleTitles: async () => void (await p.titles?.idle()),
     cancelIngest: (identity, documentId, generation) =>
       p.ingest.cancel(identity, documentId, generation),
+    cancelVisualize: (identity, documentId, generation) =>
+      p.visuals.cancel(identity, documentId, generation),
     async stopChat(identity: Identity, chatId: string) {
       if (!p.chat) return;
       const conversationId = chatConversationId(identity.userId, chatId);

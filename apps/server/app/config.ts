@@ -7,6 +7,7 @@ import { isChatExecution } from "./chats/activity";
 import { type ErasureWiring, complianceConfig, warningFor } from "./erasure/compliance";
 import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
+import { type VisualizeDeps, visualizeEffects } from "./flows/visualize-document/deps";
 import {
   agentModules,
   flowModules,
@@ -42,6 +43,11 @@ export interface FlowDeps {
   chat?: ChatDeps;
   /** The auto-title step's dependencies; without them the flow's step fails at its first use (like an unregistered ingest step). */
   chatTitle?: ChatTitleDeps;
+  /**
+   * The visualize-document flow's dependencies. Its flow (the runner holds the app's planner) and effects register
+   * only with them; without them a start of that flow is refused (the CLI, in-memory tests).
+   */
+  visualize?: { flow: RegisteredFlow; deps: VisualizeDeps };
   /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
   onEvent?: (event: EventEnvelope) => void;
   /**
@@ -77,6 +83,7 @@ export function buildApp(
         kernel: { features: { inbox: true, continueAsNew: true } },
       }
     : {};
+  const flows = [...(deps.chat?.flows ?? []), ...(deps.visualize ? [deps.visualize.flow] : [])];
   return defineConfig({
     // With erasure, the timers and the parked-erasure folds wait for `app.start()`: `bootIngest` fills the
     // subject index first, so a parked erasure can never complete against a partly filled index.
@@ -88,6 +95,7 @@ export function buildApp(
     skillModules,
     projectionModules,
     ...chat,
+    ...(flows.length > 0 && { flows }),
     observability: {
       ...(deps.onEvent && { onEvent: deps.onEvent }),
       onWarn: loomWarn,
@@ -109,6 +117,10 @@ export function buildApp(
         }
         if (deps.chat) {
           for (const [id, effect] of Object.entries(deps.chat.effects))
+            effects.register(id, effect);
+        }
+        if (deps.visualize) {
+          for (const [id, effect] of Object.entries(visualizeEffects(deps.visualize.deps)))
             effects.register(id, effect);
         }
         if (deps.chatTitle) effects.register("chat-title", chatTitleEffect(deps.chatTitle));

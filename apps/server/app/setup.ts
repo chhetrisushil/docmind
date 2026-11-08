@@ -10,6 +10,7 @@ import { loadDeployment } from "./deployment";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
 import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring } from "./flows/ingest-document/limits";
+import { loadPlannerDecisionKey } from "./flows/visualize-document/planner";
 import { parsePublicOrigin } from "./http/originGuard";
 import { loadWebDir } from "./http/staticFiles";
 import { loadTrustProxy } from "./http/trustProxy";
@@ -68,6 +69,8 @@ export async function setupServer() {
   const ingest = createIngestWiring(env); // validates the DOCMIND_PARSE_* and DOCMIND_OLLAMA_URL / DOCMIND_EMBED_* variables before any connection opens
   // Role-aware boot warnings (fixed text, variable names only), here so a bad provider variable has already refused to start.
   for (const w of llmWarnings(ingest.llm.roles, env)) console.warn(w);
+  // R19: the planner's decision-id key, required while the visuals role is on. Before any connection opens.
+  const plannerDecisionKey = loadPlannerDecisionKey(env, ingest.llm.visuals !== undefined);
   const chatSettings = loadChatSettings(env); // before any connection opens: a bad variable must not reach recovery
   const chatLlm = createChatLlm(env, chatSettings);
   const titleLlm = createTitleLlm(env, chatSettings);
@@ -140,6 +143,7 @@ export async function setupServer() {
     maxConnections,
     httpTimeouts,
     ingest,
+    ...(plannerDecisionKey && { plannerDecisionKey }),
     chat: {
       settings: chatSettings,
       ...(chatLlm && { llm: chatLlm }),
