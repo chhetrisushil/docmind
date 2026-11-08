@@ -96,6 +96,7 @@ Rejected:
 - The chat catalogue keeps the id `docmind.visuals.v1` (chat decisions unchanged); the document catalogue is `docmind.visuals.v2`.
 - The first boot after this release re-plans every visualized document once (migration 0032): one planner call each, at most 2 at a time, no extraction (see docs/operations/cloud-deploy.md).
 - The end-to-end test (`documents/visuals.e2e.pg.test.ts`) covers upload A then B sharing an entity (no re-plan of A), deleting B, a text-only document with zero facts still getting its Connections section, another user's 404, and no plaintext title or entity name in the event log.
+- Shared entities: candidates are the 36 rarest entities of this document by chunk mentions (3 × the 12-entity cap); only those go through the readiness join, so a document naming one entity everywhere stays index-bound. Mentions are a proxy for document rarity, and when the readiness join drops many candidates fewer than 12 entities can come back (accepted).
 
 ## 7. Out of scope
 
