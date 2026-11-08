@@ -43,6 +43,8 @@ export interface IngestStackOptions {
   chatLegacyOnly?: boolean;
   /** Turns per conversation generation (production: 50), so a test can reach a rotation. */
   chatRotateEveryTurns?: number;
+  /** Turns the `visuals` role on over a FakeAnthropic (`visualsClaude`), with a planner decision key. Every other role stays off. */
+  visuals?: boolean;
   /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
   wrapErasure?: (deps: ErasureDeps) => ErasureDeps;
 }
@@ -65,6 +67,8 @@ export interface IngestStack {
   kek: KeyObject;
   /** Present with the `chat` option. */
   claude?: FakeAnthropic;
+  /** Present with the `visuals` option: the model behind the `visuals` role. */
+  visualsClaude?: FakeAnthropic;
   composed: ReturnType<typeof buildServer>;
   /** The composed eraser (always present on this stack). */
   eraser: Eraser;
@@ -118,9 +122,16 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     cleanups.unshift(() => fake.close());
     const claude = options.chat ? await startFakeAnthropic() : undefined;
     cleanups.unshift(async () => void (await claude?.close()));
+    const visualsClaude = options.visuals ? await startFakeAnthropic() : undefined;
+    cleanups.unshift(async () => void (await visualsClaude?.close()));
     const wiring = createIngestWiring({
       DOCMIND_OLLAMA_URL: fake.url,
       DOCMIND_LLM_PROVIDER: "off",
+      ...(visualsClaude && {
+        DOCMIND_VISUALS_PROVIDER: "anthropic",
+        ANTHROPIC_API_KEY: "test-key-not-real",
+        ANTHROPIC_BASE_URL: visualsClaude.url,
+      }),
       DOCMIND_EMBED_MODEL: "fake-embed",
       DOCMIND_EMBED_DIMENSIONS: "768",
     });
@@ -162,6 +173,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       secureCookies: false,
       trustProxy: false,
       ingest: wiring,
+      ...(visualsClaude && { plannerDecisionKey: randomBytes(32) }),
       status: {
         writer: pgStatusWriter(durable.pool),
         readerFor: pgStatusReaderFor(app),
@@ -279,6 +291,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       fake,
       kek,
       ...(claude && { claude }),
+      ...(visualsClaude && { visualsClaude }),
       composed,
       eraser: erasing,
       root,
@@ -297,6 +310,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
           boot.stop,
           () => fake.close(),
           async () => void (await claude?.close()),
+          async () => void (await visualsClaude?.close()),
         );
         if (opts.keepDb) return;
         await db.drop();

@@ -56,11 +56,12 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `apps/server/app/auth/` | Sign-up, login, sessions, throttling (Postgres-backed) |
 | `apps/server/app/documents/` | Upload, list, get, delete, retry routes; content sniffing; limits; starting and sweeping ingestion |
 | `apps/server/app/flows/ingest-document/` | The durable ingestion flow and one file per step in `steps/` |
+| `apps/server/app/flows/visualize-document/` | The flow that runs after ingest turns a document ready: `extract.ts` (LLM facts, grounding), `pgFacts.ts` (sealed `visual_facts`), `planner.ts` and `plan.ts` (the planner decision), `lineage.ts` and `commit.ts` (the sealed lineage head), `start.ts` (starter, boot sweep, cancel) |
 | `apps/server/app/flows/chat-title/` | The small flow that names a chat from its first question |
 | `apps/server/app/chats/` | Chat sessions, the `doc-chat` agent, tools (`tools/`), retrieval (`retrieval/`), SSE stream, citations, reasoning, the rolling summary (`summaryChoice.ts` seals Loom's summary decision, which would otherwise land in the log in the clear; `summarizer.ts` keeps a failing summarizer from ending a chat) |
 | `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers |
 | `apps/server/app/erasure/`, `keys/`, `crypto/` | Account erasure (`DELETE /api/me`), key-encryption keys, field crypto |
-| `apps/server/app/llm/` | Builds one LLM provider per role (chat, title, summary, vision) |
+| `apps/server/app/llm/` | Builds one LLM provider per role (chat, title, summary, visuals, vision) |
 | `apps/server/app/db/` | Migration runner (`migrate.ts`) and `withTenant` (`tenant.ts`); SQL lives in `infra/migrations` |
 | `apps/web/src/` | The web surface: router, services, `dm-*` Lit elements, chat state, API client |
 | `packages/contracts` | zod schemas and types shared by server and web; `intentOf` (what a UI action means) |
@@ -164,7 +165,7 @@ Five ideas explain most of the code that looks unusual. Learn them once and the 
 | --- | --- | --- |
 | Tenancy by row-level security | The server connects as `docmind_app`, which owns no tables and can't bypass RLS. Every owner-scoped query runs inside `withTenant`, which sets the tenant for that transaction. Migrations run as the owner role. | `db/tenant.ts`, `infra/migrations/0001`–`0003`, spec §4.3 |
 | One key per user (crypto-shredding) | Each user has a data key, stored wrapped by a master key (KEK). Loom's events, snapshots and archived inbox messages, sealed columns and blobs are all encrypted under it. Destroying the key makes all of that unreadable, which is how account erasure is final. | `packages/keystore-pg`, `packages/blob-store`, `erasure/`, `sensitive.ts`, spec §4.4 |
-| Durable flows | Long work runs as Loom flows: `ingest-document`, `doc-chat`, `chat-title`. Steps, model calls and tool calls are journaled, so after a crash Loom replays recorded results instead of calling again. Flow inputs carry ids only, never content. | `flows/`, `chats/wiring.ts`, `bootIngest.ts`, Loom's `@loom/core` |
+| Durable flows | Long work runs as Loom flows: `ingest-document`, `visualize-document`, `doc-chat`, `chat-title`. Steps, model calls and tool calls are journaled, so after a crash Loom replays recorded results instead of calling again. Flow inputs carry ids only, never content. | `flows/`, `chats/wiring.ts`, `bootIngest.ts`, Loom's `@loom/core` |
 | Experiences, not hand-built screens | A screen is a loom-ui experience defined once in `packages/experiences`. The server compiles it per surface and serves its data through identity-bound readers. The web app only hosts it. The same experience also renders in a terminal. | `packages/experiences`, `ui/routes.ts`, `components/dm-view.ts`, `docs/design/m6-loom-ui-native.md` |
 | Intents, never trusted actions | A widget action from the browser is untrusted. `intentOf` turns it into a typed intent, looking ids up in what the page itself published. The REST routes then re-check ownership anyway, so the intent filter is not the security boundary. | `packages/contracts/src/intents.ts`, `surface/perform.ts` |
 
