@@ -3,6 +3,7 @@ import { type BootIngestParts, bootIngest } from "./bootIngest";
 
 const calls: string[] = [];
 const owned: (((id: string) => boolean) | undefined)[] = [];
+const swept: (AbortSignal | undefined)[] = [];
 const note = (name: string) => () => void calls.push(name);
 
 vi.mock("@docmind/auth", () => ({ primeDecoy: async () => void calls.push("primeDecoy") }));
@@ -69,6 +70,14 @@ function parts(
     },
     events: { closeAll: note("events.closeAll") },
     titles: { idle: async () => void calls.push("titlesIdle") },
+    visuals: {
+      sweep: async (signal?: AbortSignal) => {
+        calls.push("visuals.sweep");
+        swept.push(signal);
+        return 0;
+      },
+      idle: async () => void calls.push("visualsIdle"),
+    },
     chatStreams: { closeAll: note("chatStreams.closeAll") },
     detachStatusFeed: note("detach"),
   };
@@ -98,6 +107,7 @@ function withIndex(over: Partial<BootIngestParts> = {}) {
 beforeEach(() => {
   calls.length = 0;
   owned.length = 0;
+  swept.length = 0;
   hydrateFails = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -115,6 +125,21 @@ describe("bootIngest", () => {
     expect(calls[5]).toBe("startRecovery:owner-1");
     expect(calls.slice(6)).toEqual(expect.arrayContaining(["startSweeper"]));
     expect(calls.indexOf("startSweeper")).toBeGreaterThan(5);
+  });
+
+  it("sweeps the ready documents for visuals right after recovery starts, and aborts that sweep at stop", async () => {
+    const handle = await bootIngest(parts({ listen: async () => void calls.push("listen") }));
+    expect(calls.indexOf("visuals.sweep")).toBe(calls.indexOf("startRecovery:owner-1") + 1);
+    const signal = swept[0];
+    expect(signal?.aborted).toBe(false);
+    await handle.stop();
+    expect(signal?.aborted).toBe(true);
+    // Recovery re-drives the visuals flow too.
+    const owns = owned[0];
+    const u = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
+    const d = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+    expect(owns?.(`u_${u}:visualize-${d}.2`)).toBe(true);
+    expect(owns?.(`u_${u}:ingest-${d}.2`)).toBe(true);
   });
 
   it("starts recovery and the sweepers without a listen step", async () => {
@@ -222,6 +247,7 @@ describe("bootIngest", () => {
       "drainServer",
       "startsIdle",
       "titlesIdle",
+      "visualsIdle",
       "closeIngest",
       "closeHeartbeat",
       "detach",

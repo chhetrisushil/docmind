@@ -39,16 +39,24 @@ import { tolerantSource } from "./erasure/tolerantSource";
 import { erasureDeps, requireKeyDestroyedProof } from "./erasure/wire";
 import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
+import { PgChunkStore } from "./flows/ingest-document/pgChunks";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { PgStepGuard } from "./flows/ingest-document/pgGuard";
+import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
+import { visualsLineage } from "./flows/visualize-document/lineage";
 import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
+import { visualsPlanner } from "./flows/visualize-document/planner";
+import { loomVisualsStarter, pgReadyDocuments } from "./flows/visualize-document/start";
 import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
 import { staticHandler } from "./http/staticFiles";
 import { createHttpServer } from "./server";
+import { StartupConfigError } from "./startupError";
 import type { UserExecutionLister } from "./status/forgetUser";
 import { type DocumentStatusReads, IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
 import { sealedLineageContent } from "./storage";
 import { PgContentStore } from "./storage/pgContentStore";
+import { subjectOfExecution } from "./subject";
 import { uiRoutes } from "./ui/routes";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
@@ -103,6 +111,11 @@ export interface ComposeOptions {
   vectors?: ChunkVectorStore & { verify?(tenantId: string): Promise<void> };
   /** Test seam: observe or wrap the ingest port the routes use. */
   wrapIngest?: (port: IngestPort) => IngestPort;
+  /**
+   * R19: the deployment secret that keys the visuals planner's decision ids (`DOCMIND_PLANNER_DECISION_KEY`, decoded).
+   * Required while the `visuals` role is on: composing refuses without it.
+   */
+  plannerDecisionKey?: Uint8Array;
   /** M4 chat: the settings, the chat LLM provider (absent when chat is off) and the timer store. Absent: no chat (the CLI, most tests). */
   chat?: {
     settings: ChatSettings;
@@ -168,8 +181,41 @@ export function buildServer(options: ComposeOptions) {
         }),
       })
     : undefined;
+  // The visuals flow. Its lineage lives over the SEALED content store only (`visualsLineage` refuses any other) and the
+  // sealing event store; the planner calls the visuals provider directly, so its prompt (the facts) writes no event.
+  const lineageContent = sealedLineageContent(new PgContentStore(pool), keys);
+  const visualsLlm = options.ingest.llm.visuals;
+  if (visualsLlm && !options.plannerDecisionKey)
+    throw new StartupConfigError(
+      "DOCMIND_PLANNER_DECISION_KEY is not set (required while the visuals role is on)",
+    );
+  const planner =
+    visualsLlm && options.plannerDecisionKey
+      ? visualsPlanner(visualsLlm, options.plannerDecisionKey)
+      : undefined;
+  const visualize = {
+    flow: visualizeDocumentFlow(() => planner),
+    deps: {
+      guard: new PgStepGuard(pool),
+      chunks: new PgChunkStore(pool, fields),
+      facts: new PgVisualFacts(pool, fields),
+      lineage: visualsLineage({
+        events: options.status.source,
+        content: lineageContent,
+        keys,
+        subjectOf: subjectOfExecution,
+      }),
+      now: () => new Date().toISOString(),
+      shutdown: options.ingest.shutdown.signal,
+      gate: options.ingest.gate,
+      ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
+      ...(visualsLlm && { llm: visualsLlm }),
+      ...(planner && { planner }),
+    },
+  };
   const app = buildApp(options.storage, options.crypto, {
     ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
+    visualize,
     ...(chatParts && { chat: chatParts.deps }),
     ...(options.chat && {
       chatTitle: {
@@ -195,6 +241,10 @@ export function buildServer(options: ComposeOptions) {
     },
   });
   const titles = options.chat && loomTitleStarter(app.runtime);
+  const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
+    ready: pgReadyDocuments(pool),
+    enabled: visualsLlm !== undefined,
+  });
   const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
   const sensitive = statusSensitive(flowSteps(), options.status.source);
   // The models fold through a source that reads an erased user's log as placeholders instead of throwing (E5). The
@@ -210,6 +260,8 @@ export function buildServer(options: ComposeOptions) {
     source: foldSource,
     sensitive,
     bus: options.ingest.bus,
+    // A document whose ingest turned ready is visualized (once per generation; the boot sweep covers a missed event).
+    onReady: (ref, generation) => visuals.fire(ref, generation),
     ...(options.status.userExecutions && { userExecutions: options.status.userExecutions }),
   });
   const activity = new ChatActivity({
@@ -279,6 +331,7 @@ export function buildServer(options: ComposeOptions) {
               starts,
               ...(titles && { titles }),
               ingest,
+              visuals,
               ...(chat && { chat }),
               status,
               activity,
@@ -349,6 +402,7 @@ export function buildServer(options: ComposeOptions) {
         limits,
         registry: options.ingest.registry,
         ingest,
+        visuals,
         starts,
         status,
       }),
@@ -392,7 +446,7 @@ export function buildServer(options: ComposeOptions) {
      * The visuals lineage's artifact store: Postgres under the per-user sealing wrapper, built once. Task 9 builds
      * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.
      */
-    lineageContent: sealedLineageContent(new PgContentStore(pool), keys),
+    lineageContent,
     /** `GET /readyz`: shutdown calls `beginShutdown()` as its first step. */
     readiness,
     store,
@@ -407,6 +461,8 @@ export function buildServer(options: ComposeOptions) {
     chat,
     /** Starts a chat's auto title; absent when `options.chat` is. `idle()` is awaited at shutdown with the ingest starts. */
     titles,
+    /** Starts, sweeps and cancels the visualize flow; boot calls `sweep()`, shutdown awaits `idle()`. */
+    visuals,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
     events,
     /** Ends every open chat stream; shutdown calls it right after `events.closeAll()` (a stream never ends on its own). Absent without chat. */

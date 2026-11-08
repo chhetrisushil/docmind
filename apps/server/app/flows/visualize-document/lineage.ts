@@ -54,6 +54,9 @@ export function visualsLineage(deps: {
   keys: Pick<KeyStore, "wasDestroyed">;
   subjectOf: (e: { executionId: string }) => string;
 }): Lineage {
+  // Fail closed: the artifacts hold the plan's labels and values, so a store that does not seal per subject is refused.
+  if ((deps.content as { sealsContent?: unknown }).sealsContent !== true)
+    throw new Error("visualsLineage needs a sealing content store (sealsContent: true)");
   const store = eventStoreLineageStore(deps.events);
   return new Lineage({
     events: store,

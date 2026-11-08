@@ -9,6 +9,7 @@ export const SECRET_VARIABLES = [
   "ANTHROPIC_API_KEY",
   "GEMINI_API_KEY",
   "DOCMIND_CHAT_ENVELOPE_KEY_PREVIOUS",
+  "DOCMIND_PLANNER_DECISION_KEY",
   // Read by the migration job and the KEK rotation script, which resolve them the same way.
   "DOCMIND_MIGRATE_URL",
   "DOCMIND_APP_DB_PASSWORD",

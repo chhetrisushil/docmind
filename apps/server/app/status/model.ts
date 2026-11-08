@@ -38,6 +38,14 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // Exactly `executionIdFor(user, "ingest-<doc>")` plus an optional positive `.<generation>` (no leading zero).
 const INGEST_EXECUTION = new RegExp(`^u_(${UUID}):ingest-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`);
 
+// Exactly `executionIdFor(user, "visualize-<doc>")` plus an optional positive `.<generation>`: the visuals flow of one ingest generation.
+const VISUALIZE_EXECUTION = new RegExp(
+  `^u_(${UUID}):visualize-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`,
+);
+/** A visualize-document execution. Never an ingest one: its events must not move a document's ingest status. */
+export const isVisualizeExecution = (executionId: string): boolean =>
+  VISUALIZE_EXECUTION.test(executionId);
+
 export const ingestKeyOf = (executionId: string): string | undefined =>
   INGEST_EXECUTION.exec(executionId)?.[2];
 export const ingestScopeOf = (executionId: string): string | undefined =>

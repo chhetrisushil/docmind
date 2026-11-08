@@ -112,6 +112,7 @@ A bad setting stops the server and names the variable, never its value.
 | `DOCMIND_GEMINI_THINKING_BUDGET must be a whole number from 0 to 24576` | Out of range. |
 | `DOCMIND_CHAT_CONTEXT_TOKENS must be at least twice DOCMIND_CHAT_MAX_TOKENS` | Chat sizing. |
 | `DOCMIND_CHAT_ENVELOPE_KEY must be 32 to 512 characters` (and the `_PREVIOUS` variants) | Envelope key shape. |
+| `DOCMIND_PLANNER_DECISION_KEY is not set` / `must be base64` / `must decode to at least 32 bytes` | The visuals role is on and the planner's decision key is missing or malformed. |
 
 Warnings (fixed text, once per process, never an address or a key):
 
@@ -124,6 +125,19 @@ Warnings (fixed text, once per process, never an address or a key):
 - `DOCMIND_CHAT_ENVELOPE_KEY is not set: chat envelopes do not survive a restart`. With chat on and the key
   unset, DocMind boots with a random per-process key. **Chats written under it cannot be read after a
   restart.** Set the key (`openssl rand -base64 32`) for any real use. To rotate it, see the README.
+
+## The visuals planner's decision key
+
+While the `visuals` role is on, set `DOCMIND_PLANNER_DECISION_KEY` (or `DOCMIND_PLANNER_DECISION_KEY_FILE`): base64 of
+32 or more random bytes, for example `openssl rand -base64 32`. It keys the planner's decision ids (HMAC-SHA-256), which
+are written to the event log in plaintext and survive a user's erasure; an unkeyed id would let anyone with the log
+confirm a guess at a document's content. It is one deployment secret, never a per-user key (a destroyed user key would
+orphan everyone else's decisions). The server refuses to start without it while the role is on; with the role off it is
+not read.
+
+**Rotate it only with no `visualize-document` execution in flight.** The same key gives the same id, which is how a resumed
+execution is served its recorded plan; after a change, a resumed execution misses it and plans again with the model, which
+may produce a different plan. Stop the server (or wait until no document is being visualized), change the key, start it.
 
 ## What users see
 

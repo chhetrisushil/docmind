@@ -2,8 +2,9 @@
 // Static modules for defineConfig — flows/agents/tools/skills/schedules/memories/projections.
 import * as _f0 from "./flows/chat-title/flow";
 import * as _f1 from "./flows/ingest-document/flow";
+import * as _f2 from "./flows/visualize-document/flow";
 
-export const flowModules = [_f0, _f1];
+export const flowModules = [_f0, _f1, _f2];
 
 
 export const agentModules = [];

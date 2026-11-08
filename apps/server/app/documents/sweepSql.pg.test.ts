@@ -14,6 +14,7 @@ const DEFINERS = [
   "docmind_erasure_pending",
   "docmind_erasure_status",
   "docmind_orphan_statuses",
+  "docmind_ready_documents",
   "docmind_stale_uploads_v2",
 ];
 const fn = (max = 10) =>

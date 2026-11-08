@@ -28,9 +28,9 @@ env:
   # db28b1b: EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned.
   LOOM_REF: db28b1b4e76ae749b382f4a34c66ee158ffcb1a7
   # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
-  # 280dc3f: erasable lineage (registerLineageSensitivePaths, confirmErased); its own CI builds against the LOOM_REF above.
+  # 6d4f6ca: erasable lineage (registerLineageSensitivePaths, confirmErased) and the planner's keyed decision id (decisionKey); its own CI builds against the LOOM_REF above.
   # Bump deliberately, like LOOM_REF.
-  LOOM_UI_REF: 280dc3f773cc499d65abbfcc020a78e8af993ee1
+  LOOM_UI_REF: 6d4f6cac8861e9448d2380351b36b33b19e8f8b6
 
 jobs:
   gate:

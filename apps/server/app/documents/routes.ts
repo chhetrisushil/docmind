@@ -19,6 +19,7 @@ import type { ParserRegistry } from "@docmind/parsers";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
+import type { VisualsStarter } from "../flows/visualize-document/start";
 import { UploadTooLargeError, receiveFile } from "../http/multipart";
 import { peek } from "../http/peek";
 import { requireAuth } from "../http/requireAuth";
@@ -64,6 +65,8 @@ export interface DocumentRoutesDeps {
   status: DocumentStatusReads;
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
+  /** Cancels the document's visualize executions on delete. Absent: none are composed (tests that never start one). */
+  visuals?: Pick<VisualsStarter, "cancel">;
   /** Test seam: how long a delete waits for a pending start before cancelling anyway. */
   settleTimeoutMs?: number;
   /** Fires flow starts after the upload commits, without making the response wait for them. */
@@ -419,6 +422,7 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           deps.settleTimeoutMs ?? SETTLE_TIMEOUT_MS,
         );
         await deps.ingest.cancel(identity, mine.id, mine.ingest_generation);
+        await deps.visuals?.cancel(identity, mine.id, mine.ingest_generation);
 
         // 2. Row and blob go under the tenant lock that uploads take before reusing a blob, so an
         //    upload of the same bytes cannot slip between the two (the store's contract). If COMMIT
@@ -445,8 +449,10 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           }
         }
         // A retry may have bumped the generation after step 1 read it; that run is still live.
-        if (outcome.generation > mine.ingest_generation)
+        if (outcome.generation > mine.ingest_generation) {
           await deps.ingest.cancel(identity, mine.id, outcome.generation);
+          await deps.visuals?.cancel(identity, mine.id, outcome.generation);
+        }
         if (!outcome.removed) return sendError(res, 404, "not_found", "document not found");
 
         // 3. The row and blob are gone (committed) and the flow is cancelled: now forget the status
