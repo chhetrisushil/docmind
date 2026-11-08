@@ -139,6 +139,7 @@ export class ChatController {
       chatId: d.chatId,
       fold: this.fold,
       open: d.open,
+      visualizing: () => [...this.phases.values()].includes("running"),
       onChange: () => this.publish(),
       onOlderFailed: () => {
         this.olderFailed = true;

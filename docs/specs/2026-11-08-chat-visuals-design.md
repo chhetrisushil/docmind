@@ -209,7 +209,12 @@ of existing turns; shared or multi-user chats; references to visuals from the an
   conversation id. A right chat with a wrong user gives no row.
 - C1: when the chat stream reopens (not on its first open), the web reads the newest history page again and takes
   `hasVisuals` and `visualizable` for replies it holds (a reply that now has visuals bumps its strip revision and ends a
-  "Visualizing…" wait). Older pages and their cursor are untouched; a failed re-read is silent.
+  "Visualizing…" wait). Older pages and their cursor are untouched; a failed re-read is silent. The re-read runs only
+  when something is pending (a held reply that is `visualizable` and has no visuals, or a visualize click waiting) and
+  never twice at once, so flapping reconnects cost one page read at most.
+  Known limit: a Re-visualize on a reply that already shows a strip is not recovered when its frame was lost. The reply
+  has `hasVisuals` already and the DTO carries no version of the head, so the re-read cannot tell the strip is stale; it
+  shows the new head after a reload. Versioning the head in the DTO was not built.
 - C2: the conversation reader has no seek by `ord` (cursors are position based), so the backward scan is bounded at 5000
   records (100 per page, 50 pages). A turn past it is `too_old`: the route answers 409 `not_visualizable` with its own
   message, and the flow treats it like any turn that is not complete.
@@ -218,3 +223,7 @@ of existing turns; shared or multi-user chats; references to visuals from the an
 - B6: the turn flow keeps the shared `document_gone` outcome word (every step output and the status model share it) and
   throws `TurnGoneError`, a `DocumentGoneError`, for a gone chat or an erased turn line.
 - `hasVisuals` uses `resolveLatest`, the route's own first test (at most 30 per page, 8 in flight).
+- C7: a turn found by the backward scan (an old reply) is scanned again by each of the route's check, `turn-load` and
+  `turn-extract`: up to three scans per click, each bounded at 5000 records and the whole bounded by the visualize
+  limiter (10 per minute). Passing the found position along would need a cursor the reader does not expose by `ord`
+  (see C2), so it is left as is.

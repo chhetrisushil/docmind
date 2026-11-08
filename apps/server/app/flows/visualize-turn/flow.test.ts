@@ -160,6 +160,15 @@ describe("visualize-turn flow", () => {
     expect(TURN_RETRY).toEqual({ maxAttempts: 3, backoffMs: 2_000, backoffMultiplier: 2 });
   });
 
+  it("the commit step's schema refuses a 'visualized' input without ops, and accepts 'nothing' without them", () => {
+    const commit = TURN_STEPS.find((s) => s.id === "turn-commit");
+    const ref = { tenantId: randomUUID(), userId: randomUUID(), chatId: randomUUID(), ord: 2 };
+    const schema = commit?.inputSchema as { safeParse(v: unknown): { success: boolean } };
+    expect(schema.safeParse({ ...ref, outcome: "visualized" }).success).toBe(false);
+    expect(schema.safeParse({ ...ref, outcome: "visualized", ops: [] }).success).toBe(true);
+    expect(schema.safeParse({ ...ref, outcome: "nothing" }).success).toBe(true);
+  });
+
   it("uses the stored facts that cover the citations: no extraction, one planner call, a head and a frame", async () => {
     const s = stack({ replies: [plan()], storedFacts: [stored] });
     expect(await s.run()).toEqual({ outcome: "visualized" });

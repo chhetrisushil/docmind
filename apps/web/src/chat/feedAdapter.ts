@@ -168,6 +168,12 @@ export class ChatFold {
     }
   }
 
+  /** A held reply that may get visuals and has none yet: a missed `visuals` frame would leave it so. */
+  hasPendingVisuals(): boolean {
+    for (const x of this.extras.values()) if (x.visualizable && !x.hasVisuals) return true;
+    return false;
+  }
+
   /**
    * The newest history page, read again after the stream reopened: a `visuals` frame is live-only, so one that fell in the
    * gap is missed. Only the visuals fields of replies already held are taken (the stream itself catches the messages up,

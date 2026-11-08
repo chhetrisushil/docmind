@@ -150,7 +150,11 @@ describe("turn-extract", () => {
     const llm = llmReplying([GOOD]);
     const ac = new AbortController();
     await setup({ llm }).run(ac.signal);
-    expect((llm.calls[0] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
+    const seen = (llm.calls[0] as { signal?: AbortSignal }).signal;
+    expect(seen).toBeInstanceOf(AbortSignal);
+    expect(seen?.aborted).toBe(false);
+    ac.abort(); // the model's signal follows the attempt's
+    expect(seen?.aborted).toBe(true);
   });
   it("is done with model 'none' and calls nothing when the visuals role is off", async () => {
     const s = setup();
