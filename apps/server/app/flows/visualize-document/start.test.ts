@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { LineErasedError } from "@loom-ui/lineage";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +11,12 @@ import { MemoryLog, evt } from "../../status/testing";
 import { executionIdFor } from "../../subject";
 import { visualizeDocumentFlow } from "./flow";
 import type { ReadyDocument } from "./start";
-import { SWEEP_EXECUTIONS, loomVisualsStarter, visualizeExecutionId } from "./start";
+import {
+  SWEEP_EXECUTIONS,
+  hasVisualsHead,
+  loomVisualsStarter,
+  visualizeExecutionId,
+} from "./start";
 
 /** One shared wait per execution, like Loom's handle: asking again for the completion is the same wait. */
 const once = <T>(make: () => Promise<T>): (() => Promise<T>) => {
@@ -740,13 +746,15 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
   };
   const setup = () => {
     const started: string[] = [];
+    const states = new Map<string, unknown>();
     const runtime = {
       cancel: vi.fn(),
+      loadState: vi.fn(async (id: string) => states.get(id) ?? null),
       start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
         started.push(o.executionId);
         return { executionId: o.executionId, waitForCompletion: async () => {} } as never;
       }),
-    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel" | "loadState">;
     const rows = new Map<string, { run: number; state: string; code: null }>();
     const runs = {
       record: vi.fn(async (r: { documentId: string; run: number }, state: string) => {
@@ -756,7 +764,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
         async (_i: unknown, documentId: string) => (rows.get(documentId) ?? null) as never,
       ),
     };
-    return { started, runtime, runs };
+    return { started, runtime, runs, states, rows };
   };
 
   it("re-runs a headed document once, noting it so the extract step never extracts; leaves a head-less one alone", async () => {
@@ -820,6 +828,55 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     log.mockRestore();
   });
 
+  it("a document with no head gets its run-0 outcome recorded from Loom's state, so it is neither listed nor read again", async () => {
+    const s = setup();
+    const bare = mk();
+    s.states.set(visualizeExecutionId(bare.userId, bare.documentId, 1), {
+      status: "completed",
+      variables: { _output: { outcome: "empty" } },
+    });
+    const visualized = vi.fn(async () => false);
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      // The real definer stops listing a document once it has a row.
+      unrecorded: async (after, limit) =>
+        s.rows.has(bare.documentId) ? [] : page([bare])(after, limit),
+      visualized,
+      runs: s.runs,
+    });
+    expect(await starter.sweep()).toBe(0);
+    expect(s.runs.record).toHaveBeenCalledWith(
+      { userId: bare.userId, documentId: bare.documentId, generation: 1, run: 0 },
+      "empty",
+      undefined,
+    );
+    expect(await starter.sweep()).toBe(0);
+    expect(visualized).toHaveBeenCalledTimes(1);
+    expect(s.started).toEqual([]);
+  });
+
+  it("records nothing for a head-less document whose execution is unreadable or not terminal (class logged), and continues", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const [running, gone, ok] = [mk(), mk(), mk()];
+    s.states.set(visualizeExecutionId(running.userId, running.documentId, 1), {
+      status: "running",
+    });
+    s.runtime.loadState = vi.fn(async (id: string) => {
+      if (id === visualizeExecutionId(gone.userId, gone.documentId, 1))
+        throw new RangeError("down");
+      return (s.states.get(id) ?? null) as never;
+    }) as never;
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      unrecorded: page([running, gone, ok]),
+      visualized: async () => false,
+      runs: s.runs,
+    });
+    expect(await starter.sweep()).toBe(0);
+    expect(s.runs.record).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("visuals unvisualized record failed", "RangeError");
+    log.mockRestore();
+  });
+
   it("a failing source is logged by class and does not undo the earlier passes", async () => {
     const s = setup();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -835,6 +892,38 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     expect(await starter.sweep()).toBe(1);
     expect(log).toHaveBeenCalledWith("visuals unrecorded pass failed", "RangeError");
     log.mockRestore();
+  });
+});
+
+describe("hasVisualsHead", () => {
+  const r = ref();
+  const lineage = (result: unknown, throws?: Error) =>
+    ({
+      head: async () => {
+        if (throws) throw throws;
+        return result;
+      },
+    }) as never;
+  it("is true for a head, false for none and for an erased line (refusal or error)", async () => {
+    expect(await hasVisualsHead(lineage({ ok: true, value: "x" }))(r)).toBe(true);
+    expect(await hasVisualsHead(lineage({ ok: true, value: null }))(r)).toBe(false);
+    expect(
+      await hasVisualsHead(
+        lineage({ ok: false, refusal: { kind: "refused", finding: { code: "line-erased" } } }),
+      )(r),
+    ).toBe(false);
+    expect(await hasVisualsHead(lineage(null, new LineErasedError("e")))(r)).toBe(false);
+  });
+  it("throws (class only) on any other refusal or error", async () => {
+    await expect(
+      hasVisualsHead(
+        lineage({ ok: false, refusal: { kind: "refused", finding: { code: "line-unreadable" } } }),
+      )(r),
+    ).rejects.toMatchObject({ name: "LineageRefusedError" });
+    await expect(
+      hasVisualsHead(lineage({ ok: false, refusal: { kind: "head-moved" } }))(r),
+    ).rejects.toThrow();
+    await expect(hasVisualsHead(lineage(null, new RangeError("x")))(r)).rejects.toThrow(RangeError);
   });
 });
 

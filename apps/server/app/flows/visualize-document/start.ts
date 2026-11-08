@@ -1,6 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import { factFormatFingerprint } from "@docmind/experiences";
-import type { Lineage } from "@loom-ui/lineage";
+import { LineErasedError, type Lineage } from "@loom-ui/lineage";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
@@ -12,7 +12,7 @@ import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS } from "../rerunTracker";
 import { rerunTracker } from "../rerunTracker";
 import { VisualizeInput } from "./flow";
-import { experienceIdOf } from "./lineage";
+import { LineageRefusedError, experienceIdOf } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { type VisualRun, type VisualRuns, outcomeOfState } from "./runs";
 
@@ -109,12 +109,24 @@ export const pgStaleFormatDocuments =
  */
 export const pgUnrecordedDocuments = readyFrom("docmind_visual_unrecorded_documents");
 
-/** True when the document's visuals line has a head (it was visualized with visuals). A refusal or an unreadable line throws. */
+/**
+ * True when the document's visuals line has a head (it was visualized with visuals). A confirmed-erased line is "no head".
+ * Any other refusal or an unreadable line throws (the caller logs the class and skips the document).
+ */
 export const hasVisualsHead =
   (lineage: Pick<Lineage, "head">) =>
   async (ref: VisualizeRef): Promise<boolean> => {
-    const head = await lineage.head(experienceIdOf(ref));
-    return head.ok && head.value !== null;
+    try {
+      const head = await lineage.head(experienceIdOf(ref));
+      if (head.ok) return head.value !== null;
+      const { refusal } = head;
+      const code = refusal.kind === "refused" ? refusal.finding.code : refusal.kind;
+      if (code === "line-erased") return false;
+      throw new LineageRefusedError(code);
+    } catch (err) {
+      if (err instanceof LineErasedError) return false;
+      throw err;
+    }
   };
 
 /** A run recorded as `running` (the boot reconcile's source). */
@@ -324,6 +336,26 @@ export function loomVisualsStarter(
     }
   };
 
+  /** Records the run-0 outcome of a document that has no visuals head, from the execution's output (as `reconcile`). Never throws. */
+  const recordUnvisualized = async (d: ReadyDocument): Promise<void> => {
+    try {
+      if (typeof runtime.loadState !== "function" || !runs) return;
+      const state = await runtime.loadState(
+        visualizeExecutionId(d.userId, d.documentId, d.generation),
+        { principal: { tenant: d.tenantId, actor: d.userId } },
+      );
+      const end = state ? outcomeOfState(state) : null;
+      if (!end) return;
+      await runs.record(
+        { userId: d.userId, documentId: d.documentId, generation: d.generation, run: 0 },
+        end.state,
+        end.code,
+      );
+    } catch (err) {
+      logClass("visuals unvisualized record failed")(err);
+    }
+  };
+
   const rerunWith = async (
     ref: VisualizeRef,
     generation: number,
@@ -506,12 +538,17 @@ export function loomVisualsStarter(
                   return answer.kind === "started" ? (answer.handle ?? null) : null;
                 }),
               async (d) => {
+                let head: boolean;
                 try {
-                  return await visualized(d);
+                  head = await visualized(d);
                 } catch (err) {
                   logClass("visuals head check failed")(err);
-                  return false;
+                  return false; // listed again next boot
                 }
+                // No head: it never produced visuals. Record its run-0 outcome (from Loom's state) so it is never listed
+                // again; when that cannot be read, record nothing (listed again next boot; the set does not grow).
+                if (!head) await recordUnvisualized(d);
+                return head;
               },
             );
           }

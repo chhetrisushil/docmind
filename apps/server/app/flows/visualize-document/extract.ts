@@ -144,11 +144,12 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       const id = executionId === undefined ? null : parseVisualizeExecution(executionId);
       const rerun = id?.rerun ?? 0;
       if (executionId !== undefined && id && rerun > 0) {
+        // The starter's note is read once and removed here (stored facts or not), so the set never fills up over a large boot.
+        const noted = deps.afterDone?.delete(executionId) === true;
         const stored = await deps.facts.list(ref);
         if (stored.length > 0) return { count: stored.length, model };
         // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
         // is the sure source; the reader only helps if it runs before this run's own `running` record lands.
-        const noted = deps.afterDone?.has(executionId) === true;
         const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
         if (noted || (last?.state === "done" && last.run < rerun)) return { count: 0, model };
       }
