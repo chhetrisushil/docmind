@@ -25,12 +25,12 @@ concurrency:
 env:
   # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
   # new commit, re-run the whole gate, then change this line.
-  # db28b1b: EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned.
-  LOOM_REF: db28b1b4e76ae749b382f4a34c66ee158ffcb1a7
+  # 4af27ea: turnSettledObserver (@loom/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
+  LOOM_REF: 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19
   # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
-  # 6d4f6ca: erasable lineage (registerLineageSensitivePaths, confirmErased) and the planner's keyed decision id (decisionKey); its own CI builds against the LOOM_REF above.
+  # d036e84: chatAccessories (@loom-ui/renderer-lit/chat, loom-ui PR #125): host content drawn under a chat transcript entry. Contains 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
   # Bump deliberately, like LOOM_REF.
-  LOOM_UI_REF: 6d4f6cac8861e9448d2380351b36b33b19e8f8b6
+  LOOM_UI_REF: d036e842361226470d5f939aa5e6a01ba6803205
 
 jobs:
   gate:
