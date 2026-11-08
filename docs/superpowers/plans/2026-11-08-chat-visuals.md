@@ -3793,6 +3793,12 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 
 ### Task 11: The web: the Visuals strip, the action states and the live frame
 
+> **Blocked on the loom-ui entry slot (spec section 3b).** The strip's placement below (`placeStrips` /
+> `placeVisuals`, the reach into `lu-chat`'s shadow root and the `MutationObserver`) is superseded and must not be
+> built. Before dispatching this task, the controller bumps `LOOM_UI_REF` to the merged loom-ui SHA and rewrites the
+> placement steps against that API. The strip component, its states, the client calls and the live-frame handling
+> stand.
+
 **Files:**
 - Modify: `WEB/api/client.ts` (`ViewSource`, `uiTurnVisuals`, `visualizeTurn`), `WEB/ui/session.ts` (`fetchPayload`), `WEB/components/dm-view.ts` (`turn` property)
 - Create: `WEB/chat/visuals.ts` (copy and the pure action rules), `WEB/chat/placeStrips.ts`
