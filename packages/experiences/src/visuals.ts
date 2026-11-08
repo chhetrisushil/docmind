@@ -207,9 +207,23 @@ const toIso = (raw: string): string => {
   const month = m ? MONTHS.indexOf((m[1] as string).slice(0, 3).toLowerCase()) : -1;
   return m && month >= 0 ? ym(m[2] as string, month + 1) : x;
 };
-/** Every label is a date and each is strictly later than the one before it (mixed granularities can collide or run backwards). */
-const isIncreasing = (isos: string[]) =>
-  isos.every((x, i) => isDate(x) && (i === 0 || Date.parse(x) > Date.parse(isos[i - 1] as string)));
+/**
+ * A trend's points in date order, or null. Every label must be a date and no two may fall on the same instant (mixed
+ * granularities can collide, e.g. "2024" and "2024-01"). Reports often list periods newest first, so the points are sorted
+ * oldest first rather than refused.
+ */
+const chronological = <P extends { x: string }>(
+  points: readonly P[],
+): (P & { iso: string })[] | null => {
+  const dated = points.map((p) => ({ ...p, iso: toIso(p.x) }));
+  if (!dated.every((p) => isDate(p.iso))) return null;
+  const sorted = [...dated].sort((a, b) => Date.parse(a.iso) - Date.parse(b.iso));
+  return sorted.every(
+    (p, i) => i === 0 || Date.parse(p.iso) > Date.parse((sorted[i - 1] as { iso: string }).iso),
+  )
+    ? sorted
+    : null;
+};
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
 /** loom-ui's "%" format reads a fraction (0.38 prints 38%), while facts hold the document's form (38 for "38%"). */
 const isPercent = (unit: string | undefined) => unit?.trim() === "%";
@@ -257,8 +271,9 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
           ),
           bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })),
         },
-  "visual-trend": (f) =>
-    f.kind !== "series" || !isIncreasing(f.points.map((p) => toIso(p.x)))
+  "visual-trend": (f) => {
+    const points = f.kind === "series" ? chronological(f.points) : null;
+    return f.kind !== "series" || points === null
       ? wrong()
       : {
           series: [
@@ -269,13 +284,11 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
                 f,
                 f.points.map((p) => p.y),
               ),
-              points: f.points.map((p) => ({
-                timestamp: toIso(p.x),
-                value: toLoom(f, p.y),
-              })),
+              points: points.map((p) => ({ timestamp: p.iso, value: toLoom(f, p.y) })),
             },
           ],
-        },
+        };
+  },
   "visual-table": (f) => (f.kind !== "factTable" ? wrong() : { columns: f.columns, rows: f.rows }),
 };
 

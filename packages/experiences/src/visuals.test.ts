@@ -194,10 +194,21 @@ describe("the visual reshapers", () => {
     ]);
     expect(stamps(["2024-01", "Q2 2024", "2025"])).toEqual(["2024-01", "2024-04", "2025-01"]);
     expect(stamps(["Jun. 2026", "Sep-2026"])).toEqual(["2026-06", "2026-09"]);
-    // Mixed granularity that collides or runs backwards is not a trend.
+    // Reports often list periods newest first: the points are drawn oldest first.
+    expect(stamps(["2026", "2025", "2024"])).toEqual(["2024-01", "2025-01", "2026-01"]);
+    expect(stamps(["Q1 2026", "2025-12-31"])).toEqual(["2025-12-31", "2026-01"]);
+    const newestFirst = shape("visual-trend-2", [FIGURE, SERIES, xs(["2026", "2025", "2024"])]) as {
+      series: { points: { timestamp: string; value: number }[] }[];
+    };
+    // Each value stays with its own period (xs gives the first label y 0, the second 1, the third 2).
+    expect(newestFirst.series[0]?.points).toEqual([
+      { timestamp: "2024-01", value: 2 },
+      { timestamp: "2025-01", value: 1 },
+      { timestamp: "2026-01", value: 0 },
+    ]);
+    // Labels that fall on the same instant (mixed granularities collide) are not a trend.
     expect(() => stamps(["2024-01", "Q2 2024", "2024"])).toThrow();
     expect(() => stamps(["2026-01", "2026-01"])).toThrow();
-    expect(() => stamps(["Q1 2026", "2025-12-31"])).toThrow();
     expect(() => stamps(["Q1 2026", "next spring"])).toThrow();
     expect(() => stamps(["Q5 2026"])).toThrow();
     expect(() => stamps(["Q1"])).toThrow();
