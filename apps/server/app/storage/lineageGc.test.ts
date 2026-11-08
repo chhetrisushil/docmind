@@ -6,6 +6,7 @@ import {
   DEFAULT_LINEAGE_GC_INTERVAL_MS,
   LINEAGE_GC_GRACE_MS,
   type LineageGcDeps,
+  type MaintenanceRuns,
   collectLineageContent,
   loadLineageGcIntervalMs,
   startLineageGc,
@@ -112,15 +113,75 @@ describe("collectLineageContent", () => {
     expect((await w.store.listPage?.({ limit: 10 }))?.entries).toHaveLength(2);
   });
 
-  it("deletes nothing when the store has no clock or the pins are unavailable at the start", async () => {
+  it("reports a store without a clock as no-clock, deleting nothing", async () => {
     const w = world();
-    await w.put("a");
+    const a = await w.put("a");
     w.advance(3 * DAY);
-    const noClock = w.deps(yielding("x"), { store: withoutMethod(w.store, "touchClock") });
-    expect(await collectLineageContent(noClock)).toMatchObject({
-      refused: "roots-incomplete",
+    const missing = w.deps(yielding("x"), { store: withoutMethod(w.store, "touchClock") });
+    expect(await collectLineageContent(missing)).toMatchObject({
+      refused: "no-clock",
       reclaimed: 0,
+      failed: 1,
     });
+    const throwing = withoutMethod(w.store, "touch");
+    const broken = {
+      ...throwing,
+      touchClock: async () => {
+        throw new RangeError("clock down");
+      },
+    } as unknown as LineageGcDeps["store"];
+    expect(await collectLineageContent(w.deps(yielding("x"), { store: broken }))).toMatchObject({
+      refused: "no-clock",
+      failedByClass: { RangeError: 1 },
+    });
+    expect(await w.has(a)).toBe(true);
+  });
+
+  it("deletes nothing when the pins are unavailable from the start", async () => {
+    const w = world();
+    const a = await w.put("a");
+    w.advance(3 * DAY);
+    const pins = (): AsyncIterable<string> => {
+      throw new TypeError("the LineageStore cannot enumerate its lines");
+    };
+    expect(await collectLineageContent(w.deps(pins))).toMatchObject({
+      refused: "roots-incomplete",
+      failedByClass: { TypeError: 1 },
+    });
+    expect(await w.has(a)).toBe(true);
+  });
+
+  it("stops between root yields on shutdown, without erasing or failing", async () => {
+    const w = world();
+    const a = await w.put("a");
+    w.advance(3 * DAY);
+    const ctl = new AbortController();
+    const pins = async function* () {
+      yield "sha256:one";
+      ctl.abort();
+      yield "sha256:two";
+    };
+    const report = await collectLineageContent(w.deps(pins), ctl.signal);
+    expect(report).toMatchObject({ refused: "stopped", reclaimed: 0, failed: 0 });
+    expect(await w.has(a)).toBe(true);
+  });
+
+  it("reports a shutdown during the sweep as stopped, not sweep-failed", async () => {
+    const w = world();
+    w.advance(3 * DAY);
+    const ctl = new AbortController();
+    const store = {
+      delete: w.store.delete.bind(w.store),
+      deleteIfUntouchedSince: w.store.deleteIfUntouchedSince?.bind(w.store),
+      touch: w.store.touch?.bind(w.store),
+      touchClock: w.store.touchClock?.bind(w.store),
+      listPage: async () => {
+        ctl.abort();
+        throw new Error("the connection was closed");
+      },
+    } as LineageGcDeps["store"];
+    const report = await collectLineageContent(w.deps(yielding("sha256:x"), { store }), ctl.signal);
+    expect(report).toMatchObject({ refused: "stopped", failed: 0 });
   });
 
   it("deletes nothing when the root set is empty", async () => {
@@ -205,6 +266,86 @@ describe("collectLineageContent", () => {
   });
 });
 
+/** An in-memory `maintenance_runs`: `last` is undefined until a run is marked. */
+function fakeRuns(last?: number, now = () => 1_000_000) {
+  const state = { last };
+  const runs: MaintenanceRuns & { marks: number } = {
+    marks: 0,
+    due: async (_name, everyMs) => state.last === undefined || now() - state.last >= everyMs,
+    markRun: async () => {
+      runs.marks += 1;
+      state.last = now();
+    },
+  };
+  return runs;
+}
+
+describe("collectLineageContent: scheduling by the last completed run", () => {
+  const sched = (runs: MaintenanceRuns) => ({
+    schedule: { name: "lineage-gc", everyMs: DAY, runs },
+  });
+
+  it("runs when there is no row, and records the run", async () => {
+    const w = world();
+    const runs = fakeRuns(undefined);
+    const report = await collectLineageContent(w.deps(yielding("sha256:x"), sched(runs)));
+    expect(report).toMatchObject({ notDue: false, skipped: false });
+    expect(report.refused).toBeUndefined();
+    expect(runs.marks).toBe(1);
+  });
+
+  it("skips, looking at nothing, when the last run is recent", async () => {
+    const w = world();
+    const runs = fakeRuns(1_000_000 - DAY / 2);
+    const pins = vi.fn(yielding("sha256:x"));
+    const report = await collectLineageContent(w.deps(pins, sched(runs)));
+    expect(report).toMatchObject({ notDue: true, reclaimed: 0 });
+    expect(pins).not.toHaveBeenCalled();
+    expect(runs.marks).toBe(0);
+    expect(w.lock.release).toHaveBeenCalledOnce();
+  });
+
+  it("runs when the last run is old, and updates it", async () => {
+    const w = world();
+    const runs = fakeRuns(1_000_000 - 2 * DAY);
+    const report = await collectLineageContent(w.deps(yielding("sha256:x"), sched(runs)));
+    expect(report.notDue).toBe(false);
+    expect(runs.marks).toBe(1);
+    expect(await runs.due("lineage-gc", DAY)).toBe(false);
+  });
+
+  it("does not count a refusal or a failure as a run", async () => {
+    const w = world();
+    const runs = fakeRuns(undefined);
+    const failing = async function* () {
+      yield "sha256:x";
+      throw new Error("down");
+    };
+    await collectLineageContent(w.deps(failing, sched(runs)));
+    await collectLineageContent(w.deps(yielding(), sched(runs))); // no-roots
+    await collectLineageContent(
+      w.deps(yielding("sha256:x"), { ...sched(runs), store: withoutMethod(w.store, "touch") }),
+    ); // sweep refused
+    expect(runs.marks).toBe(0);
+  });
+
+  it("reports an unreadable schedule as schedule-unavailable and runs nothing", async () => {
+    const w = world();
+    const runs = {
+      due: async () => {
+        throw new TypeError("db down");
+      },
+      markRun: async () => {},
+    };
+    const pins = vi.fn(yielding("sha256:x"));
+    expect(await collectLineageContent(w.deps(pins, sched(runs)))).toMatchObject({
+      refused: "schedule-unavailable",
+      failedByClass: { TypeError: 1 },
+    });
+    expect(pins).not.toHaveBeenCalled();
+  });
+});
+
 describe("startLineageGc", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -226,7 +367,7 @@ describe("startLineageGc", () => {
       yield "sha256:x";
     });
     const gc = startLineageGc(w.deps(pins), 1000);
-    expect(pins).not.toHaveBeenCalled(); // the first run is one interval away
+    expect(pins).not.toHaveBeenCalled(); // the first tick is one tick interval away
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(3000); // ticks during the run are skipped
     expect(pins).toHaveBeenCalledOnce();
@@ -235,5 +376,41 @@ describe("startLineageGc", () => {
     const logged = JSON.stringify(vi.mocked(console.info).mock.calls);
     expect(logged).toContain("lineage gc");
     expect(logged).not.toContain("sha256:");
+  });
+
+  it("logs at startup that the collector is on and its interval", () => {
+    const w = world();
+    const gc = startLineageGc(w.deps(yielding("sha256:x")), 86_400_000);
+    expect(JSON.stringify(vi.mocked(console.info).mock.calls)).toMatch(
+      /lineage gc enabled.*86400000/,
+    );
+    void gc.stop();
+  });
+
+  it("ticks hourly for a daily interval, so a service redeployed every day still collects", async () => {
+    const w = world();
+    const pins = vi.fn(yielding("sha256:x"));
+    const runs = fakeRuns(undefined);
+    const gc = startLineageGc(
+      w.deps(pins, { schedule: { name: "lineage-gc", everyMs: DAY, runs } }),
+      DAY,
+    );
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(pins).toHaveBeenCalledOnce();
+    await gc.stop();
+  });
+
+  it("stays quiet on a tick that is not due", async () => {
+    const w = world();
+    const pins = vi.fn(yielding("sha256:x"));
+    const gc = startLineageGc(
+      w.deps(pins, { schedule: { name: "lineage-gc", everyMs: DAY, runs: fakeRuns(1_000_000) } }),
+      DAY,
+    );
+    vi.mocked(console.info).mockClear();
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(pins).not.toHaveBeenCalled();
+    expect(console.info).not.toHaveBeenCalled();
+    await gc.stop();
   });
 });

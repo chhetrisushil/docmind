@@ -18,7 +18,7 @@ import { type DurableStorage, createDurableStorage, sealedLineageContent } from 
 import { subjectOfExecution } from "../subject";
 import { collectLineageContent } from "./lineageGc";
 import { PgContentStore } from "./pgContentStore";
-import { lineageGcDeps } from "./pgLineageGc";
+import { PgMaintenanceRuns, lineageGcDeps } from "./pgLineageGc";
 
 const DAY = 86_400_000;
 const NOW = "2026-11-08T10:00:00.000Z";
@@ -67,8 +67,12 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
     );
   };
   const exists = async (address: string) => (await inner.get({ __loomContent: address })) !== null;
-  const run = (over: Parameters<typeof lineageGcDeps>[0] = { lineage, store: inner }) =>
-    collectLineageContent(lineageGcDeps(over, stores.pool));
+  /** Production deps minus the schedule: these tests run the collector on demand. */
+  const depsOf = (over: Parameters<typeof lineageGcDeps>[0] = { lineage, store: inner }) => ({
+    ...lineageGcDeps(over, stores.pool, app, DAY),
+    schedule: undefined,
+  });
+  const run = (over?: Parameters<typeof lineageGcDeps>[0]) => collectLineageContent(depsOf(over));
   /** A document line with two versions (so more than one blob). */
   async function twoVersions(userId: string, label: string) {
     const r = refOf(userId);
@@ -123,7 +127,7 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
     const raced = (await inner.put(enc(`raced-${randomUUID()}`))).__loomContent;
     clock += 3 * DAY;
     const young = (await inner.put(enc(`young-${randomUUID()}`))).__loomContent;
-    const deps = lineageGcDeps({ lineage, store: inner }, stores.pool);
+    const deps = depsOf();
     const report = await collectLineageContent({
       ...deps,
       pins: async function* () {
@@ -175,6 +179,65 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
     for (const a of goodAddresses) expect(await exists(a)).toBe(true);
   });
 
+  it("keeps every version of a line with more than 20 versions (keepLast is Infinity, not the default 20)", async () => {
+    const r = refOf(randomUUID());
+    const id = experienceIdOf(r);
+    for (let i = 0; i < 25; i++)
+      await commitPlan(lineage, r, await aPlan(`n${i}`, `Version-${i}`), () => NOW);
+    const addresses = await addressesOf(id);
+    expect(new Set(addresses).size).toBeGreaterThan(20);
+    clock += 3 * DAY;
+    const report = await run();
+    expect(report.refused).toBeUndefined();
+    for (const a of addresses) expect(await exists(a), a).toBe(true);
+  });
+
+  describe("maintenance_runs scheduling (the DB clock)", () => {
+    const runs = () => new PgMaintenanceRuns(app);
+    const name = () => `test-${randomUUID()}`;
+
+    it("is due with no row, not due right after a mark, due again once the row is old", async () => {
+      const n = name();
+      expect(await runs().due(n, DAY)).toBe(true);
+      await runs().markRun(n);
+      expect(await runs().due(n, DAY)).toBe(false);
+      await app.query(
+        "UPDATE maintenance_runs SET last_run_at = now() - interval '2 days' WHERE name = $1",
+        [n],
+      );
+      expect(await runs().due(n, DAY)).toBe(true);
+      await runs().markRun(n);
+      const { rows } = await app.query(
+        "SELECT last_run_at > now() - interval '1 minute' AS fresh FROM maintenance_runs WHERE name = $1",
+        [n],
+      );
+      expect(rows[0].fresh).toBe(true);
+    });
+
+    it("a run records itself once, a refusal does not, and a second replica then finds it not due", async () => {
+      await twoVersions(randomUUID(), "Sched-Label");
+      clock += 3 * DAY;
+      const deps = lineageGcDeps({ lineage, store: inner }, stores.pool, app, DAY);
+      await app.query("DELETE FROM maintenance_runs WHERE name = 'lineage-gc'");
+      const refused = await collectLineageContent({
+        ...deps,
+        pins: async function* () {
+          yield "sha256:x";
+          throw new Error("a line failed");
+        },
+      });
+      expect(refused.refused).toBe("roots-incomplete");
+      expect(
+        (await app.query("SELECT 1 FROM maintenance_runs WHERE name = 'lineage-gc'")).rowCount,
+      ).toBe(0);
+      const first = await collectLineageContent(deps);
+      expect(first).toMatchObject({ notDue: false });
+      expect(first.refused).toBeUndefined();
+      const second = await collectLineageContent(deps); // another replica, same database
+      expect(second).toMatchObject({ notDue: true, reclaimed: 0 });
+    });
+  });
+
   it("lets one of two concurrent runs work and the other skip (cross-replica lock)", async () => {
     await twoVersions(randomUUID(), "Lock-Label");
     clock += 3 * DAY;
@@ -182,7 +245,7 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    const deps = lineageGcDeps({ lineage, store: inner }, stores.pool);
+    const deps = depsOf();
     const first = collectLineageContent({
       ...deps,
       pins: async function* () {

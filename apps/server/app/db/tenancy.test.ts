@@ -106,10 +106,11 @@ describe.skipIf(!PG_URL)("tenant isolation (needs DOCMIND_TEST_PG_URL)", () => {
   // schema_migrations holds only file names, timestamps and checksums (no tenant data); docmind_app
   // may SELECT it (0017, the boot checksum check) and nothing else, so it is exempt from RLS.
   // lineage_content holds ciphertext only, sealed per user by EncryptingContentStore, and loom's content API has no tenant (0027).
+  // maintenance_runs holds a job name and the time it last completed (0031): no tenant data.
   const unprotected = async () => {
     const { rows } = await db.owner.query<{ relname: string }>(
       `SELECT relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-       WHERE n.nspname = 'public' AND relname NOT IN ('schema_migrations', 'lineage_content') AND (
+       WHERE n.nspname = 'public' AND relname NOT IN ('schema_migrations', 'lineage_content', 'maintenance_runs') AND (
          (c.relkind IN ('r', 'p') AND NOT c.relrowsecurity) OR c.relkind = 'm' OR
          (c.relkind = 'v' AND NOT coalesce(c.reloptions @> ARRAY['security_invoker=true'], false)))
        ORDER BY relname`,

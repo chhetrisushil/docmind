@@ -24,7 +24,7 @@ const walk = (dir: string, out: string[] = []): string[] => {
 
 // What would put content in Loom's store or read it back.
 const CONTENT_WIRING =
-  /\b(ContentResolvingEventStore|ContentTouchingSnapshotStore|claimCheck\w*|ClaimCheck\w*|SeenLog|createSeenLog|collectSeenRoots|collectSeenGarbage|new Lineage\(|PgContentStore|EncryptingContentStore|sealedLineageContent|rawLineageContent|lineageContent|externalize)\b/;
+  /\b(ContentResolvingEventStore|ContentTouchingSnapshotStore|claimCheck\w*|ClaimCheck\w*|SeenLog|createSeenLog|collectSeenRoots|collectSeenGarbage|new Lineage\(|PgContentStore|EncryptingContentStore|sealedLineageContent|rawLineageContent|lineageContent|lineage_content|externalize)\b/;
 
 /** Files allowed to mention it, each with the reason. */
 const ALLOWED: Record<string, string> = {
@@ -43,6 +43,7 @@ const ALLOWED: Record<string, string> = {
 describe("who uses lineage_content", () => {
   const files = [
     ...walk(join(repo, "apps/server/app")),
+    ...walk(join(repo, "apps/server/scripts")),
     ...readdirSync(join(repo, "packages")).flatMap((pkg) => {
       try {
         return walk(join(repo, "packages", pkg, "src"));

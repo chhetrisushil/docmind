@@ -199,7 +199,7 @@ export async function bootIngest(
       snapshotPruner = startSnapshotPruner(snapshotPruneDeps(durable), snapshotPruneIntervalMs);
     if (lineageGcIntervalMs > 0)
       lineageCollector = startLineageGc(
-        lineageGcDeps(lineageGc, durable.pool),
+        lineageGcDeps(lineageGc, durable.pool, pool, lineageGcIntervalMs),
         lineageGcIntervalMs,
       );
   };
