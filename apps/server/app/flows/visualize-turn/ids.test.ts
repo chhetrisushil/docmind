@@ -22,6 +22,16 @@ describe("turn ids", () => {
       `turnvisuals-${user}-${chat}-6`,
     );
   });
+  it("refuses a user or chat id that is not a canonical lower-case uuid in the lineage id", () => {
+    for (const bad of ["", "x", user.toUpperCase(), `${user}\n`, `${user}-1`])
+      expect(() => turnExperienceId({ userId: bad, chatId: chat, ord: 6 }), bad).toThrow(
+        RangeError,
+      );
+    for (const bad of ["", "x", chat.toUpperCase(), `${chat}\n`])
+      expect(() => turnExperienceId({ userId: user, chatId: bad, ord: 6 }), bad).toThrow(
+        RangeError,
+      );
+  });
   it("refuses a bad ord or re-run number", () => {
     for (const bad of [0, -1, 1.5, 1_000_000_000_000_000])
       expect(() => turnExecutionId(user, chat, bad)).toThrow(RangeError);

@@ -310,9 +310,13 @@ export function buildServer(options: ComposeOptions) {
     turnRead &&
     loomTurnStarter(app.runtime, visualizeTurn.flow, {
       enabled: () => visualsLlm !== undefined,
-      tenantOf: async (chatId) =>
-        ((await pool.query("SELECT public.docmind_chat_tenant($1::uuid) AS t", [chatId])).rows[0]
-          ?.t as string | null) ?? null,
+      tenantOf: async (userId, chatId) =>
+        ((
+          await pool.query("SELECT public.docmind_chat_tenant($1::uuid, $2::uuid) AS t", [
+            chatId,
+            userId,
+          ])
+        ).rows[0]?.t as string | null) ?? null,
       turn: turnRead,
       backlog: () => visualizeGate.waiting,
       maxWaiting: MAX_WAITING,

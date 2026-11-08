@@ -57,6 +57,7 @@ const settled = () => {
   const chat = randomUUID();
   const id = chatConversationId(user, chat);
   return {
+    user,
     chat,
     e: { conversationId: id, executionId: id, turn: 1, ord: 2, status: "complete" as const },
   };
@@ -85,7 +86,7 @@ describe("compose: the turn starter", () => {
     await built.turns?.idle(); // the check has settled: a start would have been made by now
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0]?.[0]).toContain("docmind_chat_tenant");
-    expect(query.mock.calls[0]?.[1]).toEqual([s.chat]);
+    expect(query.mock.calls[0]?.[1]).toEqual([s.chat, s.user]);
     expect(start).not.toHaveBeenCalled();
   });
 });

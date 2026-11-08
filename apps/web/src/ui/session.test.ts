@@ -392,6 +392,7 @@ describe("ViewSession: a turn source", () => {
     };
     const s = await ViewSession.open(api as never, { turn: { chatId: "c1", ord: 4 } });
     expect(api.uiTurnVisuals).toHaveBeenCalledWith("c1", 4, undefined);
+    expect(s.name).toBe("turn"); // not "detail": a turn is not a document's page
     s.start();
     await vi.waitFor(() => expect(api.uiHydrate).toHaveBeenCalled());
     expect((api.uiHydrate.mock.calls[0] as unknown[])[0]).toEqual({

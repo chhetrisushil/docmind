@@ -55,10 +55,12 @@ const settled = () => ({
 describe("the turn starter: the hook", () => {
   it("starts visualize-turn-<chat>-<ord> once; a duplicate event is swallowed and a fork's repeat is the same id", async () => {
     const f = fake();
-    const s = loomTurnStarter(f.runtime, flow, options());
+    const onError = vi.fn();
+    const s = loomTurnStarter(f.runtime, flow, options({ onError }));
     s.onSettled(settled());
     s.onSettled(settled());
     await s.idle();
+    expect(onError).not.toHaveBeenCalled(); // the duplicate is swallowed silently, not reported
     expect(f.start).toHaveBeenCalledTimes(2);
     expect([...f.started]).toEqual([turnExecutionId(user, chat, 4)]);
     expect(f.start.mock.calls[0]?.[1]).toEqual(ref); // ids only

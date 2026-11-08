@@ -1,6 +1,7 @@
 import { LlmRefusalError } from "@docmind/llm-anthropic";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
+import { MAX_READ_IDS } from "../../chats/retrieval/passages";
 import { isDocumentGone } from "../ingest-document/errors";
 import {
   LLM_BACKOFF_CAP_MS,
@@ -19,8 +20,6 @@ import type { TurnRef } from "./ids";
 import { TURN_RETRY, type TurnFactsInput, TurnFactsOutput, TurnLoadOutput } from "./model";
 import type { TurnFactStore } from "./pgTurnFacts";
 import type { TurnRead } from "./readTurn";
-
-const PASSAGE_READ_BATCH = 100; // PassageReader's MAX_READ_IDS
 
 export interface TurnLoadDeps extends StepSeams {
   guard: StepGuard<TurnRef>;
@@ -87,7 +86,7 @@ const readRetrieved = (deps: TurnExtractDeps, ref: TurnRef, ids: string[]) =>
     },
     ids,
     deps.summaryMaxChars,
-    PASSAGE_READ_BATCH,
+    MAX_READ_IDS,
   );
 
 /**

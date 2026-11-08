@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { HistoryEntry } from "@loom/conversation";
 import { describe, expect, it, vi } from "vitest";
 import type { StoredPassage, TurnItem } from "../../chats/turnItems";
-import { readTurn } from "./readTurn";
+import { LOOKBACK_RECORDS, readTurn } from "./readTurn";
 
 const user = randomUUID();
 const chat = randomUUID();
@@ -101,5 +101,22 @@ describe("readTurn", () => {
     );
     expect(await readTurn(deps([user1, reply("x")], []), { ...ref, ord: 3 })).toBeNull();
     expect(await readTurn(deps([user1, reply("x")], []), { ...ref, ord: 99 })).toBeNull();
+  });
+
+  it("stops at the first page that reaches an older ord, though the log is not done", async () => {
+    const older = { ...user1, ord: 2, turn: 1 } as HistoryEntry;
+    const read = vi.fn(async () => ({ entries: [older], nextCursor: "1.1", done: false }));
+    const out = await readTurn({ ...deps([], []), reader: { read } as never }, { ...ref, ord: 4 });
+    expect(out).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 'too_old' (not null) when the reply is past the lookback, after a bounded number of reads", async () => {
+    const newer = { ...user1, ord: 900, turn: 9 } as HistoryEntry;
+    const read = vi.fn(async () => ({ entries: [newer], nextCursor: "1.1", done: false }));
+    const out = await readTurn({ ...deps([], []), reader: { read } as never }, ref);
+    expect(out).toEqual({ status: "too_old", retrieved: [], citations: [] });
+    expect(read).toHaveBeenCalledTimes(LOOKBACK_RECORDS / 100);
+    expect(LOOKBACK_RECORDS).toBeGreaterThan(1200);
   });
 });

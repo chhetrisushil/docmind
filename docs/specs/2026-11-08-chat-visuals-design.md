@@ -68,7 +68,8 @@ interface TurnSettledEvent {
 - A fork can report its copied prefix again under the fork's id. DocMind keys work by chat and
   `ord`, which covers it.
 - The event carries no tenant. DocMind resolves it with a SECURITY DEFINER function
-  `docmind_chat_tenant(chat_id)` (migration 0029), like `docmind_ready_documents`.
+  `docmind_chat_tenant(chat_id, user_id)` (migration 0029), like `docmind_ready_documents`. It binds the user the
+  conversation id carries, so a chat id with another user's id reveals no tenant.
 
 ## 3b. Prerequisite: a per-entry attachment point in loom-ui's Chat widget
 

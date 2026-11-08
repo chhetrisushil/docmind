@@ -1,3 +1,4 @@
+import { ORD_PATTERN } from "@docmind/contracts";
 import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
 import { UUID_PATTERN } from "./chats/ids";
@@ -7,7 +8,7 @@ const CANONICAL_USER_ID = new RegExp(`^${UUID}$`);
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** The visuals lineage lines: a document's `visuals-<userId>-<documentId>` and a chat turn's `turnvisuals-<userId>-<chatId>-<ord>` (ids only). */
 const VISUALS_LINEAGE = new RegExp(
-  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}(?:visuals-(${UUID})-${UUID}|turnvisuals-(${UUID})-${UUID}-[1-9][0-9]{0,14})$`,
+  `^${escapeRegExp(LINEAGE_STREAM_PREFIX)}(?:visuals-(${UUID})-${UUID}|turnvisuals-(${UUID})-${UUID}-${ORD_PATTERN})$`,
 );
 const USER_EXECUTION = new RegExp(`^u_(${UUID})(?::|\\.c-|$)`);
 

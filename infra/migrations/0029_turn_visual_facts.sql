@@ -20,14 +20,15 @@ CREATE POLICY tenant_isolation ON turn_visual_facts USING (tenant_id = app_tenan
 
 -- The tenant of a live chat, for the turn-settled hook: the conversation id carries the user and the chat but no
 -- tenant. Ids only, a narrow SECURITY DEFINER function like 0028; a soft-deleted chat or an owner being erased gives
--- no row (the hook then does nothing).
-CREATE FUNCTION public.docmind_chat_tenant(p_chat uuid)
+-- no row (the hook then does nothing). A deliberate narrow lookup: it also binds the user (the conversation id carries
+-- both), so a chat id alone, or the wrong user's, reveals no tenant; it returns one uuid and nothing else.
+CREATE FUNCTION public.docmind_chat_tenant(p_chat uuid, p_user uuid)
 RETURNS uuid
 LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT c.tenant_id
     FROM public.chat_sessions c
     JOIN public.users u ON u.id = c.user_id AND u.erasing_at IS NULL
-   WHERE c.id = p_chat AND c.deleted_at IS NULL
+   WHERE c.id = p_chat AND c.user_id = p_user AND c.deleted_at IS NULL
 $$;
-REVOKE ALL ON FUNCTION public.docmind_chat_tenant(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.docmind_chat_tenant(uuid) TO docmind_app;
+REVOKE ALL ON FUNCTION public.docmind_chat_tenant(uuid, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.docmind_chat_tenant(uuid, uuid) TO docmind_app;

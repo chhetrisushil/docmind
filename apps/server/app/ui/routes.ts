@@ -6,7 +6,7 @@ import {
   type UiViewResponse,
   ViewName,
 } from "@docmind/contracts";
-import { Uuid } from "@docmind/contracts";
+import { ORD_PATTERN, Uuid } from "@docmind/contracts";
 import { type UiReaders, type Views, documentsOfVisuals } from "@docmind/experiences";
 import type { Experience } from "@loom-ui/core";
 import type { Lineage } from "@loom-ui/lineage";
@@ -98,23 +98,16 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
   const ownedDocuments =
     deps.ownedDocuments ??
     ((identity: Identity, ids: string[]) => ownedDocumentIds(deps.readers.pool, identity, ids));
-  const ORD = /^[1-9][0-9]{0,14}$/; // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
+  const ORD = new RegExp(`^${ORD_PATTERN}$`); // RecordOrd: up to 15 digits, the range of ChatMessageDto.id
   /** The turn's visuals head and the documents of it that are still the caller's; null when there is no head. */
   const turnHead = async (identity: Identity, chatId: string, ord: number) => {
+    let visuals: Experience;
     try {
       const latest = await deps.lineage.resolveLatest(
         turnExperienceId({ userId: identity.userId, chatId, ord }),
       );
       if (!latest.ok) return null;
-      return {
-        visuals: latest.value,
-        // the pins name documents in lowercase; so does the set they are looked up in
-        live: new Set(
-          [...(await ownedDocuments(identity, documentsOfVisuals(latest.value)))].map((d) =>
-            d.toLowerCase(),
-          ),
-        ),
-      };
+      visuals = latest.value;
     } catch (err) {
       console.error(
         "turn visuals head unavailable",
@@ -122,6 +115,19 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
       );
       return null;
     }
+    let owned: Set<string>;
+    try {
+      owned = new Set(await ownedDocuments(identity, documentsOfVisuals(visuals)));
+    } catch (err) {
+      // A database failure is not an absent head: logged apart, and rethrown so the route answers 500 (as `owns` does).
+      console.error(
+        "turn visuals documents lookup failed",
+        err instanceof Error ? err.constructor.name : typeof err,
+      );
+      throw err;
+    }
+    // the pins name documents in lowercase; so does the set they are looked up in
+    return { visuals, live: new Set([...owned].map((d) => d.toLowerCase())) };
   };
   const surfaceOf = (req: { url?: string }) =>
     SurfaceName.safeParse(

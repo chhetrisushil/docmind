@@ -3,9 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { insertChat, softDeleteChat } from "../../chats/sessions";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
-import { T1, U1, U1B } from "../../documents/testHarness";
+import { T1, T2, U1, U1B } from "../../documents/testHarness";
 import { DocumentGoneError } from "../ingest-document/errors";
 import { type PgFixture, startPgFixture } from "../ingest-document/pgFixture";
+import { TurnGoneError } from "./errors";
 import { PgTurnGuard } from "./guard";
 
 describe.skipIf(!PG_URL)("PgTurnGuard (needs DOCMIND_TEST_PG_URL)", () => {
@@ -24,6 +25,12 @@ describe.skipIf(!PG_URL)("PgTurnGuard (needs DOCMIND_TEST_PG_URL)", () => {
     await expect(
       new PgTurnGuard(fx.app).begin({ tenantId: T1, userId: U1, chatId, ord: 2 }, "turn-load"),
     ).resolves.toBeUndefined();
+  });
+  it("refuses a T1 chat under a T2 tenant (RLS), as gone", async () => {
+    const chatId = await chat();
+    await expect(
+      new PgTurnGuard(fx.app).begin({ tenantId: T2, userId: U1, chatId, ord: 2 }, "s"),
+    ).rejects.toBeInstanceOf(TurnGoneError);
   });
   it("refuses a foreign, soft-deleted, unknown or erasing owner's chat as 'gone'", async () => {
     const guard = new PgTurnGuard(fx.app);

@@ -16,7 +16,7 @@ const APP_EXECUTABLE = [
   "auth_find_session(text)",
   "auth_purge_expired_sessions()",
   "auth_sign_up(uuid,uuid,text,text)",
-  "docmind_chat_tenant(uuid)",
+  "docmind_chat_tenant(uuid,uuid)",
   "docmind_delete_empty_tenant(uuid)",
   "docmind_erasure_mark(uuid,text,boolean)",
   "docmind_erasure_pending(text,uuid,integer)",

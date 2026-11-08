@@ -1,4 +1,4 @@
-import type { RecordOrd } from "@docmind/contracts";
+import { ORD_PATTERN, RecordOrd } from "@docmind/contracts";
 import { UUID_PATTERN } from "../../chats/ids";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 
@@ -11,12 +11,15 @@ export interface TurnRef {
 }
 
 export const TURN_FLOW_ID = "visualize-turn";
-const MAX_ORD = 999_999_999_999_999; // fifteen digits: `RecordOrd`, the range of ChatMessageDto.id
+const CANONICAL_UUID = new RegExp(`^${UUID_PATTERN}$`);
 const MAX_RERUN = 999;
 
 const checkOrd = (ord: number) => {
-  if (!Number.isSafeInteger(ord) || ord < 1 || ord > MAX_ORD)
+  if (!RecordOrd.safeParse(ord).success)
     throw new RangeError("ord must be an integer from 1 to 999999999999999");
+};
+const checkUuid = (what: string, id: string) => {
+  if (!CANONICAL_UUID.test(id)) throw new RangeError(`${what} must be a canonical lower-case uuid`);
 };
 
 /**
@@ -43,12 +46,14 @@ export function turnExecutionId(
  * back to the owner, so the shape is part of the erasure contract).
  */
 export const turnExperienceId = (r: { userId: string; chatId: string; ord: number }): string => {
+  checkUuid("userId", r.userId);
+  checkUuid("chatId", r.chatId);
   checkOrd(r.ord);
   return `turnvisuals-${r.userId}-${r.chatId}-${r.ord}`;
 };
 
 const TURN_EXECUTION = new RegExp(
-  `^u_(${UUID_PATTERN}):visualize-turn-(${UUID_PATTERN})-([1-9][0-9]{0,14})(?:-r([1-9][0-9]{0,2}))?$`,
+  `^u_(${UUID_PATTERN}):visualize-turn-(${UUID_PATTERN})-(${ORD_PATTERN})(?:-r([1-9][0-9]{0,2}))?$`,
 );
 export function parseTurnExecution(
   id: string,

@@ -31,6 +31,7 @@ const authenticator: Authenticator = {
 const CHAT = "00000000-0000-4000-8000-0000000000c1";
 const CHAT_NO_HEAD = "00000000-0000-4000-8000-0000000000c2";
 const GONE_DOC = "00000000-0000-4000-8000-0000000000d9";
+let ownedFails = false;
 const turnFactCalls: unknown[] = [];
 const ownsCalls: [string, string][] = [];
 const target = (r: { userId: string; chatId: string; ord: number }) => ({
@@ -70,7 +71,10 @@ beforeAll(async () => {
         ownsCalls.push([identity.userId, id]);
         return identity.userId === ID.userId && (id === CHAT || id === CHAT_NO_HEAD); // alice's chats; bob owns none
       },
-      ownedDocuments: async (_identity, ids) => new Set(ids.filter((d) => d !== GONE_DOC)),
+      ownedDocuments: async (_identity, ids) => {
+        if (ownedFails) throw new TypeError("db down");
+        return new Set(ids.filter((d) => d !== GONE_DOC));
+      },
       readersFor: (identity) => {
         builtFor.push(identity);
         return {
@@ -425,6 +429,18 @@ describe("GET /api/ui/chats/:id/turns/:ord/visuals", () => {
     ownsCalls.length = 0;
     expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "bob")).status).toBe(404);
     expect(ownsCalls).toEqual([[BOB_ID.userId, CHAT]]);
+  });
+  it("a database failure while checking the documents is a 500 logged apart from 'head unavailable', never a silent 404", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    ownedFails = true;
+    try {
+      expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`)).status).toBe(500);
+      expect(log).toHaveBeenCalledWith("turn visuals documents lookup failed", "TypeError");
+      expect(log).not.toHaveBeenCalledWith("turn visuals head unavailable", expect.anything());
+    } finally {
+      ownedFails = false;
+      log.mockRestore();
+    }
   });
   it("is 401 without a session, 404 for a chat or turn without a head, a malformed id or ord, and a head none of whose widgets survive; 400 for an unknown surface", async () => {
     expect((await get(`/api/ui/chats/${CHAT}/turns/4/visuals`, "")).status).toBe(401);

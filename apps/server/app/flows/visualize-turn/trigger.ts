@@ -8,8 +8,8 @@ export const MAX_WAITING = 20;
 export interface TriggerDeps {
   /** True while the `visuals` role is on. */
   enabled(): boolean;
-  /** The tenant of a live chat, or null (unknown, soft-deleted, owner being erased): `docmind_chat_tenant(chat_id)`. */
-  tenantOf(chatId: string): Promise<string | null>;
+  /** The tenant of a live chat, or null (unknown, soft-deleted, owner being erased): `docmind_chat_tenant(chat_id, user_id)` (the user comes from the conversation id). */
+  tenantOf(userId: string, chatId: string): Promise<string | null>;
   turn: { read(ref: TurnRef, signal?: AbortSignal): Promise<TurnRead | null> };
   /** Visuals executions (document and turn) waiting on the shared gate. */
   backlog(): number;
@@ -28,7 +28,7 @@ export async function turnToVisualize(
   if (e.status !== "complete" || !d.enabled()) return null;
   const ids = chatIdOfConversation(e.conversationId);
   if (!ids || d.backlog() >= d.maxWaiting) return null;
-  const tenantId = await d.tenantOf(ids.chatId);
+  const tenantId = await d.tenantOf(ids.userId, ids.chatId);
   if (!tenantId) return null;
   const ref: TurnRef = { tenantId, userId: ids.userId, chatId: ids.chatId, ord: e.ord };
   const turn = await d.turn.read(ref);

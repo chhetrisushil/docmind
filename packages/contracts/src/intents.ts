@@ -82,7 +82,7 @@ const heldIds = (raw: unknown, held: Held): string[] | undefined => {
 };
 
 function resolve(
-  view: ViewName,
+  view: ViewName | "turn",
   type: string,
   p: Record<string, unknown>,
   held: Held,
@@ -186,7 +186,7 @@ function resolve(
  * `held.refs`). Staleness is the caller's job: run loom-ui's `isStaleAction` / `viewedVersion` check first; `intentOf` ignores it.
  */
 export function intentOf(
-  view: ViewName,
+  view: ViewName | "turn", // a chat turn's visuals are read-only: `turn` (and any view this does not know) has no intents
   action: { type: string; payload?: unknown },
   held: Held = {},
 ): Intent | undefined {

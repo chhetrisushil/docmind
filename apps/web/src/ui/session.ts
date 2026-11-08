@@ -53,9 +53,9 @@ export class ViewSession {
   private failed = false;
   private readonly abort = new AbortController();
 
-  /** The view this session draws: a document's detail experience is the `detail` view with visuals added. */
-  get name(): ViewName {
-    return "view" in this.source ? this.source.view : "detail";
+  /** The view this session draws: a document's detail experience is the `detail` view with visuals added; a chat turn's visuals are `turn`. */
+  get name(): ViewName | "turn" {
+    return "view" in this.source ? this.source.view : "document" in this.source ? "detail" : "turn";
   }
 
   private constructor(
