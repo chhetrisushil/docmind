@@ -10,7 +10,9 @@ import { startFakeOllama } from "@docmind/embeddings/testing";
 import { createViews } from "@docmind/experiences";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { type ChunkVectorStore, InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
+import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryContentStore } from "@loom/plugin-content";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { ExecutionHandle } from "@loom/workflow-runtime";
@@ -325,6 +327,8 @@ export interface DocumentHarness {
   /** The ingest executions' event log, as the flow wrote it. */
   eventStore: InMemoryAsyncEventStore;
   events: ReturnType<typeof documentEventRoutes>;
+  /** The visuals lineage the UI routes read (in memory: the sealed Postgres one is covered by its own tests). */
+  lineage: Lineage;
   /** The fake Claude behind the wiring's providers (its key is set only with `llm: true`). */
   fake: FakeAnthropic;
   /** With `llm: "ollama"`: the fake Ollama (chat completions; other paths reach the embedding fake) and the fake Gemini. */
@@ -429,11 +433,16 @@ export async function startDocumentServer(
       wrapped.ingest === ingest.port ? wrapped.starts : new StartScheduler(wrapped.ingest);
     const events = documentEventRoutes({ authenticator: testAuthenticator, bus: ingest.bus });
     const views = createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
+    const lineage = new Lineage({
+      events: new InMemoryLineageStore(),
+      content: new InMemoryContentStore(),
+    });
     const server = createHttpServer({
       ...documentRoutes({ ...wrapped, starts }),
       ...uiRoutes({
         authenticator: testAuthenticator,
         views,
+        lineage,
         readers: {
           pool: app,
           fields,
@@ -462,6 +471,7 @@ export async function startDocumentServer(
       bus: ingest.bus,
       eventStore: ingest.eventStore,
       events,
+      lineage,
       fake: claude,
       ...(compat && { compat }),
       ...(gemini && { gemini }),

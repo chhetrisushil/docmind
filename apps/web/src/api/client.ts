@@ -32,6 +32,9 @@ const qs = (o: Record<string, string | number | undefined>): string => {
 };
 const seg = encodeURIComponent;
 
+/** What a view session hydrates against: a named view, or one document's detail experience. */
+export type ViewSource = { view: ViewName } | { document: string };
+
 export interface Api {
   signUp(req: SignUpRequest): Promise<void>;
   login(req: LoginRequest): Promise<MeResponse>;
@@ -55,8 +58,10 @@ export interface Api {
   sendMessage(id: string, req: SendMessageRequest): Promise<SendMessageResponse>;
   stopChat(id: string): Promise<StopChatResponse>;
   uiView(name: ViewName, signal?: AbortSignal): Promise<UiViewResponse>;
+  /** The per-document detail: the static detail plus this document's visuals. */
+  uiDocumentDetail(id: string, signal?: AbortSignal): Promise<UiViewResponse>;
   uiHydrate(
-    view: ViewName,
+    source: ViewSource,
     requests: HandleLoadRequest[],
     signal?: AbortSignal,
   ): Promise<unknown[]>;
@@ -154,10 +159,15 @@ export function createApi(
         schema: UiViewResponse,
         ...(signal && { signal }),
       }),
-    uiHydrate: async (view, requests, signal) =>
+    uiDocumentDetail: (id, signal) =>
+      http.request("GET", `/api/ui/documents/${seg(id)}/detail?surface=web`, {
+        schema: UiViewResponse,
+        ...(signal && { signal }),
+      }),
+    uiHydrate: async (source, requests, signal) =>
       (
         await http.request("POST", "/api/ui/hydrate", {
-          body: { view, requests },
+          body: { ...source, requests },
           schema: UiHydrateResponse,
           ...(signal && { signal }),
         })

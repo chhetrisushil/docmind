@@ -4,7 +4,8 @@ import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { InMemoryProgressBus } from "../../documents/progress";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
@@ -36,12 +37,57 @@ describe("the commit step", () => {
     const effect = commitEffect({
       guard: { begin: async () => {} },
       lineage,
+      bus: new InMemoryProgressBus(),
       now: () => "2026-11-08T10:00:00.000Z",
     });
     const out = await effect.execute(input, undefined as never);
     expect(out).toEqual({ outcome: "done", count: input.ops.length });
     const latest = await lineage.resolveLatest(experienceIdOf(r));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
+  });
+
+  it("publishes visuals-ready once per commit, to the owner, and never fails the step when the bus does", async () => {
+    const lineage = new Lineage({
+      events: new InMemoryLineageStore(),
+      content: new InMemoryContentStore(),
+    });
+    const r = ref();
+    const input = await inputOf(r);
+    const bus = new InMemoryProgressBus();
+    const seen: unknown[] = [];
+    bus.subscribe({ userId: r.userId }, (e) => seen.push(e));
+    const other: unknown[] = [];
+    bus.subscribe({ userId: randomUUID() }, (e) => other.push(e));
+    const effect = commitEffect({
+      guard: { begin: async () => {} },
+      lineage,
+      bus,
+      now: () => "2026-11-08T10:00:00.000Z",
+    });
+    await effect.execute(input, undefined as never);
+    expect(seen).toEqual([
+      { documentId: r.documentId, status: "ready", step: "finalize", visuals: "ready" },
+    ]);
+    expect(other).toEqual([]);
+
+    const broken = commitEffect({
+      guard: { begin: async () => {} },
+      lineage,
+      bus: {
+        publish: () => {
+          throw new Error("bus down");
+        },
+        subscribe: () => () => {},
+      },
+      now: () => "2026-11-08T10:00:00.000Z",
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await broken.execute(input, undefined as never)).toEqual({
+      outcome: "done",
+      count: input.ops.length,
+    });
+    expect(log).toHaveBeenCalledWith("visuals ready event not published", "Error");
+    log.mockRestore();
   });
 
   it("seals the planned ops, summary and report of its start event in the raw log", async () => {

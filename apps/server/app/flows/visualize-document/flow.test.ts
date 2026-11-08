@@ -7,6 +7,7 @@ import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../config";
+import { InMemoryProgressBus } from "../../documents/progress";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { isIngestExecution, isVisualizeExecution } from "../../status/model";
 import { foldIngestStatus } from "../../status/model";
@@ -74,6 +75,7 @@ function stack(replies: string[] | null) {
     sensitive: { ...SENSITIVE_EVENT_PATHS },
     subjectOf: subjectOfExecution,
   });
+  const bus = new InMemoryProgressBus();
   const lineage = new Lineage({
     events: new InMemoryLineageStore(),
     content: new InMemoryContentStore(),
@@ -94,6 +96,7 @@ function stack(replies: string[] | null) {
       },
       list: async () => held,
     },
+    bus,
     lineage,
     now: () => "2026-11-08T10:00:00.000Z",
     sleep: async () => {},
@@ -126,7 +129,7 @@ function stack(replies: string[] | null) {
     const state = await handle.waitForCompletion();
     return VisualizeOutput.parse(state.variables._output);
   };
-  return { app, inner, sealed, lineage, model, ref, executionId, run };
+  return { app, inner, sealed, lineage, bus, model, ref, executionId, run };
 }
 
 describe("visualize-document flow", () => {

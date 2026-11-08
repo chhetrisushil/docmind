@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { SurfaceName, ViewName } from "@docmind/contracts";
-import { type CompileResult, compile } from "@loom-ui/core";
+import { type CompileResult, type Experience, compile } from "@loom-ui/core";
 import {
   HYDRATION_PROJECTION_ID,
   HYDRATION_PROJECTION_VERSION,
@@ -10,6 +10,7 @@ import {
 import type { Blueprint } from "@loom/blueprint-runtime";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { EXPERIENCES } from "./views";
+import { mergedCatalog } from "./visuals";
 
 export interface ViewPayload {
   view: ViewName;
@@ -28,6 +29,9 @@ export interface ViewsOptions {
   /** The hook the server logs through: a handle and a finding CODE, never a message. */
   onFinding?(handle: string, code: string): void;
 }
+
+/** Compiled per-document payloads kept at once (each is keyed by the experience's version hash). */
+const DETAIL_CACHE_SIZE = 256;
 
 export const VIEW_NAMES = Object.keys(EXPERIENCES) as ViewName[];
 
@@ -67,7 +71,43 @@ export function createViewPayloads(o: ViewsOptions) {
         fingerprint: compiled.fingerprint,
       });
     }
+  // The per-document detail depends on the model's visuals, so it is compiled on demand and kept in a small LRU.
+  const details = new Map<string, ViewPayload>();
+  const compileDetail = (experience: Experience, surface: SurfaceName): ViewPayload => {
+    const key = `${surface}:${experience.versionHash}`;
+    const hit = details.get(key);
+    if (hit) {
+      details.delete(key);
+      details.set(key, hit);
+      return hit;
+    }
+    const compiled = compile(experience, {
+      surface,
+      catalog: mergedCatalog(),
+      hydrationProjectionId: HYDRATION_PROJECTION_ID,
+      hydrationProjectionVersion: HYDRATION_PROJECTION_VERSION,
+      viewer: {},
+      placeholderKey: o.placeholderKey,
+    });
+    if (!compiled.ok)
+      throw new Error(
+        `document detail does not compile: ${compiled.findings.map((f) => f.code).join(",")}`,
+      );
+    const payload: ViewPayload = {
+      view: "detail",
+      surface,
+      experienceId: experience.experienceId,
+      versionHash: experience.versionHash,
+      blueprint: compiled.blueprint,
+      inventory: handleInventory(experience, { revisionOf }).inventory,
+      fingerprint: compiled.fingerprint,
+    };
+    details.set(key, payload);
+    if (details.size > DETAIL_CACHE_SIZE) details.delete(details.keys().next().value as string);
+    return payload;
+  };
   return {
+    compileDetail,
     names: VIEW_NAMES as readonly ViewName[],
     surfaces: SURFACES as readonly SurfaceName[],
     payload(name: ViewName, surface: SurfaceName): ViewPayload {

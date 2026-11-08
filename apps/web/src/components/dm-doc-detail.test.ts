@@ -117,10 +117,10 @@ function setup(
   });
   const uploads = new UploadsStore(api as never, open as never);
   const services = createServices({ api: api as never, router, uploads, open: open as never });
-  const progress = (documentId: string, status: string) =>
+  const progress = (documentId: string, status: string, extra: Record<string, unknown> = {}) =>
     sse.onFrame?.({
       event: "progress",
-      data: JSON.stringify({ documentId, step: "finalize", status }),
+      data: JSON.stringify({ documentId, step: "finalize", status, ...extra }),
       id: undefined,
     });
   return {
@@ -431,6 +431,26 @@ describe("dm-doc-detail", () => {
     await vi.waitFor(() => expect(deepText(view(page))).toContain("Ready"));
     page.remove();
     expect(t.sse.close).toHaveBeenCalled();
+  });
+});
+
+describe("dm-doc-detail: the per-document experience", () => {
+  it("opens the document's own experience, reloads it on visuals ready and only refreshes data on other events", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const detail = vi.spyOn(t.api, "uiDocumentDetail");
+    const page = await t.mount();
+    await vi.waitFor(() => expect(view(page).session?.statusOf("doc-status")).toBe("ready"));
+    expect(detail).toHaveBeenCalledTimes(1);
+    expect(detail).toHaveBeenCalledWith(id(1), expect.anything());
+    expect(t.ui.calls.views).toEqual([]); // not the generic detail view
+
+    t.progress(id(1), "ready"); // an ordinary event: data only
+    t.progress(id(2), "ready", { visuals: "ready" }); // another document's visuals
+    await new Promise((r) => setTimeout(r, 20));
+    expect(detail).toHaveBeenCalledTimes(1);
+
+    t.progress(id(1), "ready", { visuals: "ready" });
+    await vi.waitFor(() => expect(detail).toHaveBeenCalledTimes(2));
   });
 });
 

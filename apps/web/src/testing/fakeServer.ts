@@ -191,10 +191,18 @@ export class FakeServer {
       const name = ViewName.safeParse(m[1]);
       return name.success ? json(200, await this.ui.api.uiView(name.data)) : fail(404, "not_found");
     }
+    m = /^\/api\/ui\/documents\/([^/]+)\/detail$/.exec(path);
+    if (m && method === "GET") {
+      const id = m[1] as string;
+      return this.docs.some((d) => d.id === id)
+        ? json(200, await this.ui.api.uiDocumentDetail(id))
+        : fail(404, "not_found");
+    }
     if (path === "/api/ui/hydrate" && method === "POST") {
       const req = UiHydrateRequest.safeParse(body);
       if (!req.success) return fail(400, "invalid_request");
-      return json(200, { results: await this.ui.api.uiHydrate(req.data.view, req.data.requests) });
+      const { requests, ...source } = req.data;
+      return json(200, { results: await this.ui.api.uiHydrate(source, requests) });
     }
     if (path === "/api/documents/events" && method === "GET") return this.open(path);
     if (path === "/api/documents" && method === "GET")

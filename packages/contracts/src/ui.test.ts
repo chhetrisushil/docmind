@@ -24,6 +24,13 @@ describe("the UI plane contracts", () => {
     expect(UiHydrateRequest.safeParse({ view: "library", requests: [req] }).success).toBe(true);
     expect(
       UiHydrateRequest.safeParse({
+        document: "00000000-0000-4000-8000-000000000001",
+        requests: [req],
+      }).success,
+    ).toBe(true);
+    expect(UiHydrateRequest.safeParse({ document: "nope", requests: [req] }).success).toBe(false);
+    expect(
+      UiHydrateRequest.safeParse({
         view: "library",
         requests: [{ ...req, params: { status: "ready", n: 3, q: null } }],
       }).success,

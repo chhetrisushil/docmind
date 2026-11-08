@@ -2,6 +2,7 @@ import type { Lineage } from "@loom-ui/lineage";
 import type { Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
+import type { ProgressBus } from "../../documents/progress";
 import { visualizeGenerationOf } from "../../status/model";
 import type { ChunkStore } from "../ingest-document/pgChunks";
 import type { StepGuard, StepSeams } from "../ingest-document/stepEffect";
@@ -19,6 +20,8 @@ export interface VisualizeDeps extends StepSeams {
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
   facts: VisualFactStore;
   lineage: Lineage;
+  /** Tells the owner's open browsers the visuals are ready (the commit step publishes). */
+  bus: ProgressBus;
   now: () => string;
   /** The `visuals` role's provider; absent when the role is off (the extract step then ends `skipped`). */
   llm?: LlmProvider;

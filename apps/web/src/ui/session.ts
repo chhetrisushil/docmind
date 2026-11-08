@@ -11,7 +11,7 @@ import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
 import { referenceContainers } from "@loom-ui/renderer-lit/containers";
 import { type DomRenderHandle, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
 import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
-import type { Api } from "../api/client";
+import type { Api, ViewSource } from "../api/client";
 import { report } from "../report";
 import "./elements";
 
@@ -31,6 +31,15 @@ const isLoadResult = (r: unknown): r is { finding?: { code?: string } } =>
 /** Reloads one run of version-mismatch answers may cause before the view is given up as failed; a clean hydrate round restores it. */
 const RELOAD_BUDGET = 2;
 
+const fetchPayload = (
+  api: Pick<Api, "uiView" | "uiDocumentDetail">,
+  source: ViewSource,
+  signal: AbortSignal | undefined,
+): Promise<UiViewResponse> =>
+  "view" in source
+    ? api.uiView(source.view, signal)
+    : api.uiDocumentDetail(source.document, signal);
+
 export class ViewSession {
   readonly store: HydrationStore;
   readonly split: SplitHydrationController;
@@ -42,9 +51,14 @@ export class ViewSession {
   private failed = false;
   private readonly abort = new AbortController();
 
+  /** The view this session draws: a document's detail experience is the `detail` view with visuals added. */
+  get name(): ViewName {
+    return "view" in this.source ? this.source.view : "detail";
+  }
+
   private constructor(
-    private readonly api: Pick<Api, "uiView" | "uiHydrate">,
-    readonly name: ViewName,
+    private readonly api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiHydrate">,
+    readonly source: ViewSource,
     private payload: UiViewResponse,
     private readonly onStale: (() => void) | undefined,
     private readonly onFailed: (() => void) | undefined,
@@ -58,7 +72,7 @@ export class ViewSession {
       requests: readonly HandleLoadRequest[],
       signal: AbortSignal,
     ): Promise<HandleLoadResult[]> => {
-      const results = (await api.uiHydrate(name, [...requests], signal)) as HandleLoadResult[];
+      const results = (await api.uiHydrate(source, [...requests], signal)) as HandleLoadResult[];
       if (results.some((r) => isLoadResult(r) && r.finding?.code === "version-mismatch")) {
         if (this.disposed) return results;
         if (this.budget > 0) {
@@ -78,11 +92,17 @@ export class ViewSession {
   }
 
   static async open(
-    api: Pick<Api, "uiView" | "uiHydrate">,
-    name: ViewName,
+    api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiHydrate">,
+    source: ViewSource,
     o: { onStale?(): void; onFailed?(): void; signal?: AbortSignal } = {},
   ): Promise<ViewSession> {
-    return new ViewSession(api, name, await api.uiView(name, o.signal), o.onStale, o.onFailed);
+    return new ViewSession(
+      api,
+      source,
+      await fetchPayload(api, source, o.signal),
+      o.onStale,
+      o.onFailed,
+    );
   }
 
   /** Applies the params to every handle, then loads the inventory (a handle loads with the params it declares, no others). */
@@ -170,7 +190,7 @@ export class ViewSession {
     if (this.disposed) return Promise.resolve();
     this.reloading ??= (async () => {
       try {
-        this.payload = await this.api.uiView(this.name, this.abort.signal);
+        this.payload = await fetchPayload(this.api, this.source, this.abort.signal);
         if (this.disposed) return;
         this.split.load(this.payload.inventory as never);
         this.invalidate(); // a handle whose revision did not change is not re-requested by load alone (a version-mismatch left it in error)

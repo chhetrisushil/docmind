@@ -120,6 +120,8 @@ export const DocumentProgressEvent = z
     step: IngestStep.optional(),
     status: DocumentStatus,
     detail: ProgressDetail.optional(),
+    /** The document's visuals were committed: an open detail page reloads its experience. */
+    visuals: z.literal("ready").optional(),
   })
   .refine((e) => e.step !== undefined || e.status === "failed", {
     message: "an event without a step must be failed",

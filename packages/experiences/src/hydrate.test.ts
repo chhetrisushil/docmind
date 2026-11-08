@@ -2,6 +2,7 @@ import type { DocumentDto } from "@docmind/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, MAX_READS_PER_BATCH, type UiReaders, createInvoker } from "./invoker";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP } from "./providers";
+import { detailWithVisuals } from "./views";
 import { MAX_CONCURRENT_READS, createViews } from "./views-api";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -530,5 +531,36 @@ describe("the work one batch can cause is bounded", () => {
     const results = await views().hydrate("library", same, r, "user-1");
     expect(r.documents).toHaveBeenCalledTimes(1);
     expect(results.every((x) => x.state === "ready")).toBe(true);
+  });
+});
+
+describe("the per-document detail", () => {
+  const DOC = id(1);
+  it("without visuals compiles to the static detail's blueprint, and is cached per surface", () => {
+    const v = views();
+    const p = v.documentPayload(DOC, null, "web");
+    expect(p.blueprint).toEqual(v.payload("detail", "web").blueprint);
+    expect(p.versionHash).toBe(v.payload("detail", "web").versionHash);
+    expect(v.documentPayload(DOC, null, "web")).toBe(p);
+    expect(v.documentPayload(DOC, null, "terminal")).not.toBe(p);
+  });
+
+  it("hydrates a static detail experience through hydrateExperience like hydrate does", async () => {
+    const r = readers();
+    const p = views().payload("detail", "web");
+    const [out] = await views().hydrateExperience(
+      detailWithVisuals(null, DOC),
+      [
+        {
+          experienceId: p.experienceId,
+          versionHash: p.versionHash,
+          handle: "doc-status",
+          params: { id: DOC },
+        },
+      ],
+      r,
+      "user-1",
+    );
+    expect(out?.state).toBe("ready");
   });
 });

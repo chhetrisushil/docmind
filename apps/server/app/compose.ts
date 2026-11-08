@@ -193,18 +193,20 @@ export function buildServer(options: ComposeOptions) {
     visualsLlm && options.plannerDecisionKey
       ? visualsPlanner(visualsLlm, options.plannerDecisionKey)
       : undefined;
+  const visualsLineageOf = visualsLineage({
+    events: options.status.source,
+    content: lineageContent,
+    keys,
+    subjectOf: subjectOfExecution,
+  });
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
     deps: {
       guard: new PgVisualizeGuard(pool),
       chunks: new PgChunkStore(pool, fields),
       facts: new PgVisualFacts(pool, fields),
-      lineage: visualsLineage({
-        events: options.status.source,
-        content: lineageContent,
-        keys,
-        subjectOf: subjectOfExecution,
-      }),
+      lineage: visualsLineageOf,
+      bus: options.ingest.bus,
       now: () => new Date().toISOString(),
       shutdown: options.ingest.shutdown.signal,
       gate: options.ingest.gate,
@@ -409,6 +411,7 @@ export function buildServer(options: ComposeOptions) {
       ...uiRoutes({
         authenticator,
         views,
+        lineage: visualsLineageOf,
         readers: {
           pool,
           fields,

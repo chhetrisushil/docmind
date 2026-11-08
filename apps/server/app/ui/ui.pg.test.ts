@@ -242,6 +242,30 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
     expect(opened).toBe(2); // one document: its title and its filename
   });
 
+  it("serves the per-document detail only to its owner (404 for a colleague's or Bob's, never 403)", async () => {
+    const own = await get(`/api/ui/documents/${mine}/detail`);
+    expect(own.status).toBe(200);
+    expect(UiViewResponse.parse(await own.json()).experienceId).toBe("docmind.detail");
+    for (const id of [colleagues, bobs, randomUUID()])
+      expect((await get(`/api/ui/documents/${id}/detail`)).status).toBe(404);
+    const hydrated = await fetch(`${h.base}/api/ui/hydrate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-user": "alice" },
+      body: JSON.stringify({
+        document: bobs,
+        requests: [
+          {
+            experienceId: "docmind.detail",
+            versionHash: "x",
+            handle: "doc-status",
+            params: { id: bobs },
+          },
+        ],
+      }),
+    });
+    expect(hydrated.status).toBe(404);
+  });
+
   it("answers 401 without a session, and the views route refuses an anonymous caller too", async () => {
     expect((await get("/api/ui/views/library", "")).status).toBe(401);
     const res = await fetch(`${h.base}/api/ui/hydrate`, {

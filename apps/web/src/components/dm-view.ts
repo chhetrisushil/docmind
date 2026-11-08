@@ -1,5 +1,6 @@
 import type { ViewName } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
+import type { ViewSource } from "../api/client";
 import { report } from "../report";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
@@ -9,6 +10,7 @@ import { type ActionHandler, ViewSession } from "../ui/session";
 export class DmView extends LitElement {
   static properties = {
     name: { type: String },
+    document: { type: String },
     params: { attribute: false },
     onAct: { attribute: false },
     phase: { state: true },
@@ -30,6 +32,8 @@ export class DmView extends LitElement {
     `,
   ];
   declare name: ViewName | undefined;
+  /** A document id: the view is that document's detail experience (instead of `name`). */
+  declare document: string | undefined;
   declare params: Record<string, string | number> | undefined;
   declare onAct: ActionHandler | undefined;
   declare phase: "loading" | "ready" | "failed";
@@ -41,8 +45,14 @@ export class DmView extends LitElement {
     this.phase = "loading";
   }
 
+  private get source(): ViewSource | undefined {
+    if (this.document !== undefined) return { document: this.document };
+    return this.name === undefined ? undefined : { view: this.name };
+  }
+
   protected updated(changed: Map<string, unknown>): void {
-    if (this.ctx.services && this.name !== undefined && this.opened !== this.name) void this.open();
+    const key = this.sourceKey();
+    if (this.ctx.services && key !== undefined && this.opened !== key) void this.open();
     else if (changed.has("params") && this.session && this.params)
       this.session.setParams(this.params);
   }
@@ -51,22 +61,32 @@ export class DmView extends LitElement {
   private generation = 0;
   private fetching: AbortController | undefined;
 
+  private sourceKey(): string | undefined {
+    const source = this.source;
+    return source === undefined
+      ? undefined
+      : "view" in source
+        ? `view:${source.view}`
+        : `document:${source.document}`;
+  }
+
   private async open(): Promise<void> {
     const svc = this.ctx.services;
-    const name = this.name;
-    if (!svc || name === undefined) return;
+    const source = this.source;
+    const key = this.sourceKey();
+    if (!svc || source === undefined || key === undefined) return;
     const mine = ++this.generation;
     const current = () => mine === this.generation && this.isConnected;
     this.fetching?.abort();
     const ac = new AbortController();
     this.fetching = ac;
-    this.opened = name;
+    this.opened = key;
     this.session?.dispose();
     this.session = undefined;
     this.phase = "loading";
     let session: ViewSession | undefined;
     try {
-      session = await ViewSession.open(svc.api, name, {
+      session = await ViewSession.open(svc.api, source, {
         signal: ac.signal,
         onStale: () =>
           svc.toasts.push({
