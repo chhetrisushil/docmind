@@ -1,7 +1,7 @@
 import type { UploadDocumentResponse } from "@docmind/contracts";
 import { UiViewResponse } from "@docmind/contracts";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { eraseMe, waitErased } from "../erasure/e2eSupport";
 import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
@@ -59,7 +59,9 @@ function stubVisuals(claude: FakeAnthropic, figures: Figure[], down?: { value: b
 
 describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL)", () => {
   const stacks: IngestStack[] = [];
-  afterAll(async () => {
+  // Each test's stacks close when the test ends: holding every stack (each with its own pools) open until the end of the
+  // file exhausts a default-sized Postgres (CI's max_connections is 100).
+  afterEach(async () => {
     for (const s of stacks.splice(0)) await s.close();
   });
 
