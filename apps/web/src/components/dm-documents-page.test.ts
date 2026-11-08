@@ -41,6 +41,7 @@ async function setup(items: DocumentDto[]) {
     source: async () => null,
     visualFacts: async () => null,
     turnFacts: async () => null,
+    connections: async () => null,
     chats: async () => [],
   });
   const sse: {

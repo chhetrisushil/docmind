@@ -3,6 +3,7 @@ import { RecordOrd, Uuid } from "@docmind/contracts";
 import type { TransientInvoker } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { z } from "zod";
+import { clipConnections } from "./connections";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP, citedWindow } from "./providers";
 import type { VisualFactRaw } from "./visuals";
 
@@ -63,6 +64,8 @@ export interface UiReaders {
   chats(a: { q: string }): Promise<ChatSessionDto[]>;
   visualFacts(a: { id: string }): Promise<VisualFactRaw[] | null>;
   turnFacts(a: { chatId: string; ord: number }): Promise<VisualFactRaw[] | null>;
+  /** The connections of one of the caller's documents (live); null when it is not the caller's. */
+  connections(a: { documentId: string }): Promise<RawConnections | null>;
 }
 
 /** The tool id the data provider calls through the transient invoker. */
@@ -87,6 +90,7 @@ const ARGS = {
   "document.source": z.object({ id: Id, passage: Id.or(z.literal("")).default("") }).strict(),
   "chats.list": z.object({ q: z.string().max(100) }).strict(),
   "visual.facts": z.object({ id: Id }).strict(),
+  "doc.connections": z.object({ documentId: Id }).strict(),
   "turn.facts": z
     .object({
       chatId: Id,
@@ -202,6 +206,17 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
         return {
           key: [target, a.data],
           exec: async () => (await readers.turnFacts(a.data)) ?? fail("notFound"),
+        };
+      }
+      case "doc.connections": {
+        const a = ARGS["doc.connections"].safeParse(args);
+        if (!a.success) return fail("invalidArgs");
+        return {
+          key: [target, a.data],
+          exec: async () =>
+            clipConnections(
+              (await readers.connections({ documentId: a.data.documentId })) ?? fail("notFound"),
+            ),
         };
       }
       default:

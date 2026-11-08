@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import {
   OWNER_READ,
   PINS,
-  capabilitiesOf,
   createViews,
   detailWithVisuals,
   factProvider,
+  visualCapabilities,
 } from "@docmind/experiences";
 import type { UiReaders } from "@docmind/experiences";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
@@ -109,7 +109,7 @@ describe("planner output to a served, hydrated detail (R26)", () => {
     expect(noClearance[0]?.state).toBe("error");
     expect(visualFacts).toHaveBeenCalledTimes(1); // never invoked
     // The table equals what the capabilities declare.
-    expect(declaredToolClassesFrom(capabilitiesOf(facts as never))).toEqual(
+    expect(declaredToolClassesFrom(visualCapabilities(facts as never))).toEqual(
       OWNER_READ.declaredToolClasses,
     );
     // For the owner nothing is redacted.

@@ -216,6 +216,7 @@ describe("visualize-turn flow", () => {
       })),
       {
         turnFacts,
+        connections: async () => null,
         documents: async () => ({ items: [], truncated: false }),
         document: async () => null,
         content: async () => ({ items: [], more: false }),

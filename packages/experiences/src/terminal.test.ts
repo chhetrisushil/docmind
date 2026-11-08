@@ -59,6 +59,7 @@ const readersFor = (titles: [string, string]): UiReaders => ({
   source: async () => null,
   visualFacts: async () => null,
   turnFacts: async () => null,
+  connections: async () => null,
   chats: async () => [
     {
       id: id(7),

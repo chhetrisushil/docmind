@@ -99,6 +99,7 @@ beforeAll(async () => {
               },
             ];
           },
+          connections: async () => null,
           turnFacts: async (a) => {
             turnFactCalls.push(a);
             return [

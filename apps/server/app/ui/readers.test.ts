@@ -131,3 +131,18 @@ describe("citations on facts", () => {
     vi.doUnmock("./factCites");
   });
 });
+
+describe("the connections reader", () => {
+  it("reads the connections of the caller's document with the caller's identity", async () => {
+    vi.resetModules();
+    const readConnections = vi.fn(async () => null);
+    vi.doMock("./connections", () => ({ readConnections }));
+    const { readersFor } = await import("./readers");
+    const deps = { pool: {}, fields: {} } as never;
+    const identity = { userId: "u", tenantId: "t" } as never;
+    const r = readersFor(deps, identity);
+    await expect(r.connections({ documentId: "d" })).resolves.toBeNull();
+    expect(readConnections).toHaveBeenLastCalledWith(deps, identity, "d");
+    vi.doUnmock("./connections");
+  });
+});
