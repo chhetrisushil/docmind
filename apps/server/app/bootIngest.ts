@@ -197,7 +197,8 @@ export async function bootIngest(
     // The first sweep runs one interval from now, never during the boot (recovery and the index come first).
     if (snapshotPruneIntervalMs > 0)
       snapshotPruner = startSnapshotPruner(snapshotPruneDeps(durable), snapshotPruneIntervalMs);
-    if (lineageGcIntervalMs > 0)
+    // Not while the visuals role is off: the lineage is only written by it, so there is nothing to collect.
+    if (lineageGcIntervalMs > 0 && built.visualsOn)
       lineageCollector = startLineageGc(
         lineageGcDeps(lineageGc, durable.pool, pool, lineageGcIntervalMs),
         lineageGcIntervalMs,

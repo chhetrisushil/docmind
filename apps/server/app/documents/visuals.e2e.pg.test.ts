@@ -409,6 +409,11 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
       code: "visuals-model-unavailable",
     });
     await vi.waitFor(async () => expect((await runRow(first, id))[0]?.state).toBe("failed"));
+    // The boot's retry list only holds failures at least an hour old.
+    await first.db.owner.query(
+      "UPDATE visual_runs SET updated_at = now() - interval '2 hours' WHERE document_id = $1",
+      [id],
+    );
     await first.close({ keepDb: true });
     stacks.splice(stacks.indexOf(first), 1);
 
@@ -465,7 +470,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     );
   }, 120_000);
 
-  it("the next boot repairs a stale running row from Loom's state and then re-runs an unavailable one", async () => {
+  it("the next boot repairs a stale running row from Loom's state; the repaired unavailable failure is fresh, so it is not re-run until it is an hour old", async () => {
     const first = await startIngestStack({ visuals: true });
     stacks.push(first);
     stubVisuals(first.visualsClaude as FakeAnthropic, [ADA], { value: true });
@@ -486,7 +491,17 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     });
     stacks.push(second);
     stubVisuals(second.visualsClaude as FakeAnthropic, [ADA]);
-    expect(await visualizeEnd(second, ada.userId, id, 1)).toEqual({ outcome: "done" });
+    await vi.waitFor(async () =>
+      expect(await runRow(second, id)).toEqual([
+        { run: 0, state: "failed", code: "visuals-model-unavailable" },
+      ]),
+    ); // repaired from Loom's output; the repair is stamped now, so the retry pass leaves it for a later boot
+    await second.db.owner.query(
+      "UPDATE visual_runs SET updated_at = now() - interval '2 hours' WHERE document_id = $1",
+      [id],
+    );
+    expect(await second.composed.visuals.sweep()).toBeGreaterThanOrEqual(1);
+    await second.composed.visuals.idle();
     await vi.waitFor(async () =>
       expect(await runRow(second, id)).toEqual([{ run: 1, state: "done", code: null }]),
     );

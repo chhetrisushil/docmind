@@ -15,6 +15,12 @@ export interface ResolvedCite {
 }
 
 const MAX_LABEL = 200; // loom-ui's MAX_WIDGET_REF_LABEL
+/**
+ * The most distinct chunk ids one call resolves. Unreachable by a well-formed caller: a fact cites at most 8 chunk ids
+ * (`ChunkIds` in `flows/visualize-document/facts.ts`) and a document keeps at most MAX_FACTS (16) facts, so one document's
+ * facts name at most 16 x 8 = 128 distinct ids, a quarter of this cap. It only bounds the `ANY($2)` array against a
+ * caller that passes more.
+ */
 const MAX_IDS = 512;
 const UNTITLED = "Untitled document";
 

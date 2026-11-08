@@ -232,12 +232,17 @@ export interface LineageGc {
 export function startLineageGc(deps: LineageGcDeps, everyMs: number): LineageGc {
   const stopping = new AbortController();
   let running: Promise<unknown> | null = null;
+  let loggedNoRoots = false; // an empty lineage stays empty: say so once, not every hour
   const tick = () => {
     if (running !== null || stopping.signal.aborted) return;
     const started = Date.now();
     running = collectLineageContent(deps, stopping.signal)
       .then((r) => {
         if (r.notDue) return;
+        if (r.refused === "no-roots") {
+          if (loggedNoRoots) return;
+          loggedNoRoots = true;
+        }
         if (r.skipped) console.info("lineage gc skipped: another replica holds the lock");
         else
           console.info("lineage gc", {

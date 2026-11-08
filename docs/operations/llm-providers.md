@@ -156,7 +156,7 @@ does. An upgraded deployment therefore boots as before, with no new key and no n
 Document visuals can be made again. A run whose `visuals` model stayed unreachable (a timeout, a 5xx or a rate limit, after the
 step's 6 attempts) ends `failed` with the code `visuals-model-unavailable`, and the document page offers "Retry" (`POST
 /api/documents/:id/visuals/retry`, 10 per user per minute). The next server boot also re-runs, once, every ready document whose
-last run ended that way, and every ready document whose last run committed over an older fact format (the fingerprint of the fact tools' pins, stamped in `visual_runs.format`; rows with no stamp are left alone), at most two visualize executions at once, none while the role is off. This needs migration 0030:
+last run ended that way at least an hour ago (a boot loop does not hammer a model that is down), and every ready document whose last run committed over an older fact format (the fingerprint of the fact tools' pins, stamped in `visual_runs.format`; rows with no stamp are left alone), at most two visualize executions at once, none while the role is off. This needs migration 0030:
 the table `visual_runs` (one row per document and ingest generation: run number, state, a fixed code; ids and enums only) and
 four narrow SECURITY DEFINER functions, `docmind_record_visual_run` (the tenant comes from the document row),
 `docmind_visual_retry_documents`, `docmind_visual_stale_format_documents` and `docmind_visual_running_runs` (the boot sweep's lists). The flow's step graph is unchanged, so executions in flight at

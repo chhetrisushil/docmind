@@ -141,7 +141,7 @@ describe("the starter", () => {
       },
     });
     expect(await starter.sweep()).toBe(0);
-    expect(log).toHaveBeenCalledWith("visualize sweep failed", "RangeError");
+    expect(log).toHaveBeenCalledWith("visuals ready pass failed", "RangeError");
     const aborted = new AbortController();
     aborted.abort();
     const never = vi.fn(async () => [] as ReadyDocument[]);
@@ -673,6 +673,38 @@ describe("the stale-format boot pass", () => {
     await expect(starter.sweep()).resolves.toBe(1);
     expect(s.started).toEqual([visualizeExecutionId(fresh.userId, fresh.documentId, 1)]);
     expect(log).toHaveBeenCalledWith("visuals stale-format pass failed", "RangeError");
+    log.mockRestore();
+  });
+
+  it("a failing ready source still runs the retry and stale passes, and a failing retry source still runs the stale pass", async () => {
+    const s = setup();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = async () => {
+      throw new RangeError("down");
+    };
+    const retryDoc = mk();
+    const staleDoc = mk();
+    const a = loomVisualsStarter(s.runtime, flow, {
+      ready: boom,
+      retry: page([retryDoc]),
+      stale: page([staleDoc]),
+      runs: s.runs,
+    });
+    await expect(a.sweep()).resolves.toBe(2);
+    expect(s.started).toEqual([
+      visualizeExecutionId(retryDoc.userId, retryDoc.documentId, 1, 1),
+      visualizeExecutionId(staleDoc.userId, staleDoc.documentId, 1, 1),
+    ]);
+    s.started.length = 0;
+    const b = loomVisualsStarter(s.runtime, flow, {
+      retry: boom,
+      stale: page([staleDoc]),
+      runs: s.runs,
+    });
+    await expect(b.sweep()).resolves.toBe(1);
+    expect(s.started).toEqual([visualizeExecutionId(staleDoc.userId, staleDoc.documentId, 1, 1)]);
+    expect(log).toHaveBeenCalledWith("visuals ready pass failed", "RangeError");
+    expect(log).toHaveBeenCalledWith("visuals retry pass failed", "RangeError");
     log.mockRestore();
   });
 
