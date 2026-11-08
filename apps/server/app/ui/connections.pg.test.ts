@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { type FieldCrypto, FieldKeyStoreError } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { T1, T2, U1, U1B, U2 } from "../documents/testHarness";
@@ -61,7 +62,8 @@ describe.skipIf(!PG_URL)("readConnections (needs DOCMIND_TEST_PG_URL)", () => {
     await seed("a");
     await seed("b");
     await seed("notReady", { ready: false });
-    await seed("theirs", { who: { tenantId: T1, userId: U1B } });
+    // Its title opens under U1's key, so only the owner filter of the query keeps it out.
+    await seed("theirs", { who: { tenantId: T1, userId: U1B }, titleKey: U1 });
     await link(ch("a", 0), ch("a", 1), 0.9); // within the document
     await link(ch("a", 0), ch("notReady", 0), 0.9);
     await link(ch("a", 0), ch("theirs", 0), 0.9); // another user of the same tenant
@@ -177,8 +179,55 @@ describe.skipIf(!PG_URL)("readConnections (needs DOCMIND_TEST_PG_URL)", () => {
   it("never reads an entity of another user, even one linked to this owner's chunks", async () => {
     await seed("a");
     await seed("b");
-    await entity("Theirs", [ch("a", 0), ch("b", 0)], { user: U1B });
+    // Sealed under U1's key, so only the owner filter of the query keeps it out.
+    await entity("Theirs", [ch("a", 0), ch("b", 0)], { user: U1B, sealedBy: U1 });
     expect((await read("a"))?.entities).toEqual([]);
+  });
+
+  it("reads nothing across tenants, even with linked data in the other tenant", async () => {
+    await seed("a");
+    await seed("b");
+    await link(ch("a", 0), ch("b", 0), 0.8);
+    await entity("Acme Corp", [ch("a", 0), ch("b", 0)]);
+    const t2 = { tenantId: T2, userId: U2 };
+    await seed("x", { who: t2 });
+    await seed("y", { who: t2 });
+    await link(ch("x", 0), ch("y", 0), 0.9, "similar", T2);
+    await entity("Globex", [ch("x", 1), ch("y", 1)], { user: U2, tenantId: T2 });
+    // T2's user reads T2's own data, and only that
+    const theirs = await read("x", t2);
+    expect(theirs?.related.map((r) => r.documentId)).toEqual([id("y")]);
+    expect(theirs?.entities.map((e) => e.name)).toEqual(["Globex"]);
+    // nobody reads across: T1's caller asking about T2's document, and the reverse
+    expect(await read("x")).toBeNull();
+    expect(await read("a", t2)).toBeNull();
+    expect((await read("a"))?.related.map((r) => r.documentId)).toEqual([id("b")]);
+  });
+
+  it("fails on a key-store outage instead of dropping every value, and still drops one that does not open", async () => {
+    await seed("a");
+    await seed("b");
+    await link(ch("a", 0), ch("b", 0), 0.8);
+    const down = {
+      forUser: () => ({
+        openText: async () => {
+          throw new FieldKeyStoreError();
+        },
+      }),
+    } as unknown as FieldCrypto;
+    await expect(
+      readConnections({ pool: fx.app, fields: down }, A1, id("a")),
+    ).rejects.toBeInstanceOf(FieldKeyStoreError);
+    const broken = {
+      forUser: () => ({
+        openText: async () => {
+          throw new Error("does not open");
+        },
+      }),
+    } as unknown as FieldCrypto;
+    expect((await readConnections({ pool: fx.app, fields: broken }, A1, id("a")))?.related).toEqual(
+      [],
+    );
   });
 });
 
@@ -227,6 +276,13 @@ describe.skipIf(!PG_URL)(
                 d.id::text, d.owner_id::text, 0, '{"status":"ready"}'::jsonb
            FROM documents d`,
         );
+        // Other tenants' status rows share the table (the app role sees none of them): the lookup must stay a key lookup.
+        await c.query(
+          `INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state)
+         SELECT 'ingest-status', 'u_' || $1::text || ':ingest-' || gen_random_uuid()::text, NULL, $1::text, 0, '{"status":"ready"}'::jsonb
+           FROM generate_series(1, 20000)`,
+          [U2],
+        );
         await c.query("ANALYZE");
       } finally {
         c.release();
@@ -237,12 +293,17 @@ describe.skipIf(!PG_URL)(
       await fx?.close();
     });
 
-    type PlanNode = { "Node Type": string; "Relation Name"?: string; Plans?: PlanNode[] };
+    type PlanNode = {
+      "Node Type": string;
+      "Relation Name"?: string;
+      "Index Cond"?: string;
+      "Actual Loops"?: number;
+      Plans?: PlanNode[];
+    };
     const walk = (n: PlanNode): PlanNode[] => [n, ...(n.Plans ?? []).flatMap(walk)];
-    /** Plans (and runs) `sql` as the app role with sequential scans off: a Seq Scan left in the plan has no index to use. */
+    /** Plans and runs `sql` as the app role under the DEFAULT planner settings, with the parameters as literals. */
     async function explain(sql: string, params: unknown[]) {
       return withTenant(fx.app, T1, async (tx) => {
-        await tx.query("SET LOCAL enable_seqscan = off");
         // Literals, so the planner sees the values; every parameter is a uuid or a small integer.
         const inline = sql.replace(/\$(\d+)/g, (_m, n) => `'${params[Number(n) - 1]}'`);
         const res = await tx.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${inline}`);
@@ -250,20 +311,41 @@ describe.skipIf(!PG_URL)(
         return { nodes: walk(top.Plan as PlanNode), ms: Number(top["Execution Time"]) };
       });
     }
-    const BIG = ["chunks", "chunk_links", "chunk_entities", "documents", "entities"];
+    const LIBRARY = 500;
+    const BIG = [
+      "chunks",
+      "chunk_links",
+      "chunk_entities",
+      "documents",
+      "entities",
+      "read_model_state",
+    ];
 
     it.each([
       ["related", RELATED_SQL, [U1, 8]],
       ["entities", ENTITIES_SQL, [U1, 12, 5]],
     ] as const)(
-      "the %s query reaches every large table through an index, in well under a second",
+      "the %s query walks out from this document and never scans the library, under default planner settings",
       async (_n, sql, rest) => {
         const params = [rest[0], selfId, ...rest.slice(1)];
         const { nodes, ms } = await explain(sql, params);
-        const seq = nodes
-          .filter((n) => n["Node Type"] === "Seq Scan")
-          .map((n) => n["Relation Name"]);
-        expect(seq.filter((r) => r !== undefined && BIG.includes(r))).toEqual([]);
+        const isScan = (n: PlanNode) => /Scan/.test(n["Node Type"]);
+        // no sequential scan of the big tables
+        expect(
+          nodes
+            .filter((n) => n["Node Type"] === "Seq Scan")
+            .map((n) => n["Relation Name"])
+            .filter((r) => r !== undefined && BIG.includes(r)),
+        ).toEqual([]);
+        // chunk_links is reached only by an index, on its source chunk
+        const links = nodes.filter((n) => n["Relation Name"] === "chunk_links" && isScan(n));
+        if (_n === "related") expect(links.length).toBeGreaterThan(0);
+        for (const n of links) {
+          expect(n["Node Type"]).toMatch(/^Index/);
+          expect(n["Index Cond"] ?? "").toMatch(/src_chunk_id/);
+        }
+        // nothing is visited once per document of the library
+        expect(nodes.filter((n) => (n["Actual Loops"] ?? 0) >= LIBRARY)).toEqual([]);
         expect(ms).toBeLessThan(2000);
       },
     );

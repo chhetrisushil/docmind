@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { withTenant } from "../db/tenant";
 import { ingestExecutionId } from "../documents/ingest";
 import { insertDocument, titleBind } from "../documents/repo";
-import { T1, U1, newDocument, seedRow } from "../documents/testHarness";
+import { newDocument, seedRow } from "../documents/testHarness";
 import { chunkIdFor } from "../flows/ingest-document/chunker";
 import { entityNameBind } from "../flows/ingest-document/pgEntities";
 import type { PgFixture } from "../flows/ingest-document/pgFixture";
@@ -68,29 +68,36 @@ export function connectionsSeeder(getFixture: () => PgFixture, defaultWho: SeedW
   }
 
   /** Both directions, as the link store writes them. */
-  const link = async (a: string, b: string, weight: number, kind: LinkKind = "similar") => {
+  const link = async (
+    a: string,
+    b: string,
+    weight: number,
+    kind: LinkKind = "similar",
+    tenantId = defaultWho.tenantId,
+  ) => {
     for (const [s, d] of [
       [a, b],
       [b, a],
     ] as const)
       await fixture().db.owner.query(
         "INSERT INTO chunk_links (tenant_id, src_chunk_id, dst_chunk_id, kind, weight) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
-        [T1, s, d, kind, weight],
+        [tenantId, s, d, kind, weight],
       );
   };
 
   const entity = async (
     name: string,
     chunks: string[],
-    opts: { user?: string; sealedBy?: string; kind?: string } = {},
+    opts: { user?: string; sealedBy?: string; kind?: string; tenantId?: string } = {},
   ): Promise<string> => {
     const entityId = randomUUID();
-    const owner = opts.user ?? U1;
+    const owner = opts.user ?? defaultWho.userId;
+    const tenantId = opts.tenantId ?? defaultWho.tenantId;
     await fixture().db.owner.query(
       "INSERT INTO entities (id, tenant_id, owner_id, kind, name_enc, name_key) VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
       [
         entityId,
-        T1,
+        tenantId,
         owner,
         opts.kind ?? "organization",
         JSON.stringify(
@@ -104,7 +111,7 @@ export function connectionsSeeder(getFixture: () => PgFixture, defaultWho: SeedW
     for (const c of chunks)
       await fixture().db.owner.query(
         "INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id) VALUES ($1, $2, $3)",
-        [T1, c, entityId],
+        [tenantId, c, entityId],
       );
     return entityId;
   };

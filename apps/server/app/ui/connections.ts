@@ -5,7 +5,7 @@ import {
   type RawConnections,
 } from "@docmind/experiences";
 import type { Pool } from "pg";
-import type { FieldCrypto } from "../crypto/fields";
+import { type FieldCrypto, FieldKeyStoreError } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { titleBind } from "../documents/repo";
 import { entityNameBind } from "../flows/ingest-document/pgEntities";
@@ -18,61 +18,86 @@ export interface ConnectionsDeps {
 /**
  * "Ready" is what the status read model says (`documents.status` is not maintained): the same rule as `docmind_ready_documents`
  * (migration 0028), through the app role's tenant-scoped `SELECT` on `read_model_state`.
+ * `execKey` is the status row's execution id, computed by the caller in a subquery's output: row-level security only lets a
+ * leakproof comparison of plain values reach the primary key (model_id, execution_id), and the string building is not leakproof.
  */
-const readyOf = (d: string): string => `EXISTS (
+const EXEC_KEY = (d: string): string => `'u_' || ${d}.owner_id::text || ':ingest-' || ${d}.id::text
+           || CASE WHEN ${d}.ingest_generation = 1 THEN '' ELSE '.' || ${d}.ingest_generation::text END`;
+const READY_ROW = (key: string): string => `EXISTS (
     SELECT 1 FROM read_model_state s
-     WHERE s.model_id = 'ingest-status' AND NOT s.erased AND s.state ->> 'status' = 'ready'
-       AND s.execution_id = 'u_' || ${d}.owner_id::text || ':ingest-' || ${d}.id::text
-           || CASE WHEN ${d}.ingest_generation = 1 THEN '' ELSE '.' || ${d}.ingest_generation::text END)`;
+     WHERE s.model_id = 'ingest-status' AND s.execution_id = ${key}
+       AND NOT s.erased AND s.state ->> 'status' = 'ready')`;
 
 /** $1 owner, $2 document. */
 export const SELF_SQL = "SELECT 1 FROM documents WHERE id = $2 AND owner_id = $1";
 
 /**
- * $1 owner, $2 document, $3 limit. Related documents: links out of THIS document's chunks (the `chunk_links` primary key
- * leads with the source chunk), to chunks of other ready documents of the same owner, grouped per document.
- * `structure` links stay inside a document and are never a connection.
+ * $1 owner, $2 document, $3 limit. Related documents. The neighbourhood is built first, from this document alone: its chunks
+ * (`chunks_document_ordinal_key`), the links out of them (the `chunk_links` primary key leads with the source chunk), the chunks
+ * they reach, grouped per document. Each step is MATERIALIZED, so the planner cannot reorder it into a scan of the owner's
+ * library. Only then does each neighbour document meet `documents` (owner) and the readiness check, in a LATERAL with LIMIT 1 so the
+ * planner looks each one up by key (documents primary key, then the status row's primary key) and cannot scan either table. `structure` links stay inside a document and are never a connection.
  */
-export const RELATED_SQL = `SELECT dd.id AS document_id, dd.title_enc,
-       (count(*) FILTER (WHERE l.kind = 'entity'))::int AS entity,
-       (count(*) FILTER (WHERE l.kind = 'reference'))::int AS reference,
-       (count(*) FILTER (WHERE l.kind = 'similar'))::int AS similar,
-       max(l.weight) AS strength
-  FROM documents me
-  JOIN chunks mc ON mc.tenant_id = me.tenant_id AND mc.document_id = me.id
-  JOIN chunk_links l ON l.tenant_id = mc.tenant_id AND l.src_chunk_id = mc.id
-                    AND l.kind IN ('entity', 'reference', 'similar')
-  JOIN chunks dc ON dc.tenant_id = l.tenant_id AND dc.id = l.dst_chunk_id AND dc.document_id <> me.id
-  JOIN documents dd ON dd.tenant_id = dc.tenant_id AND dd.id = dc.document_id AND dd.owner_id = $1
- WHERE me.id = $2 AND me.owner_id = $1
-   AND ${readyOf("dd")}
- GROUP BY dd.id
- ORDER BY max(l.weight) DESC, count(*) DESC, dd.id
+export const RELATED_SQL = `WITH mine AS MATERIALIZED (
+  SELECT mc.tenant_id, mc.id
+    FROM documents me
+    JOIN chunks mc ON mc.tenant_id = me.tenant_id AND mc.document_id = me.id
+   WHERE me.id = $2 AND me.owner_id = $1),
+nbr AS MATERIALIZED (
+  SELECT dc.tenant_id, dc.document_id,
+         (count(*) FILTER (WHERE l.kind = 'entity'))::int AS entity,
+         (count(*) FILTER (WHERE l.kind = 'reference'))::int AS reference,
+         (count(*) FILTER (WHERE l.kind = 'similar'))::int AS similar,
+         count(*) AS n,
+         max(l.weight) AS strength
+    FROM mine m
+    JOIN chunk_links l ON l.tenant_id = m.tenant_id AND l.src_chunk_id = m.id
+                      AND l.kind IN ('entity', 'reference', 'similar')
+    JOIN chunks dc ON dc.tenant_id = l.tenant_id AND dc.id = l.dst_chunk_id AND dc.document_id <> $2
+   GROUP BY dc.tenant_id, dc.document_id)
+SELECT dd.id AS document_id, dd.title_enc, n.entity, n.reference, n.similar, n.strength
+  FROM nbr n
+  CROSS JOIN LATERAL (
+    SELECT d.id, d.title_enc, ${EXEC_KEY("d")} AS exec_key FROM documents d
+     WHERE d.tenant_id = n.tenant_id AND d.id = n.document_id AND d.owner_id = $1
+     LIMIT 1) dd
+ WHERE ${READY_ROW("dd.exec_key")}
+ ORDER BY n.strength DESC, n.n DESC, dd.id
  LIMIT $3`;
 
 /**
- * $1 owner, $2 document, $3 entity limit, $4 documents per entity. The entities of this document's chunks
- * (`chunks_document_ordinal_key`, then the `chunk_entities` primary key) that also occur in chunks of other ready documents
- * (`chunk_entities_entity_idx`); the rarest (fewest other documents) first. Titles are sealed, so SQL keeps the newest
+ * $1 owner, $2 document, $3 entity limit, $4 documents per entity. The owner's entities of this document's chunks
+ * (`chunks_document_ordinal_key`, the `chunk_entities` primary key, `entities`), then the (entity, document) pairs through
+ * the other chunks of each entity (`chunk_entities_entity_idx`), all MATERIALIZED so they stay a walk from this document.
+ * Rarity (the number of other documents) is counted over those pairs, before the readiness join; an entity whose other
+ * documents are none ready, or none the owner's, drops out at that join. Titles are sealed, so SQL keeps the newest
  * documents per entity and the reader orders them by title.
  */
-export const ENTITIES_SQL = `WITH mine AS (
-  SELECT DISTINCT ce.entity_id
+export const ENTITIES_SQL = `WITH mine AS MATERIALIZED (
+  SELECT DISTINCT ce.tenant_id, ce.entity_id
     FROM documents me
     JOIN chunks mc ON mc.tenant_id = me.tenant_id AND mc.document_id = me.id
     JOIN chunk_entities ce ON ce.tenant_id = mc.tenant_id AND ce.chunk_id = mc.id
+    JOIN entities en ON en.tenant_id = ce.tenant_id AND en.id = ce.entity_id AND en.owner_id = $1
    WHERE me.id = $2 AND me.owner_id = $1),
-shared AS (
-  SELECT m.entity_id, dd.id AS document_id, dd.title_enc, dd.created_at
+pairs AS MATERIALIZED (
+  SELECT m.entity_id, oc.tenant_id, oc.document_id
     FROM mine m
-    JOIN entities en ON en.id = m.entity_id AND en.owner_id = $1
-    JOIN chunk_entities oe ON oe.tenant_id = en.tenant_id AND oe.entity_id = en.id
+    JOIN chunk_entities oe ON oe.tenant_id = m.tenant_id AND oe.entity_id = m.entity_id
     JOIN chunks oc ON oc.tenant_id = oe.tenant_id AND oc.id = oe.chunk_id AND oc.document_id <> $2
-    JOIN documents dd ON dd.tenant_id = oc.tenant_id AND dd.id = oc.document_id AND dd.owner_id = $1
-   WHERE ${readyOf("dd")}
-   GROUP BY m.entity_id, dd.id),
+   GROUP BY m.entity_id, oc.tenant_id, oc.document_id),
+counted AS MATERIALIZED (
+  SELECT p.*, count(*) OVER (PARTITION BY p.entity_id) AS n FROM pairs p),
+shared AS MATERIALIZED (
+  SELECT c.entity_id, c.n, dd.id AS document_id, dd.title_enc, dd.created_at
+    FROM counted c
+    CROSS JOIN LATERAL (
+      SELECT d.id, d.title_enc, d.created_at, ${EXEC_KEY("d")} AS exec_key FROM documents d
+       WHERE d.tenant_id = c.tenant_id AND d.id = c.document_id AND d.owner_id = $1
+       LIMIT 1) dd
+   WHERE ${READY_ROW("dd.exec_key")}),
 rarest AS (
-  SELECT entity_id, count(*) AS n FROM shared GROUP BY entity_id ORDER BY count(*), entity_id LIMIT $3),
+  SELECT entity_id, min(n) AS n FROM shared GROUP BY entity_id ORDER BY min(n), entity_id LIMIT $3),
 picked AS (
   SELECT s.entity_id, s.document_id, s.title_enc, r.n,
          row_number() OVER (PARTITION BY s.entity_id ORDER BY s.created_at DESC, s.document_id) AS rank
@@ -135,7 +160,8 @@ export async function readConnections(
   const open = async (bind: string, enc: unknown): Promise<string | null> => {
     try {
       return await cipher.openText(bind, enc);
-    } catch {
+    } catch (err) {
+      if (err instanceof FieldKeyStoreError) throw err; // an outage is not "this value does not open": the widget errors
       return null; // not logged: the failure names nothing, and what it guards is content
     }
   };
