@@ -67,6 +67,17 @@ interface TurnSettledEvent {
   (`doc-chat`, `doc-chat-gk`) into a single function, so later observers compose there too.
 - A fork can report its copied prefix again under the fork's id. DocMind keys work by chat and
   `ord`, which covers it.
+- The event carries no tenant. DocMind resolves it with a SECURITY DEFINER function
+  `docmind_chat_tenant(chat_id)` (migration 0029), like `docmind_ready_documents`.
+
+## 3b. Prerequisite: a per-entry attachment point in loom-ui's Chat widget
+
+`lu-chat` gives a host no place for content under one entry; reaching into its shadow DOM would
+depend on internal markup. A generic loom-ui mechanism, naming no DocMind concept, lets the host
+render content keyed by chat entry id (`t<turn>.assistant`) inside that entry, stable across
+streaming re-renders, through the `dm-view` rendering path, and never on restricted entries.
+Requested from the Loom session on 2026-11-08; the plan pins the merged loom-ui SHA before the web
+task. Server tasks do not wait for it.
 
 ## 4. Trigger
 
@@ -112,11 +123,11 @@ Input `{tenantId, userId, chatId, ord}`, strict, ids only. Steps:
    `docmind:visual.facts@1#<documentId>/fact-<n>` for a stored fact,
    `docmind:turn.facts@1#fact-<n>` for an extracted one. A plan with no widgets ends with `nothing`.
 4. **`turn-commit`.** Replaces the head of lineage `turnvisuals-<userId>-<chatId>-<ord>`, sealed
-   with the user's key (idempotent, R18), then publishes `{kind: "visuals", ord}` on `ChatBus` for that
-   chat.
+   with the user's key (idempotent, R18), then publishes `{kind: "visuals", ord, outcome}` on `ChatBus`
+   for that chat. A run that ends `nothing` also publishes, so an on-demand click resolves.
 
-Output `{outcome: "visualized" | "nothing"}`. Retry policy as `visualize-document`: 3 attempts,
-2 s backoff, ×2. Exhausted retries fail the execution with the visuals error type (R20).
+Output `{outcome: "visualized" | "nothing"}`. Retry policy: 3 attempts,
+2 s backoff, ×2 (not `visualize-document`'s per-step policies). Exhausted retries fail the execution with the visuals error type (R20).
 
 ## 6. Storage
 
@@ -143,7 +154,7 @@ Lineage content goes to the existing `lineage_content` store. No new settings.
 
 - An assistant message with `hasVisuals`, or after a `visuals` frame for its ord, shows a collapsed
   "Visuals" strip: the first key figure, or a one-row thumbnail of the first chart, plus a count. It
-  expands in place to the full widgets and fetches them when first expanded.
+  fetches the widgets when the strip is first shown (the preview needs them) and expands in place.
 - Cited answers show "Visualize" (no visuals yet), "Visualizing…" (after 202 until a frame or
   60 s), or "Re-visualize". 409 `visualize_running` shows "Visualizing…"; 429 shows "Try again in a
   minute"; an outcome of `nothing` shows "Nothing to visualize".
