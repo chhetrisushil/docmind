@@ -124,6 +124,24 @@ describe("connections-table", () => {
     expect(TableValue.safeParse(e).success).toBe(true);
   });
 
+  it("drops a repeated related document and a related entry that is this document itself", () => {
+    const dup: RawConnections = {
+      documentId: SELF,
+      related: [
+        RAW.related[0],
+        RAW.related[0],
+        { ...RAW.related[1], documentId: SELF },
+        RAW.related[2],
+      ] as never,
+      entities: [],
+    };
+    const t = shape("connections-table", dup) as Table;
+    expect(t.rowKeys).toEqual([B, D]);
+    expect(t.rows).toHaveLength(2);
+    expect(t.rowActions).toHaveLength(2);
+    expect(TableValue.safeParse(t).success).toBe(true);
+  });
+
   it("labels an untitled document and clips a very long title", () => {
     const odd: RawConnections = {
       documentId: SELF,

@@ -12,6 +12,7 @@ import { INVOKE_ID, createInvoker } from "./invoker";
 import { PINS } from "./providers";
 import { shape as shapeOf } from "./reshapers";
 import {
+  FACT_VISUALS_CATALOG,
   VISUALS_CATALOG,
   VISUAL_SHAPES,
   type VisualFactRaw,
@@ -59,6 +60,19 @@ const TABLE: VisualFactRaw = {
 };
 
 const shape = (name: string, raw: VisualFactRaw[]) => shapeOf(name, raw);
+
+describe("the fact catalogue (chat)", () => {
+  it("is exactly the catalogue chat always had: id docmind.visuals.v1 and the four fact entries", () => {
+    expect(FACT_VISUALS_CATALOG.id).toBe("docmind.visuals.v1");
+    expect(FACT_VISUALS_CATALOG.entries.map((e) => e.name)).toEqual([
+      "FigureChart",
+      "FigureTrend",
+      "KeyFigure",
+      "FactTable",
+    ]);
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v2");
+  });
+});
 
 describe("the visuals catalogue", () => {
   it("resolves every entry on web and terminal to a framework kind", () => {

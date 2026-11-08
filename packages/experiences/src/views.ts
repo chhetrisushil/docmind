@@ -259,6 +259,8 @@ function adoptVisuals<R extends FactRef>(
         binding: { ...n.binding, handle, priority, sensitivity: "sensitive" },
       };
     }
+    // Fact nodes keep the planner's sensitivity while connections nodes are forced above: safe, because the production route
+    // serves a document under the OWNER_READ floor, which classifies every fact handle's tool as sensitive whatever the node says.
     const ref = n.binding ? o.refOf(visuals, n.binding.handle) : null;
     if (
       !n.binding ||
