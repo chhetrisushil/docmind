@@ -138,7 +138,10 @@ describe("the visual reshapers", () => {
         { x: "2024-02", y: 46 },
       ],
     };
-    const kpi = shape("visual-kpi-0", [pctFigure]) as { value: number; unit: string };
+    const kpi = shape("visual-kpi-0", [pctFigure]) as {
+      value: number;
+      unit: string;
+    };
     expect(kpi.value).toBeCloseTo(0.38);
     expect(kpi.unit).toBe("%");
     const say = (v: number, unit: string) =>
@@ -174,14 +177,14 @@ describe("the visual reshapers", () => {
           series: { points: { timestamp: string }[] }[];
         }
       ).series[0]?.points.map((p) => p.timestamp);
-    expect(stamps(["Q1 2026", "q2 2026", "2026 Q3", "Q4-2026", "2026-q1"])).toEqual([
+    expect(stamps(["Q1 2026", "q2 2026", "2026 Q3", "Q4-2026", "2027-q1"])).toEqual([
       "2026-01",
       "2026-04",
       "2026-07",
       "2026-10",
-      "2026-01",
+      "2027-01",
     ]);
-    expect(stamps(["H1 2026", "h2 2026", "2026 H2"])).toEqual(["2026-01", "2026-07", "2026-07"]);
+    expect(stamps(["H1 2026", "h2 2026", "2027 H1"])).toEqual(["2026-01", "2026-07", "2027-01"]);
     expect(stamps(["2025", "2026"])).toEqual(["2025-01", "2026-01"]);
     expect(stamps(["Jan 2026", "Sept 2026", "December 2026", "march 2027"])).toEqual([
       "2026-01",
@@ -189,10 +192,66 @@ describe("the visual reshapers", () => {
       "2026-12",
       "2027-03",
     ]);
-    expect(stamps(["2024-01", "Q2 2024", "2024"])).toEqual(["2024-01", "2024-04", "2024-01"]);
+    expect(stamps(["2024-01", "Q2 2024", "2025"])).toEqual(["2024-01", "2024-04", "2025-01"]);
+    expect(stamps(["Jun. 2026", "Sep-2026"])).toEqual(["2026-06", "2026-09"]);
+    // Mixed granularity that collides or runs backwards is not a trend.
+    expect(() => stamps(["2024-01", "Q2 2024", "2024"])).toThrow();
+    expect(() => stamps(["2026-01", "2026-01"])).toThrow();
+    expect(() => stamps(["Q1 2026", "2025-12-31"])).toThrow();
     expect(() => stamps(["Q1 2026", "next spring"])).toThrow();
     expect(() => stamps(["Q5 2026"])).toThrow();
     expect(() => stamps(["Q1"])).toThrow();
+  });
+  it("read only real English month names as a month label", () => {
+    const trend = (x: string) =>
+      shape("visual-trend-2", [FIGURE, SERIES, { ...DATED_SERIES, points: [{ x, y: 1 }] }]);
+    for (const bad of ["Junk 2026", "Octopus 2026", "mayhem 2026", "Marvel 2026"])
+      expect(() => trend(bad), bad).toThrow();
+    for (const good of ["Sept 2026", "September 2026", "Jun. 2026", "MAY 2026"])
+      expect(() => trend(good), good).not.toThrow();
+  });
+  it("state the decimals a percent fact needs, so loom-ui does not round to whole percents", () => {
+    const say = (v: number, f: unknown) =>
+      formatSemanticNumber(v, effectiveFormat(f as never, "%"), "en-US");
+    const fig = (value: number) =>
+      shape("visual-kpi-0", [{ ...FIGURE, value, unit: "%" }]) as {
+        value: number;
+        format: unknown;
+      };
+    for (const [n, text] of [
+      [38.5, "38.5%"],
+      [0.38, "0.38%"],
+      [38, "38%"],
+    ] as const) {
+      const k = fig(n);
+      expect(say(k.value, k.format), String(n)).toBe(text);
+    }
+    const ser = {
+      ...DATED_SERIES,
+      unit: "%",
+      points: [
+        { x: "2024-01", y: 41 },
+        { x: "2024-02", y: 46.25 },
+      ],
+    };
+    const bars = shape("visual-bar-2", [FIGURE, SERIES, ser]) as {
+      bars: { value: number }[];
+      format: unknown;
+    };
+    expect(bars.bars.map((b) => say(b.value, bars.format))).toEqual(["41%", "46.25%"]);
+    const trend = shape("visual-trend-2", [FIGURE, SERIES, ser]) as {
+      series: { format: unknown; points: { value: number }[] }[];
+    };
+    expect(trend.series[0]?.points.map((p) => say(p.value, trend.series[0]?.format))).toEqual([
+      "41%",
+      "46.25%",
+    ]);
+    expect(fig(1.123456).format).toMatchObject({ maximumFractionDigits: 4 });
+    expect(shape("visual-kpi-0", [FIGURE])).not.toHaveProperty("format");
+    // A unit with stray whitespace is still a percent.
+    expect(shape("visual-kpi-0", [{ ...FIGURE, value: 38, unit: " % " }])).toMatchObject({
+      value: 0.38,
+    });
   });
   it("fail for a fact of the wrong kind or a missing fact", () => {
     expect(() => shape("visual-trend-1", raw)).toThrow();
@@ -232,7 +291,10 @@ describe("the visual.facts invoker target", () => {
       inv.invokeTransient(INVOKE_ID, { target: "visual.facts", args: { id } }),
     ).rejects.toMatchObject({ channel: "notFound" });
     await expect(
-      inv.invokeTransient(INVOKE_ID, { target: "visual.facts", args: { id: "x" } }),
+      inv.invokeTransient(INVOKE_ID, {
+        target: "visual.facts",
+        args: { id: "x" },
+      }),
     ).rejects.toMatchObject({ channel: "invalidArgs" });
   });
 });

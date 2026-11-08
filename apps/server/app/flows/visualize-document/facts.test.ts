@@ -16,7 +16,13 @@ describe("grounded", () => {
     ["Margin 12 %", 12],
     ["Margin 12%", 12],
   ])("finds %s", (s, n) => {
-    const fact = { kind: "figure", label: "x", value: n, chunkIds: [C1], ordinal: 0 } as const;
+    const fact = {
+      kind: "figure",
+      label: "x",
+      value: n,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     expect(grounded(fact, text(s))).toBe(true);
   });
   it("accepts 0.12 for a percent unit when the text says 12%", () => {
@@ -31,15 +37,29 @@ describe("grounded", () => {
     expect(grounded(fact, text("margin 12%"))).toBe(true);
   });
   it("rejects a number the cited text does not contain", () => {
-    const fact = { kind: "figure", label: "x", value: 1300, chunkIds: [C1], ordinal: 0 } as const;
+    const fact = {
+      kind: "figure",
+      label: "x",
+      value: 1300,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     expect(grounded(fact, text("Revenue was 1,200"))).toBe(false);
   });
 });
 
 describe("admit", () => {
   it("drops facts citing chunks of another document, caps at 16, assigns ordinals", () => {
-    const ok = { kind: "figure", label: "x", value: 5, chunkIds: [C1] } as const;
-    const foreign = { ...ok, chunkIds: ["22222222-2222-4222-8222-222222222222"] };
+    const ok = {
+      kind: "figure",
+      label: "x",
+      value: 5,
+      chunkIds: [C1],
+    } as const;
+    const foreign = {
+      ...ok,
+      chunkIds: ["22222222-2222-4222-8222-222222222222"],
+    };
     const r = admit([foreign, ...Array(20).fill(ok)], text("five 5"), new Set([C1]));
     expect(r.facts).toHaveLength(16);
     expect(r.facts.map((f) => f.ordinal)).toEqual([...Array(16).keys()]);
@@ -60,7 +80,7 @@ describe("admit", () => {
       unit: "%",
       points: [
         { x: "a", y: 0.41 },
-        { x: "b", y: 46 },
+        { x: "b", y: 0.46 },
       ],
       chunkIds: [C1],
     };
@@ -73,9 +93,57 @@ describe("admit", () => {
       ],
     });
   });
+  it("leaves every value as given when a percent fact mixes scales", () => {
+    const mixed: DraftFact = {
+      kind: "series",
+      label: "s",
+      unit: "%",
+      points: [
+        { x: "a", y: 0.41 },
+        { x: "b", y: 46 },
+      ],
+      chunkIds: [C1],
+    };
+    const fig: DraftFact = {
+      kind: "figure",
+      label: "g",
+      value: 0.38,
+      unit: "%",
+      compare: { label: "p", value: 30 },
+      chunkIds: [C1],
+    };
+    const r = admit([mixed, fig], text("margin 41% then 46%; up 38% from 30%"), new Set([C1]));
+    expect(r.facts[0]).toMatchObject({ points: [{ y: 0.41 }, { y: 46 }] });
+    expect(r.facts[1]).toMatchObject({ value: 0.38, compare: { value: 30 } });
+  });
+  it('treats a unit of " %" as a percent', () => {
+    const fig: DraftFact = {
+      kind: "figure",
+      label: "g",
+      value: 0.38,
+      unit: " %",
+      chunkIds: [C1],
+    };
+    expect(grounded(fig, text("up 38%"))).toBe(true);
+    expect(admit([fig], text("up 38%"), new Set([C1])).facts[0]).toMatchObject({
+      value: 38,
+    });
+  });
   it("leaves a written percent and every non-percent unit unchanged", () => {
-    const pct: DraftFact = { kind: "figure", label: "g", value: 38, unit: "%", chunkIds: [C1] };
-    const eur: DraftFact = { kind: "figure", label: "g", value: 38, unit: "EUR", chunkIds: [C1] };
+    const pct: DraftFact = {
+      kind: "figure",
+      label: "g",
+      value: 38,
+      unit: "%",
+      chunkIds: [C1],
+    };
+    const eur: DraftFact = {
+      kind: "figure",
+      label: "g",
+      value: 38,
+      unit: "EUR",
+      chunkIds: [C1],
+    };
     const r = admit([pct, eur], text("38% and EUR 38"), new Set([C1]));
     expect(r.facts.map((f) => (f.kind === "figure" ? f.value : null))).toEqual([38, 38]);
   });
@@ -153,32 +221,68 @@ describe("grounding covers every number in a fact (V4)", () => {
     expect(grounded(s(-5), one("a gain of 5"))).toBe(false);
   });
   it("grounds a parenthesised year, (2024), as 2024", () => {
-    const fig = { kind: "figure", label: "x", value: 2024, chunkIds: [C1], ordinal: 0 } as const;
+    const fig = {
+      kind: "figure",
+      label: "x",
+      value: 2024,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     expect(grounded(fig, one("in (2024)"))).toBe(true);
   });
   it("grounds a parenthesised -5 from (5) and still refuses +5 from a leading minus", () => {
     const fig = (value: number) =>
-      ({ kind: "figure", label: "x", value, chunkIds: [C1], ordinal: 0 }) as const;
+      ({
+        kind: "figure",
+        label: "x",
+        value,
+        chunkIds: [C1],
+        ordinal: 0,
+      }) as const;
     expect(grounded(fig(-5), one("a loss of (5)"))).toBe(true);
     expect(grounded(fig(5), one("a change of -5"))).toBe(false);
   });
   it("does not ground +5 from the text -5", () => {
-    const fig = { kind: "figure", label: "x", value: 5, chunkIds: [C1], ordinal: 0 } as const;
+    const fig = {
+      kind: "figure",
+      label: "x",
+      value: 5,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     expect(grounded(fig, one("change of -5"))).toBe(false);
   });
   it("reads a dash between numbers as a separator, not a minus", () => {
-    const fig = { kind: "figure", label: "x", value: 2020, chunkIds: [C1], ordinal: 0 } as const;
+    const fig = {
+      kind: "figure",
+      label: "x",
+      value: 2020,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     expect(grounded(fig, one("2019-2020"))).toBe(true);
   });
   it("grounds 5 from '5 m wide', and 5 million from it too", () => {
     const fig = (value: number) =>
-      ({ kind: "figure", label: "width", value, chunkIds: [C1], ordinal: 0 }) as const;
+      ({
+        kind: "figure",
+        label: "width",
+        value,
+        chunkIds: [C1],
+        ordinal: 0,
+      }) as const;
     expect(grounded(fig(5), one("5 m wide"))).toBe(true);
     expect(grounded(fig(5_000_000), one("5 m wide"))).toBe(true);
   });
   it("grounds the raw number of a suffixed value, 1.2 from 1.2k", () => {
     const fig = (value: number) =>
-      ({ kind: "figure", label: "x", value, chunkIds: [C1], ordinal: 0 }) as const;
+      ({
+        kind: "figure",
+        label: "x",
+        value,
+        chunkIds: [C1],
+        ordinal: 0,
+      }) as const;
     expect(grounded(fig(1.2), one("sales 1.2k"))).toBe(true);
     expect(grounded(fig(1200), one("sales 1.2k"))).toBe(true);
   });
@@ -271,13 +375,25 @@ describe("grounding covers every number in a fact (V4)", () => {
     expect(grounded(s, one("in 2031 sales were 4 and 5"))).toBe(false);
   });
   it("does not ground a unitless 0.12 from 12%, but a % unit does", () => {
-    const bare = { kind: "figure", label: "m", value: 0.12, chunkIds: [C1], ordinal: 0 } as const;
+    const bare = {
+      kind: "figure",
+      label: "m",
+      value: 0.12,
+      chunkIds: [C1],
+      ordinal: 0,
+    } as const;
     const pct = { ...bare, unit: "%" } as const;
     expect(grounded(bare, one("margin 12%"))).toBe(false);
     expect(grounded(pct, one("margin 12%"))).toBe(true);
   });
   it("uses every chunk a fact cites when it grounds a number", () => {
-    const fig = { kind: "figure", label: "x", value: 7, chunkIds: [C1, C2], ordinal: 0 } as const;
+    const fig = {
+      kind: "figure",
+      label: "x",
+      value: 7,
+      chunkIds: [C1, C2],
+      ordinal: 0,
+    } as const;
     const texts = new Map([
       [C1, "nothing"],
       [C2, "seven is 7"],
@@ -308,12 +424,25 @@ describe("StoredFact", () => {
         chunkIds: [C],
         ordinal: 1,
       },
-      { kind: "factTable", title: "t", columns: ["a"], rows: [["1"]], chunkIds: [C], ordinal: 15 },
+      {
+        kind: "factTable",
+        title: "t",
+        columns: ["a"],
+        rows: [["1"]],
+        chunkIds: [C],
+        ordinal: 15,
+      },
     ];
     for (const f of facts) expect(StoredFact.parse(f)).toEqual(f);
   });
   it("rejects an unknown key and an out-of-range ordinal", () => {
-    const f = { kind: "figure", label: "f", value: 3, chunkIds: [C], ordinal: 0 };
+    const f = {
+      kind: "figure",
+      label: "f",
+      value: 3,
+      chunkIds: [C],
+      ordinal: 0,
+    };
     expect(StoredFact.safeParse({ ...f, extra: 1 }).success).toBe(false);
     expect(StoredFact.safeParse({ ...f, ordinal: 16 }).success).toBe(false);
   });

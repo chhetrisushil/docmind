@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import "./elements";
 import "./session";
 
-/** The tag loom-ui's registry draws each widget kind with (litRegistry and the chat registry). */
+/**
+ * The tag loom-ui's registry draws each widget kind with (litRegistry and the chat registry). Hand-copied on purpose:
+ * loom-ui (pinned d036e84) exports no kind-to-tag map; litRegistry.ts registers each tag inline, so none can be read.
+ */
 const TAG: Record<string, string> = {
   Kpi: "lu-kpi",
   Table: "lu-table",
