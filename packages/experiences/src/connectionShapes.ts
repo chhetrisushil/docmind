@@ -19,6 +19,14 @@ const label = (title: string): string =>
 
 type Related = RawConnections["related"][number];
 
+/** The listed related documents, deduplicated once for both shapes: no repeat of an id and never this document itself. */
+const relatedOf = (raw: RawConnections): Related[] => {
+  const seen = new Set<string>([raw.documentId]);
+  return raw.related
+    .slice(0, CONNECTIONS_CAPS.related)
+    .filter((r) => !seen.has(r.documentId) && seen.add(r.documentId));
+};
+
 /** "shares A, B; referenced; similar content": the kinds that apply, the top shared names (rarest entity first). */
 const whyOf = (r: Related, names: readonly string[]): string => {
   const parts: string[] = [];
@@ -40,7 +48,7 @@ const COLUMNS = [
  * that says it. No row keys and no actions: nothing to open.
  */
 const table = (raw: RawConnections): unknown => {
-  const related = raw.related.slice(0, CONNECTIONS_CAPS.related);
+  const related = relatedOf(raw);
   if (related.length === 0) return { columns: COLUMNS, rows: [[EMPTY_RELATED, "", ""]] };
   const namesFor = (documentId: string): string[] =>
     raw.entities
@@ -70,9 +78,8 @@ const map = (raw: RawConnections): unknown => {
     seenEdges.add(key);
     edges.push(e);
   };
-  for (const r of raw.related.slice(0, CONNECTIONS_CAPS.related)) {
+  for (const r of relatedOf(raw)) {
     const id = `doc:${r.documentId}`;
-    if (ids.has(id)) continue;
     ids.add(id);
     nodes.push({ id, label: label(r.title), group: "document" });
     const kind = r.kinds.reference > 0 ? "reference" : r.kinds.similar > 0 ? "similar" : undefined;

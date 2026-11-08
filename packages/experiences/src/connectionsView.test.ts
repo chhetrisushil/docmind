@@ -124,6 +124,15 @@ describe("detailWithVisuals with connections", () => {
     expect(panel.children.map((c) => c.id)).toEqual(["v-kf", "v-rel"]);
   });
 
+  it("drops a non-connections entry bound to a handle whose provider carries the doc.connections pin", () => {
+    const e = experienceOf(
+      [node("kf", "KeyFigure", "connections"), node("rel", "RelatedDocuments", "connections")],
+      committed,
+    );
+    const panel = find(detailWithVisuals(e, DOC).root, "visuals") as ContainerNode;
+    expect(panel.children.map((c) => c.id)).toEqual(["v-rel"]);
+  });
+
   it("is the static detail when the only nodes are connections entries that bind nothing real", () => {
     const e = experienceOf([node("bad", "ConnectionMap", "fact-0")], committed);
     expect(find(detailWithVisuals(e, DOC).root, "visuals")).toBeUndefined();
@@ -142,12 +151,37 @@ describe("detailWithVisuals with connections", () => {
         placeholderKey: KEY,
       });
       expect(r.findings).toEqual([]);
+      const json = JSON.stringify(r);
+      expect(json).toContain("v-rel");
+      expect(json).toContain("v-map");
     }
   });
 
   it("is never adopted for a chat turn (K7)", () => {
     const turn = { chatId: "00000000-0000-4000-8000-0000000000c1", ord: 1 };
     expect(turnWithVisuals(both(), turn, new Set([DOC]))).toBeNull();
+  });
+});
+
+describe("a head planned before connections existed", () => {
+  it("still compiles and hydrates its fact widgets under the current document catalogue", async () => {
+    const views = createViews({ placeholderKey: KEY, revisionKey: "r".repeat(32) });
+    const head = experienceOf([node("kf", "KeyFigure", "fact-0")], committed);
+    const exp = views.documentExperience(DOC, head);
+    expect(find(exp.root, "v-kf")).toBeDefined();
+    const p = views.documentPayload(DOC, head, "web");
+    const visualFacts = vi.fn(async () => [
+      { kind: "figure", label: "Revenue", value: 4242, chunkIds: [], ordinal: 0 },
+    ]);
+    const [f] = await views.hydrateExperience(
+      exp,
+      [{ experienceId: p.experienceId, versionHash: p.versionHash, handle: "fact-0", params: {} }],
+      { visualFacts } as unknown as UiReaders,
+      "u",
+      "document",
+    );
+    expect(f).toMatchObject({ state: "ready" });
+    expect(JSON.stringify(f)).toContain("4242");
   });
 });
 

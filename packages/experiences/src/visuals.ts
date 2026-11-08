@@ -80,16 +80,18 @@ const FACT_ENTRY_NAMES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"
 
 /** The closed set of widgets the document planner may bind: to the document's facts, and to its live connections. */
 export const VISUALS_CATALOG: SemanticCatalog = catalogOf(
-  "docmind.visuals.v1",
+  "docmind.visuals.v2",
   ENTRIES.map(([name]) => name),
 );
 
 /**
  * The fact widgets alone: what the chat-turn planner is given (K7), so a turn can never be planned a connections widget.
- * Connections belong to a document's own page.
+ * Connections belong to a document's own page. Its id and entries are exactly the catalogue chat always had (loom-ui keys a
+ * planner decision on catalogue id and content), so recorded chat turns still replay. A stored head carries no catalogue id:
+ * compile checks node types against the catalogue it is given, so heads planned under the old document catalogue still serve.
  */
 export const FACT_VISUALS_CATALOG: SemanticCatalog = catalogOf(
-  "docmind.visuals.facts.v1",
+  "docmind.visuals.v1",
   FACT_ENTRY_NAMES,
 );
 
