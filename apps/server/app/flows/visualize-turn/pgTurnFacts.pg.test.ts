@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { insertChat } from "../../chats/sessions";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
@@ -78,6 +78,57 @@ describe.skipIf(!PG_URL)("PgTurnVisualFacts (needs DOCMIND_TEST_PG_URL)", () => 
     expect(await count(ref.chatId)).toBe(1);
   });
 
+  it("refuses a write under another tenant for a chat of tenant T1, and leaves the rows as they were", async () => {
+    const ref = await chatOf(T1, U1);
+    await store.replace(ref, [fig(0, "Mine")]);
+    await expect(store.replace({ ...ref, tenantId: T2 }, [fig(0, "Theirs")])).rejects.toThrow();
+    expect(await store.list({ ...ref, tenantId: T2 })).toEqual([]);
+    expect((await store.list(ref)).map((f) => (f as { label: string }).label)).toEqual(["Mine"]);
+    expect(await count(ref.chatId)).toBe(1);
+  });
+
+  it("an already-aborted signal seals nothing and writes nothing (not even the delete)", async () => {
+    const ref = await chatOf(T1, U1);
+    await store.replace(ref, [fig(0)]);
+    const forUser = vi.spyOn(fx.fields, "forUser");
+    try {
+      const ac = new AbortController();
+      ac.abort();
+      await expect(store.replace(ref, [fig(0), fig(1)], ac.signal)).rejects.toMatchObject({
+        name: "ParseAbortedError",
+      });
+      expect(forUser).not.toHaveBeenCalled();
+      expect(await count(ref.chatId)).toBe(1); // the earlier row was not deleted
+    } finally {
+      forUser.mockRestore();
+    }
+  });
+
+  it("an abort that lands while sealing opens no transaction", async () => {
+    const ref = await chatOf(T1, U1);
+    await store.replace(ref, [fig(0)]);
+    const ac = new AbortController();
+    const real = fx.fields.forUser.bind(fx.fields);
+    const forUser = vi.spyOn(fx.fields, "forUser").mockImplementation((u: string) => {
+      const c = real(u);
+      return {
+        ...c,
+        seal: async (...a: Parameters<typeof c.seal>) => {
+          ac.abort();
+          return c.seal(...a);
+        },
+      } as ReturnType<typeof real>;
+    });
+    try {
+      await expect(store.replace(ref, [fig(0), fig(1)], ac.signal)).rejects.toMatchObject({
+        name: "ParseAbortedError",
+      });
+      expect(await count(ref.chatId)).toBe(1);
+    } finally {
+      forUser.mockRestore();
+    }
+  });
+
   it("goes with the chat row (cascade) and is unreadable once the user's key is destroyed (erasure)", async () => {
     const ref = await chatOf(T1, U1);
     await store.replace(ref, [fig(0)]);
@@ -104,15 +155,20 @@ describe.skipIf(!PG_URL)("PgTurnVisualFacts (needs DOCMIND_TEST_PG_URL)", () => 
 
   it("docmind_chat_tenant answers for a live chat only", async () => {
     const live = await chatOf(T1, U1);
-    const ask = async (chatId: string) =>
-      (await fx.app.query("SELECT public.docmind_chat_tenant($1::uuid) AS t", [chatId])).rows[0]
-        ?.t as string | null | undefined;
-    expect(await ask(live.chatId)).toBe(T1);
-    expect(await ask(randomUUID())).toBeFalsy(); // unknown chat
+    const ask = async (chatId: string, userId: string) =>
+      (
+        await fx.app.query("SELECT public.docmind_chat_tenant($1::uuid, $2::uuid) AS t", [
+          chatId,
+          userId,
+        ])
+      ).rows[0]?.t as string | null | undefined;
+    expect(await ask(live.chatId, U1)).toBe(T1);
+    expect(await ask(live.chatId, U2)).toBeFalsy(); // the right chat, another user
+    expect(await ask(randomUUID(), U1)).toBeFalsy(); // unknown chat
     await fx.db.owner.query("UPDATE chat_sessions SET deleted_at = now() WHERE id = $1", [
       live.chatId,
     ]);
-    expect(await ask(live.chatId)).toBeFalsy(); // soft-deleted
+    expect(await ask(live.chatId, U1)).toBeFalsy(); // soft-deleted
 
     // erasing_at is final (0024), so the erasure case uses a user of its own.
     const doomed = randomUUID();
@@ -121,8 +177,8 @@ describe.skipIf(!PG_URL)("PgTurnVisualFacts (needs DOCMIND_TEST_PG_URL)", () => 
       [doomed, T1, `${doomed}@example.com`],
     );
     const theirs = await chatOf(T1, doomed);
-    expect(await ask(theirs.chatId)).toBe(T1);
+    expect(await ask(theirs.chatId, doomed)).toBe(T1);
     await fx.db.owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [doomed]);
-    expect(await ask(theirs.chatId)).toBeFalsy(); // owner being erased
+    expect(await ask(theirs.chatId, doomed)).toBeFalsy(); // owner being erased
   });
 });

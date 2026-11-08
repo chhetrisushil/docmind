@@ -135,7 +135,7 @@ export async function toMessageDtos(
     }
     const cited = citeReply(e.text, retrieved, titles);
     const visualizable = e.status === "complete" && cited.citations.length > 0;
-    if (visualizable) citedOrds.push(e.ord as number);
+    if (visualizable && e.ord !== undefined) citedOrds.push(e.ord);
     // A complete, empty reply with no recorded outcome is a loop that ran out of iterations (H11).
     if (outcome === null && e.status === "complete" && e.text.trim() === "")
       outcome = "max_iterations";

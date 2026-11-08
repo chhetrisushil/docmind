@@ -37,7 +37,13 @@ const llmReplying = (facts: unknown[]): LlmProvider & { calls: unknown[] } => {
   } as never;
 };
 function setup(
-  o: { llm?: LlmProvider; retrieved?: string[]; summaryMaxChars?: number; existing?: Fact[] } = {},
+  o: {
+    llm?: LlmProvider;
+    retrieved?: string[];
+    summaryMaxChars?: number;
+    existing?: Fact[];
+    noTurn?: boolean;
+  } = {},
 ) {
   const writes: Fact[][] = [];
   const read = vi.fn(
@@ -47,11 +53,10 @@ function setup(
   const effect = turnExtractEffect({
     guard: { begin: async () => {} },
     turn: {
-      read: async () => ({
-        status: "complete",
-        retrieved: o.retrieved ?? [K0, GONE, K1],
-        citations: [],
-      }),
+      read: async () =>
+        o.noTurn
+          ? null
+          : { status: "complete", retrieved: o.retrieved ?? [K0, GONE, K1], citations: [] },
     },
     passages: { read: read as never },
     facts: {
@@ -62,9 +67,16 @@ function setup(
       list: async () => o.existing ?? [],
     },
     summaryMaxChars: o.summaryMaxChars ?? 400_000,
+    sleep: async () => {},
     ...(o.llm && { llm: o.llm }),
   });
-  return { effect, writes, read, run: () => effect.execute(ref, { executionId: "e" } as never) };
+  return {
+    effect,
+    writes,
+    read,
+    run: (signal?: AbortSignal) =>
+      effect.execute(ref, { executionId: "e", ...(signal && { signal }) } as never),
+  };
 }
 
 describe("turn-extract", () => {
@@ -115,6 +127,30 @@ describe("turn-extract", () => {
     const s = setup({ llm });
     expect(await s.run()).toEqual({ outcome: "done", count: 0, model: "m" });
     expect(s.writes).toEqual([[]]);
+  });
+  it("clears the turn's facts (count 0, no model call) when the turn cannot be read, and when it retrieved nothing", async () => {
+    for (const o of [{ noTurn: true }, { retrieved: [] as string[] }, { retrieved: [GONE] }]) {
+      const llm = llmReplying([GOOD]);
+      const s = setup({ llm, ...o });
+      expect(await s.run()).toEqual({ outcome: "done", count: 0, model: "visuals-test" });
+      expect(s.writes).toEqual([[]]);
+      expect(llm.calls).toHaveLength(0);
+    }
+  });
+  it("treats a truncated answer (max_tokens) as a failure, not as facts: it throws and stores nothing", async () => {
+    const llm = {
+      model: "m",
+      complete: async () => ({ content: '{"facts":[', stopReason: "max_tokens" }),
+    } as never;
+    const s = setup({ llm });
+    await expect(s.run()).rejects.toThrow();
+    expect(s.writes).toEqual([]);
+  });
+  it("forwards the attempt's abort signal to the model", async () => {
+    const llm = llmReplying([GOOD]);
+    const ac = new AbortController();
+    await setup({ llm }).run(ac.signal);
+    expect((llm.calls[0] as { signal?: AbortSignal }).signal).toBeInstanceOf(AbortSignal);
   });
   it("is done with model 'none' and calls nothing when the visuals role is off", async () => {
     const s = setup();

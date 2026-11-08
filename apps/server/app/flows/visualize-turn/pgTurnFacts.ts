@@ -22,6 +22,7 @@ export class PgTurnVisualFacts implements TurnFactStore {
   ) {}
 
   async replace(ref: TurnRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number> {
+    if (signal?.aborted) throw new ParseAbortedError(); // nothing sealed, nothing written
     // Sealing may call the key store: do it before the transaction, never under row locks.
     const cipher = this.fields.forUser(ref.userId);
     const rows = await Promise.all(
@@ -35,7 +36,9 @@ export class PgTurnVisualFacts implements TurnFactStore {
         };
       }),
     );
+    if (signal?.aborted) throw new ParseAbortedError(); // aborted while sealing: no transaction
     await withTenant(this.pool, ref.tenantId, async (tx) => {
+      if (signal?.aborted) throw new ParseAbortedError();
       await tx.query(
         "DELETE FROM turn_visual_facts WHERE chat_id = $1 AND user_id = $2 AND ord = $3",
         [ref.chatId, ref.userId, ref.ord],

@@ -178,6 +178,10 @@ describe("intentOf: anything else", () => {
     expect(
       intentOf("library-empty", { type: "SELECT", payload: { value: "all", key: "k" } }),
     ).toBeUndefined();
+    // a chat turn's visuals view is read-only: no action means anything there
+    expect(
+      intentOf("turn", { type: "A2UI_ACTION", payload: { action: "ask-question", context: {} } }),
+    ).toBeUndefined();
   });
 });
 

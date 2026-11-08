@@ -26,11 +26,14 @@ export type CommitInput = VisualizeRef & {
 };
 
 /** Runs a lineage commit and maps its failures to the step errors: an erased line is "gone"; a refusal repeats and an unreadable line fails closed (neither is transient). */
-export async function committing<T>(commit: () => Promise<T>): Promise<T> {
+export async function committing<T>(
+  commit: () => Promise<T>,
+  gone: () => DocumentGoneError = () => new DocumentGoneError(),
+): Promise<T> {
   try {
     return await commit();
   } catch (err) {
-    if (err instanceof LineErasedError) throw new DocumentGoneError();
+    if (err instanceof LineErasedError) throw gone();
     if (err instanceof LineageRefusedError || err instanceof LineUnreadableError)
       throw new VisualsLineageError();
     throw err;

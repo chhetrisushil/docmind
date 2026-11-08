@@ -18,22 +18,33 @@ export interface TurnReadDeps {
 }
 
 export interface TurnRead {
-  status: "complete" | "interrupted" | "failed";
+  /**
+   * `too_old`: the reply is further back than the lookback (`LOOKBACK_RECORDS`) and was not looked at; no retrieved
+   * chunks or citations. Every caller that needs a complete turn already treats it like any other incomplete one.
+   */
+  status: "complete" | "interrupted" | "failed" | "too_old";
   /** Chunk ids of the turn's retrieved passages, in retrieval order, deduplicated. */
   retrieved: string[];
   /** What `citeReply` leaves, in citation order, for documents the user still owns. */
   citations: { passageId: string; documentId: string }[];
 }
 
-const PAGE = 30;
-const MAX_PAGES = 40;
+const PAGE = 100;
+const MAX_PAGES = 50;
+/**
+ * How far back from the tail a turn is looked for: 5000 records. The conversation reader pages by (generation, sequence)
+ * cursors, which an `ord` does not map to, so there is no seek; the walk is bounded instead (each page is one read and
+ * a decrypt of 100 records, and only an on-demand click on an old turn goes far; the automatic pass finds the newest turn
+ * on the first page).
+ */
+export const LOOKBACK_RECORDS = PAGE * MAX_PAGES;
 
-/** The assistant record with this `ord`, found by scanning backward from the tail; null when there is none. */
+/** The assistant record with this `ord`, found by scanning backward from the tail; null when there is none, "too_old" past the lookback. */
 async function findReply(
   deps: TurnReadDeps,
   ref: TurnRef,
   signal?: AbortSignal,
-): Promise<HistoryEntry | null> {
+): Promise<HistoryEntry | null | "too_old"> {
   const conversationId = chatConversationId(ref.userId, ref.chatId);
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -52,7 +63,7 @@ async function findReply(
       return null;
     cursor = res.nextCursor;
   }
-  return null;
+  return "too_old";
 }
 
 /** The settled turn's status, retrieved chunks and kept citations. Reads content; returns ids only. */
@@ -62,6 +73,7 @@ export async function readTurn(
   signal?: AbortSignal,
 ): Promise<TurnRead | null> {
   const reply = await findReply(deps, ref, signal);
+  if (reply === "too_old") return { status: "too_old", retrieved: [], citations: [] };
   if (
     !reply ||
     (reply.status !== "complete" && reply.status !== "interrupted" && reply.status !== "failed")

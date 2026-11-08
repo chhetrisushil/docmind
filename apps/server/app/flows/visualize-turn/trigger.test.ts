@@ -39,7 +39,7 @@ describe("turnToVisualize", () => {
       chatId: chat,
       ord: 4,
     });
-    expect(d.tenantOf).toHaveBeenCalledWith(chat);
+    expect(d.tenantOf).toHaveBeenCalledWith(user, chat);
   });
   it("resolves the chat of a rotated generation too", async () => {
     const e = event({

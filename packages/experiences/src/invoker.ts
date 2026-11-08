@@ -1,5 +1,5 @@
 import type { ChatSessionDto, DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { Uuid } from "@docmind/contracts";
+import { RecordOrd, Uuid } from "@docmind/contracts";
 import type { TransientInvoker } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { z } from "zod";
@@ -65,7 +65,7 @@ const ARGS = {
   "turn.facts": z
     .object({
       chatId: Id,
-      ord: z.number().int().min(1).max(999_999_999_999_999) /* = RecordOrd (contracts) */,
+      ord: RecordOrd,
     })
     .strict(),
 } as const;

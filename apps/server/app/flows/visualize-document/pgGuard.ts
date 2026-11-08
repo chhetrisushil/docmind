@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { withTenant } from "../../db/tenant";
+import { guardLookup } from "../guardLookup";
 import { DocumentGoneError } from "../ingest-document/errors";
 import type { IngestStartInput } from "../ingest-document/flow";
 import type { StepGuard } from "../ingest-document/stepEffect";
@@ -17,9 +17,10 @@ export class PgVisualizeGuard implements StepGuard {
     _step: string,
     generation?: number,
   ) {
-    let row: { ingest_generation: number } | undefined;
-    try {
-      row = await withTenant(this.pool, tenantId, async (tx) => {
+    const row = await guardLookup(
+      this.pool,
+      tenantId,
+      async (tx) => {
         const { rows } = await tx.query<{ ingest_generation: number }>(
           `SELECT d.ingest_generation FROM documents d
              JOIN users u ON u.id = d.owner_id AND u.erasing_at IS NULL
@@ -27,10 +28,9 @@ export class PgVisualizeGuard implements StepGuard {
           [documentId, userId],
         );
         return rows[0];
-      });
-    } catch {
-      throw new Error("document existence check failed");
-    }
+      },
+      "document existence check failed",
+    );
     if (row === undefined) throw new DocumentGoneError();
     if (generation !== undefined && Number(row.ingest_generation) !== generation)
       throw new DocumentGoneError();

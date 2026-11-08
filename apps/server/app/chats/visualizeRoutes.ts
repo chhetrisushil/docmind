@@ -1,10 +1,10 @@
-import { RecordOrd, type VisualizeTurnResponse } from "@docmind/contracts";
+import { ORD_PATTERN, RecordOrd, type VisualizeTurnResponse } from "@docmind/contracts";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound } from "./access";
 import type { ChatRouteDeps } from "./routes";
 
-const DIGITS = /^[1-9][0-9]*$/; // canonical decimal: no sign, no leading zero, no fraction
+const ORD = new RegExp(`^${ORD_PATTERN}$`); // canonical decimal: no sign, no leading zero, no fraction
 
 /** On-demand visuals for one turn. A foreign chat, an unknown one and a deleted one all answer the same 404. */
 export function chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler> {
@@ -16,7 +16,7 @@ export function chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler
       async (_req, res, identity, ctx) => {
         const chat = await loadChat(deps, identity, ctx); // owner, tenant, not soft-deleted
         const ordText = ctx.params.ord ?? "";
-        const ord = DIGITS.test(ordText) ? RecordOrd.safeParse(Number(ordText)) : null;
+        const ord = ORD.test(ordText) ? RecordOrd.safeParse(Number(ordText)) : null;
         if (!chat || !ord?.success) return notFound(res);
         if (!v.limiter.tryAcquire(identity.userId)) {
           res.setHeader("retry-after", "60");
@@ -34,6 +34,13 @@ export function chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler
           ord: ord.data,
         };
         const turn = await v.turn.read(ref);
+        if (turn?.status === "too_old")
+          return sendError(
+            res,
+            409,
+            "not_visualizable",
+            "this answer is too far back in the chat to make visuals for",
+          );
         if (!turn || turn.status !== "complete" || turn.citations.length === 0)
           return sendError(res, 409, "not_visualizable", "this answer has no visuals to make");
         const started = await v.starter.visualize(ref);

@@ -101,6 +101,8 @@ export type ChatFailureReason = z.infer<typeof ChatFailureReason>;
 
 /** A chat record's ordinal as a number: the range of `ChatMessageDto.id`'s decimal string (`/^(0|[1-9][0-9]{0,14})$/`), from 1. */
 export const RecordOrd = z.number().int().min(1).max(999_999_999_999_999);
+/** `RecordOrd` as regex source for ids and routes: 1 to 15 decimal digits, no leading zero, no sign. The one definition. */
+export const ORD_PATTERN = "[1-9][0-9]{0,14}";
 export type RecordOrd = z.infer<typeof RecordOrd>;
 
 export const ChatMessageDto = z.object({

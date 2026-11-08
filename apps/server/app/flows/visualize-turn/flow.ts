@@ -39,7 +39,7 @@ export const turnFactsStep = step$({
 // the shape. STEP_STARTED seals `input.ops|summary|report`.
 const CommitStepInput = TurnInput.extend({
   outcome: z.enum(["visualized", "nothing"]),
-  ops: z.array(z.unknown()),
+  ops: z.array(z.unknown()).optional(),
   summary: z.string().optional(),
   summaryClass: z.string().optional(),
   report: z.unknown().optional(),
@@ -65,7 +65,7 @@ export const runVisualizeTurn =
   (planner: () => Planner | undefined): FlowRunner<TurnRef, TurnOutput> =>
   async (ctx, input) => {
     const nothing = async (): Promise<TurnOutput> => {
-      await ctx.run(turnCommitStep, { ...input, outcome: "nothing", ops: [] });
+      await ctx.run(turnCommitStep, { ...input, outcome: "nothing" });
       return { outcome: "nothing" };
     };
     const loaded = await ctx.run(turnLoadStep, input);

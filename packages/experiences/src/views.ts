@@ -207,11 +207,16 @@ function factRefOf(visuals: Experience, handle: string, direct: boolean): FactRe
   return step ? factRefOfPin(step.toolName, step.toolSchemaHash ?? "") : null;
 }
 
-interface Adopt {
-  refOf(visuals: Experience, handle: string): FactRef | null;
+/** `R`: the refs the host accepts (a detail page only takes detail refs, a turn only doc and turn refs). */
+type DetailFactRef = Extract<FactRef, { kind: "detail" }>;
+type TurnFactRef = Exclude<FactRef, { kind: "detail" }>;
+
+interface Adopt<R extends FactRef> {
+  refOf(visuals: Experience, handle: string): R | null;
   /** The provider handle of a distinct fact in the host experience. */
-  baseHandle(ref: FactRef): string;
-  provider(ref: FactRef, entry: VisualEntry): ProviderSpec;
+  baseHandle(ref: R): string;
+  /** The handle in the returned spec is replaced by the adopted one. */
+  provider(ref: R, entry: VisualEntry): ProviderSpec;
 }
 
 /**
@@ -219,9 +224,9 @@ interface Adopt {
  * the real ids; any the planner declared are ignored. Two nodes binding one fact with different entries get separate
  * providers (`<base>-b`, `-c`, ...). Malformed nodes are dropped, never thrown on: this runs on every page load.
  */
-function adoptVisuals(
+function adoptVisuals<R extends FactRef>(
   visuals: Experience,
-  o: Adopt,
+  o: Adopt<R>,
   providers: Record<string, ProviderSpec>,
 ): Child[] {
   const entryOf = new Map<string, VisualEntry>();
@@ -268,7 +273,7 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
   const kept = adoptVisuals(
     visuals,
     {
-      refOf: (v, h) => {
+      refOf: (v, h): DetailFactRef | null => {
         const r = factRefOf(v, h, true);
         return r?.kind === "detail" ? r : null; // a turn pin means nothing on a document's page
       },
@@ -299,12 +304,12 @@ export function turnWithVisuals(
   if (visuals === null) return null;
   const providers: Record<string, ProviderSpec> = {};
   const base = new Map<string, string>();
-  const keyOf = (r: FactRef) =>
+  const keyOf = (r: TurnFactRef) =>
     r.kind === "doc" ? `${r.documentId}/${r.ordinal}` : `turn/${r.ordinal}`;
   const kept = adoptVisuals(
     visuals,
     {
-      refOf: (v, h) => {
+      refOf: (v, h): TurnFactRef | null => {
         const r = factRefOf(v, h, false);
         if (r === null || r.kind === "detail") return null;
         return r.kind === "doc" && !liveDocuments.has(r.documentId) ? null : r;
@@ -314,8 +319,7 @@ export function turnWithVisuals(
         if (!base.has(k)) base.set(k, `fact-${base.size}`);
         return base.get(k) as string;
       },
-      provider: (r, entry) =>
-        turnFactProvider("", r as Exclude<FactRef, { kind: "detail" }>, turn, entry),
+      provider: (r, entry) => turnFactProvider(r, turn, entry),
     },
     providers,
   );

@@ -18,7 +18,8 @@ const make = (l: Lineage, bus: Pick<ChatBus, "publish">) =>
     bus,
     now: () => "2026-11-08T10:00:00.000Z",
   });
-const visualized = async (r: ReturnType<typeof ref>): Promise<TurnCommitInput> => {
+type Visualized = Extract<TurnCommitInput, { outcome: "visualized" }>;
+const visualized = async (r: ReturnType<typeof ref>): Promise<Visualized> => {
   const plan = await aTurnPlan("headline", "Zebra-Secret-Label", "Zebra-Secret-Summary");
   return {
     ...r,
@@ -77,10 +78,40 @@ describe("turn-commit", () => {
     const l = lineage();
     const r = ref();
     const publish = vi.fn();
-    await make(l, { publish }).execute({ ...r, outcome: "nothing", ops: [] }, undefined as never);
+    await make(l, { publish }).execute({ ...r, outcome: "nothing" }, undefined as never);
     expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith(r.chatId, { kind: "visuals", ord: 6, outcome: "nothing" });
     expect(await l.head(turnExperienceId(r))).toEqual({ ok: true, value: null });
+  });
+  it("fails with the lineage error (fatal, not retried) when 'visualized' arrives without a report, and publishes nothing", async () => {
+    const publish = vi.fn();
+    const input = { ...(await visualized(ref())) } as Record<string, unknown>;
+    input.report = undefined;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        make(lineage(), { publish }).execute(input as never, undefined as never),
+      ).rejects.toThrow("ingest step failed: turn-commit"); // the event log's fixed text
+      // the class that reaches the process log: the lineage error, which is fatal (one attempt, no retry)
+      expect(log.mock.calls).toEqual([
+        ["ingest step failed", "turn-commit", "VisualsLineageError"],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+    expect(publish).not.toHaveBeenCalled();
+  });
+  it("ends 'gone' (the shared document_gone outcome), writing and publishing nothing, when the turn's line was erased", async () => {
+    const erased = {
+      head: async () => ({ ok: false, refusal: { kind: "line-erased" } }),
+    } as unknown as Lineage;
+    const publish = vi.fn();
+    const out = await make(erased, { publish }).execute(
+      await visualized(ref()),
+      undefined as never,
+    );
+    expect(out).toEqual({ outcome: "document_gone" });
+    expect(publish).not.toHaveBeenCalled();
   });
   it("never fails the step when the bus does", async () => {
     const r = ref();

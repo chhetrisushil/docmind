@@ -464,12 +464,14 @@ describe("turnWithVisuals", () => {
         node("n2", "KeyFigure", "p-b"),
         node("n3", "KeyFigure", "p-c"),
         node("n4", "KeyFigure", "p-d"),
+        node("n5", "KeyFigure", "p-e"),
       ],
       [
         planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-0`),
         planned("p-b", "visual.facts", `docmind:visual.facts@1#${A}/fact-1`),
         planned("p-c", "visual.facts", `docmind:visual.facts@1#${B}/fact-0`),
         planned("p-d", "turn.facts", "docmind:turn.facts@1#fact-0"),
+        planned("p-e", "visual.facts", "docmind:visual.facts@1#fact-0"), // a detail pin names no document
       ],
     );
     expect(documentsOfVisuals(e)).toEqual([A, B]);

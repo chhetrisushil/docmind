@@ -13,6 +13,7 @@ import {
 } from "../ingest-document/stepEffect";
 import { committing } from "../visualize-document/commit";
 import { commitPlanTo } from "../visualize-document/lineage";
+import { TurnGoneError } from "./errors";
 import { type TurnRef, turnExperienceId } from "./ids";
 import { TURN_RETRY } from "./model";
 import { TURN_INTENT } from "./plan";
@@ -21,13 +22,17 @@ import { TURN_INTENT } from "./plan";
  * The commit step's input: the plan the planner decided. User content (labels, bindings, the model's summary), so
  * `STEP_STARTED.input.ops`, `input.summary` and `input.report` are sealed in S/sensitive.ts (already registered).
  */
-export type TurnCommitInput = TurnRef & {
-  outcome: "visualized" | "nothing";
-  ops: Operation[];
-  summary?: string;
-  summaryClass?: PlanResult["summaryClass"];
-  report?: PlanReport;
-};
+export type TurnCommitInput = TurnRef &
+  (
+    | {
+        outcome: "visualized";
+        ops: Operation[];
+        summary?: string;
+        summaryClass?: PlanResult["summaryClass"];
+        report?: PlanReport;
+      }
+    | { outcome: "nothing" }
+  );
 
 /**
  * "visualized": replaces the head of the turn's line (sealed under the user's key; R18: a sealed, idempotent commit; an identical head is returned with
@@ -48,14 +53,17 @@ export function turnCommitEffect(
     deps.guard,
     async (input) => {
       if (input.outcome === "visualized") {
-        const { report } = input;
+        const { report } = input; // type-optional: a hand-made input without one is the lineage error below
         if (!report) throw new VisualsLineageError(); // the flow always sends it; without one there is nothing to commit
         const target = {
           experienceId: turnExperienceId(input),
           intent: TURN_INTENT,
           sourceKind: "turn-visuals",
         };
-        await committing(() => commitPlanTo(deps.lineage, target, { ...input, report }, deps.now));
+        await committing(
+          () => commitPlanTo(deps.lineage, target, { ...input, report }, deps.now),
+          () => new TurnGoneError(),
+        );
       }
       try {
         deps.bus.publish(input.chatId, {
@@ -69,7 +77,7 @@ export function turnCommitEffect(
           err instanceof Error ? err.constructor.name : typeof err,
         );
       }
-      return { count: input.ops.length };
+      return { count: input.outcome === "visualized" ? input.ops.length : 0 };
     },
     { schema: StepResult, ended: (end) => end },
     ingestStepOptions(deps, TURN_RETRY),

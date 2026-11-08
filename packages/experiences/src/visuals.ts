@@ -239,20 +239,19 @@ export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fro
   ),
 );
 
-/** The provider of a fact read for a turn: a stored fact reads its document, an extracted one the turn. */
+/** The provider of a fact read for a turn: a stored fact reads its document, an extracted one the turn. Its handle is a placeholder, as `factProvider`'s: the host experience sets the real one. */
 export const turnFactProvider = (
-  handle: string,
   ref: Exclude<FactRef, { kind: "detail" }>,
   turn: { chatId: string; ord: number },
   entry: VisualEntry,
 ): ProviderSpec =>
   ref.kind === "doc"
-    ? provider(handle, {
+    ? provider(`fact-${ref.ordinal}`, {
         target: "visual.facts",
         args: { id: ref.documentId },
         reshaper: `${FAMILY[entry]}-${ref.ordinal}`,
       })
-    : provider(handle, {
+    : provider(`fact-${ref.ordinal}`, {
         target: "turn.facts",
         args: { chatId: turn.chatId, ord: turn.ord },
         reshaper: `${FAMILY[entry]}-${ref.ordinal}`,

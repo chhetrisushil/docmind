@@ -65,6 +65,18 @@ describe("turn-facts", () => {
     );
     expect(out.facts).toHaveLength(1);
   });
+  it("rethrows an error that is not 'the document is gone'", async () => {
+    const list = vi.fn(async () => {
+      throw new TypeError("db down");
+    });
+    const run = turnFactsEffect({
+      guard,
+      stored: { list, replace: vi.fn() },
+      turnFacts: { list: vi.fn(), replace: vi.fn() },
+      sleep: async () => {},
+    }).execute({ ...ref, refs: [{ documentId: A, ordinal: 0 }] }, { executionId: "e" } as never);
+    await expect(run).rejects.toThrow();
+  });
   it("reads the turn's own facts when there are no references", async () => {
     const turnList = vi.fn(async () => [fig(0, "t0"), fig(1, "t1")]);
     const out = await turnFactsEffect({
