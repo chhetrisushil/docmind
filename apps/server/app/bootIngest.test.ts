@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type BootIngestParts, bootIngest } from "./bootIngest";
+import { type BootIngestParts, bootIngest, recoveryOwns } from "./bootIngest";
 
 const calls: string[] = [];
 const owned: (((id: string) => boolean) | undefined)[] = [];
@@ -70,6 +70,7 @@ function parts(
     },
     events: { closeAll: note("events.closeAll") },
     titles: { idle: async () => void calls.push("titlesIdle") },
+    turns: { idle: async () => void calls.push("turnsIdle") },
     visuals: {
       sweep: async (signal?: AbortSignal) => {
         calls.push("visuals.sweep");
@@ -110,6 +111,16 @@ beforeEach(() => {
   swept.length = 0;
   hydrateFails = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+describe("recoveryOwns", () => {
+  it("re-drives a turn visualize execution and still refuses an unrelated one", () => {
+    const u = "11111111-1111-4111-8111-111111111111";
+    const c = "22222222-2222-4222-8222-222222222222";
+    expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6`)).toBe(true);
+    expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6-r2`)).toBe(true);
+    expect(recoveryOwns(`u_${u}:something-else`)).toBe(false);
+  });
 });
 
 describe("bootIngest", () => {
@@ -247,6 +258,7 @@ describe("bootIngest", () => {
       "drainServer",
       "startsIdle",
       "titlesIdle",
+      "turnsIdle",
       "visualsIdle",
       "closeIngest",
       "closeHeartbeat",

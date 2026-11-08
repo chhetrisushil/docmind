@@ -50,6 +50,15 @@ describe("the effect grants", () => {
     },
   );
 
+  it("grants visualize-turn exactly its four steps", () => {
+    for (const tool of ["turn-load", "turn-extract", "turn-facts", "turn-commit"])
+      expect(authorizer.authorize(request("visualize-turn", tool)).allowed).toBe(true);
+    expect(authorizer.authorize(request("visualize-turn", "visualize-extract")).allowed).toBe(
+      false,
+    );
+    expect(authorizer.authorize(request("visualize-document", "turn-load")).allowed).toBe(false);
+  });
+
   it("lets chat-title run its one step and no chat tool", () => {
     expect(authorizer.authorize(request(CHAT_TITLE_FLOW_ID, "chat-title")).allowed).toBe(true);
     expect(authorizer.authorize(request(CHAT_TITLE_FLOW_ID, "search_docs")).allowed).toBe(false);

@@ -4,7 +4,11 @@ import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { createViews } from "@docmind/experiences";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
 import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
-import { createConversationReader } from "@loom/conversation";
+import {
+  type TurnSettledEvent,
+  createConversationReader,
+  turnSettledObserver,
+} from "@loom/conversation";
 import type { EventEnvelope } from "@loom/core";
 import type { EventStore, TimerStore } from "@loom/event-runtime";
 import type { LlmProvider } from "@loom/llm";
@@ -15,6 +19,7 @@ import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { ChatActivity } from "./chats/activity";
+import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID } from "./chats/ids";
 import type { ChatLlm } from "./chats/llm";
 import { pgCollaborators } from "./chats/pgCollaborators";
 import { replyReasoning } from "./chats/reasoningRead";
@@ -48,8 +53,16 @@ import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
 import { PgVisualizeGuard } from "./flows/visualize-document/pgGuard";
 import { visualsPlanner } from "./flows/visualize-document/planner";
 import { loomVisualsStarter, pgReadyDocuments } from "./flows/visualize-document/start";
+import { visualizeTurnFlow } from "./flows/visualize-turn/flow";
+import { PgTurnGuard } from "./flows/visualize-turn/guard";
+import type { TurnRef } from "./flows/visualize-turn/ids";
+import { PgTurnVisualFacts } from "./flows/visualize-turn/pgTurnFacts";
+import { readTurn } from "./flows/visualize-turn/readTurn";
+import { loomTurnStarter } from "./flows/visualize-turn/start";
+import { MAX_WAITING } from "./flows/visualize-turn/trigger";
 import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
 import { staticHandler } from "./http/staticFiles";
+import { composeDurableObservers } from "./observers";
 import { createHttpServer } from "./server";
 import { StartupConfigError } from "./startupError";
 import type { UserExecutionLister } from "./status/forgetUser";
@@ -219,9 +232,46 @@ export function buildServer(options: ComposeOptions) {
       ...(planner && { planner }),
     },
   };
+  // The turn-settled hook needs the runtime that buildApp creates, so the observer is late-bound (as `statusReads` is).
+  let settled: ((e: EventEnvelope) => void) | undefined;
+  const turnRead = chatParts && {
+    read: (ref: TurnRef, signal?: AbortSignal) =>
+      readTurn(
+        {
+          reader: createConversationReader(options.status.source),
+          items: chatParts.collaborators.items,
+          pool,
+          fields,
+        },
+        ref,
+        signal,
+      ),
+  };
+  const visualizeTurn = chatParts &&
+    turnRead && {
+      flow: visualizeTurnFlow(() => planner),
+      deps: {
+        guard: new PgTurnGuard(pool),
+        turn: turnRead,
+        stored: new PgVisualFacts(pool, fields),
+        turnFacts: new PgTurnVisualFacts(pool, fields),
+        passages: chatParts.collaborators.passages,
+        summaryMaxChars: options.ingest.summaryMaxChars,
+        lineage: visualsLineageOf, // sealed (visualsLineage fails closed without a sealing content store)
+        bus: chatParts.bus,
+        now: () => new Date().toISOString(),
+        shutdown: options.ingest.shutdown.signal,
+        gate: visualizeGate, // the SAME gate as visualize-document: at most 2 visuals executions in flight
+        ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
+        ...(visualsLlm && { llm: visualsLlm }),
+        ...(planner && { planner }),
+      },
+    };
   const app = buildApp(options.storage, options.crypto, {
     ingest: pgIngestDeps({ pool, fields, keys, blobs, wiring: options.ingest, vectors }),
     visualize,
+    ...(visualizeTurn && { visualizeTurn }),
+    onDurableEvent: (e) => settled?.(e),
     ...(chatParts && { chat: chatParts.deps }),
     ...(options.chat && {
       chatTitle: {
@@ -251,6 +301,26 @@ export function buildServer(options: ComposeOptions) {
     ready: pgReadyDocuments(pool),
     enabled: visualsLlm !== undefined,
   });
+  const turns =
+    visualizeTurn &&
+    turnRead &&
+    loomTurnStarter(app.runtime, visualizeTurn.flow, {
+      enabled: () => visualsLlm !== undefined,
+      tenantOf: async (chatId) =>
+        ((await pool.query("SELECT public.docmind_chat_tenant($1::uuid) AS t", [chatId])).rows[0]
+          ?.t as string | null) ?? null,
+      turn: turnRead,
+      backlog: () => visualizeGate.waiting,
+      maxWaiting: MAX_WAITING,
+    });
+  if (turns) {
+    const onSettled = (e: TurnSettledEvent) => turns.onSettled(e);
+    // One onDurableEvent per runtime: one observer per chat flow, composed here so later observers compose here too.
+    settled = composeDurableObservers(
+      turnSettledObserver({ definition: { id: CHAT_FLOW_ID } }, onSettled),
+      turnSettledObserver({ definition: { id: CHAT_GK_FLOW_ID } }, onSettled),
+    );
+  }
   const chat = chatParts && connectChat(chatParts, app.runtime, options.status.source);
   const sensitive = statusSensitive(flowSteps(), options.status.source);
   // The models fold through a source that reads an erased user's log as placeholders instead of throwing (E5). The
@@ -468,6 +538,8 @@ export function buildServer(options: ComposeOptions) {
     chat,
     /** Starts a chat's auto title; absent when `options.chat` is. `idle()` is awaited at shutdown with the ingest starts. */
     titles,
+    /** Starts visualize-turn runs; absent without chat. idle() is awaited at shutdown with the other starts. */
+    turns,
     /** Starts, sweeps and cancels the visualize flow; boot calls `sweep()`, shutdown awaits `idle()`. */
     visuals,
     /** Ends every open progress stream; shutdown calls it before the server drain (an event stream never ends on its own). */
