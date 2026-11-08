@@ -33,3 +33,31 @@ export const TurnLoadOutput = z
   })
   .strict();
 export type TurnLoadOutput = z.infer<typeof TurnLoadOutput>;
+
+export const TurnFactsInput = TurnInput.extend({ refs: z.array(FactRefOut).max(12) });
+export type TurnFactsInput = z.infer<typeof TurnFactsInput>;
+
+/**
+ * What `turn-facts` leaves in the log: the facts themselves (labels, values, table cells), so `output.facts` is sealed in
+ * S/sensitive.ts (the path `visualize-load` already registers). Empty unless done.
+ */
+export const TurnFactsOutput = z
+  .object({
+    outcome: Outcome,
+    code: z.enum(FAILURE_CODES).optional(),
+    facts: z
+      .array(
+        z
+          .object({
+            origin: z.union([
+              z.object({ kind: z.literal("doc"), documentId: z.string().uuid() }).strict(),
+              z.object({ kind: z.literal("turn") }).strict(),
+            ]),
+            fact: StoredFact,
+          })
+          .strict(),
+      )
+      .max(MAX_FACTS),
+  })
+  .strict();
+export type TurnFactsOutput = z.infer<typeof TurnFactsOutput>;
