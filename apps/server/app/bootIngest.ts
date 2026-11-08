@@ -10,6 +10,7 @@ import { hydrateSubjectIndex } from "./erasure/compliance";
 import { type IngestWiring, closeIngest } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
+import { isTurnVisualizeExecution } from "./flows/visualize-turn/ids";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
 import { snapshotPruneDeps } from "./snapshots/pgPruner";
 import { startSnapshotPruner } from "./snapshots/pruner";
@@ -19,9 +20,12 @@ import type { DurableStorage } from "./storage";
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** The executions boot recovery re-drives: ingest, the visuals flow, and the chat's conversations and titles. */
+/** The executions boot recovery re-drives: ingest, the visuals flows (document and turn), and the chat's conversations and titles. */
 export const recoveryOwns = (id: string): boolean =>
-  isIngestExecution(id) || isVisualizeExecution(id) || isRecoverableChatExecution(id);
+  isIngestExecution(id) ||
+  isVisualizeExecution(id) ||
+  isTurnVisualizeExecution(id) ||
+  isRecoverableChatExecution(id);
 
 export interface BootIngestParts {
   built: ReturnType<typeof buildServer>;
@@ -91,6 +95,7 @@ export async function bootIngest(
     detachStatusFeed,
     chat,
     titles,
+    turns,
     visuals,
     eraser,
     erasureLocks,
@@ -221,6 +226,7 @@ export async function bootIngest(
             startsIdle: async () => {
               await starts.idle();
               await titles?.idle();
+              await turns?.idle();
               await visuals.idle();
             },
             closeIngest: () => closeIngest(ingest),

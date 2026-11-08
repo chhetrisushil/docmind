@@ -8,6 +8,7 @@ import { type ErasureWiring, complianceConfig, warningFor } from "./erasure/comp
 import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
 import { type VisualizeDeps, visualizeEffects } from "./flows/visualize-document/deps";
+import { type TurnVisualizeDeps, turnEffects } from "./flows/visualize-turn/deps";
 import {
   agentModules,
   flowModules,
@@ -48,6 +49,10 @@ export interface FlowDeps {
    * only with them; without them a start of that flow is refused (the CLI, in-memory tests).
    */
   visualize?: { flow: RegisteredFlow; deps: VisualizeDeps };
+  /** The visualize-turn flow's dependencies (chat visuals); registered with chat. */
+  visualizeTurn?: { flow: RegisteredFlow; deps: TurnVisualizeDeps };
+  /** Loom's `observability.onDurableEvent`: one function (see ./observers.ts). Late-bound by the composition root. */
+  onDurableEvent?: (event: EventEnvelope) => void | Promise<void>;
   /** Loom's `observability.onEvent`: the live feed of the ingest-status model. */
   onEvent?: (event: EventEnvelope) => void;
   /**
@@ -83,7 +88,11 @@ export function buildApp(
         kernel: { features: { inbox: true, continueAsNew: true } },
       }
     : {};
-  const flows = [...(deps.chat?.flows ?? []), ...(deps.visualize ? [deps.visualize.flow] : [])];
+  const flows = [
+    ...(deps.chat?.flows ?? []),
+    ...(deps.visualize ? [deps.visualize.flow] : []),
+    ...(deps.visualizeTurn ? [deps.visualizeTurn.flow] : []),
+  ];
   return defineConfig({
     // With erasure, the timers and the parked-erasure folds wait for `app.start()`: `bootIngest` fills the
     // subject index first, so a parked erasure can never complete against a partly filled index.
@@ -98,6 +107,7 @@ export function buildApp(
     ...(flows.length > 0 && { flows }),
     observability: {
       ...(deps.onEvent && { onEvent: deps.onEvent }),
+      ...(deps.onDurableEvent && { onDurableEvent: deps.onDurableEvent }),
       onWarn: loomWarn,
     },
     // The status and activity models fold each ingest and chat execution's log from its first event, so compaction
@@ -121,6 +131,10 @@ export function buildApp(
         }
         if (deps.visualize) {
           for (const [id, effect] of Object.entries(visualizeEffects(deps.visualize.deps)))
+            effects.register(id, effect);
+        }
+        if (deps.visualizeTurn) {
+          for (const [id, effect] of Object.entries(turnEffects(deps.visualizeTurn.deps)))
             effects.register(id, effect);
         }
         if (deps.chatTitle) effects.register("chat-title", chatTitleEffect(deps.chatTitle));
