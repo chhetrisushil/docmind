@@ -188,6 +188,20 @@ export const factProvider = (
   });
 
 const isDate = (x: string) => /^\d{4}-\d{2}(-\d{2})?$/.test(x);
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const ym = (y: string, m: number) => `${y}-${String(m).padStart(2, "0")}`;
+/** A period label ("Q1 2026", "H2 2026", "2026", "Mar 2026") as the ISO month it starts; an ISO date or anything unknown comes back as it was. */
+const toIso = (raw: string): string => {
+  const x = raw.trim();
+  const q = /^(?:q([1-4])[\s-]+(\d{4})|(\d{4})[\s-]+q([1-4]))$/i.exec(x);
+  if (q) return ym((q[2] ?? q[3]) as string, (Number(q[1] ?? q[4]) - 1) * 3 + 1);
+  const h = /^(?:h([12])[\s-]+(\d{4})|(\d{4})[\s-]+h([12]))$/i.exec(x);
+  if (h) return ym((h[2] ?? h[3]) as string, Number(h[1] ?? h[4]) === 1 ? 1 : 7);
+  if (/^\d{4}$/.test(x)) return ym(x, 1);
+  const m = /^([a-z]{3})[a-z]*\.?[\s-]+(\d{4})$/i.exec(x);
+  const month = m ? MONTHS.indexOf((m[1] as string).toLowerCase()) : -1;
+  return m && month >= 0 ? ym(m[2] as string, month + 1) : x;
+};
 const unitOf = (f: { unit?: string }) => (f.unit ? { unit: f.unit } : {});
 /** loom-ui's "%" format reads a fraction (0.38 prints 38%), while facts hold the document's form (38 for "38%"). */
 const toLoom = (f: { unit?: string }, n: number) => (f.unit?.trim() === "%" ? n / 100 : n);
@@ -213,14 +227,14 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
       ? wrong()
       : { ...unitOf(f), bars: f.points.map((p) => ({ label: p.x, value: toLoom(f, p.y) })) },
   "visual-trend": (f) =>
-    f.kind !== "series" || !f.points.every((p) => isDate(p.x))
+    f.kind !== "series" || !f.points.every((p) => isDate(toIso(p.x)))
       ? wrong()
       : {
           series: [
             {
               label: f.label,
               ...unitOf(f),
-              points: f.points.map((p) => ({ timestamp: p.x, value: toLoom(f, p.y) })),
+              points: f.points.map((p) => ({ timestamp: toIso(p.x), value: toLoom(f, p.y) })),
             },
           ],
         },

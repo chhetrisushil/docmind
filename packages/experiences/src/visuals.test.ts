@@ -163,6 +163,37 @@ describe("the visual reshapers", () => {
     expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01-xyz")])).toThrow();
     expect(() => shape("visual-trend-2", [FIGURE, SERIES, series("2024-01")])).not.toThrow();
   });
+  it("normalise quarter, half, year and month labels to ISO dates for the trend", () => {
+    const xs = (labels: string[]): VisualFactRaw => ({
+      ...DATED_SERIES,
+      points: labels.map((x, i) => ({ x, y: i })),
+    });
+    const stamps = (labels: string[]) =>
+      (
+        shape("visual-trend-2", [FIGURE, SERIES, xs(labels)]) as {
+          series: { points: { timestamp: string }[] }[];
+        }
+      ).series[0]?.points.map((p) => p.timestamp);
+    expect(stamps(["Q1 2026", "q2 2026", "2026 Q3", "Q4-2026", "2026-q1"])).toEqual([
+      "2026-01",
+      "2026-04",
+      "2026-07",
+      "2026-10",
+      "2026-01",
+    ]);
+    expect(stamps(["H1 2026", "h2 2026", "2026 H2"])).toEqual(["2026-01", "2026-07", "2026-07"]);
+    expect(stamps(["2025", "2026"])).toEqual(["2025-01", "2026-01"]);
+    expect(stamps(["Jan 2026", "Sept 2026", "December 2026", "march 2027"])).toEqual([
+      "2026-01",
+      "2026-09",
+      "2026-12",
+      "2027-03",
+    ]);
+    expect(stamps(["2024-01", "Q2 2024", "2024"])).toEqual(["2024-01", "2024-04", "2024-01"]);
+    expect(() => stamps(["Q1 2026", "next spring"])).toThrow();
+    expect(() => stamps(["Q5 2026"])).toThrow();
+    expect(() => stamps(["Q1"])).toThrow();
+  });
   it("fail for a fact of the wrong kind or a missing fact", () => {
     expect(() => shape("visual-trend-1", raw)).toThrow();
     expect(() => shape("visual-kpi-1", raw)).toThrow();
