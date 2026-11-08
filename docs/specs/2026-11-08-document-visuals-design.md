@@ -229,11 +229,10 @@ the user's key destruction shreds `fact_enc`, the sealed decision and (after V8)
 
 ## 9. Step (b): cross-document
 
-A `crossDoc` fact kind built from the existing `entities` and `chunk_links` (shared entities,
-related documents), cited on both sides. When a linked document is ingested or deleted, affected
-documents' visuals are revised in place with `planner.revise` against the head, not recomposed.
-`@loom-ui/changes` then supplies the "visuals updated" signal and unread cursors. Its own design
-note settles which documents count as affected and how revisions are coalesced.
+Superseded by `2026-11-08-document-connections-design.md`. Connections are LIVE data: a `doc.connections`
+provider is read at hydrate time and bound by the planner once. Another document's ingest or deletion therefore
+needs no `planner.revise`, no `@loom-ui/changes` and no `crossDoc` fact kind. Figure comparison across documents
+is out of scope.
 
 ## 10. Step (c): diagrams
 
