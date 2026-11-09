@@ -67,6 +67,8 @@ describe("buildOutline", () => {
       ["D", 1, 1],
     ]);
     expect(o?.nodes[0]?.firstChunkId).toBe(id(1)); // the first descendant passage
+    // A shares B's first passage: cited once; level 1 (A, D) first, then level 2 (C)
+    expect(o?.chunkIds).toEqual([id(1), id(3), id(2)]);
   });
 
   it("keeps a duplicate heading under one parent as a separate node", () => {
@@ -112,6 +114,9 @@ describe("buildOutline", () => {
     expect(o?.nodes.every((n) => n.level <= 2)).toBe(true);
     // ids are numbered over the kept nodes, so they stay unique and contiguous after pruning
     expect(o?.nodes.map((n) => n.id)).toEqual(Array.from({ length: 22 }, (_, i) => `s${i}`));
+    expect(o?.nodes.filter((n) => n.level === 1).map((n) => n.passageCount)).toEqual([0, 0]);
+    // after pruning, a node still cites its own first passage
+    expect(o?.nodes.slice(0, 2).map((n) => n.firstChunkId)).toEqual([id(1), id(1)]);
     const level2 = o?.nodes.filter((n) => n.level === 2) ?? [];
     expect(level2.every((n) => n.passageCount === 8)).toBe(true); // 1 own + 7 folded
   });
@@ -134,5 +139,45 @@ describe("buildOutline", () => {
     const o = buildOutline("T", rows);
     expect(o?.nodes.map((n) => n.label)).toEqual(["A", "B", "C", "D"]);
     expect(o?.chunkIds).toEqual([id(1), id(3), id(2), id(4)]); // A, C (level 1), then B, D
+  });
+
+  it("prunes in several passes, folding each level into its parent", () => {
+    // 6 x 5 x 4 x 3 chain of levels 1..4 = 6 + 30 + 120 + 360 = 516 headings: two passes (level 4, then level 3).
+    const specs: [number, string[]][] = [];
+    let s = 0;
+    for (let a = 0; a < 6; a++)
+      for (let b = 0; b < 5; b++)
+        for (let c = 0; c < 4; c++)
+          for (let d = 0; d < 3; d++) {
+            const p = [`a${a}`, `b${b}`, `c${c}`, `d${d}`];
+            specs.push([++s, p]);
+          }
+    const o = buildOutline("T", sections(...specs));
+    expect(o?.nodes).toHaveLength(36);
+    expect(o?.nodes.every((n) => n.level <= 2)).toBe(true);
+    const level2 = o?.nodes.filter((n) => n.level === 2) ?? [];
+    expect(level2.every((n) => n.passageCount === 12)).toBe(true); // 4 level-3 x 3 level-4 passages
+    expect(o?.nodes.filter((n) => n.level === 1).every((n) => n.passageCount === 0)).toBe(true);
+  });
+
+  it("clamps heading depth to 32 levels", () => {
+    const deep = Array.from({ length: 40 }, (_, i) => `h${i}`);
+    const o = buildOutline("T", sections([1, deep], [2, ["X"]], [3, ["Y"]]));
+    expect(Math.max(...(o?.nodes.map((n) => n.level) ?? [0]))).toBe(32);
+    expect(o?.nodes).toHaveLength(34);
+  });
+
+  it("starts afresh after a preamble row mid-document", () => {
+    const rows = sections([1, ["A"]], [2, ["A", "B"]], [3, []], [4, ["A", "B"]], [5, ["C"]]);
+    const o = buildOutline("T", rows);
+    // the empty-path section resets the open path: A and B are made again
+    expect(o?.nodes.map((n) => n.label)).toEqual(["A", "B", "A", "B", "C"]);
+  });
+
+  it("keeps ancestors apart when headings differ only after 80 characters", () => {
+    const base = "x".repeat(80);
+    const rows = sections([1, [`${base}1`, "Sub"]], [2, [`${base}2`, "Sub"]], [3, ["Z"]]);
+    const o = buildOutline("T", rows);
+    expect(o?.nodes.map((n) => n.level)).toEqual([1, 2, 1, 2, 1]);
   });
 });

@@ -9,6 +9,6 @@ export const clipText = (text: string, max: number): string => {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 };
 
-/** A heading or a name as a label: trimmed and clipped to 80 characters; "" when nothing is left. */
+/** A heading or a name as a label: trimmed and clipped to 80 UTF-16 units (an astral character counts 2); "" when nothing is left. */
 export const clipLabel = (raw: string): string =>
   clipText(raw.trim(), MAX_STRUCTURE_LABEL).trimEnd();
