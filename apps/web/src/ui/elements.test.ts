@@ -46,3 +46,16 @@ describe("the opt-in diagram widget", () => {
     expect(customElements.get("lu-diagram")).toBeDefined();
   });
 });
+
+describe("the structure widgets", () => {
+  it("the outline and the entity map are Diagram entries, and lu-diagram is defined for them", () => {
+    createViewRegistry();
+    for (const name of ["DocumentOutline", "EntityMap"]) {
+      const entry = mergedCatalog().entries.find((e) => e.name === name);
+      expect(entry, name).toBeDefined();
+      const kind = (entry?.surfaces as { web: { kind: string } }).web.kind;
+      expect(kind).toBe("Diagram");
+      expect(customElements.get(TAG[kind] as string)).toBeDefined();
+    }
+  });
+});

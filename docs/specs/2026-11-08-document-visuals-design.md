@@ -238,8 +238,9 @@ is out of scope.
 
 First a generic loom-ui change: a `Diagram` kind (nodes, edges, a layout hint, an accessible text
 fallback) with renderer-conformance coverage for Lit and the terminal, naming no DocMind concept.
-Then DocMind adds a `structure` fact (outline, timeline, relationships) and a `DocumentDiagram`
-catalogue entry.
+Then DocMind adds derived structure facts and diagram catalogue entries. Phase c1 (outline and entity map, derived from
+passage headings and entity mentions, no model call) is specified in `2026-11-10-structure-diagrams-c1-design.md`; phase c2
+(timeline and named relationships, model-extracted) has its own spec.
 
 ## 11. Out of scope
 
@@ -296,3 +297,17 @@ lookup, and the reshaper turns them into `refs` with id `<documentId>:<passageId
 omitted when empty). A deleted document's chunks are gone, so its markers are dropped. Activating a marker raises
 `REF_OPEN`; `intentOf` maps it to `source.open` and the page opens `/documents/<id>?passage=<passageId>`. Chat turn
 visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no other action).
+
+### As built: structure diagrams, phase c1
+
+- Two derived fact kinds, `outline` and `cooccurrence`, are written by the `visualize-structure` step (after extract; also on a
+  re-plan that skips extraction) with `PgVisualFacts.replaceStructure`, on reserved ordinals 16 and 17 of `visual_facts`
+  (extraction keeps 16 facts at 0..15). Each store writer owns its own ordinal range. Migration 0035 relaxes the `kind`
+  and `ordinal` CHECKs of 0026 (`kind` also allows `outline` and `cooccurrence`; `ordinal` 0..17); the sealed fact's `kind` decides.
+- `DocumentOutline` (Diagram, tree) and `EntityMap` (Diagram, network) are in the document catalogue `docmind.visuals.v3`;
+  the chat catalogue `FACT_VISUALS_CATALOG` is byte-identical (sha256 guard). Their reshapers (`structureShapes.ts`) pass
+  loom-ui's `diagramProblems`, and `fitsShape` drops a misfit before commit. `VISUAL_SHAPES` serves them only at ordinals 16
+  and 17, and a document page adopts an entry only on its own ordinal (`entryFitsOrdinal`).
+- The planner sees counts and neutral placeholders only for a structure capability (never a heading or a name). `factFormatFingerprint()` ends `+docmind.structure@1`, which makes
+  the boot stale pass re-plan each visualized document once.
+- Not done in c1: timeline and relationships (c2), diagrams in chat, cross-document structure.
