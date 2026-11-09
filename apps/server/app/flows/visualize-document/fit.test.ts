@@ -5,7 +5,7 @@ import { ReferencePlanner } from "@loom-ui/planner";
 import { describe, expect, it } from "vitest";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import type { Fact } from "./facts";
-import { dropUnfittingOps } from "./fit";
+import { dropUnfittingOps, fittedSummary } from "./fit";
 import { VISUALS_INTENT, composeVisuals, planVisuals } from "./plan";
 import { recording, scriptedPlannerModel } from "./testing";
 
@@ -117,5 +117,57 @@ describe("dropUnfittingOps", () => {
           ? { ...REGIONS, ordinal: 0 }
           : undefined;
     expect(inserted(dropUnfittingOps(p.ops, lookup).ops)).toEqual(["b"]);
+  });
+});
+
+describe("fittedSummary", () => {
+  const withFindings = async () => {
+    const p = await plan([
+      node("headline", "KeyFigure", "fact-0"),
+      node("trend", "FigureTrend", "fact-1"),
+    ]);
+    const report = {
+      ...p.report,
+      attempts: [
+        {
+          parsed: true,
+          findings: [
+            { code: "x", severity: "warn" as const, message: "Zebra trend", nodeId: "trend" },
+            { code: "y", severity: "warn" as const, message: "kept note", nodeId: "headline" },
+            { code: "z", severity: "warn" as const, message: "plan-wide" },
+          ],
+        },
+      ],
+    };
+    return {
+      ...p,
+      report,
+      summary: "Zebra Regions trend shows growth",
+      summaryClass: p.summaryClass,
+    };
+  };
+
+  it("with a drop, replaces the planner summary by survivors' entry names and filters the report", async () => {
+    const p = await withFindings();
+    const fitted = dropUnfittingOps(p.ops, byOrdinal([FIGURE, REGIONS]));
+    expect(fitted.dropped).toEqual(["FigureTrend"]);
+    const out = fittedSummary(p, fitted);
+    expect(out.summary).toBe("KeyFigure");
+    expect(out.summary).not.toContain("Zebra");
+    expect(JSON.stringify(out.report)).not.toContain("Zebra trend");
+    expect(out.report.attempts[0]?.findings.map((f) => f.code)).toEqual(["y", "z"]);
+    expect(out.report.decisionId).toBe(p.report.decisionId);
+  });
+
+  it("with no drop, leaves summary and report unchanged", async () => {
+    const same = dropUnfittingOps(
+      (await plan([node("headline", "KeyFigure", "fact-0")])).ops,
+      byOrdinal([FIGURE]),
+    );
+    expect(same.dropped).toEqual([]);
+    const q = await withFindings();
+    const out = fittedSummary(q, same);
+    expect(out.summary).toBe(q.summary);
+    expect(out.report).toBe(q.report);
   });
 });

@@ -1,5 +1,6 @@
 import { type FactRef, type VisualFactRaw, factRefOfPin, fitsShape } from "@docmind/experiences";
 import type { Operation } from "@loom-ui/core";
+import type { PlanReport } from "@loom-ui/planner";
 
 /** The fact a provider handle reads, from the `remapProvider` op that declares it; null for a provider this module did not mint. */
 function factOfHandle(op: Operation): { handle: string; ref: FactRef | null } | null {
@@ -22,7 +23,7 @@ function factOfHandle(op: Operation): { handle: string; ref: FactRef | null } | 
 export function dropUnfittingOps(
   ops: readonly Operation[],
   factOf: (ref: FactRef) => VisualFactRaw | undefined,
-): { ops: Operation[]; dropped: string[] } {
+): { ops: Operation[]; dropped: string[]; droppedIds: string[] } {
   const refs = new Map<string, FactRef | null>();
   for (const op of ops) {
     const p = factOfHandle(op);
@@ -70,10 +71,42 @@ export function dropUnfittingOps(
       !gone.has(op) &&
       !(op.type === "remapProvider" && refs.get(op.handle) && !used.has(op.handle)),
   );
-  return { ops: kept, dropped };
+  const droppedIds = ops.flatMap((op) =>
+    op.type === "insertNode" && gone.has(op) ? [op.node.id] : [],
+  );
+  return { ops: kept, dropped, droppedIds };
 }
 
 /** Logs what `dropUnfittingOps` dropped: the entry names and the count only, never a fact's text. */
 export function logDropped(flow: string, dropped: readonly string[]): void {
   if (dropped.length > 0) console.warn(`${flow} dropped widgets whose fact does not fit`, dropped);
+}
+
+/**
+ * The summary and report to commit alongside `dropUnfittingOps`' result. With no drop they are the planner's, untouched.
+ * After a drop the planner's summary may describe a widget that is no longer there, so it is replaced by a neutral line
+ * built from the surviving widgets' catalogue entry names (never a fact's text), and the report's per-node findings
+ * for dropped nodes are removed. The recorded planner decision itself is never touched.
+ */
+export function fittedSummary<R extends PlanReport, T extends { summary?: string; report: R }>(
+  plan: T,
+  fitted: { ops: readonly Operation[]; droppedIds: readonly string[] },
+): { summary: string | undefined; report: PlanReport } {
+  if (fitted.droppedIds.length === 0) return { summary: plan.summary, report: plan.report };
+  const gone = new Set(fitted.droppedIds);
+  const names: string[] = [];
+  for (const op of fitted.ops) {
+    const entry = op.type === "insertNode" ? (op.node as { type?: string }).type : undefined;
+    if (entry !== undefined && !names.includes(entry)) names.push(entry);
+  }
+  return {
+    summary: plan.summary === undefined ? undefined : names.join(", ") || undefined,
+    report: {
+      ...plan.report,
+      attempts: plan.report.attempts.map((a) => ({
+        ...a,
+        findings: a.findings.filter((f) => f.nodeId === undefined || !gone.has(f.nodeId)),
+      })),
+    },
+  };
 }

@@ -80,7 +80,9 @@ describe("loadBlobRoot", () => {
     const worktree = "/home/dev/docmind/.worktrees/feature-x";
     for (const env of [{}, { DOCMIND_BLOB_DIR: "./data/blobs" }]) {
       expect(() => loadBlobRoot(env, worktree)).toThrow(StartupConfigError);
-      expect(() => loadBlobRoot(env, worktree)).toThrow(/absolute DOCMIND_BLOB_DIR/);
+      expect(() => loadBlobRoot(env, worktree)).toThrow(
+        /absolute DOCMIND_BLOB_DIR under a \.worktrees directory is refused.*data\/blobs.*outside \.worktrees/s,
+      );
     }
     // An absolute directory elsewhere is the remedy, and is accepted from a worktree.
     expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "/var/lib/docmind" }, worktree)).toBe(

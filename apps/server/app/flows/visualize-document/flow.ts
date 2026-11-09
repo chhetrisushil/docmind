@@ -5,7 +5,7 @@ import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { LLM_RETRY, STEP_RETRY, StepResult } from "../ingest-document/stepEffect";
 import { ExtractResult } from "./extract";
-import { dropUnfittingOps, logDropped } from "./fit";
+import { dropUnfittingOps, fittedSummary, logDropped } from "./fit";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, planVisuals, plannerUnavailable } from "./plan";
 
@@ -105,11 +105,12 @@ export const runVisualize =
     );
     logDropped("visualize", fitted.dropped);
     if (fitted.ops.length === 0) return { outcome: "empty" };
+    const shown = fittedSummary(plan, fitted);
     const committed = await ctx.run(visualizeCommitStep, {
       ...input,
       ops: fitted.ops,
-      report: plan.report,
-      ...(plan.summary && { summary: plan.summary, summaryClass: plan.summaryClass }),
+      report: shown.report,
+      ...(shown.summary && { summary: shown.summary, summaryClass: plan.summaryClass }),
     });
     return committed.outcome === "done" ? { outcome: "done" } : { outcome: committed.outcome };
   };

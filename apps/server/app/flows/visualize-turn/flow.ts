@@ -3,7 +3,7 @@ import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "../ingest-document/stepEffect";
-import { dropUnfittingOps, logDropped } from "../visualize-document/fit";
+import { dropUnfittingOps, fittedSummary, logDropped } from "../visualize-document/fit";
 import type { TurnRef } from "./ids";
 import { TURN_RETRY, TurnFactsInput, TurnFactsOutput, TurnInput, TurnLoadOutput } from "./model";
 import { planTurn } from "./plan";
@@ -109,12 +109,13 @@ export const runVisualizeTurn =
     );
     logDropped("visualize-turn", fitted.dropped);
     if (fitted.ops.length === 0) return nothing();
+    const shown = fittedSummary(plan, fitted);
     const committed = await ctx.run(turnCommitStep, {
       ...input,
       outcome: "visualized",
       ops: fitted.ops,
-      report: plan.report,
-      ...(plan.summary && { summary: plan.summary, summaryClass: plan.summaryClass }),
+      report: shown.report,
+      ...(shown.summary && { summary: shown.summary, summaryClass: plan.summaryClass }),
     });
     return committed.outcome === "done" ? { outcome: "visualized" } : { outcome: "nothing" };
   };
