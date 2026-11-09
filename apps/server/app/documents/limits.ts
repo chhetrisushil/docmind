@@ -77,7 +77,7 @@ export function loadBlobRoot(
   // database with their files gone. Refuse to start rather than store originals somewhere that vanishes.
   if (dir.split(sep).includes(".worktrees")) {
     throw new StartupConfigError(
-      "DOCMIND_BLOB_DIR resolves inside a .worktrees checkout, which is deleted with the worktree and takes the uploaded files with it; set an absolute DOCMIND_BLOB_DIR outside it",
+      "DOCMIND_BLOB_DIR resolves inside a .worktrees checkout, which is deleted with the worktree and takes the uploaded files with it; an absolute DOCMIND_BLOB_DIR under a .worktrees directory is refused too. Point it at the main checkout's data/blobs, or any absolute path outside .worktrees",
     );
   }
   return dir;

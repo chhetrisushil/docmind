@@ -220,5 +220,18 @@ describe.skipIf(!PG_URL)("document source (needs DOCMIND_TEST_PG_URL)", () => {
         }) as never;
       await expect(readSource(depsFor(broken), ALICE, id)).rejects.toThrow("key store unavailable");
     });
+
+    it("surfaces a real I/O error (EACCES), never as unavailable", async () => {
+      const id = await upload(ALICE, "text/markdown", "# Denied\n\nbody", "3");
+      const denied: SourceDeps["blobs"] = () =>
+        ({
+          get: async () => {
+            throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+          },
+        }) as never;
+      await expect(readSource(depsFor(denied), ALICE, id)).rejects.toMatchObject({
+        code: "EACCES",
+      });
+    });
   });
 });
