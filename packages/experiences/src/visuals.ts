@@ -3,6 +3,7 @@ import type { CapabilityRef } from "@loom-ui/planner";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { connectionsCapability } from "./connections";
 import { KIND, PINS, provider } from "./providers";
+import { entityMapDiagram, outlineDiagram } from "./structureShapes";
 
 /**
  * One passage a fact was read from, resolved by the server's reader (owner-scoped, so a deleted document's passage is absent):
@@ -67,6 +68,8 @@ const ENTRIES = [
   ["FactTable", "Table"],
   ["RelatedDocuments", "Table"],
   ["ConnectionMap", "Diagram"],
+  ["DocumentOutline", "Diagram"],
+  ["EntityMap", "Diagram"],
 ] as const;
 const PROPS: Record<string, string[]> = {
   BarChart: ["unit", "format"],
@@ -97,7 +100,7 @@ const FACT_ENTRY_NAMES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"
 
 /** The closed set of widgets the document planner may bind: to the document's facts, and to its live connections. */
 export const VISUALS_CATALOG: SemanticCatalog = catalogOf(
-  "docmind.visuals.v2",
+  "docmind.visuals.v3",
   ENTRIES.map(([name]) => name),
 );
 
@@ -261,12 +264,32 @@ export const TURN_READ = {
   },
 } as const;
 
-export type VisualEntry = "FigureChart" | "FigureTrend" | "KeyFigure" | "FactTable";
+export type VisualEntry =
+  | "FigureChart"
+  | "FigureTrend"
+  | "KeyFigure"
+  | "FactTable"
+  | "DocumentOutline"
+  | "EntityMap";
 const FAMILY: Record<VisualEntry, string> = {
   FigureChart: "visual-bar",
   FigureTrend: "visual-trend",
   KeyFigure: "visual-kpi",
   FactTable: "visual-table",
+  DocumentOutline: "visual-outline",
+  EntityMap: "visual-entitymap",
+};
+/** The reserved ordinal each structure entry reads (the server's `OUTLINE_ORDINAL` and `ENTITY_MAP_ORDINAL`: experiences does not import the server; a server test pins them equal). */
+const STRUCTURE_ORDINAL: Partial<Record<VisualEntry, number>> = {
+  DocumentOutline: 16,
+  EntityMap: 17,
+};
+/** True when `entry` may read the fact at `ordinal`: a structure entry only its own reserved ordinal, any other entry the extracted ones (0..15). */
+export const entryFitsOrdinal = (entry: string, ordinal: number): boolean => {
+  const own = STRUCTURE_ORDINAL[entry as VisualEntry];
+  return own !== undefined
+    ? ordinal === own
+    : Number.isInteger(ordinal) && ordinal >= 0 && ordinal < MAX_VISUAL_FACTS;
 };
 
 export const factProvider = (
@@ -424,6 +447,14 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
   },
   "visual-table": (f) =>
     f.kind !== "factTable" ? wrong() : { columns: f.columns, rows: f.rows, ...refsOf(f) },
+  "visual-outline": (f) => {
+    const v = f.kind === "outline" ? outlineDiagram(f) : null;
+    return v === null ? wrong() : { ...v, ...refsOf(f) };
+  },
+  "visual-entitymap": (f) => {
+    const v = f.kind === "cooccurrence" ? entityMapDiagram(f) : null;
+    return v === null ? wrong() : { ...v, ...refsOf(f) };
+  },
 };
 
 /**
@@ -443,9 +474,16 @@ export function fitsShape(entry: string, fact: VisualFactRaw | undefined): boole
   }
 }
 
+/** The ordinals a reshaper family serves: an extracted-fact family 0..15, a structure family exactly its reserved one. */
+const ordinalsOf = (family: string): number[] => {
+  const entry = (Object.keys(FAMILY) as VisualEntry[]).find((e) => FAMILY[e] === family);
+  const own = entry === undefined ? undefined : STRUCTURE_ORDINAL[entry];
+  return own !== undefined ? [own] : Array.from({ length: MAX_VISUAL_FACTS }, (_, n) => n);
+};
+
 export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fromEntries(
   Object.entries(TO).flatMap(([family, to]) =>
-    Array.from({ length: MAX_VISUAL_FACTS }, (_, n) => [
+    ordinalsOf(family).map((n) => [
       `${family}-${n}`,
       (raw: VisualFactRaw[]) => {
         const f = raw.find((x) => x.ordinal === n);

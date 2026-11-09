@@ -380,6 +380,31 @@ describe("detailWithVisuals", () => {
     expect(exp.versionHash).toBe(EXPERIENCES.detail.versionHash);
   });
 
+  it("adopts the outline at fact-16 and the entity map at fact-17 with their own reshapers, and no other pairing (P2)", () => {
+    const exp = detailWithVisuals(
+      visualsOf([
+        kf("o", "DocumentOutline", "fact-16"),
+        kf("m", "EntityMap", "fact-17"),
+        kf("swap", "DocumentOutline", "fact-17"), // a structure entry on the other structure fact
+        kf("low", "DocumentOutline", "fact-3"), // a structure entry on an extracted fact
+        kf("high", "KeyFigure", "fact-16"), // a fact entry on a structure fact
+      ]),
+      DOC,
+    );
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-o", "v-m"]);
+    expect(exp.providers["fact-16"]).toEqual(factProvider(16, DOC, "DocumentOutline"));
+    expect(exp.providers["fact-17"]).toEqual(factProvider(17, DOC, "EntityMap"));
+    expect((exp.providers["fact-16"]?.reshaping as { scriptRef: string }).scriptRef).toBe(
+      "visual-outline-16",
+    );
+    expect((exp.providers["fact-17"]?.reshaping as { scriptRef: string }).scriptRef).toBe(
+      "visual-entitymap-17",
+    );
+    // the dropped pairings left no provider behind
+    for (const h of ["fact-16-b", "fact-17-b", "fact-3"])
+      expect(exp.providers[h], h).toBeUndefined();
+  });
+
   it("compiles for web and terminal with no findings", () => {
     for (const surface of ["web", "terminal"] as const) {
       const r = compile(
@@ -540,5 +565,22 @@ describe("turnWithVisuals", () => {
     );
     const out = turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live) as Experience;
     expect(Object.keys(out.providers).sort()).toEqual(["fact-0", "fact-0-b"]);
+  });
+
+  it("never adopts a structure widget or a structure ordinal in chat", () => {
+    const e = experience(
+      [
+        node("n1", "DocumentOutline", "p-a"),
+        node("n2", "EntityMap", "p-b"),
+        node("n3", "KeyFigure", "p-c"),
+      ],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-16`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${A}/fact-17`),
+        planned("p-c", "visual.facts", `docmind:visual.facts@1#${A}/fact-16`),
+      ],
+    );
+    // a structure entry is not a chat entry, and a fact entry may not read a structure ordinal: nothing is left
+    expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
   });
 });

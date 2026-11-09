@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { PINS, factFormatFingerprint } from "./providers";
+import { PINS, STRUCTURE_FORMAT, factFormatFingerprint } from "./providers";
 
 describe("factFormatFingerprint", () => {
-  it("is stable and names the pins of both fact tools and of the connections tool", () => {
+  it("is stable and names the pins of both fact tools, of the connections tool, and the structure format", () => {
     expect(factFormatFingerprint()).toBe(factFormatFingerprint());
     expect(factFormatFingerprint()).toBe(
-      `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}`,
+      `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}+${STRUCTURE_FORMAT}`,
     );
+    expect(STRUCTURE_FORMAT).toBe("docmind.structure@1");
     expect(factFormatFingerprint().length).toBeLessThanOrEqual(200);
   });
 
