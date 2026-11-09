@@ -18,6 +18,7 @@ import { visualizeDocumentFlow } from "./flow";
 import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
 import { visualizeExecutionId } from "./start";
+import { noStructure } from "./testing";
 import { childrenOf } from "./testing";
 
 const CHUNK = randomUUID();
@@ -87,8 +88,11 @@ describe("recovering an interrupted visualize execution", () => {
           held = [...f];
           return f.length;
         },
+        replaceStructure: async () => 0,
         list: async () => held,
+        listAll: async () => held,
       },
+      structure: noStructure(),
       summaryMaxChars: 400_000,
       bus: new InMemoryProgressBus(),
       lineage,

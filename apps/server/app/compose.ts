@@ -52,6 +52,7 @@ import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { visualsLineage } from "./flows/visualize-document/lineage";
 import { PgVisualFacts } from "./flows/visualize-document/pgFacts";
 import { PgVisualizeGuard } from "./flows/visualize-document/pgGuard";
+import { PgStructureReader } from "./flows/visualize-document/pgStructure";
 import { visualsPlanner } from "./flows/visualize-document/planner";
 import { PgVisualRuns, visualRunRecorder } from "./flows/visualize-document/runs";
 import {
@@ -235,10 +236,12 @@ export function buildServer(options: ComposeOptions) {
   const afterDone = new Set<string>();
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
+    legacyFlow: visualizeDocumentFlow(() => planner, { legacy: true }),
     deps: {
       guard: new PgVisualizeGuard(pool),
       chunks: new PgChunkStore(pool, fields),
       facts: new PgVisualFacts(pool, fields),
+      structure: new PgStructureReader(pool, fields),
       summaryMaxChars: options.ingest.summaryMaxChars,
       lineage: visualsLineageOf,
       bus: options.ingest.bus,

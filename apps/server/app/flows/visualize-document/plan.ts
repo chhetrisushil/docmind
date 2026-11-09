@@ -11,7 +11,7 @@ import {
   ingestStepOptions,
   stepEffectOf,
 } from "../ingest-document/stepEffect";
-import { type Fact, MAX_FACTS, StoredFact } from "./facts";
+import { type AnyFact, MAX_STORED_FACTS, StoredEntry } from "./facts";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
 
 /**
@@ -22,18 +22,19 @@ export const LoadOutput = z
   .object({
     outcome: z.enum(["done", "document_gone", "failed"]),
     code: z.enum(FAILURE_CODES).optional(),
-    facts: z.array(StoredFact).max(MAX_FACTS),
+    // The extracted facts (up to 16) and the structure facts (up to 2): at most MAX_STORED_FACTS (18) rows, ordinals 0..17.
+    facts: z.array(StoredEntry).max(MAX_STORED_FACTS),
   })
   .strict();
 export type LoadOutput = z.infer<typeof LoadOutput>;
 
 export function loadEffect(
-  deps: { guard: StepGuard; facts: VisualFactStore } & StepSeams,
+  deps: { guard: StepGuard; facts: Pick<VisualFactStore, "listAll"> } & StepSeams,
 ): Effect<VisualizeRef, LoadOutput> {
   return stepEffectOf(
     "visualize-load",
     deps.guard,
-    async (ref) => ({ facts: await deps.facts.list(ref) }),
+    async (ref) => ({ facts: await deps.facts.listAll(ref) }),
     { schema: LoadOutput, ended: (end) => ({ ...end, facts: [] }) },
     ingestStepOptions(deps),
   );
@@ -68,7 +69,7 @@ export const composeVisuals = (
 
 export const planVisuals = (
   planner: Planner,
-  facts: readonly Fact[],
+  facts: readonly AnyFact[],
   ctx: DecideContext,
 ): Promise<PlanResult> =>
   composeVisuals(planner, VISUALS_INTENT, visualCapabilities(facts), VISUALS_CATALOG, ctx);

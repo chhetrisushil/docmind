@@ -17,6 +17,7 @@ import {
   loomVisualsStarter,
   visualizeExecutionId,
 } from "./start";
+import { noStructure } from "./testing";
 
 /** One shared wait per execution, like Loom's handle: asking again for the completion is the same wait. */
 const once = <T>(make: () => Promise<T>): (() => Promise<T>) => {
@@ -379,7 +380,13 @@ describe("a start still pending when the cancel runs", () => {
         deps: {
           guard: { begin: () => hang },
           chunks: { sectionsOf: async () => [], read: async () => [] },
-          facts: { replace: async () => 0, list: async () => [] },
+          facts: {
+            replace: async () => 0,
+            replaceStructure: async () => 0,
+            list: async () => [],
+            listAll: async () => [],
+          },
+          structure: noStructure(),
           summaryMaxChars: 400_000,
           bus: new InMemoryProgressBus(),
           lineage: new Lineage({

@@ -15,7 +15,7 @@ export interface TurnVisualizeDeps extends StepSeams {
   guard: StepGuard<TurnRef>;
   turn: TurnExtractDeps["turn"];
   /** Sub-project 1's store: the stored facts of the cited documents. */
-  stored: VisualFactStore;
+  stored: Pick<VisualFactStore, "list">;
   turnFacts: TurnFactStore;
   passages: TurnExtractDeps["passages"];
   /** The extract step's read bound: the summary cap (DOCMIND_SUMMARY_MAX_CHARS). */

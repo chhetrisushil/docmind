@@ -48,7 +48,7 @@ export interface FlowDeps {
    * The visualize-document flow's dependencies. Its flow (the runner holds the app's planner) and effects register
    * only with them; without them a start of that flow is refused (the CLI, in-memory tests).
    */
-  visualize?: { flow: RegisteredFlow; deps: VisualizeDeps };
+  visualize?: { flow: RegisteredFlow; legacyFlow?: RegisteredFlow; deps: VisualizeDeps };
   /** The visualize-turn flow's dependencies (chat visuals); registered with chat. */
   visualizeTurn?: { flow: RegisteredFlow; deps: TurnVisualizeDeps };
   /** Loom's `observability.onDurableEvent`: one function (see ./observers.ts). Late-bound by the composition root. */
@@ -75,6 +75,16 @@ export const loomWarn = (message: string): void => console.warn("[loom]", warnin
 export const compactionExempt = (executionId: string): boolean =>
   isIngestExecution(executionId) || isChatExecution(executionId);
 
+/**
+ * The visualize-document flows to register: the 1.0.0 flow first (when there is one), then the current one. Loom resumes an
+ * execution on the registered version whose hash matches the one recorded at its start, and treats the LAST-registered
+ * version of an id as current (as for chat 1.0.0 and 1.1.0 in `chats/wiring.ts`).
+ */
+export const visualizeFlows = (v: {
+  flow: RegisteredFlow;
+  legacyFlow?: RegisteredFlow;
+}): RegisteredFlow[] => (v.legacyFlow ? [v.legacyFlow, v.flow] : [v.flow]);
+
 export function buildApp(
   storage: StorageConfig,
   crypto?: PrincipalCryptoOptions,
@@ -90,7 +100,7 @@ export function buildApp(
     : {};
   const flows = [
     ...(deps.chat?.flows ?? []),
-    ...(deps.visualize ? [deps.visualize.flow] : []),
+    ...(deps.visualize ? visualizeFlows(deps.visualize) : []),
     ...(deps.visualizeTurn ? [deps.visualizeTurn.flow] : []),
   ];
   return defineConfig({

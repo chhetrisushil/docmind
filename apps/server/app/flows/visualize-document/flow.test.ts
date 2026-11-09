@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import type { EventEnvelope } from "@loom/core";
+import { type EventEnvelope, flowContentHash, flowHashMatches } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryContentStore } from "@loom/plugin-content";
@@ -16,20 +16,23 @@ import { subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { LLM_RETRY, STEP_RETRY } from "../ingest-document/stepEffect";
 import type { VisualizeDeps } from "./deps";
-import type { Fact } from "./facts";
+import type { Fact, StructureFact } from "./facts";
 import {
+  LEGACY_VISUALIZE_STEPS,
   VISUALIZE_STEPS,
   VisualizeOutput,
   visualizeCommitStep,
   visualizeDocumentFlow,
   visualizeExtractStep,
   visualizeLoadStep,
+  visualizeStructureStep,
 } from "./flow";
 import { experienceIdOf } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { visualsPlanner } from "./planner";
 import { visualizeExecutionId } from "./start";
-import { childrenOf } from "./testing";
+import type { StructureReader } from "./structure";
+import { childrenOf, noStructure } from "./testing";
 
 const LABEL = "Zebra-Secret-Revenue";
 const SUMMARY = "Zebra-Secret-Summary-Text";
@@ -91,7 +94,13 @@ const failingAfter = (answers: string[], err: () => Error) => {
 
 function stack(
   replies: string[] | null,
-  o: { provider?: ReturnType<typeof scripted>; executionId?: string } = {},
+  o: {
+    provider?: ReturnType<typeof scripted>;
+    executionId?: string;
+    structure?: StructureReader;
+    /** Start the execution on the 1.0.0 flow, as one that was in flight at deploy was. */
+    legacy?: boolean;
+  } = {},
 ) {
   const inner = new InMemoryAsyncEventStore();
   const sealed = new EncryptingEventStore(inner, new InMemoryKeyStore(), {
@@ -105,6 +114,7 @@ function stack(
   });
   const model = o.provider ?? (replies ? scripted(replies) : undefined);
   let held: Fact[] = [];
+  let structured: StructureFact[] = [];
   const planner = model && visualsPlanner(model.llm, KEY);
   const deps: VisualizeDeps = {
     guard: { begin: async () => {} },
@@ -117,8 +127,14 @@ function stack(
         held = [...facts];
         return facts.length;
       },
+      replaceStructure: async (_r, facts) => {
+        structured = [...facts];
+        return facts.length;
+      },
       list: async () => held,
+      listAll: async () => [...held, ...structured],
     },
+    structure: o.structure ?? noStructure(),
     summaryMaxChars: 400_000,
     bus,
     lineage,
@@ -127,12 +143,12 @@ function stack(
     ...(model && { llm: model.llm }),
     ...(planner && { planner }),
   };
+  const current = () => visualizeDocumentFlow(() => planner);
+  const legacy = () => visualizeDocumentFlow(() => planner, { legacy: true });
   const app = buildApp(
     { kind: "custom", eventStore: sealed },
     { events: sealed },
-    {
-      visualize: { flow: visualizeDocumentFlow(() => planner), deps },
-    },
+    { visualize: { flow: current(), legacyFlow: legacy(), deps } },
   );
   apps.push(app);
   const ref: VisualizeRef = {
@@ -142,14 +158,10 @@ function stack(
   };
   const executionId = o.executionId ?? visualizeExecutionId(ref.userId, ref.documentId, 2);
   const run = async (id: string = executionId) => {
-    const handle = await app.runtime.start(
-      visualizeDocumentFlow(() => planner),
-      ref,
-      {
-        executionId: id as typeof executionId,
-        principal: { tenant: ref.tenantId, actor: ref.userId },
-      },
-    );
+    const handle = await app.runtime.start(o.legacy ? legacy() : current(), ref, {
+      executionId: id as typeof executionId,
+      principal: { tenant: ref.tenantId, actor: ref.userId },
+    });
     const state = await handle.waitForCompletion();
     return VisualizeOutput.parse(state.variables._output);
   };
@@ -164,6 +176,7 @@ function stack(
     executionId,
     run,
     held: () => held,
+    structured: () => structured,
     hold: (facts: Fact[]) => {
       held = facts;
     },
@@ -174,12 +187,14 @@ describe("visualize-document flow", () => {
   it("pins its identity: version, step ids and retry policies", () => {
     const flow = visualizeDocumentFlow();
     expect(flow.definition.id).toBe("visualize-document");
-    expect(flow.definition.version).toBe("1.0.0");
+    expect(flow.definition.version).toBe("1.1.0");
     expect(VISUALIZE_STEPS.map((s) => s.id)).toEqual([
       "visualize-extract",
+      "visualize-structure",
       "visualize-load",
       "visualize-commit",
     ]);
+    expect(visualizeStructureStep.retry).toEqual(STEP_RETRY);
     expect(visualizeExtractStep.retry).toEqual(LLM_RETRY);
     expect(visualizeLoadStep.retry).toEqual(STEP_RETRY);
     expect(visualizeCommitStep.retry).toEqual(STEP_RETRY);
@@ -329,6 +344,101 @@ describe("visualize-document flow", () => {
     const s = stack([FACTS, "this is not json", "still not json"]);
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
     expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  const STRUCTURE_READER: StructureReader = {
+    title: async () => "Zebra-Secret-Report",
+    headings: async () => [
+      { chunkId: CHUNK, sectionOrdinal: 1, headingPath: ["Zebra-Heading-One"] },
+      { chunkId: CHUNK, sectionOrdinal: 2, headingPath: ["Zebra-Heading-Two"] },
+      {
+        chunkId: CHUNK,
+        sectionOrdinal: 3,
+        headingPath: ["Zebra-Heading-Two", "Zebra-Heading-Sub"],
+      },
+    ],
+    entities: async () => [],
+    mentions: async () => [],
+  };
+
+  it("derives the structure facts after extraction and stores them beside the extracted ones, with no extra model call", async () => {
+    const s = stack([FACTS, PLAN], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([0]);
+    expect(s.structured().map((f) => [f.ordinal, f.kind])).toEqual([[16, "outline"]]);
+    expect(s.model?.requests).toHaveLength(2); // one extract window, one planner call: structure made no model call
+    // The planner is offered the outline as a capability but is never shown a heading.
+    expect(JSON.stringify(s.model?.requests[1])).not.toContain("Zebra-Heading");
+    expect(JSON.stringify(s.model?.requests[1])).not.toContain("Zebra-Secret-Report");
+  });
+
+  it("re-derives and replaces the structure facts on a re-run that skips extraction", async () => {
+    const s = stack([PLAN], { structure: STRUCTURE_READER });
+    s.hold(JSON.parse(FACTS).facts.map((f: object, i: number) => ({ ...f, ordinal: i })) as Fact[]);
+    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    expect(await s.run(rerun)).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(1); // the planner only: no extraction
+    expect(s.structured().map((f) => f.ordinal)).toEqual([16]); // re-derived on the re-plan path
+  });
+
+  it("still ends empty, not failed, for a document with neither facts nor structure when the planner emits nothing", async () => {
+    const s = stack([JSON.stringify({ facts: [] }), EMPTY_PLAN]);
+    expect(await s.run()).toEqual({ outcome: "empty" });
+  });
+
+  it("makes no structure and no write when the visuals role is off", async () => {
+    const s = stack(null, { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "skipped" });
+    expect(s.structured()).toEqual([]);
+  });
+
+  it("keeps 1.0.0 beside 1.1.0: the same flow id, its own steps and its own flow hash", () => {
+    const legacy = visualizeDocumentFlow(undefined, { legacy: true });
+    const current = visualizeDocumentFlow();
+    expect(legacy.definition.id).toBe(current.definition.id);
+    expect(legacy.definition.version).toBe("1.0.0");
+    expect(legacy.definition.steps.map((s) => s.id)).toEqual(
+      LEGACY_VISUALIZE_STEPS.map((s) => s.id),
+    );
+    expect(legacy.definition.steps.map((s) => s.id)).toEqual([
+      "visualize-extract",
+      "visualize-load",
+      "visualize-commit",
+    ]);
+    expect(flowHashMatches(flowContentHash(current.definition), legacy.definition)).toBe(false);
+    expect(flowHashMatches(flowContentHash(legacy.definition), legacy.definition)).toBe(true);
+  });
+
+  it("finishes a run started on 1.0.0 on the legacy runner: no structure step, no structure fact", async () => {
+    const s = stack([FACTS, PLAN], { legacy: true, structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([0]);
+    expect(s.structured()).toEqual([]);
+    const log = await s.inner.read(s.executionId);
+    // `start()` records the hash of the CURRENT registered version of the id (1.1.0) whichever flow object it is given, so the
+    // recorded hash of this simulated run is not asserted: a real 1.0.0 run recorded the 1.0.0 hash before the deploy. What
+    // is pinned here is that the legacy runner never asks for the structure step.
+    const steps = log
+      .filter((e) => e.eventType === "STEP_STARTED")
+      .map((e) => (e.payload as { stepId: string }).stepId);
+    expect(steps).toContain("visualize-extract");
+    expect(steps).not.toContain("visualize-structure");
+  });
+
+  it("a run started on 1.1.0 records the 1.1.0 hash and the structure step", async () => {
+    const s = stack([FACTS, PLAN], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    const log = await s.inner.read(s.executionId);
+    const started = log.find((e) => e.eventType === "EXECUTION_STARTED");
+    const recorded = (started?.payload as { flowHash: string }).flowHash;
+    expect(flowHashMatches(recorded, visualizeDocumentFlow().definition)).toBe(true);
+    expect(
+      flowHashMatches(recorded, visualizeDocumentFlow(undefined, { legacy: true }).definition),
+    ).toBe(false);
+    const steps = log
+      .filter((e) => e.eventType === "STEP_STARTED")
+      .map((e) => (e.payload as { stepId: string }).stepId);
+    expect(steps).toContain("visualize-structure");
   });
 });
 

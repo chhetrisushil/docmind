@@ -21,7 +21,12 @@ export const authorizer = new GrantTable({
     "ingest-finalize",
   ],
   // The visuals flow (extract the facts, load them, decide a plan, commit it to the lineage); a step id is its tool id.
-  "visualize-document": ["visualize-extract", "visualize-load", "visualize-commit"],
+  "visualize-document": [
+    "visualize-extract",
+    "visualize-structure",
+    "visualize-load",
+    "visualize-commit",
+  ],
   // The chat visuals flow (the turn's stored facts, the extraction fallback, the sealed fact read, the commit); a step id is its tool id.
   "visualize-turn": ["turn-load", "turn-extract", "turn-facts", "turn-commit"],
   // A conversation's effects (the model call and the five read-only tools) run under the flow id.

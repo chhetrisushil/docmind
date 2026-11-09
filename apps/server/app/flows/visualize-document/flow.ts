@@ -59,25 +59,56 @@ export const visualizeCommitStep = step$({
   retry: STEP_RETRY,
 });
 
-export const VISUALIZE_STEPS = [visualizeExtractStep, visualizeLoadStep, visualizeCommitStep];
+export const visualizeStructureStep = step$({
+  id: "visualize-structure",
+  name: "VisualizeStructure",
+  inputSchema: VisualizeInput,
+  outputSchema: StepResult,
+  retry: STEP_RETRY, // no model: it reads this document and derives
+});
+
+export const VISUALIZE_STEPS = [
+  visualizeExtractStep,
+  visualizeStructureStep,
+  visualizeLoadStep,
+  visualizeCommitStep,
+];
+/** The 1.0.0 steps: what a run that was in flight at deploy was started with (it has no structure step). */
+export const LEGACY_VISUALIZE_STEPS = [
+  visualizeExtractStep,
+  visualizeLoadStep,
+  visualizeCommitStep,
+];
 
 /**
- * extract (model, facts stored sealed) -> load (the facts, for the decision; skipped when there are none) -> one planner
- * decision (over the facts and the live connections) -> commit
- * (the plan to the document's lineage). `planner` is read after the load step, so a role that went off in
- * between ends the run as `skipped`. A failure here never reaches the document's ingest status.
+ * extract (model, facts stored sealed) -> structure (the derived outline and entity map, no model; also on a re-plan that
+ * skips extraction) -> load (the stored facts, for the decision; skipped when there are none) -> one planner decision (over
+ * the facts and the live connections) -> commit (the plan to the document's lineage). `planner` is read after the load
+ * step, so a role that went off in between ends the run as `skipped`. A failure here never reaches the document's ingest
+ * status. `withStructure` is false only for the 1.0.0 flow (see `visualizeDocumentFlow`).
  */
 export const runVisualize =
-  (planner: () => Planner | undefined): FlowRunner<VisualizeRef, VisualizeOutput> =>
+  (
+    planner: () => Planner | undefined,
+    withStructure = true,
+  ): FlowRunner<VisualizeRef, VisualizeOutput> =>
   async (ctx, input) => {
     const extracted = await ctx.run(visualizeExtractStep, input);
     if (extracted.outcome !== "done")
       return { outcome: extracted.outcome, ...(extracted.code && { code: extracted.code }) };
     if (extracted.model === "none") return { outcome: "skipped" };
-    // No facts (the model found none, or refused and the stored facts were cleared): there is nothing to load, but the
-    // connections are live data, so the planner still runs, offered only the connections capability.
+    // The structure facts are derived on every run (a re-plan that skips extraction included): no model, this document only.
+    let derived = 0;
+    if (withStructure) {
+      const structured = await ctx.run(visualizeStructureStep, input);
+      if (structured.outcome !== "done") return { outcome: structured.outcome };
+      derived = structured.count ?? 0;
+    }
+    // No facts at all (none extracted and none derived): there is nothing to load, but the connections are live data, so
+    // the planner still runs, offered only the connections capability.
+    const stored = (extracted.count ?? 0) + derived;
     let facts: LoadOutput["facts"] = [];
-    if (extracted.count !== 0) {
+    if (stored !== 0) {
       const loaded = await ctx.run(visualizeLoadStep, input);
       if (loaded.outcome !== "done") return { outcome: loaded.outcome };
       facts = loaded.facts;
@@ -88,7 +119,7 @@ export const runVisualize =
     if (plannerUnavailable(plan)) return { outcome: "failed", code: "visuals-model-unavailable" };
     // With no facts, a plan the planner could not make (it refuses an empty plan) is just nothing to show.
     if (
-      extracted.count === 0 &&
+      stored === 0 &&
       (plan.ops.length === 0 || plan.findings.some((f) => f.severity === "error"))
     ) {
       // Codes only, never text: a broken connections binding must not hide behind a quiet `empty`.
@@ -115,17 +146,22 @@ export const runVisualize =
     return committed.outcome === "done" ? { outcome: "done" } : { outcome: committed.outcome };
   };
 
-/** The flow, with the planner of this app. Flows are static modules, but the planner holds a secret and a model: per app. */
+/**
+ * The flow, with the planner of this app. Flows are static modules, but the planner holds a secret and a model: per app.
+ * `legacy` builds the 1.0.0 definition (extract, load, commit; its runner never asks for the structure step) that a run in
+ * flight at deploy needs (see the Plan decision on in-flight runs); the default is 1.1.0.
+ */
 export const visualizeDocumentFlow = (
   planner: () => Planner | undefined = () => undefined,
+  o: { legacy?: boolean } = {},
 ): RegisteredFlow => ({
   definition: flow$({
     id: "visualize-document",
     name: "VisualizeDocument",
-    version: "1.0.0",
+    version: o.legacy ? "1.0.0" : "1.1.0",
     inputSchema: VisualizeInput,
     outputSchema: VisualizeOutput,
-    steps: VISUALIZE_STEPS,
+    steps: o.legacy ? LEGACY_VISUALIZE_STEPS : VISUALIZE_STEPS,
   }),
-  runner: runVisualize(planner) as FlowRunner<unknown, unknown>,
+  runner: runVisualize(planner, !o.legacy) as FlowRunner<unknown, unknown>,
 });

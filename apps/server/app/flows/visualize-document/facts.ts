@@ -1,6 +1,18 @@
 import { z } from "zod";
+import { ENTITY_KINDS } from "../../crypto/entityKeys";
+import type { CooccurrenceDraft } from "./cooccurrence";
+import type { OutlineDraft } from "./outline";
 
 export const MAX_FACTS = 16;
+/**
+ * Extraction keeps `MAX_FACTS` (16) facts at ordinals 0..15. `visual_facts.ordinal` is 0..17 after migration 0035, and 16 and 17
+ * are reserved for the derived structure facts, which are written by their own step and never collide with an extracted fact.
+ */
+export const STRUCTURE_ORDINAL_BASE = 16;
+export const OUTLINE_ORDINAL = 16;
+export const ENTITY_MAP_ORDINAL = 17;
+/** The most rows one document holds: the extracted facts plus the outline and the entity map. */
+export const MAX_STORED_FACTS = MAX_FACTS + 2;
 const Label = z.string().trim().min(1).max(120);
 const ChunkIds = z.array(z.string().uuid()).min(1).max(8);
 
@@ -37,6 +49,63 @@ const FactTable = z
   })
   .strict();
 
+const StructureLabel = z.string().trim().min(1).max(80);
+const PassageId = z.string().uuid();
+const Count = z.number().int().min(0).max(100_000);
+const Outline = z
+  .object({
+    kind: z.literal("outline"),
+    title: StructureLabel,
+    nodes: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^s\d{1,3}$/), // "s" + the node's index: unique by position (spec 3)
+            label: StructureLabel,
+            level: z.number().int().min(1).max(32),
+            passageCount: Count,
+            firstChunkId: PassageId,
+          })
+          .strict(),
+      )
+      .min(3)
+      .max(120),
+    chunkIds: z.array(PassageId).min(1).max(120),
+  })
+  .strict();
+const EntityIndex = z.number().int().min(0).max(19);
+const EntityMap = z
+  .object({
+    kind: z.literal("cooccurrence"),
+    entities: z
+      .array(
+        z
+          .object({
+            name: StructureLabel,
+            entityKind: z.enum(ENTITY_KINDS),
+            passages: z.number().int().min(1).max(100_000),
+          })
+          .strict(),
+      )
+      .min(3)
+      .max(20),
+    edges: z
+      .array(
+        z
+          .object({
+            a: EntityIndex,
+            b: EntityIndex,
+            weight: z.number().int().min(2).max(100_000),
+            firstChunkId: PassageId,
+          })
+          .strict(),
+      )
+      .min(2)
+      .max(40),
+    chunkIds: z.array(PassageId).min(1).max(40),
+  })
+  .strict();
+
 export const DraftFact = z.discriminatedUnion("kind", [Series, Figure, FactTable]);
 export type DraftFact = z.infer<typeof DraftFact>;
 export type Fact = DraftFact & { ordinal: number };
@@ -47,6 +116,25 @@ export const StoredFact = z.discriminatedUnion("kind", [
   Figure.extend(Ordinal.shape),
   FactTable.extend(Ordinal.shape),
 ]);
+
+/** A derived fact (never extracted by a model): the document's outline or its entity map. */
+export type StructureFact = (OutlineDraft | CooccurrenceDraft) & { ordinal: number };
+/** Everything `visual_facts` holds for a document. */
+export type AnyFact = Fact | StructureFact;
+/** Structure facts have their own ordinal schema: 16 for the outline, 17 for the map. The extracted `Ordinal` (0..15) is untouched. */
+const StructureOrdinal = z.object({
+  ordinal: z.union([z.literal(OUTLINE_ORDINAL), z.literal(ENTITY_MAP_ORDINAL)]),
+});
+/** A stored row of any kind (ordinals 0..17). `StoredFact` (extracted kinds, 0..15) stays what chat reads. */
+export const StoredEntry = z.discriminatedUnion("kind", [
+  Series.extend(Ordinal.shape),
+  Figure.extend(Ordinal.shape),
+  FactTable.extend(Ordinal.shape),
+  Outline.extend(StructureOrdinal.shape),
+  EntityMap.extend(StructureOrdinal.shape),
+]);
+export const isStructureFact = (f: { kind: string }): f is StructureFact =>
+  f.kind === "outline" || f.kind === "cooccurrence";
 export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).strict();
 
 const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };

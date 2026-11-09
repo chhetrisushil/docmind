@@ -87,7 +87,7 @@ describe("the load step", () => {
   it("returns the document's facts as its output", async () => {
     const effect = loadEffect({
       guard,
-      facts: { list: async () => [FIGURE], replace: async () => 0 },
+      facts: { listAll: async () => [FIGURE] },
     });
     const out = await effect.execute(ref, undefined as never);
     expect(LoadOutput.parse(out)).toEqual({ outcome: "done", facts: [FIGURE] });
@@ -97,10 +97,9 @@ describe("the load step", () => {
     const effect = loadEffect({
       guard,
       facts: {
-        list: async () => {
+        listAll: async () => {
           throw new DocumentGoneError();
         },
-        replace: async () => 0,
       },
     });
     expect(await effect.execute(ref, undefined as never)).toEqual({

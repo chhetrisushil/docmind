@@ -14,7 +14,22 @@ export interface FactCite {
   label: string;
 }
 
-/** A fact the visualize step extracted from a document; structurally the server's `Fact` (which experiences does not depend on) plus the reader's `cites`. */
+export interface OutlineFact {
+  kind: "outline";
+  title: string;
+  nodes: { id: string; label: string; level: number; passageCount: number; firstChunkId: string }[];
+  chunkIds: string[];
+  ordinal: number;
+}
+export interface EntityMapFact {
+  kind: "cooccurrence";
+  entities: { name: string; entityKind: string; passages: number }[];
+  edges: { a: number; b: number; weight: number; firstChunkId: string }[];
+  chunkIds: string[];
+  ordinal: number;
+}
+
+/** A fact the visualize step stored for a document; structurally the server's `AnyFact` (which experiences does not depend on) plus the reader's `cites`. */
 export type VisualFactRaw = (
   | {
       kind: "series";
@@ -41,6 +56,8 @@ export type VisualFactRaw = (
       chunkIds: string[];
       ordinal: number;
     }
+  | OutlineFact
+  | EntityMapFact
 ) & { cites?: readonly FactCite[] };
 
 const ENTRIES = [
@@ -126,12 +143,42 @@ export interface OfferedFact {
 }
 type FactTool = "visual.facts" | "turn.facts";
 
+const depthOf = (f: OutlineFact) => Math.max(1, ...f.nodes.map((n) => n.level));
 const describeFact = (f: VisualFactRaw) =>
   f.kind === "series"
     ? "a series of numbers from the document"
     : f.kind === "figure"
       ? "one headline figure"
-      : "a table of facts";
+      : f.kind === "outline"
+        ? `a tree of ${f.nodes.length} ${f.nodes.length === 1 ? "section" : "sections"}, ${depthOf(f)} ${depthOf(f) === 1 ? "level" : "levels"} deep`
+        : f.kind === "cooccurrence"
+          ? `${f.entities.length} named parties and ${f.edges.length} links between those that appear together`
+          : "a table of facts";
+
+/** Neutral stand-ins for a structure fact's nodes and edges: shape only, no document text. They let the planner's JSONPath over the sample (`nodes`, `edges`) select something. */
+const OUTLINE_PLACEHOLDER = [
+  { label: "Section", level: 1 },
+  { label: "Subsection", level: 2 },
+];
+const MAP_PLACEHOLDER = {
+  nodes: [
+    { label: "Entity", group: "person" },
+    { label: "Entity", group: "organization" },
+  ],
+  edges: [{ from: "e0", to: "e1", label: "2" }],
+};
+/** What the planner is shown of a fact: extracted facts show themselves; a structure fact shows counts and placeholders only. */
+const sampleOf = (f: VisualFactRaw): unknown =>
+  f.kind === "outline"
+    ? { kind: "outline", sections: f.nodes.length, levels: depthOf(f), nodes: OUTLINE_PLACEHOLDER }
+    : f.kind === "cooccurrence"
+      ? {
+          kind: "cooccurrence",
+          entities: f.entities.length,
+          links: f.edges.length,
+          ...MAP_PLACEHOLDER,
+        }
+      : f;
 
 /** The one capability shape of every fact: only the handle, the tool and the pin differ. */
 function capability(f: VisualFactRaw, handle: string, tool: FactTool, pin: string): CapabilityRef {
@@ -142,7 +189,7 @@ function capability(f: VisualFactRaw, handle: string, tool: FactTool, pin: strin
     toolVersion: "1.0.0",
     toolSchemaHash: pin,
     description: describeFact(f),
-    sampleOutput: f,
+    sampleOutput: sampleOf(f),
     sensitivity: "sensitive",
   };
 }

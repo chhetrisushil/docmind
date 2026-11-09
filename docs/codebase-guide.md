@@ -74,7 +74,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `packages/blob-store` | Encrypted filesystem `ContentStore` (per-user envelopes) |
 | `packages/keystore-pg` | `PostgresKeyStore`: per-user data keys wrapped by a master key |
 | `packages/llm-anthropic` | Claude provider for Loom's `LlmProvider` |
-| `infra/migrations` | Ordered SQL migrations 0001–0025: roles, tenancy, auth, keys, documents, chunks, chats, erasure |
+| `infra/migrations` | Ordered SQL migrations 0001–0035: roles, tenancy, auth, keys, documents, chunks, chats, erasure |
 | `infra/local-db.sh` | `pnpm db:start`, `db:stop`, `db:status` for a local Postgres outside `/tmp` |
 | `docs/` | Design spec, design notes, operations runbooks, implementation plans |
 
