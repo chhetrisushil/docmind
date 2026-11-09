@@ -20,7 +20,7 @@ This is step (c) of document visuals (`2026-11-08-document-visuals-design.md` §
 | S4 | Two new catalogue entries, both on loom-ui's Diagram kind (already pinned at 3b4d046 and registered in the web): `DocumentOutline` (tree) and `EntityMap` (network). |
 | S5 | **Document visuals only.** The chat catalogue `FACT_VISUALS_CATALOG` stays byte-identical; the sha256 guard test stands. |
 | S6 | **Rollout reuses the existing format re-plan.** The document catalogue moves to `docmind.visuals.v3` and the fact-format fingerprint changes, so the boot stale pass re-plans every visualized document once: it derives the structure facts (no model call), then makes one planner call, with no extraction and at most 2 at a time. |
-| S7 | No migration and no new table. The new kinds live inside the sealed fact JSON. |
+| S7 | One migration (0035) relaxes the kind and ordinal CHECKs of `visual_facts`; no new table. Why: migration 0026 CHECKs `kind IN ('series','figure','factTable')` and `ordinal BETWEEN 0 AND 15`, so the new kinds and the two reserved ordinals (16 outline, 17 cooccurrence) would be refused. Extraction keeps its 16 facts at 0..15. |
 
 Rejected: a live provider like connections (S2), and model extraction for c1 (it isn't needed for outline or co-occurrence).
 
