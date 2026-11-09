@@ -3,8 +3,11 @@ import { UiViewResponse } from "@docmind/contracts";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertNoPlaintext } from "../chats/eventLogProof";
+import { EntityKeys } from "../crypto/entityKeys";
 import { PG_URL } from "../db/testSupport";
 import { eraseMe, waitErased } from "../erasure/e2eSupport";
+import { chunkIdFor } from "../flows/ingest-document/chunker";
+import { PgEntityStore } from "../flows/ingest-document/pgEntities";
 import type { PgFixture } from "../flows/ingest-document/pgFixture";
 import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
@@ -684,4 +687,149 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     };
     expect(t.rowKeys).toEqual([b]);
   }, 180_000);
+
+  const SECTIONED = [
+    "# Zebra-Handbook-Title",
+    "## Zebra-Overview-Section",
+    `${NO_FACTS} Acme Corporation and Bolt Limited met Cora Diaz-Marlowe about the plan.`,
+    "## Zebra-Details-Section",
+    `${NO_FACTS} Acme Corporation, Bolt Limited and Cora Diaz-Marlowe agreed the terms.`,
+    "### Zebra-Pricing-Subsection",
+    `${NO_FACTS} Acme Corporation, Bolt Limited and Cora Diaz-Marlowe signed.`,
+  ].join("\n\n");
+  const SECRETS = [
+    "Zebra-Overview-Section",
+    "Zebra-Details-Section",
+    "Zebra-Pricing-Subsection",
+    "Acme Corporation",
+    "Cora Diaz-Marlowe",
+  ];
+
+  /** A visuals model that finds no extracted facts and plans whatever structure capabilities the prompt offers. */
+  function stubStructure(claude: FakeAnthropic) {
+    claude.reply((body) => {
+      const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
+      const text = JSON.stringify(body.messages);
+      if (system.includes("You extract facts")) return { text: '{"facts":[]}' };
+      const widget = (id: string, type: string, capability: string, path: string) => ({
+        id,
+        type,
+        label: id,
+        span: 12,
+        props: {},
+        binding: { capability, arguments: {}, path, priority: "P1" },
+      });
+      const nodes = [
+        ...(text.includes("fact-16")
+          ? [widget("outline", "DocumentOutline", "fact-16", "nodes")]
+          : []),
+        ...(text.includes("fact-17") ? [widget("map", "EntityMap", "fact-17", "edges")] : []),
+      ];
+      return { text: JSON.stringify({ summary: "The document's structure", nodes }) };
+    });
+  }
+
+  it("a long sectioned document gets an outline and an entity map, a citation opens the section, and nothing is plaintext", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    stubStructure(st.visualsClaude as FakeAnthropic);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const id = await upload(st, ada.cookie, SECTIONED, { visuals: true, name: "handbook.md" });
+    expect(await visualizeOutcome(st, ada.userId, id)).toBe("done");
+    const ref = { tenantId: ada.tenantId, userId: ada.userId, documentId: id };
+    const facts = new PgVisualFacts(st.app, st.fields);
+
+    // Ingest is keyless here, so no entities exist yet: only the outline was derived (ordinal 16).
+    expect((await facts.listAll(ref)).map((f) => [f.ordinal, f.kind])).toEqual([[16, "outline"]]);
+
+    // The outline hydrates to a valid tree whose first ref is a real passage of the document.
+    const outline = (await hydrate(st, ada.cookie, id, "fact-16")) as {
+      state: string;
+      value: { layout: string; nodes: { label: string }[]; refs: { id: string }[] };
+    };
+    expect(outline.state).toBe("ready");
+    expect(outline.value.layout).toBe("tree");
+    expect(outline.value.nodes.map((n) => n.label)).toEqual(
+      expect.arrayContaining([
+        "Zebra-Overview-Section",
+        "Zebra-Details-Section",
+        "Zebra-Pricing-Subsection",
+      ]),
+    );
+    const cited = (outline.value.refs[0] as { id: string }).id.split(":")[1] as string;
+    const source = await get(st, ada.cookie, `/api/documents/${id}/source?passage=${cited}`);
+    expect(source.status).toBe(200);
+    expect(await source.json()).toMatchObject({ focus: expect.anything() });
+
+    // Entities arrive (seeded: ingest is keyless); a re-run re-plans without extraction and re-derives the structure.
+    const passages = (
+      await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal", [id])
+    ).rows.map((r) => r.id as string);
+    expect(passages.length).toBeGreaterThanOrEqual(3);
+    await new PgEntityStore(st.app, st.fields, new EntityKeys(st.keys)).replaceForDocument(ref, [
+      { name: "Acme Corporation", kind: "organization", chunkIds: passages },
+      { name: "Bolt Limited", kind: "organization", chunkIds: passages },
+      { name: "Cora Diaz-Marlowe", kind: "person", chunkIds: passages },
+    ]);
+    const events = await st.events(ada.cookie);
+    try {
+      const retry = await fetch(`${st.base}/api/documents/${id}/visuals/retry`, {
+        method: "POST",
+        headers: { cookie: ada.cookie },
+      });
+      expect(retry.status).toBe(202);
+      await st.until(events, id, () => true);
+    } finally {
+      events.close();
+    }
+    expect(await visualizeEnd(st, ada.userId, id, 1)).toEqual({ outcome: "done" });
+    expect((await facts.listAll(ref)).map((f) => [f.ordinal, f.kind])).toEqual([
+      [16, "outline"],
+      [17, "cooccurrence"],
+    ]);
+    const map = (await hydrate(st, ada.cookie, id, "fact-17")) as {
+      state: string;
+      value: {
+        layout: string;
+        nodes: { label: string }[];
+        edges: { label: string }[];
+        refs: unknown[];
+      };
+    };
+    expect(map.state).toBe("ready");
+    expect(map.value.layout).toBe("network");
+    expect(map.value.nodes.map((n) => n.label).sort()).toEqual([
+      "Acme Corporation",
+      "Bolt Limited",
+      "Cora Diaz-Marlowe",
+    ]);
+    expect(map.value.edges.every((e) => Number(e.label) >= 2)).toBe(true);
+    expect(map.value.refs.length).toBeGreaterThan(0);
+
+    // Nothing sealed is readable: the rows, and every execution's raw event log.
+    const rows = await st.db.owner.query(
+      "SELECT fact_enc::text AS t FROM visual_facts WHERE document_id = $1",
+      [id],
+    );
+    for (const r of rows.rows) for (const s of SECRETS) expect(r.t).not.toContain(s);
+    for (const execution of (await st.durable.raw.eventStore.listExecutions?.()) ?? [])
+      assertNoPlaintext(await st.durable.raw.eventStore.read(execution), SECRETS);
+    // The chat's facts for this document stay extracted-only.
+    expect(await facts.list(ref)).toEqual([]);
+    expect(chunkIdFor(id, 0)).toBe(passages[0]);
+  }, 180_000);
+
+  it("a short flat document gets neither an outline nor an entity map", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    stubStructure(st.visualsClaude as FakeAnthropic);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const id = await upload(st, ada.cookie, `${NO_FACTS} A short note with no headings.`, {
+      visuals: false,
+    });
+    expect(await visualizeOutcome(st, ada.userId, id)).toBe("empty");
+    const left = await st.db.owner.query("SELECT 1 FROM visual_facts WHERE document_id = $1", [id]);
+    expect(left.rowCount).toBe(0);
+    expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
+  }, 120_000);
 });
