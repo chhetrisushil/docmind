@@ -379,6 +379,8 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
           ? await readSource(deps, identity, parsed.data.toLowerCase(), passage)
           : null;
         if (!result) return sendError(res, 404, "not_found", "document not found");
+        if (!result.applicable && result.missing)
+          return sendError(res, 404, "file_missing", "the document's original file is missing");
         if (!result.applicable)
           return sendError(res, 415, "not_renderable", "this document's format is not rendered");
         const { applicable: _, ...body } = result;

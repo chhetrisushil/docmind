@@ -5,6 +5,7 @@ import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { LLM_RETRY, STEP_RETRY, StepResult } from "../ingest-document/stepEffect";
 import { ExtractResult } from "./extract";
+import { dropUnfittingOps, logDropped } from "./fit";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, planVisuals, plannerUnavailable } from "./plan";
 
@@ -97,10 +98,16 @@ export const runVisualize =
     }
     if (plan.findings.some((f) => f.severity === "error"))
       return { outcome: "failed", code: "visuals-plan-invalid" };
-    if (plan.ops.length === 0) return { outcome: "empty" };
+    // Facts that do not fit their widget would only hydrate as error placeholders: commit the ones that fit.
+    const byOrdinal = new Map(facts.map((f) => [f.ordinal, f]));
+    const fitted = dropUnfittingOps(plan.ops, (ref) =>
+      ref.kind === "detail" ? byOrdinal.get(ref.ordinal) : undefined,
+    );
+    logDropped("visualize", fitted.dropped);
+    if (fitted.ops.length === 0) return { outcome: "empty" };
     const committed = await ctx.run(visualizeCommitStep, {
       ...input,
-      ops: [...plan.ops],
+      ops: fitted.ops,
       report: plan.report,
       ...(plan.summary && { summary: plan.summary, summaryClass: plan.summaryClass }),
     });

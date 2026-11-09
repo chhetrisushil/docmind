@@ -21,6 +21,7 @@ import {
   factCapabilities,
   factProvider,
   factRefOfPin,
+  fitsShape,
 } from "./visuals";
 
 const FIGURE: VisualFactRaw = {
@@ -529,5 +530,53 @@ describe("the chat catalogue guard", () => {
     expect(createHash("sha256").update(JSON.stringify(FACT_VISUALS_CATALOG)).digest("hex")).toBe(
       "e9096cf41a01d1b87ef45b3eba3744600ae81e36d78fff476f6117f1455af080",
     );
+  });
+});
+
+describe("fitsShape", () => {
+  const CATEGORIES: VisualFactRaw = {
+    ...SERIES,
+    label: "By region",
+    points: [
+      { x: "North", y: 1 },
+      { x: "South", y: 2 },
+    ],
+  };
+  it("runs the reshaper the hydration uses: true exactly when it would not throw", () => {
+    const table: VisualFactRaw = {
+      kind: "factTable",
+      title: "T",
+      columns: ["a"],
+      rows: [["1"]],
+      chunkIds: [],
+      ordinal: 2,
+    };
+    const entries = ["KeyFigure", "FigureChart", "FigureTrend", "FactTable"] as const;
+    const family = {
+      KeyFigure: "visual-kpi",
+      FigureChart: "visual-bar",
+      FigureTrend: "visual-trend",
+      FactTable: "visual-table",
+    };
+    for (const entry of entries)
+      for (const fact of [FIGURE, SERIES, DATED_SERIES, CATEGORIES, table]) {
+        let threw = false;
+        try {
+          shapeOf(`${family[entry]}-${fact.ordinal}`, [fact]);
+        } catch {
+          threw = true;
+        }
+        expect(fitsShape(entry, fact)).toBe(!threw);
+      }
+  });
+  it("refuses a trend over category labels and a figure widget over a series", () => {
+    expect(fitsShape("FigureTrend", CATEGORIES)).toBe(false);
+    expect(fitsShape("KeyFigure", SERIES)).toBe(false);
+    expect(fitsShape("FigureChart", CATEGORIES)).toBe(true);
+    expect(fitsShape("FigureTrend", DATED_SERIES)).toBe(true);
+  });
+  it("refuses a missing fact, and has no opinion on a widget that binds no fact", () => {
+    expect(fitsShape("KeyFigure", undefined)).toBe(false);
+    expect(fitsShape("ConnectionMap", undefined)).toBe(true);
   });
 });

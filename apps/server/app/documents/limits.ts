@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { StartupConfigError } from "../startupError";
 
 export interface DocumentLimits {
@@ -65,10 +65,22 @@ export function loadLimits(env: NodeJS.ProcessEnv = process.env): DocumentLimits
 /**
  * Where blobs live: `DOCMIND_BLOB_DIR`, default `data/blobs`, always absolute. A relative directory is resolved against
  * the repo root, never the working directory: a server started from another directory must find the same uploads, not
- * an empty store that makes every earlier document look lost.
+ * an empty store that makes every earlier document look lost. A directory inside a `.worktrees/` checkout is refused
+ * (a StartupConfigError): the files would vanish with the worktree.
  */
-export function loadBlobRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(repoRoot(), env.DOCMIND_BLOB_DIR?.trim() || "data/blobs");
+export function loadBlobRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  root: string = repoRoot(),
+): string {
+  const dir = resolve(root, env.DOCMIND_BLOB_DIR?.trim() || "data/blobs");
+  // A `.worktrees/<name>` checkout is deleted with its branch, and its blobs with it: the documents would stay in the
+  // database with their files gone. Refuse to start rather than store originals somewhere that vanishes.
+  if (dir.split(sep).includes(".worktrees")) {
+    throw new StartupConfigError(
+      "DOCMIND_BLOB_DIR resolves inside a .worktrees checkout, which is deleted with the worktree and takes the uploaded files with it; set an absolute DOCMIND_BLOB_DIR outside it",
+    );
+  }
+  return dir;
 }
 
 /** The nearest directory above this module that holds `pnpm-workspace.yaml`; the working directory if there is none. */

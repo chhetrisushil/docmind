@@ -41,9 +41,12 @@ export interface RawConnections {
   }[];
 }
 
-/** A document's original text for the page to render; a document that cannot be rendered is the value `{ applicable: false }`, never an error. */
+/**
+ * A document's original text for the page to render; a document that cannot be rendered is the value `{ applicable: false }`, never an error.
+ * `missing`: the format is renderable but the stored file is gone (the page treats it as not applicable; the original-file route says 404 `file_missing`).
+ */
 export type SourceResult =
-  | { applicable: false }
+  | { applicable: false; missing?: true }
   | {
       applicable: true;
       format: "md" | "org" | "txt";

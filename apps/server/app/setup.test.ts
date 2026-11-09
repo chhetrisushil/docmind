@@ -54,6 +54,7 @@ describe("setupServer configuration", () => {
     process.env.DATABASE_URL = "postgres://from-env/db";
     process.env.LOOM_DATABASE_URL = "postgres://loom/db";
     process.env.PORT = "0";
+    process.env.DOCMIND_BLOB_DIR = join(dir, "blobs"); // absolute: the default is refused inside a .worktrees checkout
     process.env.DOCMIND_KEK = Buffer.alloc(32, 7).toString("base64");
     process.env.DOCMIND_LLM_PROVIDER = "off";
     process.env.DOCMIND_DEPLOYMENT = "development";
