@@ -29,12 +29,19 @@ export const PINS = {
 export type Target = keyof typeof PINS;
 
 /**
- * The identity of the format visuals are planned over: the pins of the two fact tools and of the connections tool, as one short canonical string.
+ * The form of the derived structure facts (outline, co-occurrence) inside `visual.facts`. Bump it when their stored or served
+ * shape changes. It is part of the fingerprint rather than a new pin: stored chat heads carry `docmind:visual.facts@1#...`
+ * pins, which must keep parsing.
+ */
+export const STRUCTURE_FORMAT = "docmind.structure@1";
+
+/**
+ * The identity of the format visuals are planned over: the pins of the two fact tools and of the connections tool, and the structure format, as one short canonical string.
  * A visualize run that ends `done` is stamped with it (visual_runs.format); a stored plan whose stamp differs was made over an
  * older format and is re-planned by the boot sweep. Pure, no content.
  */
 export function factFormatFingerprint(): string {
-  return `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}`;
+  return `${PINS["visual.facts"]}+${PINS["turn.facts"]}+${PINS["doc.connections"]}+${STRUCTURE_FORMAT}`;
 }
 
 export function provider(

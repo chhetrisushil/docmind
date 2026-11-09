@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { VISUALS_CATALOG, visualCapabilities } from "@docmind/experiences";
+import { VISUALS_CATALOG, shape, visualCapabilities } from "@docmind/experiences";
 import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { ReferencePlanner, checkPlannerConformance } from "@loom-ui/planner";
 import type { EventEnvelope } from "@loom/core";
@@ -10,7 +10,7 @@ import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { DocumentGoneError } from "../ingest-document/errors";
-import type { Fact } from "./facts";
+import { ENTITY_MAP_ORDINAL, type Fact, OUTLINE_ORDINAL, type StructureFact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals, plannerUnavailable } from "./plan";
 import { recording, scriptedPlannerModel } from "./testing";
@@ -273,5 +273,80 @@ describe("planVisuals offers the live connections", () => {
     expect(o).toContain("live connections capability");
     expect(o).toContain("compact Connections section");
     expect(o).toContain("is likely to gain, related material");
+  });
+});
+
+describe("planning the structure facts", () => {
+  const chunk = FIGURE.chunkIds[0] as string;
+  const OUTLINE: StructureFact = {
+    kind: "outline",
+    title: "Zebra Report",
+    nodes: ["A", "B", "C"].map((label, i) => ({
+      id: `s${i}`,
+      label,
+      level: 1,
+      passageCount: 1,
+      firstChunkId: chunk,
+    })),
+    chunkIds: [chunk],
+    ordinal: OUTLINE_ORDINAL,
+  };
+  const MAP: StructureFact = {
+    kind: "cooccurrence",
+    entities: ["P1", "P2", "P3"].map((name) => ({
+      name,
+      entityKind: "person" as const,
+      passages: 2,
+    })),
+    edges: [
+      { a: 0, b: 1, weight: 2, firstChunkId: chunk },
+      { a: 1, b: 2, weight: 2, firstChunkId: chunk },
+    ],
+    chunkIds: [chunk],
+    ordinal: ENTITY_MAP_ORDINAL,
+  };
+  const bind = (id: string, type: string, capability: string, path: string) => ({
+    id,
+    type,
+    label: id,
+    span: 12,
+    props: {},
+    binding: { capability, arguments: {}, path, priority: "P1" },
+  });
+
+  it("plans an outline bound at nodes and a map bound at edges, with no reshape-invalid (P3)", async () => {
+    const planner = new ReferencePlanner({
+      model: scriptedPlannerModel([
+        draft(
+          [
+            bind("outline", "DocumentOutline", "fact-16", "nodes"),
+            bind("map", "EntityMap", "fact-17", "edges"),
+          ],
+          "The structure",
+        ),
+      ]),
+      modelId: "t",
+    });
+    const plan = await planVisuals(planner, [FIGURE, OUTLINE, MAP], recording());
+    expect(plan.findings.map((f) => f.code)).not.toContain("reshape-invalid");
+    expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const inserted = (plan.ops as unknown as { type: string; node?: { id: string } }[])
+      .filter((o) => o.type === "insertNode")
+      .map((o) => o.node?.id);
+    expect(inserted).toEqual(["outline", "map"]);
+  });
+
+  it("the server's reserved ordinals are the ones the experiences reshapers serve", () => {
+    expect(() => shape(`visual-outline-${OUTLINE_ORDINAL}`, [OUTLINE])).not.toThrow();
+    expect(() => shape(`visual-entitymap-${ENTITY_MAP_ORDINAL}`, [MAP])).not.toThrow();
+  });
+});
+
+describe("the intent", () => {
+  it("tells the planner when to show the outline and the entity map, and when to leave them out", () => {
+    expect(VISUALS_INTENT.objective).toContain("DocumentOutline");
+    expect(VISUALS_INTENT.objective).toContain("EntityMap");
+    expect(VISUALS_INTENT.objective).toMatch(/long, sectioned documents/);
+    expect(VISUALS_INTENT.objective).toMatch(/short or flat documents/);
   });
 });

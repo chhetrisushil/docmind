@@ -21,6 +21,7 @@ import {
   VISUAL_SHAPES,
   type VisualFactRaw,
   capabilitiesOf,
+  entryFitsOrdinal,
   factCapabilities,
   factProvider,
   factRefOfPin,
@@ -135,7 +136,7 @@ describe("the fact catalogue (chat)", () => {
       "KeyFigure",
       "FactTable",
     ]);
-    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v2");
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v3");
   });
 });
 
@@ -154,6 +155,8 @@ describe("the visuals catalogue", () => {
       ["FactTable", "Table"],
       ["RelatedDocuments", "Table"],
       ["ConnectionMap", "Diagram"],
+      ["DocumentOutline", "Diagram"],
+      ["EntityMap", "Diagram"],
     ]);
   });
   it("gives one bindable, classed capability per fact", () => {
@@ -410,10 +413,12 @@ describe("the visual reshapers", () => {
       shape("visual-kpi-0", [{ ...FIGURE, compare: { label: "2023", value: 1000 } }]),
     ).toMatchObject({ deltaPct: 0.2 });
   });
-  it("register all 64 names", () => {
-    expect(Object.keys(VISUAL_SHAPES)).toHaveLength(64);
+  it("register all 66 names: the four fact families at ordinals 0..15, plus the outline at 16 and the map at 17", () => {
+    expect(Object.keys(VISUAL_SHAPES)).toHaveLength(66);
     for (const f of ["bar", "trend", "kpi", "table"])
       for (let n = 0; n < 16; n++) expect(() => shapeOf(`visual-${f}-${n}`, [])).toThrow("missing");
+    expect(() => shapeOf("visual-outline-16", [])).toThrow("missing");
+    expect(() => shapeOf("visual-entitymap-17", [])).toThrow("missing");
   });
 });
 
@@ -641,5 +646,105 @@ describe("fitsShape", () => {
   it("refuses a missing fact, and has no opinion on a widget that binds no fact", () => {
     expect(fitsShape("KeyFigure", undefined)).toBe(false);
     expect(fitsShape("ConnectionMap", undefined)).toBe(true);
+  });
+});
+
+describe("structure widgets", () => {
+  const doc = "11111111-1111-4111-8111-111111111111";
+  const cites = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      documentId: doc,
+      passageId: cid(i + 1),
+      label: `Report, passage ${i + 1}`,
+    }));
+
+  it("the document catalogue is v3 and has the two diagram entries; the chat catalogue has neither", () => {
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v3");
+    const web = (name: string) =>
+      (VISUALS_CATALOG.entries.find((e) => e.name === name)?.surfaces.web as { kind: string }).kind;
+    expect(web("DocumentOutline")).toBe("Diagram");
+    expect(web("EntityMap")).toBe("Diagram");
+    expect(FACT_VISUALS_CATALOG.entries.map((e) => e.name)).not.toContain("DocumentOutline");
+    expect(FACT_VISUALS_CATALOG.entries.map((e) => e.name)).not.toContain("EntityMap");
+  });
+
+  it("reshapes the outline to a valid tree whose refs are the cited passages (at most 16)", () => {
+    const v = shape("visual-outline-16", [{ ...OUTLINE, cites: cites(20) }]) as {
+      layout: string;
+      refs: { id: string; label: string }[];
+    };
+    expect(v.layout).toBe("tree");
+    expect(v.refs).toHaveLength(16);
+    expect(v.refs[0]).toEqual({ id: `${doc}:${cid(1)}`, label: "Report, passage 1" });
+    expect(checkKindValue("Diagram", v)).toMatchObject({ ok: true });
+  });
+
+  it("reshapes the map to a valid network with refs, and carries no refs when nothing is cited", () => {
+    const v = shape("visual-entitymap-17", [{ ...MAP, cites: cites(2) }]) as {
+      layout: string;
+      refs?: unknown[];
+    };
+    expect(v.layout).toBe("network");
+    expect(v.refs).toHaveLength(2);
+    expect(checkKindValue("Diagram", v)).toMatchObject({ ok: true });
+    expect((shape("visual-entitymap-17", [MAP]) as { refs?: unknown }).refs).toBeUndefined();
+  });
+
+  it("fitsShape accepts the right fact and rejects the wrong one, as hydration would", () => {
+    expect(fitsShape("DocumentOutline", OUTLINE)).toBe(true);
+    expect(fitsShape("DocumentOutline", MAP)).toBe(false);
+    expect(fitsShape("DocumentOutline", FIGURE)).toBe(false);
+    expect(fitsShape("DocumentOutline", undefined)).toBe(false);
+    expect(fitsShape("EntityMap", MAP)).toBe(true);
+    expect(fitsShape("EntityMap", OUTLINE)).toBe(false);
+    expect(
+      fitsShape("EntityMap", { ...MAP, edges: [{ a: 0, b: 9, weight: 2, firstChunkId: cid(1) }] }),
+    ).toBe(false);
+    expect(fitsShape("FigureChart", OUTLINE)).toBe(false); // an outline fits no extracted-fact widget
+    expect(fitsShape("KeyFigure", MAP)).toBe(false);
+  });
+
+  it("builds the structure reshapers only at their reserved ordinals, and an entry reads only its own ordinal (P2)", () => {
+    const keys = Object.keys(VISUAL_SHAPES);
+    for (const k of ["visual-outline-16", "visual-entitymap-17", "visual-kpi-15", "visual-table-0"])
+      expect(keys, k).toContain(k);
+    for (const k of [
+      "visual-outline-17",
+      "visual-outline-3",
+      "visual-entitymap-16",
+      "visual-entitymap-0",
+      "visual-kpi-16",
+      "visual-bar-17",
+      "visual-trend-16",
+      "visual-table-16",
+    ])
+      expect(keys, k).not.toContain(k);
+    expect([16, 17, 3].map((n) => entryFitsOrdinal("DocumentOutline", n))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect([16, 17, 0].map((n) => entryFitsOrdinal("EntityMap", n))).toEqual([false, true, false]);
+    expect([0, 15, 16, 17].map((n) => entryFitsOrdinal("KeyFigure", n))).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect([0, 15, 16, 17].map((n) => entryFitsOrdinal("FactTable", n))).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
+
+  it("a provider reads the fact by ordinal for either entry", () => {
+    expect(factProvider(16, doc, "DocumentOutline").reshaping).toMatchObject({
+      scriptRef: "visual-outline-16",
+    });
+    expect(factProvider(17, doc, "EntityMap").reshaping).toMatchObject({
+      scriptRef: "visual-entitymap-17",
+    });
   });
 });

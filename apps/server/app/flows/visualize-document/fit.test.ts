@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { FACT_VISUALS_CATALOG, factCapabilities } from "@docmind/experiences";
-import type { FactRef } from "@docmind/experiences";
+import type { FactRef, VisualFactRaw } from "@docmind/experiences";
 import { ReferencePlanner } from "@loom-ui/planner";
 import { describe, expect, it } from "vitest";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
-import type { Fact } from "./facts";
+import type { Fact, StructureFact } from "./facts";
 import { dropUnfittingOps, fittedSummary } from "./fit";
 import { VISUALS_INTENT, composeVisuals, planVisuals } from "./plan";
 import { recording, scriptedPlannerModel } from "./testing";
@@ -47,12 +47,53 @@ const plan = (nodes: unknown[]) =>
   );
 const byOrdinal = (facts: Fact[]) => (ref: FactRef) =>
   ref.kind === "detail" ? facts.find((f) => f.ordinal === ref.ordinal) : undefined;
+const OUTLINE: StructureFact = {
+  kind: "outline",
+  title: "Zebra Report",
+  nodes: ["A", "B", "C"].map((label, i) => ({
+    id: `s${i}`,
+    label,
+    level: 1,
+    passageCount: 1,
+    firstChunkId: CHUNK,
+  })),
+  chunkIds: [CHUNK],
+  ordinal: 16,
+};
+const lookupOf = (facts: readonly VisualFactRaw[]) => (ref: FactRef) =>
+  ref.kind === "detail" ? facts.find((f) => f.ordinal === ref.ordinal) : undefined;
 const inserted = (ops: readonly unknown[]) =>
   (ops as { type: string; node?: { id: string } }[])
     .filter((o) => o.type === "insertNode")
     .map((o) => o.node?.id);
 
 describe("dropUnfittingOps", () => {
+  it("keeps a DocumentOutline bound to the outline fact and drops it when fact-16 holds something else", async () => {
+    const outlineNode = {
+      ...node("outline", "DocumentOutline", "fact-16"),
+      span: 12,
+      binding: { capability: "fact-16", arguments: {}, path: "nodes", priority: "P1" },
+    };
+    const p = await planVisuals(
+      new ReferencePlanner({
+        model: scriptedPlannerModel([JSON.stringify({ summary: "s", nodes: [outlineNode] })]),
+        modelId: "t",
+      }),
+      [FIGURE, OUTLINE],
+      recording(),
+    );
+    expect(p.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const kept = dropUnfittingOps(p.ops, lookupOf([FIGURE, OUTLINE]));
+    expect(inserted(kept.ops)).toEqual(["outline"]);
+    expect(kept.dropped).toEqual([]);
+    // fact-16 now holds a figure: an outline widget does not fit it
+    const gone = dropUnfittingOps(p.ops, lookupOf([FIGURE, { ...FIGURE, ordinal: 16 }]));
+    expect(inserted(gone.ops)).toEqual([]);
+    expect(gone.dropped).toEqual(["DocumentOutline"]);
+    // and a fact that is gone fits nothing
+    expect(inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE])).ops)).toEqual([]);
+  });
+
   it("drops a trend over category labels and a key figure over a series, keeps the fitting node", async () => {
     const p = await plan([
       node("headline", "KeyFigure", "fact-0"),

@@ -361,6 +361,36 @@ describe("visualize-document flow", () => {
     mentions: async () => [],
   };
 
+  const OUTLINE_NODE = {
+    id: "outline",
+    type: "DocumentOutline",
+    label: "Outline",
+    span: 12,
+    props: {},
+    binding: { capability: "fact-16", arguments: {}, path: "nodes", priority: "P1" },
+  };
+  const OUTLINE_PLAN = JSON.stringify({ summary: "The outline", nodes: [OUTLINE_NODE] });
+
+  it("plans over both an extracted fact and the outline, and commits both widgets", async () => {
+    const s = stack([FACTS, JSON.stringify({ summary: SUMMARY, nodes: [NODE, OUTLINE_NODE] })], {
+      structure: STRUCTURE_READER,
+    });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual([
+      "revenue",
+      "outline",
+    ]);
+  });
+
+  it("plans a document that has only a structure fact (no extracted facts)", async () => {
+    const s = stack([JSON.stringify({ facts: [] }), OUTLINE_PLAN], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held()).toEqual([]);
+    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["outline"]);
+  });
+
   it("derives the structure facts after extraction and stores them beside the extracted ones, with no extra model call", async () => {
     const s = stack([FACTS, PLAN], { structure: STRUCTURE_READER });
     expect(await s.run()).toEqual({ outcome: "done" });

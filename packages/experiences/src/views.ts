@@ -11,8 +11,8 @@ import {
 import { CONTENT_STEP, LIST_CAP, provider } from "./providers";
 import {
   type FactRef,
-  MAX_VISUAL_FACTS,
   type VisualEntry,
+  entryFitsOrdinal,
   factProvider,
   factRefOfPin,
   turnFactProvider,
@@ -197,7 +197,10 @@ const detail = (): Experience =>
     providers: detailProviders(),
   });
 
-const VISUAL_ENTRIES = new Set<string>(["FigureChart", "FigureTrend", "KeyFigure", "FactTable"]);
+const FACT_ENTRIES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"];
+/** A document's page can draw the fact widgets and the two structure widgets; chat only the fact widgets (S5). */
+const DETAIL_ENTRIES = new Set<string>([...FACT_ENTRIES, "DocumentOutline", "EntityMap"]);
+const TURN_ENTRIES = new Set<string>(FACT_ENTRIES);
 const MAX_SIBLINGS = 26;
 const FACT_HANDLE = /^fact-(0|[1-9]\d*)$/;
 
@@ -218,6 +221,8 @@ type DetailFactRef = Extract<FactRef, { kind: "detail" }>;
 type TurnFactRef = Exclude<FactRef, { kind: "detail" }>;
 
 interface Adopt<R extends FactRef> {
+  /** The catalogue entries this host draws. */
+  entries: ReadonlySet<string>;
   refOf(visuals: Experience, handle: string): R | null;
   /** The provider handle of a distinct fact in the host experience. */
   baseHandle(ref: R): string;
@@ -265,8 +270,8 @@ function adoptVisuals<R extends FactRef>(
     if (
       !n.binding ||
       ref === null ||
-      ref.ordinal >= MAX_VISUAL_FACTS ||
-      !VISUAL_ENTRIES.has(n.type)
+      !o.entries.has(n.type) ||
+      !entryFitsOrdinal(n.type, ref.ordinal)
     )
       return null;
     const entry = n.type as VisualEntry;
@@ -298,6 +303,7 @@ export function detailWithVisuals(visuals: Experience | null, documentId: string
   const kept = adoptVisuals(
     visuals,
     {
+      entries: DETAIL_ENTRIES,
       refOf: (v, h): DetailFactRef | null => {
         const r = factRefOf(v, h, true);
         return r?.kind === "detail" ? r : null; // a turn pin means nothing on a document's page
@@ -335,6 +341,7 @@ export function turnWithVisuals(
   const kept = adoptVisuals(
     visuals,
     {
+      entries: TURN_ENTRIES,
       refOf: (v, h): TurnFactRef | null => {
         const r = factRefOf(v, h, false);
         if (r === null || r.kind === "detail") return null;
