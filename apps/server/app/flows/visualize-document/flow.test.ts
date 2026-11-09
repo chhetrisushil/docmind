@@ -6,7 +6,7 @@ import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -253,6 +253,71 @@ describe("visualize-document flow", () => {
     const s = stack([FACTS, EMPTY_PLAN]);
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
     expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  it("drops the widgets whose fact does not fit them before committing, logging the entry name only", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const two = JSON.stringify({
+      facts: [
+        { kind: "figure", label: LABEL, value: 4242, unit: "USD", chunkIds: [CHUNK] },
+        {
+          kind: "series",
+          label: LABEL,
+          points: [
+            { x: "North", y: 4242 },
+            { x: "South", y: 4242 },
+          ],
+          chunkIds: [CHUNK],
+        },
+      ],
+    });
+    const bind = (id: string, type: string, capability: string) => ({
+      ...NODE,
+      id,
+      type,
+      binding: { ...NODE.binding, capability, path: "label" },
+    });
+    const planned = JSON.stringify({
+      summary: SUMMARY,
+      nodes: [
+        bind("revenue", "KeyFigure", "fact-0"),
+        bind("trend", "FigureTrend", "fact-1"),
+        bind("kpi", "KeyFigure", "fact-1"),
+      ],
+    });
+    const s = stack([two, planned]);
+    expect(await s.run()).toEqual({ outcome: "done" });
+    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain("FigureTrend");
+    expect(logged).not.toContain(LABEL);
+    warn.mockRestore();
+  });
+
+  it("is empty, committing nothing, when every widget is dropped", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const series = JSON.stringify({
+      facts: [
+        {
+          kind: "series",
+          label: LABEL,
+          points: [
+            { x: "North", y: 4242 },
+            { x: "South", y: 4242 },
+          ],
+          chunkIds: [CHUNK],
+        },
+      ],
+    });
+    const planned = JSON.stringify({
+      summary: SUMMARY,
+      nodes: [{ ...NODE, type: "FigureTrend", binding: { ...NODE.binding, path: "label" } }],
+    });
+    const s = stack([series, planned]);
+    expect(await s.run()).toEqual({ outcome: "empty" });
+    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    vi.restoreAllMocks();
   });
 
   it("is skipped when the visuals role is off", async () => {

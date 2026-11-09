@@ -3,6 +3,7 @@ import { flow$, step$ } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "../ingest-document/stepEffect";
+import { dropUnfittingOps, logDropped } from "../visualize-document/fit";
 import type { TurnRef } from "./ids";
 import { TURN_RETRY, TurnFactsInput, TurnFactsOutput, TurnInput, TurnLoadOutput } from "./model";
 import { planTurn } from "./plan";
@@ -94,10 +95,24 @@ export const runVisualizeTurn =
     );
     if (plan.findings.some((f) => f.severity === "error") || plan.ops.length === 0)
       return nothing();
+    // After the decision (the catalogue and the recorded choice are untouched): keep only the widgets whose fact fits.
+    const fitted = dropUnfittingOps(
+      plan.ops,
+      (ref) =>
+        read.facts.find(
+          ({ fact, origin }) =>
+            fact.ordinal === ref.ordinal &&
+            (ref.kind === "doc"
+              ? origin.kind === "doc" && origin.documentId === ref.documentId
+              : ref.kind === "turn" && origin.kind === "turn"),
+        )?.fact,
+    );
+    logDropped("visualize-turn", fitted.dropped);
+    if (fitted.ops.length === 0) return nothing();
     const committed = await ctx.run(turnCommitStep, {
       ...input,
       outcome: "visualized",
-      ops: [...plan.ops],
+      ops: fitted.ops,
       report: plan.report,
       ...(plan.summary && { summary: plan.summary, summaryClass: plan.summaryClass }),
     });

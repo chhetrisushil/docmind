@@ -51,22 +51,50 @@ describe("loadLimits", () => {
   });
 });
 
+const NORMAL_CHECKOUT = resolve("/home/dev/docmind");
+
 describe("loadBlobRoot", () => {
   it("is absolute whether or not it is configured", () => {
-    expect(isAbsolute(loadBlobRoot({}))).toBe(true);
-    expect(isAbsolute(loadBlobRoot({ DOCMIND_BLOB_DIR: "relative/blobs" }))).toBe(true);
+    expect(isAbsolute(loadBlobRoot({}, NORMAL_CHECKOUT))).toBe(true);
+    expect(isAbsolute(loadBlobRoot({ DOCMIND_BLOB_DIR: "relative/blobs" }, NORMAL_CHECKOUT))).toBe(
+      true,
+    );
     expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "/var/lib/docmind" })).toBe("/var/lib/docmind");
   });
 
   it("resolves a relative directory against the repo root, not the working directory", () => {
-    const root = resolve(__dirname, "../../../..");
+    const root = NORMAL_CHECKOUT;
     const cwd = process.cwd();
     try {
       process.chdir(tmpdir());
-      expect(loadBlobRoot({})).toBe(join(root, "data/blobs"));
-      expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "./data/blobs" })).toBe(join(root, "data/blobs"));
+      expect(loadBlobRoot({}, root)).toBe(join(root, "data/blobs"));
+      expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "./data/blobs" }, root)).toBe(
+        join(root, "data/blobs"),
+      );
     } finally {
       process.chdir(cwd);
     }
+  });
+
+  it("refuses a directory inside a .worktrees checkout, naming the fix", () => {
+    const worktree = "/home/dev/docmind/.worktrees/feature-x";
+    for (const env of [{}, { DOCMIND_BLOB_DIR: "./data/blobs" }]) {
+      expect(() => loadBlobRoot(env, worktree)).toThrow(StartupConfigError);
+      expect(() => loadBlobRoot(env, worktree)).toThrow(/absolute DOCMIND_BLOB_DIR/);
+    }
+    // An absolute directory elsewhere is the remedy, and is accepted from a worktree.
+    expect(loadBlobRoot({ DOCMIND_BLOB_DIR: "/var/lib/docmind" }, worktree)).toBe(
+      "/var/lib/docmind",
+    );
+    // An absolute directory that itself lies inside a worktree is refused too.
+    expect(() =>
+      loadBlobRoot({ DOCMIND_BLOB_DIR: "/home/dev/docmind/.worktrees/x/blobs" }, NORMAL_CHECKOUT),
+    ).toThrow(StartupConfigError);
+  });
+
+  it("keeps the default for a normal checkout, even one whose name contains 'worktrees'", () => {
+    expect(loadBlobRoot({}, "/home/dev/my.worktrees-notes/docmind")).toBe(
+      "/home/dev/my.worktrees-notes/docmind/data/blobs",
+    );
   });
 });

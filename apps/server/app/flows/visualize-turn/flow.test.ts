@@ -178,6 +178,47 @@ describe("visualize-turn flow", () => {
     expect(s.frames).toEqual([[s.ref.chatId, { kind: "visuals", ord: 4, outcome: "visualized" }]]);
   });
 
+  it("drops a widget whose fact does not fit it after the decision; every widget dropped is nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const regions: Fact = {
+      kind: "series",
+      label: "Regions",
+      points: [
+        { x: "North", y: 1 },
+        { x: "South", y: 2 },
+      ],
+      chunkIds: [CHUNK],
+      ordinal: 1,
+    };
+    const bind = (id: string, type: string, capability: string) => ({
+      ...node(capability),
+      id,
+      type,
+      binding: { capability, arguments: {}, path: "label", priority: "P1" },
+    });
+    const some = stack({
+      replies: [
+        JSON.stringify({
+          summary: SUMMARY,
+          nodes: [bind("revenue", "KeyFigure", "fact-0"), bind("trend", "FigureTrend", "fact-1")],
+        }),
+      ],
+      storedFacts: [stored, regions],
+    });
+    expect(await some.run()).toEqual({ outcome: "visualized" });
+    const latest = await some.lineage.resolveLatest(turnExperienceId(some.ref));
+    expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
+    const none = stack({
+      replies: [
+        JSON.stringify({ summary: SUMMARY, nodes: [bind("trend", "FigureTrend", "fact-0")] }),
+      ],
+      storedFacts: [regions],
+    });
+    expect(await none.run()).toEqual({ outcome: "nothing" });
+    expect(await none.lineage.head(turnExperienceId(none.ref))).toEqual({ ok: true, value: null });
+    vi.restoreAllMocks();
+  });
+
   it("extracts from the turn's chunks only when no stored fact covers them", async () => {
     const s = stack({ replies: [EXTRACTED, plan()], storedFacts: [] });
     expect(await s.run()).toEqual({ outcome: "visualized" });

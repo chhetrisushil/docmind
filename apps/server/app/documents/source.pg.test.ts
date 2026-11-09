@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
@@ -7,7 +9,7 @@ import { PG_URL } from "../db/testSupport";
 import { chunkIdFor } from "../flows/ingest-document/chunker";
 import { PgChunkStore } from "../flows/ingest-document/pgChunks";
 import { insertDocument } from "./repo";
-import { readSource } from "./source";
+import { type SourceDeps, readSource } from "./source";
 import {
   ALICE,
   ALICE2,
@@ -165,5 +167,58 @@ describe.skipIf(!PG_URL)("document source (needs DOCMIND_TEST_PG_URL)", () => {
     expect((await readSource(deps, eve, id))?.applicable).toBe(true);
     await h.owner.query("UPDATE users SET erasing_at = now() WHERE id = $1", [eve.userId]);
     expect(await readSource(deps, eve, id)).toBeNull();
+  });
+
+  describe("a stored file that is gone", () => {
+    const depsFor = (blobs: SourceDeps["blobs"]): SourceDeps => ({
+      pool: h.app,
+      registry: h.wiring.registry,
+      blobs,
+    });
+    const realBlobs: SourceDeps["blobs"] = (who) =>
+      new EncryptedFsContentStore({
+        root: h.root,
+        tenantId: who.tenantId,
+        userId: who.userId,
+        keys: h.keys,
+        maxBytes: 4 << 20,
+      });
+
+    it("is unavailable to readSource, not an error; the route answers 404 file_missing", async () => {
+      const id = await upload(ALICE, "text/markdown", "# Gone\n\nbody", "1");
+      const row = await h.owner.query("SELECT content_address FROM documents WHERE id = $1", [id]);
+      const address = (row.rows[0] as { content_address: string }).content_address;
+      expect(await readSource(depsFor(realBlobs), ALICE, id)).toMatchObject({ applicable: true });
+      const missing: SourceDeps["blobs"] = (who) => {
+        const store = realBlobs(who);
+        return Object.assign(Object.create(store), {
+          get: async (ref: { __loomContent: string }) =>
+            ref.__loomContent === address ? null : store.get(ref),
+        });
+      };
+      expect(await readSource(depsFor(missing), ALICE, id)).toEqual({
+        applicable: false,
+        missing: true,
+      });
+      for (const f of readdirSync(join(h.root, ALICE.tenantId, ALICE.userId)))
+        rmSync(join(h.root, ALICE.tenantId, ALICE.userId, f));
+      const res = await get(`/api/documents/${id}/source`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(await bodyOf(res)).toEqual({
+        error: { code: "file_missing", message: "the document's original file is missing" },
+      });
+    });
+
+    it("still throws when the store itself fails (a key-store outage)", async () => {
+      const id = await upload(ALICE, "text/markdown", "# Up\n\nbody", "2");
+      const broken: SourceDeps["blobs"] = () =>
+        ({
+          get: async () => {
+            throw new Error("key store unavailable");
+          },
+        }) as never;
+      await expect(readSource(depsFor(broken), ALICE, id)).rejects.toThrow("key store unavailable");
+    });
   });
 });

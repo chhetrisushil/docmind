@@ -379,6 +379,23 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
     f.kind !== "factTable" ? wrong() : { columns: f.columns, rows: f.rows, ...refsOf(f) },
 };
 
+/**
+ * True when `fact` fits the widget `entry` (a catalogue entry name): it runs the very reshaper the hydration runs, so it
+ * is true exactly when hydration would not throw `reshape-failed`. A missing fact fits nothing; an entry that binds no
+ * fact (a connections widget) has no opinion and fits. Pure, and never reads the fact's text into an error.
+ */
+export function fitsShape(entry: string, fact: VisualFactRaw | undefined): boolean {
+  const family = FAMILY[entry as VisualEntry];
+  if (family === undefined) return true;
+  if (fact === undefined) return false;
+  try {
+    (TO[family] as (f: VisualFactRaw) => unknown)(fact);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fromEntries(
   Object.entries(TO).flatMap(([family, to]) =>
     Array.from({ length: MAX_VISUAL_FACTS }, (_, n) => [

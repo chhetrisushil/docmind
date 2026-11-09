@@ -19,7 +19,8 @@ export interface SourceDeps {
 /**
  * A document's stored original, decoded exactly as ingest decoded it (so passage `chars` locators are offsets into
  * it), for the formats the page renders (md, org, txt). `null`: not found, not the caller's, or the caller is being
- * erased. `{ applicable: false }`: any other format, or bytes that no longer decode. `focus`: the locator of
+ * erased. `{ applicable: false }`: any other format, or bytes that no longer decode; with `missing: true`, a renderable
+ * format whose stored file is gone. Any other failure of the store (a key-store outage) still throws. `focus`: the locator of
  * `passageId` when it is a chunk of THIS document with a `chars` locator. Content is never logged.
  */
 export async function readSource(
@@ -55,7 +56,8 @@ export async function readSource(
   const format = id === "md" || id === "org" || id === "txt" ? FORMATS[id] : undefined;
   if (!format) return { applicable: false };
   const bytes = await deps.blobs(identity).get({ __loomContent: row.address });
-  if (bytes === null) throw new Error("the document's stored content is missing");
+  // A file that is gone (a lost volume, a removed worktree) is a state of the document, not a failure of the read.
+  if (bytes === null) return { applicable: false, missing: true };
   // The blob is decrypted whole (the blob store has no ranged read), but only a prefix is decoded and validated.
   let prefix: { text: string; complete: boolean };
   try {

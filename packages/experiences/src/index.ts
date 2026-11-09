@@ -26,6 +26,7 @@ export {
   factProvider,
   visualCapabilities,
   factRefOfPin,
+  fitsShape,
   mergedCatalog,
 } from "./visuals";
 export type { FactCite, FactOrigin, FactRef, OfferedFact, VisualFactRaw } from "./visuals";
