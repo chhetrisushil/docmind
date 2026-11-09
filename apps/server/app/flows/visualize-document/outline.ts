@@ -38,6 +38,8 @@ export interface HeadingRow {
 export const outlineTitle = (raw: string): string => clipLabel(raw) || UNTITLED_DOCUMENT;
 
 interface Built {
+  /** The trimmed, unclipped heading: ancestors merge on this, so headings differing only past 80 characters stay apart. */
+  key: string;
   label: string;
   level: number;
   parent: number;
@@ -56,9 +58,8 @@ export function buildOutline(title: string, rows: readonly HeadingRow[]): Outlin
   let stack: number[] = [];
   let section: number | undefined;
   for (const row of rows) {
-    const path = row.headingPath
-      .slice(0, MAX_OUTLINE_LEVEL)
-      .map((h) => clipLabel(h) || UNTITLED_SECTION);
+    const raw = row.headingPath.slice(0, MAX_OUTLINE_LEVEL).map((h) => h.trim());
+    const path = raw.map((h) => clipLabel(h) || UNTITLED_SECTION);
     if (path.length === 0) {
       stack = []; // text before the first heading: no node
       section = row.sectionOrdinal;
@@ -70,12 +71,13 @@ export function buildOutline(title: string, rows: readonly HeadingRow[]): Outlin
       while (
         shared < path.length - 1 &&
         shared < stack.length &&
-        nodes[stack[shared] as number]?.label === path[shared]
+        nodes[stack[shared] as number]?.key === raw[shared]
       )
         shared++;
       stack = stack.slice(0, shared);
       for (let depth = shared; depth < path.length; depth++) {
         nodes.push({
+          key: raw[depth] as string,
           label: path[depth] as string,
           level: depth + 1,
           parent: depth === 0 ? -1 : (stack[depth - 1] as number),
