@@ -217,4 +217,26 @@ describe.skipIf(!PG_URL)("PgVisualFacts (needs DOCMIND_TEST_PG_URL)", () => {
       DocumentGoneError,
     );
   });
+
+  it("replaceStructure refuses a fact that would not read back, writing nothing; list never reads structure rows", async () => {
+    const ref = await fx.doc("b5".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    await store.replaceStructure(ref, [outlineFact(chunk)]);
+    const good = outlineFact(chunk);
+    const bad = {
+      ...good,
+      nodes: (good as { nodes: unknown[] }).nodes.slice(0, 2),
+    } as unknown as StructureFact;
+    await expect(store.replaceStructure(ref, [bad])).rejects.toThrow(/unexpected shape/);
+    expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([16]); // the old row is still there
+    // A structure row that does not parse must not break the extracted read (chat).
+    await store.replace(ref, [fig(0, chunk)]);
+    await fx.db.owner.query(
+      "UPDATE visual_facts SET fact_enc = '{\"x\":1}'::jsonb WHERE document_id = $1 AND ordinal = 16",
+      [ref.documentId],
+    );
+    expect((await store.list(ref)).map((f) => f.ordinal)).toEqual([0]);
+    await expect(store.listAll(ref)).rejects.toThrow();
+  });
 });

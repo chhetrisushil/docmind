@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { COMPOSE_SYSTEM } from "@loom-ui/planner";
+import { flowHashMatches } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryContentStore } from "@loom/plugin-content";
@@ -18,8 +19,7 @@ import { visualizeDocumentFlow } from "./flow";
 import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
 import { visualizeExecutionId } from "./start";
-import { noStructure } from "./testing";
-import { childrenOf } from "./testing";
+import { childrenOf, noStructure } from "./testing";
 
 const CHUNK = randomUUID();
 const FACTS = JSON.stringify({
@@ -74,7 +74,12 @@ describe("recovering an interrupted visualize execution", () => {
     content: new InMemoryContentStore(),
   });
   let held: Fact[] = []; // the fact table outlives the process, like the database
-  const boot = (log: ReturnType<typeof keptLog>, over: Partial<VisualizeDeps>) => {
+  const boot = (
+    log: ReturnType<typeof keptLog>,
+    over: Partial<VisualizeDeps>,
+    /** Compose the server as it was before the structure step: only the 1.0.0 flow registered. */
+    legacyOnly = false,
+  ) => {
     const provider = llm();
     const planner = visualsPlanner(provider, KEY);
     const deps: VisualizeDeps = {
@@ -103,7 +108,13 @@ describe("recovering an interrupted visualize execution", () => {
       ...over,
     };
     const app = buildApp({ kind: "custom", eventStore: log.kept }, undefined, {
-      visualize: { flow: visualizeDocumentFlow(() => planner), deps },
+      visualize: legacyOnly
+        ? { flow: visualizeDocumentFlow(() => planner, { legacy: true }), deps }
+        : {
+            flow: visualizeDocumentFlow(() => planner),
+            legacyFlow: visualizeDocumentFlow(() => planner, { legacy: true }),
+            deps,
+          },
     });
     apps.push(app);
     return app;
@@ -147,6 +158,65 @@ describe("recovering an interrupted visualize execution", () => {
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
     // The visualize events moved no ingest status.
     expect(foldIngestStatus(await log.store.read(executionId))).toEqual({});
+  });
+
+  it("an execution begun on 1.0.0 (before the deploy) resumes on 1.0.0 after it: recorded hash kept, no structure step, no code mismatch", async () => {
+    const log = keptLog();
+    const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
+    const executionId = visualizeExecutionId(ref.userId, ref.documentId, 2);
+    let entered: () => void = () => {};
+    const inStep = new Promise<void>((r) => {
+      entered = r;
+    });
+    // The old server: only 1.0.0 is registered, so the run records the 1.0.0 hash. It dies in the load step.
+    const old = boot(
+      log,
+      {
+        guard: {
+          begin: async (_r, step) => {
+            if (step === "visualize-load") {
+              entered();
+              await new Promise<never>(() => {});
+            }
+          },
+        },
+      },
+      true,
+    );
+    await old.runtime.start(visualizeDocumentFlow(undefined, { legacy: true }), ref, {
+      executionId,
+      principal: { tenant: ref.tenantId, actor: ref.userId },
+    });
+    await inStep;
+    const recordedOf = async () =>
+      (
+        (await log.store.read(executionId)).find((e) => e.eventType === "EXECUTION_STARTED")
+          ?.payload as { flowHash: string }
+      ).flowHash;
+    const before = await recordedOf();
+    expect(
+      flowHashMatches(before, visualizeDocumentFlow(undefined, { legacy: true }).definition),
+    ).toBe(true);
+    expect(flowHashMatches(before, visualizeDocumentFlow().definition)).toBe(false);
+
+    // The new server: 1.1.0 current, 1.0.0 still registered. Recovery resumes the old execution.
+    const fresh = boot(log, {});
+    const recovery = startRecovery(fresh.runtime, log.kept, { owns: recoveryOwns });
+    await recovery.idle();
+    recovery.stop();
+    const state = await fresh.runtime.loadState(executionId, {
+      principal: { tenant: ref.tenantId, actor: ref.userId },
+    });
+    expect(state?.status).toBe("completed");
+    expect(state?.variables._output).toEqual({ outcome: "done" });
+    const events = await log.store.read(executionId);
+    const steps = events
+      .filter((e) => e.eventType === "STEP_STARTED")
+      .map((e) => (e.payload as { stepId: string }).stepId);
+    expect(steps).toContain("visualize-commit");
+    expect(steps).not.toContain("visualize-structure");
+    expect(events.some((e) => e.eventType === "EXECUTION_FAILED")).toBe(false);
+    expect(await recordedOf()).toBe(before);
   });
 
   it("the boot recovery owns ingest, visualize and chat executions, and nothing else", () => {

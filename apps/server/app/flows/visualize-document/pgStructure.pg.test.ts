@@ -125,6 +125,12 @@ describe.skipIf(!PG_URL)("PgStructureReader (needs DOCMIND_TEST_PG_URL)", () => 
     );
   });
 
+  it("refuses more entity ids than the candidate cap, so the LATERAL limit can never truncate", async () => {
+    const ref = await seed("9".repeat(64), [["A"]]);
+    const ids = Array.from({ length: 201 }, () => randomUUID());
+    await expect(reader().mentions(ref, ids)).rejects.toThrow(/at most 200/);
+  });
+
   it("returns null when an entity name does not open", async () => {
     const ref = await seed("f".repeat(64), [["A"], ["B"]]);
     await entities().replaceForDocument(ref, [

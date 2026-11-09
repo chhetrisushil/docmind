@@ -126,13 +126,25 @@ const StructureOrdinal = z.object({
   ordinal: z.union([z.literal(OUTLINE_ORDINAL), z.literal(ENTITY_MAP_ORDINAL)]),
 });
 /** A stored row of any kind (ordinals 0..17). `StoredFact` (extracted kinds, 0..15) stays what chat reads. */
-export const StoredEntry = z.discriminatedUnion("kind", [
+const StoredEntryUnion = z.discriminatedUnion("kind", [
   Series.extend(Ordinal.shape),
   Figure.extend(Ordinal.shape),
   FactTable.extend(Ordinal.shape),
   Outline.extend(StructureOrdinal.shape),
   EntityMap.extend(StructureOrdinal.shape),
 ]);
+/** Also enforces the plan's edge shape on a map: `a < b < entities.length` (a union member cannot carry a refinement). */
+export const StoredEntry = StoredEntryUnion.superRefine((f, ctx) => {
+  if (f.kind !== "cooccurrence") return;
+  f.edges.forEach((e, i) => {
+    if (e.a >= e.b || e.b >= f.entities.length)
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges", i],
+        message: "edge must satisfy a < b < entities.length",
+      });
+  });
+});
 export const isStructureFact = (f: { kind: string }): f is StructureFact =>
   f.kind === "outline" || f.kind === "cooccurrence";
 export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).strict();

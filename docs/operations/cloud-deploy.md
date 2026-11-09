@@ -25,6 +25,10 @@ not from a run against that platform. The image itself is built and smoke-tested
   and up to four ingest steps each buffer a whole file. The recommended instance is 2 to 4 vCPU and 8 GiB.
 - **Do not roll back past the rolling-summary release (chat flow 1.1.0).** A build without 1.1.0 registered cannot
   resume any chat that started or rotated onto it (`FlowCodeMismatchError`). Roll forward.
+- **Do not roll back past the structure-diagrams release (visualize-document flow 1.1.0, migration 0035).** A build
+  without 1.1.0 registered cannot resume any visualize execution that started on it (`FlowCodeMismatchError`), and the
+  previous `visual_facts` reader rejects the outline and entity-map rows (ordinals 16 and 17), so chat visuals and the
+  document load step fail for every document that has one. Roll forward. Migration 0035 itself is safe under old code.
 - **The first boot of that release rebuilds the ingest-status and chat-activity read models** (the sensitive-map
   digest changed). It runs once, automatically; expect a slower first start on a large log.
 - **Never scale to zero.** Recovery, sweeps and parked chat turns run outside requests.
