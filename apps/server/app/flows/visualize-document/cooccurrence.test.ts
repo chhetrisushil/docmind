@@ -25,6 +25,11 @@ describe("topEntities", () => {
     expect(top[19]?.name).toBe("Name17");
   });
 
+  it("breaks a tie on count and name by id", () => {
+    const top = topEntities([cand(9, "Same", 5), cand(3, "Same", 5), cand(5, "Same", 5)]);
+    expect(top.map((e) => e.id)).toEqual([eid(3), eid(5), eid(9)]);
+  });
+
   it("clips names to 80 characters and drops a nameless candidate", () => {
     const top = topEntities([cand(1, "x".repeat(120), 3), cand(2, "   ", 9)]);
     expect(top).toHaveLength(1);
@@ -128,5 +133,17 @@ describe("buildCooccurrence", () => {
     // Acme-Bolt weight 3 (first 1), Acme-Cora weight 2 (first 1), Bolt-Cora weight 1 (not an edge)
     expect(r?.edges.map((e) => e.weight)).toEqual([3, 2]);
     expect(r?.chunkIds).toEqual([cid(1)]);
+  });
+
+  it("counts a repeated mention of one passage once", () => {
+    const m = [...appear(1, 1, 1, 2, 2), ...appear(2, 1, 2, 2), ...appear(3, 1, 2)];
+    const r = buildCooccurrence(trio, m);
+    expect(r?.edges.map((e) => e.weight)).toEqual([2, 2, 2]);
+  });
+
+  it("derives an entity's passage count from the mentions, not the candidate's claim", () => {
+    const m = [...appear(1, 1, 2, 3), ...appear(2, 1, 2), ...appear(3, 1, 2)];
+    const r = buildCooccurrence([cand(1, "Acme", 99), cand(2, "Bolt", 1), cand(3, "Cora", 2)], m);
+    expect(r?.entities.map((e) => e.passages)).toEqual([3, 2, 2]);
   });
 });

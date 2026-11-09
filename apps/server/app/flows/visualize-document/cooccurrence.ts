@@ -77,6 +77,8 @@ export function buildCooccurrence(
     if (!entry.members.includes(i)) entry.members.push(i);
     byChunk.set(m.chunkId, entry);
   }
+  const seen = new Array<number>(top.length).fill(0);
+  for (const { members } of byChunk.values()) for (const i of members) seen[i] = (seen[i] ?? 0) + 1;
   const pairs = new Map<string, Pair>();
   for (const [chunkId, { ordinal, members }] of byChunk) {
     members.sort((x, y) => x - y);
@@ -105,7 +107,7 @@ export function buildCooccurrence(
   const at = new Map(linked.map((old, i) => [old, i]));
   const entities = linked.map((i) => {
     const e = top[i] as EntityCandidate;
-    return { name: e.name, entityKind: e.kind, passages: e.passages };
+    return { name: e.name, entityKind: e.kind, passages: seen[i] as number };
   });
   const edges = strongest.map((p) => ({
     a: at.get(p.a) as number,
