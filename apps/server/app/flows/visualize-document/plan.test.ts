@@ -276,6 +276,12 @@ describe("planVisuals offers the live connections", () => {
   });
 });
 
+const insertedIds = (ops: readonly unknown[]) =>
+  ops.flatMap((o) => {
+    const op = o as { type: string; node?: { id: string } };
+    return op.type === "insertNode" ? [op.node?.id] : [];
+  });
+
 describe("planning the structure facts", () => {
   const chunk = FIGURE.chunkIds[0] as string;
   const OUTLINE: StructureFact = {
@@ -330,9 +336,7 @@ describe("planning the structure facts", () => {
     const plan = await planVisuals(planner, [FIGURE, OUTLINE, MAP], recording());
     expect(plan.findings.map((f) => f.code)).not.toContain("reshape-invalid");
     expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
-    const inserted = (plan.ops as unknown as { type: string; node?: { id: string } }[])
-      .filter((o) => o.type === "insertNode")
-      .map((o) => o.node?.id);
+    const inserted = insertedIds(plan.ops);
     expect(inserted).toEqual(["outline", "map"]);
   });
 

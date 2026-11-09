@@ -29,6 +29,7 @@ const accepted = (v: DiagramShape): DiagramShape | null =>
  * Labels are text only.
  */
 export function outlineDiagram(f: OutlineFact): DiagramShape | null {
+  if (f.nodes.length === 0) return null;
   const nodes: DiagramNode[] = [{ id: "root", label: f.title, group: "0", kind: "document" }];
   const edges: DiagramEdge[] = [];
   const open = ["root"]; // open[level] is the latest node id at that level
@@ -51,9 +52,14 @@ export function entityMapDiagram(f: EntityMapFact): DiagramShape | null {
     group: e.entityKind,
     kind: e.entityKind,
   }));
+  if (nodes.length < 2 || f.edges.length === 0) return null;
   const edges: DiagramEdge[] = [];
+  const pairs = new Set<string>();
   for (const e of f.edges) {
     if (e.a === e.b || nodes[e.a] === undefined || nodes[e.b] === undefined) return null;
+    const pair = e.a < e.b ? `${e.a}-${e.b}` : `${e.b}-${e.a}`;
+    if (pairs.has(pair)) return null; // a-b and b-a are one edge
+    pairs.add(pair);
     edges.push({ from: `e${e.a}`, to: `e${e.b}`, label: String(e.weight) });
   }
   return accepted({ layout: "network", nodes, edges });

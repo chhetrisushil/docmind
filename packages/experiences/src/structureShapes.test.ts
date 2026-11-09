@@ -87,6 +87,10 @@ describe("outlineDiagram", () => {
     ).toBeNull();
   });
 
+  it("does not fit with zero section nodes", () => {
+    expect(outlineDiagram({ ...OUTLINE, nodes: [] })).toBeNull();
+  });
+
   it("stays a valid tree at the 120-node cap", () => {
     const at = nodes(
       ...Array.from({ length: 120 }, (_, i): [string, number] => [`H${i}`, i % 3 === 0 ? 1 : 2]),
@@ -117,5 +121,18 @@ describe("entityMapDiagram", () => {
     expect(
       entityMapDiagram({ ...MAP, edges: [{ a: 0, b: 7, weight: 2, firstChunkId: cid(1) }] }),
     ).toBeNull();
+  });
+
+  it("does not fit with fewer than 2 entities or no edges", () => {
+    expect(
+      entityMapDiagram({ ...MAP, entities: [MAP.entities[0] as never], edges: [] }),
+    ).toBeNull();
+    expect(entityMapDiagram({ ...MAP, edges: [] })).toBeNull();
+  });
+
+  it("does not fit when the same pair repeats, in either direction", () => {
+    const e = (a: number, b: number) => ({ a, b, weight: 2, firstChunkId: cid(1) });
+    expect(entityMapDiagram({ ...MAP, edges: [e(0, 1), e(0, 1)] })).toBeNull();
+    expect(entityMapDiagram({ ...MAP, edges: [e(0, 1), e(1, 0)] })).toBeNull();
   });
 });
