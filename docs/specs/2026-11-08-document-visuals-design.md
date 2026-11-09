@@ -310,4 +310,6 @@ visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no
   and 17, and a document page adopts an entry only on its own ordinal (`entryFitsOrdinal`).
 - The planner sees counts and neutral placeholders only for a structure capability (never a heading or a name). `factFormatFingerprint()` ends `+docmind.structure@1`, which makes
   the boot stale pass re-plan each visualized document once.
+- The flow is `visualize-document` 1.1.0; the `legacy` 1.0.0 definition stays registered before it so runs in flight at deploy finish on
+  1.0.0 (no structure facts until the next re-plan). Do not roll back past this release (see `docs/operations/cloud-deploy.md`).
 - Not done in c1: timeline and relationships (c2), diagrams in chat, cross-document structure.
