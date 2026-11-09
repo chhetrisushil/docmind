@@ -3,7 +3,7 @@ import { tainted } from "@loom/classify";
 import type { Effect } from "@loom/effect-runtime";
 import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
 import { z } from "zod";
-import { parseVisualizeExecution } from "../../status/model";
+import { parseVisualizeExecution, visualizeGenerationOf } from "../../status/model";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { jsonAnswer } from "../ingest-document/llmJson";
 import type { ChunkStore } from "../ingest-document/pgChunks";
@@ -138,6 +138,10 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
     async (ref, signal, _progress, executionId) => {
       const llm = deps.llm;
       if (!llm) return { model: "none" };
+      const generation =
+        executionId === undefined
+          ? undefined
+          : (deps.generationOf ?? visualizeGenerationOf)(executionId);
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
       // A re-run (`-r<n>`) re-plans over the stored facts without extracting, when there are some or the previous run
       // already ended `done` (a document that has no facts: its plan is the connections alone). It extracts otherwise.
@@ -167,13 +171,13 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       } catch (err) {
         if (!(err instanceof LlmRefusalError)) throw err;
         // A refusal is no facts, not a failure; the stored facts must reflect this run, so clear them.
-        await deps.facts.replace(ref, [], signal);
+        await deps.facts.replace(ref, [], signal, generation);
         return { count: 0, model };
       }
       const { facts, dropped } = admit(drafts, texts, new Set(ids));
       // The count only, never a fact's content (spec 5: ungrounded facts are counted).
       console.info("visualize-extract dropped ungrounded facts", dropped);
-      const count = await deps.facts.replace(ref, facts, signal);
+      const count = await deps.facts.replace(ref, facts, signal, generation);
       return { count, model };
     },
     {

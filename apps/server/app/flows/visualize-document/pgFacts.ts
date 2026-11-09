@@ -3,6 +3,7 @@ import { ParseAbortedError } from "@docmind/parsers";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
+import { DocumentGoneError } from "../ingest-document/errors";
 import { lockDocument } from "../ingest-document/pgEntities";
 import {
   type AnyFact,
@@ -22,12 +23,18 @@ export interface VisualFactStore {
    * Replaces the document's EXTRACTED facts (ordinals below 16) in one transaction; returns the rows written. The structure
    * facts (ordinals 16 and 17) are not touched.
    */
-  replace(ref: VisualizeRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number>;
+  replace(
+    ref: VisualizeRef,
+    facts: readonly Fact[],
+    signal?: AbortSignal,
+    generation?: number,
+  ): Promise<number>;
   /** Replaces the document's STRUCTURE facts (ordinals 16 and 17) in one transaction; the extracted facts are not touched. */
   replaceStructure(
     ref: VisualizeRef,
     facts: readonly StructureFact[],
     signal?: AbortSignal,
+    generation?: number,
   ): Promise<number>;
   /** The document's extracted facts in ordinal order: what chat and the extraction re-plan check read. Throws DocumentGoneError if the user does not own it. */
   list(ref: VisualizeRef): Promise<Fact[]>;
@@ -44,16 +51,22 @@ export class PgVisualFacts implements VisualFactStore {
   ) {}
 
   // `async`, so a refused range is a rejected promise (as every caller and test sees it), never a synchronous throw.
-  async replace(ref: VisualizeRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number> {
+  async replace(
+    ref: VisualizeRef,
+    facts: readonly Fact[],
+    signal?: AbortSignal,
+    generation?: number,
+  ): Promise<number> {
     if (facts.some((f) => f.ordinal >= STRUCTURE_ORDINAL_BASE))
       throw new Error("extracted facts use ordinals below 16");
-    return this.write(ref, facts, "<", signal);
+    return this.write(ref, facts, "<", signal, generation);
   }
 
   async replaceStructure(
     ref: VisualizeRef,
     facts: readonly StructureFact[],
     signal?: AbortSignal,
+    generation?: number,
   ): Promise<number> {
     if (facts.some((f) => f.ordinal !== OUTLINE_ORDINAL && f.ordinal !== ENTITY_MAP_ORDINAL))
       throw new Error("structure facts use ordinals 16 and 17");
@@ -61,7 +74,7 @@ export class PgVisualFacts implements VisualFactStore {
     for (const f of facts)
       if (!StoredEntry.safeParse(f).success)
         throw new Error("structure fact has an unexpected shape");
-    return this.write(ref, facts, ">=", signal);
+    return this.write(ref, facts, ">=", signal, generation);
   }
 
   /** `side` is the comparison of the writer's range against the base ordinal: `<` (extracted) or `>=` (structure). */
@@ -70,6 +83,7 @@ export class PgVisualFacts implements VisualFactStore {
     facts: readonly AnyFact[],
     side: "<" | ">=",
     signal?: AbortSignal,
+    generation?: number,
   ): Promise<number> {
     // Sealing may call the key store: do it before the transaction, never under row locks.
     const cipher = this.fields.forUser(ref.userId);
@@ -88,6 +102,15 @@ export class PgVisualFacts implements VisualFactStore {
     );
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
+      if (generation !== undefined) {
+        // The step guard checked this at begin; a re-ingest can land after that. Under the document lock, a run of a
+        // superseded generation writes nothing (the same outcome as the guard: the document is gone for this run).
+        const { rows } = await tx.query<{ ingest_generation: number }>(
+          "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+          [ref.documentId, ref.userId, ref.tenantId],
+        );
+        if (Number(rows[0]?.ingest_generation) !== generation) throw new DocumentGoneError();
+      }
       await tx.query(
         `DELETE FROM visual_facts
           WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ordinal ${side} $4`,

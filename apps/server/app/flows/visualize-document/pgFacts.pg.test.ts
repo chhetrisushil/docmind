@@ -118,13 +118,19 @@ describe.skipIf(!PG_URL)("PgVisualFacts (needs DOCMIND_TEST_PG_URL)", () => {
       );
     await insert("outline", 16);
     await insert("cooccurrence", 17);
-    await expect(insert("figure", 18)).rejects.toThrow(/visual_facts_ordinal_check/);
+    await expect(insert("figure", 18)).rejects.toThrow(/visual_facts_(kind_)?ordinal_check/);
     await expect(insert("diagram", 3)).rejects.toThrow(/visual_facts_kind_check/);
+    // The kind and the ordinal range must agree (M7): structure kinds only at 16+, extracted kinds only below.
+    await expect(insert("figure", 17)).rejects.toThrow(/visual_facts_kind_ordinal_check/);
+    await expect(insert("outline", 3)).rejects.toThrow(/visual_facts_kind_ordinal_check/);
+    await insert("series", 0);
+    await insert("factTable", 15);
     const names = await fx.db.owner.query(
       "SELECT conname FROM pg_constraint WHERE conrelid = 'visual_facts'::regclass AND contype = 'c' ORDER BY conname",
     );
     expect(names.rows.map((r) => r.conname)).toEqual([
       "visual_facts_kind_check",
+      "visual_facts_kind_ordinal_check",
       "visual_facts_ordinal_check",
     ]);
   });
@@ -238,5 +244,25 @@ describe.skipIf(!PG_URL)("PgVisualFacts (needs DOCMIND_TEST_PG_URL)", () => {
     );
     expect((await store.list(ref)).map((f) => f.ordinal)).toEqual([0]);
     await expect(store.listAll(ref)).rejects.toThrow();
+  });
+
+  it("a write from a stale ingest generation changes nothing and ends as document gone (both writers)", async () => {
+    const ref = await fx.doc("b6".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    await fx.db.owner.query("UPDATE documents SET ingest_generation = 5 WHERE id = $1", [
+      ref.documentId,
+    ]);
+    await store.replace(ref, [fig(0, chunk)], undefined, 5);
+    await store.replaceStructure(ref, [outlineFact(chunk)], undefined, 5);
+    // A run of generation 4 passed its step guard before the re-ingest: its writes must not land.
+    await expect(store.replaceStructure(ref, [], undefined, 4)).rejects.toBeInstanceOf(
+      DocumentGoneError,
+    );
+    await expect(store.replace(ref, [], undefined, 4)).rejects.toBeInstanceOf(DocumentGoneError);
+    expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([0, 16]);
+    // No generation given (a caller without one) keeps the old behaviour.
+    await store.replaceStructure(ref, [], undefined);
+    expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([0]);
   });
 });

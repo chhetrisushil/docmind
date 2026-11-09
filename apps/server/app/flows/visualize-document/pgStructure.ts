@@ -16,14 +16,20 @@ import type { StructureReader } from "./structure";
 export const ENTITY_CANDIDATE_CAP = 200;
 
 /**
- * $1 document, $2 owner, $3 tenant. Each passage's section (plaintext) and sealed text; `owned` is false when the document is
+ * $1 document, $2 owner, $3 tenant. One row per SECTION: its first passage (plaintext section ordinal, sealed text, which
+ * holds the section's heading path) and the section's passage count `n`, so one decrypt per section, not per passage; `owned` is false when the document is
  * not the owner's (an owner and tenant predicate of its own, not only row-level security). A document with no passages yields
  * one row with a null `id`.
  */
-export const HEADINGS_SQL = `SELECT o.owned, c.id, c.section_ordinal, c.text_enc
+export const HEADINGS_SQL = `SELECT o.owned, c.id, c.section_ordinal, c.text_enc, c.n
    FROM (SELECT EXISTS (
            SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2 AND d.tenant_id = $3) AS owned) o
-   LEFT JOIN chunks c ON o.owned AND c.tenant_id = $3 AND c.document_id = $1
+   LEFT JOIN LATERAL (
+     SELECT DISTINCT ON (x.section_ordinal) x.id, x.section_ordinal, x.text_enc, x.ordinal,
+            count(*) OVER (PARTITION BY x.section_ordinal)::int AS n
+       FROM chunks x
+      WHERE o.owned AND x.tenant_id = $3 AND x.document_id = $1
+      ORDER BY x.section_ordinal, x.ordinal) c ON true
   ORDER BY c.ordinal`;
 
 /**
@@ -116,6 +122,7 @@ export class PgStructureReader implements StructureReader {
         id: string | null;
         section_ordinal: number;
         text_enc: unknown;
+        n: number;
       }>(HEADINGS_SQL, [ref.documentId, ref.userId, ref.tenantId]);
       return res.rows;
     });
@@ -129,7 +136,12 @@ export class PgStructureReader implements StructureReader {
           await this.open(() => cipher.open(chunkBind(id), r.text_enc)),
         );
         return sealed.success
-          ? { chunkId: id, sectionOrdinal: r.section_ordinal, headingPath: sealed.data.headingPath }
+          ? {
+              chunkId: id,
+              sectionOrdinal: r.section_ordinal,
+              headingPath: sealed.data.headingPath,
+              passages: r.n,
+            }
           : null;
       }),
     );

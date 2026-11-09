@@ -33,6 +33,8 @@ export interface HeadingRow {
   chunkId: string;
   sectionOrdinal: number;
   headingPath: readonly string[];
+  /** The passages this row stands for (the section's first passage carries the section's count); default 1. */
+  passages?: number;
 }
 
 export const outlineTitle = (raw: string): string => clipLabel(raw) || UNTITLED_DOCUMENT;
@@ -88,7 +90,7 @@ export function buildOutline(title: string, rows: readonly HeadingRow[]): Outlin
       }
     }
     const leaf = stack[stack.length - 1];
-    if (leaf !== undefined) (nodes[leaf] as Built).own += 1;
+    if (leaf !== undefined) (nodes[leaf] as Built).own += row.passages ?? 1;
   }
   if (nodes.length < MIN_HEADINGS) return null;
 

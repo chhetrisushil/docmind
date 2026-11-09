@@ -1,4 +1,5 @@
 import type { Effect } from "@loom/effect-runtime";
+import { visualizeGenerationOf } from "../../status/model";
 import {
   type StepGuard,
   StepResult,
@@ -40,11 +41,14 @@ export interface StructureDeps extends StepSeams {
  * structure facts, leaving its extracted facts alone. It runs on every run, including a re-plan that skips extraction.
  * A kind whose inputs do not open, or that does not reach its thresholds, is simply not produced. The output is a count.
  */
+const generationOfRun = (deps: StructureDeps, executionId: string | undefined) =>
+  executionId === undefined ? undefined : (deps.generationOf ?? visualizeGenerationOf)(executionId);
+
 export function structureEffect(deps: StructureDeps): Effect<VisualizeRef, StepResult> {
   return stepEffectOf<StepResult, VisualizeRef>(
     "visualize-structure",
     deps.guard,
-    async (ref, signal) => {
+    async (ref, signal, _progress, executionId) => {
       const facts: StructureFact[] = [];
       const title = await deps.reader.title(ref);
       const rows = title === null ? null : await deps.reader.headings(ref);
@@ -65,7 +69,14 @@ export function structureEffect(deps: StructureDeps): Effect<VisualizeRef, StepR
 
       // The count only, never a heading or a name.
       console.info("visualize-structure facts", facts.length);
-      return { count: await deps.facts.replaceStructure(ref, facts, signal) };
+      return {
+        count: await deps.facts.replaceStructure(
+          ref,
+          facts,
+          signal,
+          generationOfRun(deps, executionId),
+        ),
+      };
     },
     { schema: StepResult, ended: (end) => end },
     ingestStepOptions(deps),

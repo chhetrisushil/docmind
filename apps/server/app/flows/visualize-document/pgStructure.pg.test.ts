@@ -53,6 +53,45 @@ describe.skipIf(!PG_URL)("PgStructureReader (needs DOCMIND_TEST_PG_URL)", () => 
     expect(await reader().title(ref)).toBe("Quarterly report"); // the fixture document's title, opened under the owner's key
   });
 
+  it("reads one row per section (its first passage, with the section's passage count) and opens only those", async () => {
+    const ref = await fx.doc("8".repeat(64));
+    // 6 passages in 3 sections: ordinals 0..2 -> section 0 (preamble), 3..4 -> section 1, 5 -> section 2.
+    const layout: [number, string[]][] = [
+      [0, []],
+      [0, []],
+      [0, []],
+      [1, ["Intro"]],
+      [1, ["Intro"]],
+      [2, ["Intro", "Scope"]],
+    ];
+    await new PgChunkStore(fx.app, fx.fields).replace(
+      ref,
+      layout.map(([section, path], i) => chunk(i, section, path)),
+    );
+    let opened = 0;
+    const counting = {
+      forUser: (u: string) => {
+        const inner = fx.fields.forUser(u);
+        return new Proxy(inner, {
+          get: (t, prop) =>
+            prop === "open"
+              ? async (...a: unknown[]) => {
+                  opened++;
+                  return (t.open as (...x: unknown[]) => Promise<unknown>)(...a);
+                }
+              : Reflect.get(t, prop),
+        });
+      },
+    } as unknown as FieldCrypto;
+    const rows = await reader(counting).headings(ref);
+    expect(rows?.map((r) => [r.chunkId, r.sectionOrdinal, r.headingPath, r.passages])).toEqual([
+      [chunkIdFor(ref.documentId, 0), 0, [], 3],
+      [chunkIdFor(ref.documentId, 3), 1, ["Intro"], 2],
+      [chunkIdFor(ref.documentId, 5), 2, ["Intro", "Scope"], 1],
+    ]);
+    expect(opened).toBe(3);
+  });
+
   it("is owner-scoped: another user's document is gone", async () => {
     const ref = await seed("b".repeat(64), [["A"]]);
     const other = { ...ref, userId: U1B };
