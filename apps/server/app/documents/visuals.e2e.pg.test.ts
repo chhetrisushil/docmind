@@ -698,10 +698,12 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     `${NO_FACTS} Acme Corporation, Bolt Limited and Cora Diaz-Marlowe signed.`,
   ].join("\n\n");
   const SECRETS = [
+    "Zebra-Handbook-Title",
     "Zebra-Overview-Section",
     "Zebra-Details-Section",
     "Zebra-Pricing-Subsection",
     "Acme Corporation",
+    "Bolt Limited",
     "Cora Diaz-Marlowe",
   ];
 
@@ -756,7 +758,14 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
         "Zebra-Pricing-Subsection",
       ]),
     );
-    const cited = (outline.value.refs[0] as { id: string }).id.split(":")[1] as string;
+    const sectionPassages = (
+      await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal", [id])
+    ).rows.map((r) => r.id as string);
+    const citedIds = outline.value.refs.map((r) => r.id.split(":")[1] as string);
+    for (const c of citedIds) expect(sectionPassages).toContain(c);
+    const cited = citedIds[0] as string;
+    // The first ref is the first passage of the document's first section.
+    expect(cited).toBe(sectionPassages[0]);
     const source = await get(st, ada.cookie, `/api/documents/${id}/source?passage=${cited}`);
     expect(source.status).toBe(200);
     expect(await source.json()).toMatchObject({ focus: expect.anything() });
@@ -812,8 +821,9 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
       [id],
     );
     for (const r of rows.rows) for (const s of SECRETS) expect(r.t).not.toContain(s);
-    for (const execution of (await st.durable.raw.eventStore.listExecutions?.()) ?? [])
-      assertNoPlaintext(await st.durable.raw.eventStore.read(execution), SECRETS);
+    const log = await eventLog(st);
+    expect(log.length).toBeGreaterThan(0);
+    assertNoPlaintext(log, SECRETS);
     // The chat's facts for this document stay extracted-only.
     expect(await facts.list(ref)).toEqual([]);
     expect(chunkIdFor(id, 0)).toBe(passages[0]);
@@ -827,7 +837,18 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     const id = await upload(st, ada.cookie, `${NO_FACTS} A short note with no headings.`, {
       visuals: false,
     });
-    expect(await visualizeOutcome(st, ada.userId, id)).toBe("empty");
+    // No facts and no structure: the planner offers only connections and (by design) refuses an empty plan, which the
+    // flow reports as "empty" with a codes-only warning. That warning is the expected path here, so assert it.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await visualizeOutcome(st, ada.userId, id)).toBe("empty");
+      expect(warn).toHaveBeenCalledWith(
+        "visualize connections-only plan failed",
+        expect.arrayContaining(["plan-failed"]),
+      );
+    } finally {
+      warn.mockRestore();
+    }
     const left = await st.db.owner.query("SELECT 1 FROM visual_facts WHERE document_id = $1", [id]);
     expect(left.rowCount).toBe(0);
     expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
