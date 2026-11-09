@@ -180,4 +180,18 @@ describe("buildOutline", () => {
     const o = buildOutline("T", rows);
     expect(o?.nodes.map((n) => n.level)).toEqual([1, 2, 1, 2, 1]);
   });
+
+  it("adds a row's `passages` (default 1) to its section's passage count", () => {
+    const rows: HeadingRow[] = [
+      { chunkId: id(1), sectionOrdinal: 1, headingPath: ["A"], passages: 5 },
+      { chunkId: id(2), sectionOrdinal: 2, headingPath: ["B"] },
+      { chunkId: id(3), sectionOrdinal: 3, headingPath: ["B", "C"], passages: 3 },
+    ];
+    const o = buildOutline("T", rows);
+    expect(o?.nodes.map((n) => [n.label, n.passageCount, n.firstChunkId])).toEqual([
+      ["A", 5, id(1)],
+      ["B", 1, id(2)],
+      ["C", 3, id(3)],
+    ]);
+  });
 });
