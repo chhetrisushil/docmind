@@ -11,8 +11,8 @@ import {
   OUTLINE_ORDINAL,
   STRUCTURE_ORDINAL_BASE,
   StoredEntry,
+  StoredFact,
   type StructureFact,
-  isStructureFact,
 } from "./facts";
 
 export type VisualizeRef = { tenantId: string; userId: string; documentId: string };
@@ -57,6 +57,10 @@ export class PgVisualFacts implements VisualFactStore {
   ): Promise<number> {
     if (facts.some((f) => f.ordinal !== OUTLINE_ORDINAL && f.ordinal !== ENTITY_MAP_ORDINAL))
       throw new Error("structure facts use ordinals 16 and 17");
+    // Refuse a fact no reader could parse: the step fails here, instead of every `listAll` failing on every later run.
+    for (const f of facts)
+      if (!StoredEntry.safeParse(f).success)
+        throw new Error("structure fact has an unexpected shape");
     return this.write(ref, facts, ">=", signal);
   }
 
@@ -102,25 +106,34 @@ export class PgVisualFacts implements VisualFactStore {
   }
 
   async listAll(ref: VisualizeRef): Promise<AnyFact[]> {
+    return this.read(ref, StoredEntry, "");
+  }
+
+  /** Extracted facts only: the structure rows are filtered in SQL, so chat never opens or parses them. */
+  async list(ref: VisualizeRef): Promise<Fact[]> {
+    return (await this.read(ref, StoredFact, `AND ordinal < ${STRUCTURE_ORDINAL_BASE}`)) as Fact[];
+  }
+
+  private async read(
+    ref: VisualizeRef,
+    schema: { safeParse(v: unknown): { success: boolean; data?: unknown } },
+    extra: string,
+  ): Promise<AnyFact[]> {
     const res = await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
       return tx.query<{ id: string; fact_enc: unknown }>(
         `SELECT id, fact_enc FROM visual_facts
-          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 ORDER BY ordinal`,
+          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 ${extra} ORDER BY ordinal`,
         [ref.tenantId, ref.userId, ref.documentId],
       );
     });
     const cipher = this.fields.forUser(ref.userId);
     return Promise.all(
       res.rows.map(async (r) => {
-        const parsed = StoredEntry.safeParse(await cipher.open(factBind(r.id), r.fact_enc));
+        const parsed = schema.safeParse(await cipher.open(factBind(r.id), r.fact_enc));
         if (!parsed.success) throw new Error("visual fact has an unexpected shape");
         return parsed.data as AnyFact;
       }),
     );
-  }
-
-  async list(ref: VisualizeRef): Promise<Fact[]> {
-    return (await this.listAll(ref)).filter((f): f is Fact => !isStructureFact(f));
   }
 }

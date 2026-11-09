@@ -32,7 +32,9 @@ export const HEADINGS_SQL = `SELECT o.owned, c.id, c.section_ordinal, c.text_enc
  * the tenant and the chunk), counted per entity, ranked by that count; the entity row is read by key only for the ranked few.
  * MATERIALIZED so the planner cannot reorder it into a scan of the owner's library. `rank()` keeps every entity tied with the
  * last wanted one, so a tie at the boundary is broken by name later (names are sealed, SQL cannot), and the cap bounds a
- * document full of equal entities.
+ * document full of equal entities. Known limits: with more than the cap tied inside the rank, the lowest ids are kept (the
+ * name tiebreak then runs on that subset); and `topEntities` drops a nameless candidate after this cut, so the map can
+ * hold fewer than 20 entities when one was nameless. Both are edge cases of a bounded read, accepted.
  */
 export const CANDIDATES_SQL = `WITH counted AS MATERIALIZED (
   SELECT ce.tenant_id, ce.entity_id, count(DISTINCT ce.chunk_id)::int AS n
@@ -157,6 +159,8 @@ export class PgStructureReader implements StructureReader {
   }
 
   async mentions(ref: VisualizeRef, entityIds: readonly string[]): Promise<Mention[]> {
+    if (entityIds.length > ENTITY_CANDIDATE_CAP)
+      throw new Error(`mentions takes at most ${ENTITY_CANDIDATE_CAP} entity ids`);
     if (entityIds.length === 0) return [];
     const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
       const res = await tx.query<{ entity_id: string; chunk_id: string; ordinal: number }>(

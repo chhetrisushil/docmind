@@ -392,6 +392,13 @@ describe("visualize-document flow", () => {
     expect(s.structured()).toEqual([]);
   });
 
+  it("pins the 1.0.0 flow hash: any drift of the legacy definition strands in-flight executions", () => {
+    // Recorded by every 1.0.0 execution before the deploy. If this changes, the legacy flow is no longer 1.0.0.
+    expect(flowContentHash(visualizeDocumentFlow(undefined, { legacy: true }).definition)).toBe(
+      "sha256:d8491324b75b1de1a597aa91646efaf15dec2dd3652ba6a4e7023a4f502266f6",
+    );
+  });
+
   it("keeps 1.0.0 beside 1.1.0: the same flow id, its own steps and its own flow hash", () => {
     const legacy = visualizeDocumentFlow(undefined, { legacy: true });
     const current = visualizeDocumentFlow();

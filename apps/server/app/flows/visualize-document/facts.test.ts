@@ -528,4 +528,14 @@ describe("structure facts", () => {
     const m = { ...MAP, ordinal: 17 };
     expect(StoredEntry.safeParse({ ...m, entities: m.entities.slice(0, 2) }).success).toBe(false);
   });
+
+  it("refuses an edge that is not a < b or that points past the entities", () => {
+    const m = { ...MAP, ordinal: 17 };
+    const edge = m.edges[0] as (typeof m.edges)[number];
+    const parses = (edges: object[]) => StoredEntry.safeParse({ ...m, edges }).success;
+    expect(parses([edge, m.edges[1] as object])).toBe(true);
+    expect(parses([{ ...edge, a: 1, b: 0 }, m.edges[1] as object])).toBe(false);
+    expect(parses([{ ...edge, a: 1, b: 1 }, m.edges[1] as object])).toBe(false);
+    expect(parses([{ ...edge, b: m.entities.length }, m.edges[1] as object])).toBe(false);
+  });
 });
