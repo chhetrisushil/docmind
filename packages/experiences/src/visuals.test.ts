@@ -8,12 +8,15 @@ import {
   isTimeFormat,
   widgetRefProblems,
 } from "@loom-ui/core";
+import { jsonPathSelect } from "@loom-ui/hydration";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, createInvoker } from "./invoker";
 import { PINS } from "./providers";
 import { shape as shapeOf } from "./reshapers";
 import {
+  type EntityMapFact,
   FACT_VISUALS_CATALOG,
+  type OutlineFact,
   VISUALS_CATALOG,
   VISUAL_SHAPES,
   type VisualFactRaw,
@@ -60,6 +63,66 @@ const TABLE: VisualFactRaw = {
   chunkIds: [],
   ordinal: 3,
 };
+
+const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const OUTLINE: OutlineFact = {
+  kind: "outline",
+  title: "Zebra Report",
+  nodes: ["Zebra-A", "Zebra-B", "Zebra-C"].map((label, i) => ({
+    id: `s${i}`,
+    label,
+    level: 1,
+    passageCount: 1,
+    firstChunkId: cid(i + 1),
+  })),
+  chunkIds: [cid(1), cid(2), cid(3)],
+  ordinal: 16,
+};
+const MAP: EntityMapFact = {
+  kind: "cooccurrence",
+  entities: ["Zebra-Ent-A", "Zebra-Ent-B", "Zebra-Ent-C"].map((name) => ({
+    name,
+    entityKind: "person",
+    passages: 2,
+  })),
+  edges: [
+    { a: 0, b: 1, weight: 2, firstChunkId: cid(1) },
+    { a: 1, b: 2, weight: 2, firstChunkId: cid(2) },
+  ],
+  chunkIds: [cid(1), cid(2)],
+  ordinal: 17,
+};
+
+describe("structure capabilities", () => {
+  it("offers each structure fact as one capability with a count-only description", () => {
+    const caps = capabilitiesOf([OUTLINE, MAP]);
+    expect(caps.map((c) => c.handle)).toEqual(["fact-16", "fact-17"]);
+    expect(caps.map((c) => c.toolSchemaHash)).toEqual([
+      `${PINS["visual.facts"]}#fact-16`,
+      `${PINS["visual.facts"]}#fact-17`,
+    ]);
+    expect(caps[0]?.description).toBe("a tree of 3 sections, 1 level deep");
+    expect(caps[1]?.description).toBe(
+      "3 named parties and 2 links between those that appear together",
+    );
+    expect(caps.every((c) => c.sensitivity === "sensitive")).toBe(true);
+    // Nothing the planner is shown carries the fact's text (the fixtures are all "Zebra...").
+    const shown = JSON.stringify(caps);
+    for (const secret of ["Zebra-A", "Zebra-B", "Zebra-C", "Zebra Report", "Zebra-Ent"])
+      expect(shown, secret).not.toContain(secret);
+  });
+
+  it("the planner sample carries placeholder nodes and edges, so a nodes or edges binding validates (P3)", () => {
+    const [outline, map] = capabilitiesOf([OUTLINE, MAP]);
+    expect(outline?.sampleOutput).toMatchObject({ kind: "outline", sections: 3, levels: 1 });
+    expect(map?.sampleOutput).toMatchObject({ kind: "cooccurrence", entities: 3, links: 2 });
+    expect(jsonPathSelect(outline?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(map?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(map?.sampleOutput, "edges").ok).toBe(true);
+    // The control: a count-only sample selects nothing, which loom-ui's planner reports as `reshape-invalid`.
+    expect(jsonPathSelect({ kind: "outline", sections: 3, levels: 1 }, "nodes").ok).toBe(false);
+  });
+});
 
 const shape = (name: string, raw: VisualFactRaw[]) => shapeOf(name, raw);
 

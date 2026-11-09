@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { type DraftFact, StoredFact, admit, grounded as groundedDraft, numbersOf } from "./facts";
+import { buildCooccurrence, topEntities } from "./cooccurrence";
+import {
+  type DraftFact,
+  ENTITY_MAP_ORDINAL,
+  MAX_FACTS,
+  MAX_STORED_FACTS,
+  OUTLINE_ORDINAL,
+  StoredEntry,
+  StoredFact,
+  admit,
+  grounded as groundedDraft,
+  isStructureFact,
+  numbersOf,
+} from "./facts";
+import { buildOutline } from "./outline";
 
 const C1 = "11111111-1111-4111-8111-111111111111";
 const text = (s: string) => new Map([[C1, s]]);
@@ -445,5 +459,73 @@ describe("StoredFact", () => {
     };
     expect(StoredFact.safeParse({ ...f, extra: 1 }).success).toBe(false);
     expect(StoredFact.safeParse({ ...f, ordinal: 16 }).success).toBe(false);
+  });
+});
+
+describe("structure facts", () => {
+  const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const eid = (n: number) => `00000000-0000-4000-9000-${String(n).padStart(12, "0")}`;
+  const builtOutline = buildOutline("Report", [
+    { chunkId: cid(1), sectionOrdinal: 1, headingPath: ["A"] },
+    { chunkId: cid(2), sectionOrdinal: 2, headingPath: ["B"] },
+    { chunkId: cid(3), sectionOrdinal: 3, headingPath: ["B", "C"] },
+  ]);
+  const cands = [1, 2, 3].map((n) => ({
+    id: eid(n),
+    kind: "person" as const,
+    name: `P${n}`,
+    passages: 2,
+  }));
+  const builtMap = buildCooccurrence(
+    topEntities(cands),
+    cands.flatMap((c) => [1, 2].map((o) => ({ entityId: c.id, chunkId: cid(o), ordinal: o }))),
+  );
+  // The builders are tested in Tasks 1 and 2; here they must have produced something (checked in the second test).
+  const OUTLINE = builtOutline as NonNullable<typeof builtOutline>;
+  const MAP = builtMap as NonNullable<typeof builtMap>;
+  const FIGURE_FACT = { kind: "figure", label: "x", value: 1, chunkIds: [C1] } as const;
+
+  it("reserves ordinals 16 and 17 above the 16 extracted ones", () => {
+    expect([MAX_FACTS, OUTLINE_ORDINAL, ENTITY_MAP_ORDINAL]).toEqual([16, 16, 17]);
+    expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 2);
+  });
+
+  it("a built outline and a built map parse as stored facts and are structure facts", () => {
+    expect(builtOutline).not.toBeNull();
+    expect(builtMap).not.toBeNull();
+    expect(OUTLINE.nodes.map((n) => n.id)).toEqual(["s0", "s1", "s2"]);
+    const o = StoredEntry.parse({ ...OUTLINE, ordinal: OUTLINE_ORDINAL });
+    const m = StoredEntry.parse({ ...MAP, ordinal: ENTITY_MAP_ORDINAL });
+    expect(isStructureFact(o) && isStructureFact(m)).toBe(true);
+    expect(isStructureFact(StoredEntry.parse({ ...FIGURE_FACT, ordinal: 0 }))).toBe(false);
+  });
+
+  it("keeps the ordinal ranges apart: extracted kinds 0..15, structure kinds 16 and 17 (separate schemas)", () => {
+    const o = { ...OUTLINE, ordinal: 16 };
+    const m = { ...MAP, ordinal: 17 };
+    expect(StoredEntry.safeParse({ ...FIGURE_FACT, ordinal: 15 }).success).toBe(true);
+    expect(StoredEntry.safeParse({ ...FIGURE_FACT, ordinal: 16 }).success).toBe(false);
+    expect(StoredEntry.safeParse(o).success).toBe(true);
+    expect(StoredEntry.safeParse(m).success).toBe(true);
+    expect(StoredEntry.safeParse({ ...o, ordinal: 15 }).success).toBe(false);
+    expect(StoredEntry.safeParse({ ...m, ordinal: 18 }).success).toBe(false);
+    // StoredFact is what chat reads: extracted kinds only, 0..15
+    expect(StoredFact.safeParse({ ...FIGURE_FACT, ordinal: 15 }).success).toBe(true);
+    expect(StoredFact.safeParse({ ...FIGURE_FACT, ordinal: 16 }).success).toBe(false);
+    expect(StoredFact.safeParse(o).success).toBe(false);
+  });
+
+  it("refuses an unknown key, too few nodes, an over-long label, a missing or empty node id and too few entities", () => {
+    const base = { ...OUTLINE, ordinal: 16 };
+    const first = base.nodes[0] as (typeof base.nodes)[number];
+    const rest = base.nodes.slice(1);
+    const parses = (over: object) => StoredEntry.safeParse({ ...base, ...over }).success;
+    expect(parses({ extra: 1 })).toBe(false);
+    expect(parses({ nodes: base.nodes.slice(0, 2) })).toBe(false);
+    expect(parses({ nodes: [{ ...first, label: "x".repeat(81) }, ...rest] })).toBe(false);
+    expect(parses({ nodes: [{ ...first, id: "" }, ...rest] })).toBe(false);
+    expect(parses({ nodes: [{ ...first, id: undefined }, ...rest] })).toBe(false);
+    const m = { ...MAP, ordinal: 17 };
+    expect(StoredEntry.safeParse({ ...m, entities: m.entities.slice(0, 2) }).success).toBe(false);
   });
 });

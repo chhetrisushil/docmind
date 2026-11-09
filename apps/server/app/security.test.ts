@@ -59,6 +59,15 @@ describe("the effect grants", () => {
     expect(authorizer.authorize(request("visualize-document", "turn-load")).allowed).toBe(false);
   });
 
+  it("grants visualize-document its structure step and keeps it away from visualize-turn", () => {
+    expect(authorizer.authorize(request("visualize-document", "visualize-structure")).allowed).toBe(
+      true,
+    );
+    expect(authorizer.authorize(request("visualize-turn", "visualize-structure")).allowed).toBe(
+      false,
+    );
+  });
+
   it("lets chat-title run its one step and no chat tool", () => {
     expect(authorizer.authorize(request(CHAT_TITLE_FLOW_ID, "chat-title")).allowed).toBe(true);
     expect(authorizer.authorize(request(CHAT_TITLE_FLOW_ID, "search_docs")).allowed).toBe(false);

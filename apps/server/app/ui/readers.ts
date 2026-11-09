@@ -29,7 +29,7 @@ export interface UiReaderDeps {
   status: DocumentStatusReads;
   blobs: SourceDeps["blobs"];
   registry: SourceDeps["registry"];
-  visualFacts: VisualFactStore;
+  visualFacts: Pick<VisualFactStore, "listAll">;
   turnFacts: TurnFactStore;
 }
 
@@ -170,7 +170,7 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         return await withCites(
           deps,
           identity,
-          await deps.visualFacts.list({
+          await deps.visualFacts.listAll({
             tenantId: identity.tenantId,
             userId: identity.userId,
             documentId: id,

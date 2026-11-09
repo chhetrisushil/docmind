@@ -12,6 +12,7 @@ import { extractEffect } from "./extract";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
 import { loadEffect } from "./plan";
 import type { VisualRuns } from "./runs";
+import { type StructureReader, structureEffect } from "./structure";
 
 /**
  * What the visualize flow's steps and runner need from the outside world. Built per app by the composition root;
@@ -21,6 +22,8 @@ export interface VisualizeDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
   facts: VisualFactStore;
+  /** The structure step's reads (headings, entity mentions), owner-scoped. */
+  structure: StructureReader;
   /** The extract step's read bound: the summary cap (DOCMIND_SUMMARY_MAX_CHARS). */
   summaryMaxChars: number;
   lineage: Lineage;
@@ -42,6 +45,10 @@ export const visualizeEffects = (seams: VisualizeDeps): Record<string, Effect> =
   const deps = { ...seams, generationOf: visualizeGenerationOf };
   return {
     "visualize-extract": extractEffect(deps) as unknown as Effect,
+    "visualize-structure": structureEffect({
+      ...deps,
+      reader: deps.structure,
+    }) as unknown as Effect,
     "visualize-load": loadEffect(deps) as unknown as Effect,
     "visualize-commit": commitEffect(deps) as unknown as Effect<CommitInput>,
   };

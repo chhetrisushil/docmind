@@ -3,6 +3,7 @@ import { ReferencePlanner } from "@loom-ui/planner";
 import type { DecideContext, PlanResult, PlannerModel } from "@loom-ui/planner";
 import type { Fact } from "./facts";
 import { planVisuals } from "./plan";
+import type { StructureReader } from "./structure";
 
 /** A planner model that replies with `replies` in order, repeating the last, and counts its calls. */
 export function scriptedPlannerModel(replies: string[]) {
@@ -78,3 +79,11 @@ export const aPlan = (
 /** A node's children (the experience root is a container; its static type is the wider ExperienceNode). */
 export const childrenOf = (root: unknown) =>
   (root as { children: readonly { id: string }[] }).children;
+
+/** A structure reader for a document with no headings and no entities: the structure step writes nothing. */
+export const noStructure = (): StructureReader => ({
+  title: async () => "",
+  headings: async () => [],
+  entities: async () => [],
+  mentions: async () => [],
+});

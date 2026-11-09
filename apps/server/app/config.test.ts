@@ -6,16 +6,28 @@ import { TimerService } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { SummaryChoiceEventStore } from "./chats/summaryChoice";
-import { buildApp } from "./config";
+import { buildApp, visualizeFlows } from "./config";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
 import { noSnapshots } from "./erasure/testing";
+import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { openDurableStorage } from "./storage";
 
 describe("buildApp", () => {
   it("composes under strict mode on in-memory storage", async () => {
     const app = buildApp({ kind: "memory" });
     await app.close();
+  });
+});
+
+describe("visualizeFlows", () => {
+  it("registers the 1.0.0 visualize flow before the current one, and only the current one without it", () => {
+    const current = visualizeDocumentFlow();
+    const legacy = visualizeDocumentFlow(undefined, { legacy: true });
+    expect(
+      visualizeFlows({ flow: current, legacyFlow: legacy }).map((f) => f.definition.version),
+    ).toEqual(["1.0.0", "1.1.0"]);
+    expect(visualizeFlows({ flow: current }).map((f) => f.definition.version)).toEqual(["1.1.0"]);
   });
 });
 

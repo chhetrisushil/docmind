@@ -95,7 +95,7 @@ function stack(o: {
   const deps: TurnVisualizeDeps = {
     guard: { begin: async () => {} },
     turn: { read: async () => (o.turn === undefined ? CITED : o.turn) },
-    stored: { list: async () => o.storedFacts ?? [], replace: async () => 0 },
+    stored: { list: async () => o.storedFacts ?? [] },
     turnFacts: {
       list: async () => held,
       replace: async (_r, facts) => {

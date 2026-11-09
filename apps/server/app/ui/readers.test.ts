@@ -22,7 +22,7 @@ describe("the visualFacts reader", () => {
       if (ref.documentId === "mine") return [];
       throw new DocumentGoneError();
     });
-    const r = readersFor({ visualFacts: { list } } as never, identity);
+    const r = readersFor({ visualFacts: { listAll: list } } as never, identity);
     await expect(r.visualFacts({ id: "theirs" })).resolves.toBeNull();
     await expect(r.visualFacts({ id: "mine" })).resolves.toEqual([]);
     expect(list).toHaveBeenLastCalledWith({ tenantId: "t", userId: "u", documentId: "mine" });
@@ -33,7 +33,7 @@ describe("the visualFacts reader", () => {
       throw new Error("boom");
     });
     const r = readersFor(
-      { visualFacts: { list } } as never,
+      { visualFacts: { listAll: list } } as never,
       { userId: "u", tenantId: "t" } as never,
     );
     await expect(r.visualFacts({ id: "x" })).rejects.toThrow("boom");
@@ -108,7 +108,10 @@ describe("citations on facts", () => {
     vi.doMock("./factCites", () => ({ resolveCites: resolve }));
     const { readersFor } = await import("./readers");
     const list = vi.fn(async () => [fact(0, [C3, C1, C2, C1]), fact(1, [C2])]);
-    const r = readersFor({ visualFacts: { list }, pool: {}, fields: {} } as never, identity);
+    const r = readersFor(
+      { visualFacts: { listAll: list }, pool: {}, fields: {} } as never,
+      identity,
+    );
     const out = (await r.visualFacts({ id: D })) as { cites?: unknown[] }[];
     expect(out[0]?.cites).toEqual([
       { documentId: D, passageId: C3, label: "Report, Page 3" },

@@ -25,7 +25,7 @@ export interface TurnLoadDeps extends StepSeams {
   guard: StepGuard<TurnRef>;
   /** `readTurn` bound to its collaborators (deps.ts does the binding). */
   turn: { read(ref: TurnRef, signal?: AbortSignal): Promise<TurnRead | null> };
-  facts: VisualFactStore;
+  facts: Pick<VisualFactStore, "list">;
 }
 
 /**
@@ -138,7 +138,7 @@ export function turnExtractEffect(deps: TurnExtractDeps): Effect<TurnRef, StepRe
 
 export interface TurnFactsDeps extends StepSeams {
   guard: StepGuard<TurnRef>;
-  stored: VisualFactStore;
+  stored: Pick<VisualFactStore, "list">;
   turnFacts: TurnFactStore;
 }
 

@@ -41,7 +41,7 @@ export type ModelUnavailableEnd = { outcome: "failed"; code: "visuals-model-unav
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
-  facts: VisualFactStore;
+  facts: Pick<VisualFactStore, "replace" | "list">;
   /** The most chunk text read, in chunk order (the summary cap, DOCMIND_SUMMARY_MAX_CHARS): it bounds the model calls. */
   summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */

@@ -23,7 +23,7 @@ describe("turn-facts", () => {
     );
     const out = await turnFactsEffect({
       guard,
-      stored: { list, replace: vi.fn() },
+      stored: { list },
       turnFacts: { list: vi.fn(), replace: vi.fn() },
     }).execute(
       {
@@ -50,7 +50,7 @@ describe("turn-facts", () => {
     });
     const out = await turnFactsEffect({
       guard,
-      stored: { list, replace: vi.fn() },
+      stored: { list },
       turnFacts: { list: vi.fn(), replace: vi.fn() },
     }).execute(
       {
@@ -71,7 +71,7 @@ describe("turn-facts", () => {
     });
     const run = turnFactsEffect({
       guard,
-      stored: { list, replace: vi.fn() },
+      stored: { list },
       turnFacts: { list: vi.fn(), replace: vi.fn() },
       sleep: async () => {},
     }).execute({ ...ref, refs: [{ documentId: A, ordinal: 0 }] }, { executionId: "e" } as never);
@@ -81,7 +81,7 @@ describe("turn-facts", () => {
     const turnList = vi.fn(async () => [fig(0, "t0"), fig(1, "t1")]);
     const out = await turnFactsEffect({
       guard,
-      stored: { list: vi.fn(), replace: vi.fn() },
+      stored: { list: vi.fn() },
       turnFacts: { list: turnList, replace: vi.fn() },
     }).execute({ ...ref, refs: [] }, { executionId: "e" } as never);
     expect(out.facts.map((f) => f.origin)).toEqual([{ kind: "turn" }, { kind: "turn" }]);

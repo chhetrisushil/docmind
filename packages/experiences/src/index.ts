@@ -29,7 +29,15 @@ export {
   fitsShape,
   mergedCatalog,
 } from "./visuals";
-export type { FactCite, FactOrigin, FactRef, OfferedFact, VisualFactRaw } from "./visuals";
+export type {
+  EntityMapFact,
+  FactCite,
+  FactOrigin,
+  FactRef,
+  OfferedFact,
+  OutlineFact,
+  VisualFactRaw,
+} from "./visuals";
 export type {
   ConnectionDocument,
   RawConnections,

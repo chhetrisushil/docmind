@@ -27,7 +27,6 @@ const run = (turn: unknown, lists: Record<string, Fact[] | "gone">) =>
         if (v === "gone") throw new DocumentGoneError();
         return v ?? [];
       }),
-      replace: vi.fn(),
     },
   }).execute(ref, { executionId: "e" } as never);
 
