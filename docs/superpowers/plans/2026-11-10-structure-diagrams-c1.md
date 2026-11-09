@@ -10,6 +10,33 @@
 
 **Spec:** `docs/specs/2026-11-10-structure-diagrams-c1-design.md` (binding; read it first). Background: `docs/specs/2026-11-08-document-visuals-design.md` §10.
 
+## Amendments (preflight)
+
+This plan was amended after the pre-flight review (`.superpowers/sdd/2026-11-10-structure-diagrams-c1/preflight.md`: 15 rows, 18 findings; rulings P1 to P18 in `progress.md`). Where an older plan decision or step says otherwise, the amended text governs.
+
+| Ruling | What changed | Where |
+|---|---|---|
+| P1 | Structure facts have their own ordinal schema (16 or 17); `StoredEntry` and `list`/`listAll` span 0..17; extraction's `Ordinal` stays 0..15 | Task 3 step 1 (test) and step 3 (`StructureOrdinal`, `StoredEntry`); Plan decision: ordinal space |
+| P2 | `VISUAL_SHAPES` gains exactly `visual-outline-16` and `visual-entitymap-17`; views adopt a structure entry only on its own ordinal (`entryFitsOrdinal`) and a fact entry only below 16 | Task 4 steps 1 and 4; Plan decision: chat adoption |
+| P3 | The planner sample of a structure capability carries neutral placeholder `nodes`/`edges` (no document text), so the `nodes`/`edges` bindings validate; tested | Task 3 step 12b (tests and code), step 13 and Task 4 (planning tests), Task 5 e2e; Plan decision: planner sample |
+| P4 | `replace` and `replaceStructure` are `async`, so their range guards reject instead of throwing synchronously | Task 3 step 7 |
+| P5 | Unique fingerprint values for every new fixture document sharing one fixture database | Task 3 steps 4b and 5 |
+| P6 | Mention order within a passage is never relied on (random entity ids): tests sort by (ordinal, name); candidates sort by count desc, name, id | Task 3 step 9; Plan decision: deterministic order |
+| P7 | One `LoadOutput.facts` maximum, 18 (`MAX_STORED_FACTS`) | Task 3 interfaces, steps 3 and 15 |
+| P8 | `MAX_FACTS` is imported, never redeclared | Task 3 step 3 |
+| P9 | The vacuous "admit stops at the cap" test is replaced by a test of the ordinal ranges | Task 3 step 1 |
+| P10 | Weak assertions replaced: the title is asserted exactly; the log test asserts the exact call | Task 3 steps 9 and 13 |
+| P11 | The EXPLAIN suite seeds a library of 500 documents (4000 passages, about 8000 mention rows, 5000 entities, a hub entity), asserts rows visited (independent of plan shape) and forbids a sequential scan only on the two large tables. `MENTIONS_SQL` now walks from this document's passages through a `LATERAL ... LIMIT`: a plain join was sequentially scanned over the library once a hub entity was among the ids (reproduced on Postgres 17) | Task 3 steps 9 and 11; Plan decision: mentions walk |
+| P12 | The duplicated chat-catalogue test is dropped (the existing test already asserts the id and the four entries) | Task 4 step 1 |
+| P13 | The views, fit and legacy-flow (1.0.0 beside 1.1.0, registration order) tests are written out | Task 4 step 1 (views, fit); Task 3 step 15b (legacy flow, `visualizeFlows`) |
+| P14 | `OutlineFact` and `EntityMapFact` are defined in Task 3 step 12b and only consumed by Task 4 | Task 3 step 12b; Task 4 interfaces |
+| P15 | Explicit owner and tenant predicates in every structure SQL statement, reads and the store's `DELETE` | Task 3 steps 7 and 11; Plan decision: explicit predicates |
+| P16 | `((ordinal 16);` double parentheses fixed | Task 5 step 4 |
+| P17 | The near-tautological "cites each firstChunkId once" test replaced by one whose edges have distinct first passages | Task 2 step 1 |
+| P18 | Outline nodes carry an `id` (`s<index>`, spec 3) from the builder through the stored shape to the diagram | Task 1; Task 3 step 3; Task 4 |
+
+Found while writing the real code (beyond the rulings): `ui/readers.test.ts` stubs rename `list` to `listAll`; the existing `visuals.test.ts` "register all 64 names" becomes 66; `config.ts` is a modified file (`visualizeFlows`); a `LIMIT`-less plain join in `MENTIONS_SQL` was the P11 root cause.
+
 ## Global Constraints
 
 Every task's requirements include these (values copied from the spec):
@@ -20,7 +47,10 @@ Every task's requirements include these (values copied from the spec):
 - The document catalogue id becomes **`docmind.visuals.v3`**; `factFormatFingerprint()` changes.
 - The chat catalogue `FACT_VISUALS_CATALOG` stays **byte-identical** (id `docmind.visuals.v1`; the sha256 guard `e9096cf41a01d1b87ef45b3eba3744600ae81e36d78fff476f6117f1455af080` in `packages/experiences/src/visuals.test.ts` stays unchanged and green).
 - **One migration (0035)**, no new table (S7): it relaxes the two CHECKs of `visual_facts` (`visual_facts_kind_check` also allows `outline` and `cooccurrence`; `visual_facts_ordinal_check` allows 0..17). Migration 0026 is merged and never edited. Extraction keeps `MAX_FACTS` 16 at ordinals 0..15; structure facts take the reserved ordinals 16 (outline) and 17 (cooccurrence).
-- **No model call** in c1 (S1). The planner sees capability descriptions only, never outline or entity text (spec §5).
+- **Ordinal schemas (P1, P7).** Extracted kinds keep `Ordinal` (0..15, unchanged). The structure kinds have their own `StructureOrdinal` (16 or 17). `StoredEntry` (what `listAll` and the load step parse) therefore spans 0..17, `StoredFact` (extracted only, what chat reads) stays 0..15, and `LoadOutput.facts` holds at most 18 (`MAX_STORED_FACTS` = `MAX_FACTS` + 2).
+- **Experiences ordinals (P2).** `VISUAL_SHAPES` gains only `visual-outline-16` and `visual-entitymap-17`. A document page adopts a structure entry only on its own ordinal and a fact entry only below 16; chat adopts the four fact entries below 16 only.
+- **Explicit predicates (P15).** Every SQL statement the structure code adds (the reader's reads and the store's `DELETE`) names the owner and the tenant, in addition to row-level security.
+- **No model call** in c1 (S1). The planner sees capability descriptions and content-free samples only (counts and neutral placeholder nodes and edges, P3), never outline or entity text (spec §5).
 - **Document visuals only** (S5): chat never offers or plans a structure widget.
 - Structure facts are sealed per user like other facts: no plaintext in logs, the event log, or the `visual_facts` row.
 - A passage or entity name that does not open skips that structure fact and the step continues; a key-store outage still fails the step.
@@ -30,11 +60,11 @@ Every task's requirements include these (values copied from the spec):
 
 Each is repeated as a "Plan decision:" next to the step that applies it.
 
-- **Plan decision: ordinal space.** `visual_facts.ordinal` has `CHECK (ordinal BETWEEN 0 AND 15)` and `UNIQUE (tenant_id, document_id, ordinal)` (migration 0026), and extraction can fill all 16 (`MAX_FACTS`, unchanged). Migration 0035 (below) widens the ordinal CHECK to 0..17, and structure facts get **reserved ordinals: outline = 16, entity map = 17**. Extraction is NOT capped below 16. Reason: a collision would make one writer's insert fail or the other's replace delete the fact.
+- **Plan decision: ordinal space.** `visual_facts.ordinal` has `CHECK (ordinal BETWEEN 0 AND 15)` and `UNIQUE (tenant_id, document_id, ordinal)` (migration 0026), and extraction can fill all 16 (`MAX_FACTS`, unchanged). Migration 0035 (below) widens the ordinal CHECK to 0..17, and structure facts get **reserved ordinals: outline = 16, entity map = 17**. Extraction is NOT capped below 16. Reason: a collision would make one writer's insert fail or the other's replace delete the fact. **Ordinal schemas (P1):** the extracted kinds keep `Ordinal` (0..15, unchanged); the structure kinds have their own `StructureOrdinal` (16 or 17); `StoredEntry` accepts both (0..17), `StoredFact` (extracted only) still refuses 16 and 17.
 - **Plan decision: each writer owns a range.** `PgVisualFacts.replace` (extraction) now deletes and writes only ordinals `< 16`; the new `replaceStructure` deletes and writes only ordinals `>= 16`. Neither can wipe the other. Order in one run: extract, then structure, then load. On the re-plan path that skips extraction, extraction writes nothing and the structure step still re-derives and replaces. A legacy extracted fact cannot exist (extraction never wrote above 15 and 16..17 were not allowed before migration 0035), so `replaceStructure` never removes an extracted fact. Reason: spec 3 "Storage" demands the structure facts survive an extraction replace and be re-derived on a re-plan.
 - **Plan decision: `list` stays extracted-only; `listAll` is new.** `list` (used by extract's re-plan check and by chat) filters structure kinds out, so chat can never see a structure fact (S5) and extract's "stored facts" check ignores them. `listAll` (used by the load step and the UI reader that serves `visual.facts`) returns everything in ordinal order.
 - **Plan decision: migration 0035 (the `kind` and `ordinal` CHECKs).** Migration 0026 declared `kind` and `ordinal` with inline, unnamed CHECKs, so Postgres named them `visual_facts_kind_check` (`kind IN ('series','figure','factTable')`) and `visual_facts_ordinal_check` (`ordinal BETWEEN 0 AND 15`). Controller ruling: structure facts are stored as their own kinds, not as `factTable`, and extraction is not cut. `infra/migrations/0035_visual_facts_structure_kinds.sql` drops both constraints and re-adds them under the same names: `kind IN ('series','figure','factTable','outline','cooccurrence')` and `ordinal BETWEEN 0 AND 17`, in one migration (one transaction). No data changes; the `UNIQUE (tenant_id, document_id, ordinal)` is untouched. The sealed fact's own `kind` is still authoritative; the column now also agrees with it.
-- **Plan decision: fact shapes.** `outline`: `{ kind, title (1..80), nodes[3..120] of { label (1..80), level (1..32), passageCount (0..100000), firstChunkId (uuid) }, chunkIds[1..120] }`, nodes in document (pre-)order with `level` encoding the tree (a node's parent is the nearest earlier node of `level - 1`). `cooccurrence`: `{ kind, entities[3..20] of { name (1..80), entityKind (the six entity kinds), passages (1..100000) }, edges[2..40] of { a, b (indexes into entities, a < b), weight (2..100000), firstChunkId (uuid) }, chunkIds[1..40] }`. Both `.strict()`. The shared `ChunkIds` cap of 8 does not apply to them.
+- **Plan decision: fact shapes.** `outline`: `{ kind, title (1..80), nodes[3..120] of { id ("s" + the node's index among the kept nodes, so unique by position, spec 3), label (1..80), level (1..32), passageCount (0..100000), firstChunkId (uuid) }, chunkIds[1..120] }`, nodes in document (pre-)order with `level` encoding the tree (a node's parent is the nearest earlier node of `level - 1`). `cooccurrence`: `{ kind, entities[3..20] of { name (1..80), entityKind (the six entity kinds), passages (1..100000) }, edges[2..40] of { a, b (indexes into entities, a < b), weight (2..100000), firstChunkId (uuid) }, chunkIds[1..40] }`. Both `.strict()`; the stored ordinal is 16 (outline) or 17 (map). The shared `ChunkIds` cap of 8 does not apply to them.
 - **Plan decision: root does not count toward the 120.** 120 heading nodes plus the title root (121 diagram nodes, under loom-ui's 200). The spec says "Cap: 120 nodes" and "the root is the document title" without saying which; counting headings keeps the cap meaning "sections".
 - **Plan decision: pruning.** Whole deepest levels are removed while over 120 (never below level 1); if level 1 alone exceeds 120, the first 120 in document order are kept and the rest dropped (their count would fold into the root, which stores none). If fewer than 3 nodes remain after pruning there is no outline. Heading depth is clamped to 32.
 - **Plan decision: what is a distinct heading.** Passages carry `section_ordinal` (plaintext) and a sealed `headingPath`. A new `section_ordinal` starts a new section: its ancestors reuse the open path when the text matches, and its **leaf is always a new node** (that is how a duplicate heading under one parent stays separate). A section with an empty heading path (text before the first heading) makes no node. A heading with no text becomes "Untitled section"; an empty document title becomes "Untitled document". `passageCount` = the passages of that section plus folded descendants; an ancestor node that has no section of its own gets `firstChunkId` of its first descendant passage and count 0.
@@ -42,10 +72,13 @@ Each is repeated as a "Plan decision:" next to the step that applies it.
 - **Plan decision: unreadable means null.** The reader returns `null` for the whole kind when any heading passage, the title, or any candidate name fails to open (a non-key-store failure); the step then skips that one fact. A `FieldKeyStoreError` is rethrown, so the step fails and retries (STEP_RETRY).
 - **Plan decision: step position and flow identity.** `visualize-structure` runs only when extraction did not end `skipped` (role off means no planner either). It is a plain `STEP_RETRY` step (no model). The facts present for the zero-fact rule are `extracted.count + structured.count`. The step list is part of the flow identity, so the flow version moves to `1.1.0` (the identity test is updated). **Deploy behaviour of in-flight runs.** Loom's flow hash covers the flow id and version, and pinned resumption resumes an execution only on the registered version whose hash matches the one recorded at its start (ADR 0023 K11.2); a build that registers only 1.1.0 would throw `FlowCodeMismatchError` for every `visualize-document` execution started on 1.0.0, and a changed step list would also trip replay-divergence detection (ADR 0113). Chat handled its 1.0.0 to 1.1.0 bump (docs/specs rolling-summary spec section 3, commit 0d6932b) by keeping 1.0.0 registered unchanged and registering 1.1.0 after it (Loom treats the last-registered version of an id as current). This plan does the same: `visualizeDocumentFlow(planner, { legacy: true })` builds the 1.0.0 definition (steps extract, load, commit; its runner never calls the structure step), `visualize` in `compose.ts` gains `legacyFlow`, and `buildApp` (`config.ts`) registers it BEFORE the 1.1.0 flow, so runs in flight at deploy finish on 1.0.0 (they simply have no structure facts; the next re-plan or retry, or the stale-format re-plan that the v3 catalogue triggers, adds them) and every new run starts on 1.1.0. Without the legacy runner a 1.0.0 execution would be replayed through the new runner and ask for a `visualize-structure` step its log never recorded. Task 3 step 15b does this and tests it (registration order, different hashes, a 1.0.0 run finishes without a structure step). 1.0.0 can be removed once no 1.0.0 `visualize-document` execution is live. Do not roll back past this release.
 - **Plan decision: citation order.** `chunkIds` are ordered so the 16 refs are the most useful: the outline cites top-level sections first (level ascending, then document order); the map cites its strongest pairs first (weight desc).
-- **Plan decision: planner sample.** A structure capability's `sampleOutput` is a content-free count shape (`{ kind: "outline", sections, levels }`, `{ kind: "cooccurrence", entities, links }`) and its description states only counts, because the existing fact `sampleOutput` is the fact itself and would put heading and entity text in the planner prompt (spec §5).
+- **Plan decision: planner sample (P3).** A structure capability's `sampleOutput` is content-free: counts plus a couple of neutral placeholder nodes and edges that carry no document text (outline `{ kind, sections, levels, nodes: [{ label: "Section", level: 1 }, ...] }`; map `{ kind, entities, links, nodes: [{ label: "Entity", group: "person" }, ...], edges: [{ from, to, label }] }`). The planner pins a binding by running its JSONPath over the sample (`jsonPathSelect`; loom-ui `materialize.ts` reports `reshape-invalid` when it selects nothing), so a count-only sample would make the `nodes` and `edges` paths select nothing and no structure widget could ever be planned. The placeholders make those paths validate while the fact itself stays out of the prompt (spec §5). The description states only counts. Tests: the sample selects `nodes` and `edges`, carries none of the fact's text, and planning an outline and a map binding raises no `reshape-invalid`.
 - **Plan decision: fingerprint.** `factFormatFingerprint()` gains a `+docmind.structure@1` suffix (`STRUCTURE_FORMAT`) instead of bumping `PINS["visual.facts"]`. Reason: stored chat heads carry `docmind:visual.facts@1#...` pins that `factRefOfPin` must keep parsing; a pin bump would silently drop old chat widgets.
-- **Plan decision: chat adoption.** The turn path of `adoptVisuals` gets its own entry set (the four fact entries), so even a hand-made chat head with `DocumentOutline` is dropped.
+- **Plan decision: chat adoption (P2).** The turn path of `adoptVisuals` gets its own entry set (the four fact entries), so even a hand-made chat head with `DocumentOutline` is dropped. Adoption also pairs each entry with its ordinal (`entryFitsOrdinal`): fact entries read ordinals below 16, `DocumentOutline` only 16 and `EntityMap` only 17, so a hand-made head cannot read a structure fact through a fact widget or the reverse; `VISUAL_SHAPES` is built to match (`visual-outline-16`, `visual-entitymap-17`, and nothing else new).
 - **Plan decision: e2e entities.** Ingest is keyless in `startIngestStack`, so no entities are extracted at upload. The e2e seeds entities with `PgEntityStore.replaceForDocument` after the first run, then re-plans through `POST /api/documents/:id/visuals/retry` (which is also the extraction-skipping path the spec requires to re-derive).
+- **Plan decision: explicit owner and tenant predicates (P15).** Row-level security already scopes every statement to the tenant, but the structure SQL does not rely on it alone (as `connections.ts` does not): `PgVisualFacts` reads and deletes `WHERE tenant_id = $ AND owner_id = $ AND document_id = $`, and the reader's statements reach chunks and mentions through a `documents d` row with `d.tenant_id = $` and `d.owner_id = $`. `lockDocument` still guards the write path.
+- **Plan decision: deterministic order (P6).** Nothing depends on the order of mentions within one passage (entity ids are random UUIDs): the builder keys on passage ordinal and set membership. `topEntities` orders by count desc, then name, then id. Tests that read mentions sort by (ordinal, name).
+- **Plan decision: mentions walk from this document's passages (P11).** `MENTIONS_SQL` materializes this document's passages and probes `chunk_entities` once per passage through its primary key in a `LATERAL ... LIMIT` (the limit keeps the planner from flattening it into a join). Reason: with a "hub" entity (on every passage of the library) among the ids, the plain join `entity_id = ANY(...)` was planned as a sequential scan of the whole `chunk_entities` table (reproduced on Postgres 17 with 500 documents); the lateral form reads only this document's rows. The candidates query is index-bound in both shapes tried (200 and 5000 entities).
 
 ## File Structure
 
@@ -59,7 +92,7 @@ Created (server, `apps/server/app/flows/visualize-document/`):
 
 Created (experiences, `packages/experiences/src/`): `structureShapes.ts` (the two `DiagramValue` builders) and `structureShapes.test.ts`.
 
-Modified: `facts.ts`, `pgFacts.ts`, `plan.ts`, `flow.ts`, `deps.ts`, `extract.ts` (server visualize-document); `visualize-turn/{deps,steps}.ts` (narrowed store type); `ui/readers.ts`; `compose.ts`; `security.ts`; `packages/experiences/src/{visuals,providers,views}.ts` and their tests; `docs/architecture.md`, `docs/specs/2026-11-08-document-visuals-design.md`.
+Modified: `facts.ts`, `pgFacts.ts`, `plan.ts`, `flow.ts`, `deps.ts`, `extract.ts` (server visualize-document); `visualize-turn/{deps,steps}.ts` (narrowed store type); `ui/readers.ts`; `compose.ts`; `config.ts`; `security.ts`; `packages/experiences/src/{visuals,providers,views}.ts` and their tests; `docs/architecture.md`, `docs/specs/2026-11-08-document-visuals-design.md`.
 
 ---
 
@@ -76,7 +109,7 @@ Modified: `facts.ts`, `pgFacts.ts`, `plan.ts`, `flow.ts`, `deps.ts`, `extract.ts
   - `structureText.ts`: `export const MAX_STRUCTURE_LABEL = 80; export const clipText: (text: string, max: number) => string; export const clipLabel: (raw: string) => string`
   - `outline.ts`:
     - `export const MAX_OUTLINE_NODES = 120; export const MIN_HEADINGS = 3; export const MAX_OUTLINE_LEVEL = 32; export const UNTITLED_DOCUMENT = "Untitled document"`
-    - `export interface OutlineNode { label: string; level: number; passageCount: number; firstChunkId: string }`
+    - `export interface OutlineNode { id: string; label: string; level: number; passageCount: number; firstChunkId: string }` (`id` = `s<index>` among the kept nodes, P18)
     - `export interface OutlineDraft { kind: "outline"; title: string; nodes: OutlineNode[]; chunkIds: string[] }`
     - `export interface HeadingRow { chunkId: string; sectionOrdinal: number; headingPath: readonly string[] }`
     - `export const outlineTitle: (raw: string) => string`
@@ -142,6 +175,8 @@ describe("buildOutline", () => {
     ]);
     // each node cites its first passage (rows are numbered from 1; row 1 is the empty-path preamble)
     expect(o?.nodes.map((n) => n.firstChunkId)).toEqual([id(2), id(4), id(5), id(6), id(7)]);
+    // each node has an id unique by position (spec 3): the diagram node id
+    expect(o?.nodes.map((n) => n.id)).toEqual(["s0", "s1", "s2", "s3", "s4"]);
   });
 
   it("makes the ancestors of a deep first section, with no passages of their own", () => {
@@ -195,6 +230,8 @@ describe("buildOutline", () => {
     const o = buildOutline("T", sections(...specs));
     expect(o?.nodes).toHaveLength(22); // level 3 gone; 22 <= 120
     expect(o?.nodes.every((n) => n.level <= 2)).toBe(true);
+    // ids are numbered over the kept nodes, so they stay unique and contiguous after pruning
+    expect(o?.nodes.map((n) => n.id)).toEqual(Array.from({ length: 22 }, (_, i) => `s${i}`));
     const level2 = o?.nodes.filter((n) => n.level === 2) ?? [];
     expect(level2.every((n) => n.passageCount === 8)).toBe(true); // 1 own + 7 folded
   });
@@ -260,6 +297,8 @@ export const UNTITLED_DOCUMENT = "Untitled document";
 const UNTITLED_SECTION = "Untitled section";
 
 export interface OutlineNode {
+  /** `s<index>` among the kept nodes: unique by position (spec 3), and the diagram node id. */
+  id: string;
   label: string;
   /** 1 for a top-level heading. A node's parent is the nearest earlier node of `level - 1`. */
   level: number;
@@ -369,7 +408,8 @@ export function buildOutline(title: string, rows: readonly HeadingRow[]): Outlin
   }
   const live = nodes.filter((_, i) => alive[i]);
   if (live.length < MIN_HEADINGS) return null;
-  const out: OutlineNode[] = live.map((n) => ({
+  const out: OutlineNode[] = live.map((n, i) => ({
+    id: `s${i}`,
     label: n.label,
     level: n.level,
     passageCount: n.own,
@@ -514,19 +554,37 @@ describe("buildCooccurrence", () => {
     expect(r?.edges.find((e) => e.a === 0 && e.b === 1)?.firstChunkId).toBe(cid(5));
   });
 
-  it("keeps the 40 strongest of up to 190 edges, strongest first, and cites each firstChunkId once", () => {
+  it("keeps the 40 strongest of 190 possible edges, strongest first, in a stable order", () => {
     const twenty = Array.from({ length: 20 }, (_, i) => cand(i, `E${String(i).padStart(2, "0")}`, 5));
     // Every entity appears in passages 1..5, so all 190 pairs share 5 passages; a 6th passage links E00-E01 only.
     const m = twenty.flatMap((_, i) => appear(i, 1, 2, 3, 4, 5));
     m.push(...appear(0, 6), ...appear(1, 6));
     const r = buildCooccurrence(twenty.map((e, i) => (i < 2 ? { ...e, passages: 6 } : e)), m);
+    expect(r?.entities).toHaveLength(20);
     expect(r?.edges).toHaveLength(40);
     expect(r?.edges[0]).toMatchObject({ a: 0, b: 1, weight: 6 });
-    expect(r?.chunkIds).toEqual([...new Set(r?.edges.map((e) => e.firstChunkId))]);
-    expect(r?.chunkIds.length).toBeLessThanOrEqual(40);
+    // The rest tie at weight 5 and keep pair order (a, then b): E00-E02 first, E02-E05 last.
+    expect(r?.edges[1]).toMatchObject({ a: 0, b: 2, weight: 5 });
+    expect(r?.edges[39]).toMatchObject({ a: 2, b: 5, weight: 5 });
+    expect(r?.edges.every((e) => e.a < e.b)).toBe(true);
   });
 
-  it("orders the cited passages by edge strength", () => {
+  it("cites each distinct firstChunkId once, strongest edge first", () => {
+    // Acme is in passages 1..6, Bolt in 1..3, Cora in 4..6, Dune in 1..2: the pairs' first shared passages differ.
+    const four = [cand(1, "Acme", 6), cand(2, "Bolt", 3), cand(3, "Cora", 3), cand(4, "Dune", 2)];
+    const m = [...appear(1, 1, 2, 3, 4, 5, 6), ...appear(2, 1, 2, 3), ...appear(3, 4, 5, 6), ...appear(4, 1, 2)];
+    const r = buildCooccurrence(four, m);
+    // Acme-Bolt 3 (first 1), Acme-Cora 3 (first 4), Acme-Dune 2 (first 1), Bolt-Dune 2 (first 1); Bolt-Cora and Cora-Dune share nothing
+    expect(r?.edges).toEqual([
+      { a: 0, b: 1, weight: 3, firstChunkId: cid(1) },
+      { a: 0, b: 2, weight: 3, firstChunkId: cid(4) },
+      { a: 0, b: 3, weight: 2, firstChunkId: cid(1) },
+      { a: 1, b: 3, weight: 2, firstChunkId: cid(1) },
+    ]);
+    expect(r?.chunkIds).toEqual([cid(1), cid(4)]); // four edges, two distinct passages, strongest edge's passage first
+  });
+
+  it("leaves out the pair that shares a single passage and lists the others by weight", () => {
     const m = [...appear(1, 1, 2, 3, 4), ...appear(2, 3, 4, 1), ...appear(3, 1, 2)];
     const r = buildCooccurrence(trio, m);
     // Acme-Bolt weight 3 (first 1), Acme-Cora weight 2 (first 1), Bolt-Cora weight 1 (not an edge)
@@ -694,82 +752,96 @@ git commit -m "feat(visuals): pure entity co-occurrence builder (top 20, shared 
 **Files:**
 - Modify: `apps/server/app/flows/visualize-document/facts.ts`, `pgFacts.ts`, `extract.ts`, `plan.ts`, `flow.ts`, `deps.ts`
 - Create: `infra/migrations/0035_visual_facts_structure_kinds.sql`, `apps/server/app/flows/visualize-document/structure.ts`, `pgStructure.ts`
-- Modify: `apps/server/app/flows/visualize-turn/deps.ts`, `apps/server/app/flows/visualize-turn/steps.ts`, `apps/server/app/ui/readers.ts`, `apps/server/app/compose.ts`, `apps/server/app/security.ts`, `packages/experiences/src/visuals.ts` and `index.ts` (types, description and sample only: step 12b)
-- Test: `facts.test.ts`, `pgFacts.pg.test.ts`, `structure.test.ts`, `pgStructure.pg.test.ts`, `flow.test.ts`, `plan.test.ts` (existing stubs), `security.test.ts`
+- Modify: `apps/server/app/flows/visualize-turn/deps.ts`, `apps/server/app/flows/visualize-turn/steps.ts`, `apps/server/app/ui/readers.ts`, `apps/server/app/compose.ts`, `apps/server/app/config.ts`, `apps/server/app/security.ts`, `packages/experiences/src/visuals.ts` and `index.ts` (types, description and sample only: step 12b)
+- Test: `facts.test.ts`, `pgFacts.pg.test.ts`, `structure.test.ts`, `pgStructure.pg.test.ts`, `flow.test.ts`, `plan.test.ts` (existing stubs, plus the planning test), `security.test.ts`, `config.test.ts`, `ui/readers.test.ts` (stub rename), and in experiences `visuals.test.ts` (step 12b)
 
 **Interfaces:**
 - Consumes (Tasks 1 and 2): `OutlineDraft`, `HeadingRow`, `buildOutline`, `outlineTitle` from `./outline`; `CooccurrenceDraft`, `EntityCandidate`, `Mention`, `topEntities`, `buildCooccurrence`, `MAX_MAP_ENTITIES`, `MIN_LINKED` from `./cooccurrence`.
 - Produces:
-  - `facts.ts`: `STRUCTURE_ORDINAL_BASE = 16`, `OUTLINE_ORDINAL = 16`, `ENTITY_MAP_ORDINAL = 17`; `type StructureFact = (OutlineDraft | CooccurrenceDraft) & { ordinal: number }`; `type AnyFact = Fact | StructureFact`; `StoredEntry` (zod discriminated union of the five kinds + ordinal); `isStructureFact(f: { kind: string }): f is StructureFact`; `admit` unchanged (still capped at `MAX_FACTS` 16).
-  - `pgFacts.ts` `VisualFactStore`: `replace(ref, facts: readonly Fact[], signal?): Promise<number>` (owns ordinals < 16), `replaceStructure(ref, facts: readonly StructureFact[], signal?): Promise<number>` (owns ordinals >= 16), `list(ref): Promise<Fact[]>` (extracted only), `listAll(ref): Promise<AnyFact[]>`.
+  - `facts.ts`: `STRUCTURE_ORDINAL_BASE = 16`, `OUTLINE_ORDINAL = 16`, `ENTITY_MAP_ORDINAL = 17`, `MAX_STORED_FACTS = MAX_FACTS + 2` (18); `type StructureFact = (OutlineDraft | CooccurrenceDraft) & { ordinal: number }`; `type AnyFact = Fact | StructureFact`; `StoredEntry` (zod discriminated union of the five kinds: the extracted kinds with `Ordinal` 0..15, the structure kinds with their own `StructureOrdinal` 16 | 17, so 0..17 in all); `isStructureFact(f: { kind: string }): f is StructureFact`; `MAX_FACTS`, `Ordinal`, `StoredFact` and `admit` unchanged (still capped at `MAX_FACTS` 16).
+  - `pgFacts.ts` `VisualFactStore`: `async replace(ref, facts: readonly Fact[], signal?): Promise<number>` (owns ordinals < 16), `async replaceStructure(ref, facts: readonly StructureFact[], signal?): Promise<number>` (owns ordinals >= 16), `list(ref): Promise<Fact[]>` (extracted only), `listAll(ref): Promise<AnyFact[]>`.
   - `structure.ts`: `interface StructureReader { title(ref: VisualizeRef): Promise<string | null>; headings(ref): Promise<HeadingRow[] | null>; entities(ref): Promise<EntityCandidate[] | null>; mentions(ref, entityIds: readonly string[]): Promise<Mention[]> }`; `structureEffect(deps: StructureDeps): Effect<VisualizeRef, StepResult>`; `StructureDeps`.
-  - `pgStructure.ts`: `class PgStructureReader implements StructureReader` (`constructor(pool: Pool, fields: FieldCrypto)`), `HEADINGS_SQL`, `CANDIDATES_SQL`, `MENTIONS_SQL`, `ENTITY_CANDIDATE_CAP = 200`.
-  - `flow.ts`: `visualizeStructureStep` (id `visualize-structure`), `VISUALIZE_STEPS` = extract, structure, load, commit; flow version `1.1.0`.
+  - `pgStructure.ts`: `class PgStructureReader implements StructureReader` (`constructor(pool: Pool, fields: FieldCrypto)`), `HEADINGS_SQL` (`$1` document, `$2` owner, `$3` tenant), `CANDIDATES_SQL` (`$1` owner, `$2` document, `$3` tenant, `$4` rank limit, `$5` row cap), `MENTIONS_SQL` (`$1` owner, `$2` document, `$3` tenant, `$4` entity ids), `ENTITY_CANDIDATE_CAP = 200`.
+  - `flow.ts`: `visualizeStructureStep` (id `visualize-structure`), `VISUALIZE_STEPS` = extract, structure, load, commit, `LEGACY_VISUALIZE_STEPS` (the 1.0.0 list); `visualizeDocumentFlow(planner, { legacy })`; flow version `1.1.0` (legacy `1.0.0`).
+  - `config.ts`: `visualizeFlows({ flow, legacyFlow? })` (the 1.0.0 flow first, then the current one) and `FlowDeps.visualize.legacyFlow`.
   - `deps.ts`: `VisualizeDeps.structure: StructureReader`; effect `"visualize-structure"`.
-  - `plan.ts`: `LoadOutput.facts` is `z.array(StoredEntry).max(16)`; `planVisuals(planner, facts: readonly AnyFact[], ctx)`; `loadEffect` reads `facts.listAll`.
+  - `plan.ts`: `LoadOutput.facts` is `z.array(StoredEntry).max(MAX_STORED_FACTS)` (18: 16 extracted plus the 2 structure facts); `planVisuals(planner, facts: readonly AnyFact[], ctx)`; `loadEffect` reads `facts.listAll`.
 
 #### 3a. Fact kinds and the admit cap
 
-- [ ] **Step 1: Write the failing tests**, append to `apps/server/app/flows/visualize-document/facts.test.ts` (add the new imports to the existing import line from `./facts`: `ENTITY_MAP_ORDINAL, MAX_FACTS, OUTLINE_ORDINAL, StoredEntry, isStructureFact`; and add `import { buildCooccurrence, topEntities } from "./cooccurrence"; import { buildOutline } from "./outline";`):
+- [ ] **Step 1: Write the failing tests**, append to `apps/server/app/flows/visualize-document/facts.test.ts` (extend its existing import from `./facts`, which already has `StoredFact` and `admit`, with `ENTITY_MAP_ORDINAL, MAX_FACTS, MAX_STORED_FACTS, OUTLINE_ORDINAL, StoredEntry, isStructureFact`; and add `import { buildCooccurrence, topEntities } from "./cooccurrence"; import { buildOutline } from "./outline";`):
 
 ```ts
 describe("structure facts", () => {
   const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-  const outline = buildOutline("Report", [
+  const eid = (n: number) => `00000000-0000-4000-9000-${String(n).padStart(12, "0")}`;
+  const builtOutline = buildOutline("Report", [
     { chunkId: cid(1), sectionOrdinal: 1, headingPath: ["A"] },
     { chunkId: cid(2), sectionOrdinal: 2, headingPath: ["B"] },
     { chunkId: cid(3), sectionOrdinal: 3, headingPath: ["B", "C"] },
   ]);
-  const eid = (n: number) => `00000000-0000-4000-9000-${String(n).padStart(12, "0")}`;
   const cands = [1, 2, 3].map((n) => ({
     id: eid(n),
     kind: "person" as const,
     name: `P${n}`,
     passages: 2,
   }));
-  const map = buildCooccurrence(
+  const builtMap = buildCooccurrence(
     topEntities(cands),
     cands.flatMap((c) => [1, 2].map((o) => ({ entityId: c.id, chunkId: cid(o), ordinal: o }))),
   );
+  // The builders are tested in Tasks 1 and 2; here they must have produced something (checked in the second test).
+  const OUTLINE = builtOutline as NonNullable<typeof builtOutline>;
+  const MAP = builtMap as NonNullable<typeof builtMap>;
+  const FIGURE_FACT = { kind: "figure", label: "x", value: 1, chunkIds: [C1] } as const;
 
   it("reserves ordinals 16 and 17 above the 16 extracted ones", () => {
     expect([MAX_FACTS, OUTLINE_ORDINAL, ENTITY_MAP_ORDINAL]).toEqual([16, 16, 17]);
+    expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 2);
   });
 
   it("a built outline and a built map parse as stored facts and are structure facts", () => {
-    expect(outline).not.toBeNull();
-    expect(map).not.toBeNull();
-    const o = StoredEntry.parse({ ...outline, ordinal: OUTLINE_ORDINAL });
-    const m = StoredEntry.parse({ ...map, ordinal: ENTITY_MAP_ORDINAL });
+    expect(builtOutline).not.toBeNull();
+    expect(builtMap).not.toBeNull();
+    expect(OUTLINE.nodes.map((n) => n.id)).toEqual(["s0", "s1", "s2"]);
+    const o = StoredEntry.parse({ ...OUTLINE, ordinal: OUTLINE_ORDINAL });
+    const m = StoredEntry.parse({ ...MAP, ordinal: ENTITY_MAP_ORDINAL });
     expect(isStructureFact(o) && isStructureFact(m)).toBe(true);
     expect(isStructureFact(StoredEntry.parse({ ...FIGURE_FACT, ordinal: 0 }))).toBe(false);
   });
 
-  it("refuses an unknown key, too few nodes, an over-long label and a bad index", () => {
-    const base = { ...outline, ordinal: 16 };
-    expect(StoredEntry.safeParse({ ...base, extra: 1 }).success).toBe(false);
-    expect(StoredEntry.safeParse({ ...base, nodes: base.nodes?.slice(0, 2) }).success).toBe(false);
-    expect(
-      StoredEntry.safeParse({ ...base, nodes: [{ ...base.nodes?.[0], label: "x".repeat(81) }, ...(base.nodes ?? []).slice(1)] })
-        .success,
-    ).toBe(false);
-    const m = { ...map, ordinal: 17 };
-    expect(StoredEntry.safeParse({ ...m, entities: m.entities?.slice(0, 2) }).success).toBe(false);
+  it("keeps the ordinal ranges apart: extracted kinds 0..15, structure kinds 16 and 17 (separate schemas)", () => {
+    const o = { ...OUTLINE, ordinal: 16 };
+    const m = { ...MAP, ordinal: 17 };
+    expect(StoredEntry.safeParse({ ...FIGURE_FACT, ordinal: 15 }).success).toBe(true);
+    expect(StoredEntry.safeParse({ ...FIGURE_FACT, ordinal: 16 }).success).toBe(false);
+    expect(StoredEntry.safeParse(o).success).toBe(true);
+    expect(StoredEntry.safeParse(m).success).toBe(true);
+    expect(StoredEntry.safeParse({ ...o, ordinal: 15 }).success).toBe(false);
+    expect(StoredEntry.safeParse({ ...m, ordinal: 18 }).success).toBe(false);
+    // StoredFact is what chat reads: extracted kinds only, 0..15
+    expect(StoredFact.safeParse({ ...FIGURE_FACT, ordinal: 15 }).success).toBe(true);
+    expect(StoredFact.safeParse({ ...FIGURE_FACT, ordinal: 16 }).success).toBe(false);
+    expect(StoredFact.safeParse(o).success).toBe(false);
   });
 
-  it("admit stops at the cap it is given, and defaults to 16", () => {
-    const fig = { kind: "figure", label: "x", value: 5, chunkIds: [C1] } as const;
-    const texts = text("five 5");
-    const ids = new Set([C1]);
-    expect(admit(Array(20).fill(fig), texts, ids).facts.map((f) => f.ordinal)).toEqual(
-      Array.from({ length: 16 }, (_, i) => i),
-    );
-    expect(admit(Array(20).fill(fig), texts, ids).facts).toHaveLength(16);
+  it("refuses an unknown key, too few nodes, an over-long label, a missing or empty node id and too few entities", () => {
+    const base = { ...OUTLINE, ordinal: 16 };
+    const first = base.nodes[0] as (typeof base.nodes)[number];
+    const rest = base.nodes.slice(1);
+    const parses = (over: object) => StoredEntry.safeParse({ ...base, ...over }).success;
+    expect(parses({ extra: 1 })).toBe(false);
+    expect(parses({ nodes: base.nodes.slice(0, 2) })).toBe(false);
+    expect(parses({ nodes: [{ ...first, label: "x".repeat(81) }, ...rest] })).toBe(false);
+    expect(parses({ nodes: [{ ...first, id: "" }, ...rest] })).toBe(false);
+    expect(parses({ nodes: [{ ...first, id: undefined }, ...rest] })).toBe(false);
+    const m = { ...MAP, ordinal: 17 };
+    expect(StoredEntry.safeParse({ ...m, entities: m.entities.slice(0, 2) }).success).toBe(false);
   });
 });
-
-const FIGURE_FACT = { kind: "figure", label: "x", value: 1, chunkIds: [C1] } as const;
 ```
+
+(`admit` and `MAX_FACTS` are unchanged, so the existing `admit` tests already cover the 16 cap; the ordinal-range test above is what is new.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -786,11 +858,9 @@ import type { CooccurrenceDraft } from "./cooccurrence";
 import type { OutlineDraft } from "./outline";
 ```
 
-Keep `export const MAX_FACTS = 16;` and add after it:
+`MAX_FACTS` already exists (`export const MAX_FACTS = 16;`, line 3 of `facts.ts`): it is imported where needed and never redeclared (P8). Leave that line exactly as it is and add after it:
 
 ```ts
-/** What a chat turn keeps (turn facts have their own table). */
-export const MAX_FACTS = 16;
 /**
  * Extraction keeps `MAX_FACTS` (16) facts at ordinals 0..15. `visual_facts.ordinal` is 0..17 after migration 0035, and 16 and 17
  * are reserved for the derived structure facts, which are written by their own step and never collide with an extracted fact.
@@ -798,6 +868,8 @@ export const MAX_FACTS = 16;
 export const STRUCTURE_ORDINAL_BASE = 16;
 export const OUTLINE_ORDINAL = 16;
 export const ENTITY_MAP_ORDINAL = 17;
+/** The most rows one document holds: the extracted facts plus the outline and the entity map. */
+export const MAX_STORED_FACTS = MAX_FACTS + 2;
 ```
 
 After the `FactTable` const, add the two zod shapes:
@@ -814,6 +886,7 @@ const Outline = z
       .array(
         z
           .object({
+            id: z.string().regex(/^s\d{1,3}$/), // "s" + the node's index: unique by position (spec 3)
             label: StructureLabel,
             level: z.number().int().min(1).max(32),
             passageCount: Count,
@@ -867,13 +940,17 @@ After `export type Fact = DraftFact & { ordinal: number };` and the `Ordinal`/`S
 export type StructureFact = (OutlineDraft | CooccurrenceDraft) & { ordinal: number };
 /** Everything `visual_facts` holds for a document. */
 export type AnyFact = Fact | StructureFact;
-/** A stored row of any kind. `StoredFact` (extracted kinds only) stays what chat reads. */
+/** Structure facts have their own ordinal schema: 16 for the outline, 17 for the map. The extracted `Ordinal` (0..15) is untouched. */
+const StructureOrdinal = z.object({
+  ordinal: z.union([z.literal(OUTLINE_ORDINAL), z.literal(ENTITY_MAP_ORDINAL)]),
+});
+/** A stored row of any kind (ordinals 0..17). `StoredFact` (extracted kinds, 0..15) stays what chat reads. */
 export const StoredEntry = z.discriminatedUnion("kind", [
   Series.extend(Ordinal.shape),
   Figure.extend(Ordinal.shape),
   FactTable.extend(Ordinal.shape),
-  Outline.extend(Ordinal.shape),
-  EntityMap.extend(Ordinal.shape),
+  Outline.extend(StructureOrdinal.shape),
+  EntityMap.extend(StructureOrdinal.shape),
 ]);
 export const isStructureFact = (f: { kind: string }): f is StructureFact =>
   f.kind === "outline" || f.kind === "cooccurrence";
@@ -904,7 +981,7 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
 
 ```ts
   it("migration 0035 admits the structure kinds at ordinals 16 and 17 and still refuses anything else", async () => {
-    const ref = await fx.doc("a".repeat(64));
+    const ref = await fx.doc("a0".repeat(32));
     const chunk = await seedChunk(ref);
     const insert = (kind: string, ordinal: number) =>
       fx.db.owner.query(
@@ -924,13 +1001,14 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
 
 (Adapt `seedChunk` and the owner pool to the helpers already in that file; the table's `fact_enc` is only `NOT NULL`, so a bare `'{}'` is enough for a constraint test.) Run it before the migration exists to see it fail (`outline` violates `visual_facts_kind_check`), then after.
 
-- [ ] **Step 5: Write the failing pg tests**, append inside the `describe.skipIf(!PG_URL)` block of `apps/server/app/flows/visualize-document/pgFacts.pg.test.ts` (add `import { ENTITY_MAP_ORDINAL, OUTLINE_ORDINAL, type StructureFact } from "./facts";` merged with the existing `import type { Fact }` line):
+- [ ] **Step 5: Write the failing pg tests**, append inside the `describe.skipIf(!PG_URL)` block of `apps/server/app/flows/visualize-document/pgFacts.pg.test.ts` (add `import { ENTITY_MAP_ORDINAL, OUTLINE_ORDINAL, type StructureFact } from "./facts";` merged with the existing `import type { Fact }` line). **Fingerprints (P5):** the existing tests of this file already use `"1"` to `"5"` repeated 64 times, and a document's `(tenant, owner, fingerprint)` is UNIQUE, so every new test uses its own value (`"a0".repeat(32)` above, `"b1"`, `"b2"`, `"b3"`, `"b4"` repeated 32 times below):
 
 ```ts
   const outlineFact = (chunk: string): StructureFact => ({
     kind: "outline",
     title: "Zebra-Secret-Title",
-    nodes: ["Zebra-Heading-A", "Zebra-Heading-B", "Zebra-Heading-C"].map((label) => ({
+    nodes: ["Zebra-Heading-A", "Zebra-Heading-B", "Zebra-Heading-C"].map((label, i) => ({
+      id: `s${i}`,
       label,
       level: 1,
       passageCount: 1,
@@ -955,7 +1033,7 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
   });
 
   it("extraction and structure each replace only their own ordinals", async () => {
-    const ref = await fx.doc("5".repeat(64));
+    const ref = await fx.doc("b1".repeat(32));
     const chunk = await seedChunk(ref);
     const store = new PgVisualFacts(fx.app, fx.fields);
     await store.replace(ref, [fig(0, chunk), fig(1, chunk)]);
@@ -977,7 +1055,7 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
   });
 
   it("list returns the extracted facts only, so chat and the re-plan check never see a structure fact", async () => {
-    const ref = await fx.doc("6".repeat(64));
+    const ref = await fx.doc("b2".repeat(32));
     const chunk = await seedChunk(ref);
     const store = new PgVisualFacts(fx.app, fx.fields);
     await store.replace(ref, [fig(0, chunk)]);
@@ -986,7 +1064,7 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
   });
 
   it("refuses a fact outside the writer's ordinal range", async () => {
-    const ref = await fx.doc("7".repeat(64));
+    const ref = await fx.doc("b3".repeat(32));
     const chunk = await seedChunk(ref);
     const store = new PgVisualFacts(fx.app, fx.fields);
     await expect(store.replace(ref, [fig(16, chunk)])).rejects.toThrow(/ordinals below 16/);
@@ -996,7 +1074,7 @@ It grants nothing, so the function allowlist in `apps/server/app/db/embeddings.p
   });
 
   it("stores structure facts sealed, with their own column kind (migration 0035), owner-scoped", async () => {
-    const ref = await fx.doc("8".repeat(64));
+    const ref = await fx.doc("b4".repeat(32));
     const chunk = await seedChunk(ref);
     const store = new PgVisualFacts(fx.app, fx.fields);
     await store.replaceStructure(ref, [outlineFact(chunk), mapFact(chunk)]);
@@ -1032,7 +1110,9 @@ import { withTenant } from "../../db/tenant";
 import { lockDocument } from "../ingest-document/pgEntities";
 import {
   type AnyFact,
+  ENTITY_MAP_ORDINAL,
   type Fact,
+  OUTLINE_ORDINAL,
   STRUCTURE_ORDINAL_BASE,
   StoredEntry,
   type StructureFact,
@@ -1060,8 +1140,6 @@ export interface VisualFactStore {
 }
 
 const factBind = (id: string) => `visualfact:${id}:fact`;
-/** The `kind` column carries the fact's own kind (migration 0035 widened its CHECK); the sealed fact's `kind` is still what readers use. */
-const columnKind = (f: AnyFact): string => f.kind;
 
 export class PgVisualFacts implements VisualFactStore {
   constructor(
@@ -1069,26 +1147,28 @@ export class PgVisualFacts implements VisualFactStore {
     private readonly fields: FieldCrypto,
   ) {}
 
-  replace(ref: VisualizeRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number> {
+  // `async`, so a refused range is a rejected promise (as every caller and test sees it), never a synchronous throw.
+  async replace(ref: VisualizeRef, facts: readonly Fact[], signal?: AbortSignal): Promise<number> {
     if (facts.some((f) => f.ordinal >= STRUCTURE_ORDINAL_BASE))
       throw new Error("extracted facts use ordinals below 16");
-    return this.write(ref, facts, "ordinal < $2", signal);
+    return this.write(ref, facts, "<", signal);
   }
 
-  replaceStructure(
+  async replaceStructure(
     ref: VisualizeRef,
     facts: readonly StructureFact[],
     signal?: AbortSignal,
   ): Promise<number> {
-    if (facts.some((f) => f.ordinal < STRUCTURE_ORDINAL_BASE || f.ordinal > 17))
+    if (facts.some((f) => f.ordinal !== OUTLINE_ORDINAL && f.ordinal !== ENTITY_MAP_ORDINAL))
       throw new Error("structure facts use ordinals 16 and 17");
-    return this.write(ref, facts, "ordinal >= $2", signal);
+    return this.write(ref, facts, ">=", signal);
   }
 
+  /** `side` is the comparison of the writer's range against the base ordinal: `<` (extracted) or `>=` (structure). */
   private async write(
     ref: VisualizeRef,
     facts: readonly AnyFact[],
-    range: string,
+    side: "<" | ">=",
     signal?: AbortSignal,
   ): Promise<number> {
     // Sealing may call the key store: do it before the transaction, never under row locks.
@@ -1098,7 +1178,8 @@ export class PgVisualFacts implements VisualFactStore {
         const id = randomUUID();
         return {
           id,
-          kind: columnKind(f),
+          // The column carries the fact's own kind (migration 0035 widened its CHECK); the sealed fact's `kind` is what readers use.
+          kind: f.kind,
           ordinal: f.ordinal,
           chunkIds: f.chunkIds,
           sealed: JSON.stringify(await cipher.seal(factBind(id), f)),
@@ -1107,10 +1188,11 @@ export class PgVisualFacts implements VisualFactStore {
     );
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
-      await tx.query(`DELETE FROM visual_facts WHERE document_id = $1 AND ${range}`, [
-        ref.documentId,
-        STRUCTURE_ORDINAL_BASE,
-      ]);
+      await tx.query(
+        `DELETE FROM visual_facts
+          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ordinal ${side} $4`,
+        [ref.tenantId, ref.userId, ref.documentId, STRUCTURE_ORDINAL_BASE],
+      );
       for (const r of rows) {
         await tx.query(
           `INSERT INTO visual_facts (id, tenant_id, owner_id, document_id, kind, ordinal, fact_enc, chunk_ids)
@@ -1127,8 +1209,9 @@ export class PgVisualFacts implements VisualFactStore {
     const res = await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
       return tx.query<{ id: string; fact_enc: unknown }>(
-        "SELECT id, fact_enc FROM visual_facts WHERE document_id = $1 AND owner_id = $2 ORDER BY ordinal",
-        [ref.documentId, ref.userId],
+        `SELECT id, fact_enc FROM visual_facts
+          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 ORDER BY ordinal`,
+        [ref.tenantId, ref.userId, ref.documentId],
       );
     });
     const cipher = this.fields.forUser(ref.userId);
@@ -1147,7 +1230,7 @@ export class PgVisualFacts implements VisualFactStore {
 }
 ```
 
-Note the `DELETE` binds `$2` in both ranges; `$1` is the document.
+Both the `DELETE` and the read name the tenant and the owner (P15) as well as the document; `$4` is the base ordinal 16 on either side of which a writer owns its range. `replace` and `replaceStructure` are `async` (P4), so the guard tests' `.rejects` see the throw.
 
 Narrow what chat and the UI reader need, so their test stubs and the store's growth stay decoupled:
 
@@ -1155,6 +1238,8 @@ Narrow what chat and the UI reader need, so their test stubs and the store's gro
 - `apps/server/app/flows/visualize-turn/steps.ts`: change line 28 `facts: VisualFactStore;` to `facts: Pick<VisualFactStore, "list">;` and line 141 `stored: VisualFactStore;` to `stored: Pick<VisualFactStore, "list">;`
 - `apps/server/app/flows/visualize-document/extract.ts`: change `facts: VisualFactStore;` (line 44) to `facts: Pick<VisualFactStore, "replace" | "list">;`
 - `apps/server/app/ui/readers.ts`: change `visualFacts: VisualFactStore;` to `visualFacts: Pick<VisualFactStore, "listAll">;` and in `visualFacts({ id })` replace `await deps.visualFacts.list({` with `await deps.visualFacts.listAll({`.
+- `apps/server/app/ui/readers.test.ts`: the `visualFacts` reader tests stub the store as `{ visualFacts: { list } }` (three places, in "the visualFacts reader" and "citations on facts"); rename the key to `listAll` (`{ visualFacts: { listAll: list } }`) so they exercise the reader's new call.
+- `pnpm typecheck:tests` also flags, in `visualize-turn` tests such as `flow.test.ts` line 98 and `steps.facts.test.ts` line 84, a stub that passes `replace` where the narrowed `Pick<VisualFactStore, "list">` takes only `list` (excess property): drop the extra key there.
 
 - [ ] **Step 8: Run to verify pass**
 
@@ -1172,7 +1257,7 @@ import { EntityKeys } from "../../crypto/entityKeys";
 import { type FieldCrypto, FieldKeyStoreError } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
-import { T1, U1, U1B } from "../../documents/testHarness";
+import { T1, T2, U1, U1B } from "../../documents/testHarness";
 import { chunkIdFor } from "../ingest-document/chunker";
 import { DocumentGoneError } from "../ingest-document/errors";
 import { PgChunkStore } from "../ingest-document/pgChunks";
@@ -1218,7 +1303,7 @@ describe.skipIf(!PG_URL)("PgStructureReader (needs DOCMIND_TEST_PG_URL)", () => 
       [chunkIdFor(ref.documentId, 2), 2, ["Methods"]],
       [chunkIdFor(ref.documentId, 3), 3, ["Methods", "Data"]],
     ]);
-    expect(typeof (await reader().title(ref))).toBe("string");
+    expect(await reader().title(ref)).toBe("Quarterly report"); // the fixture document's title, opened under the owner's key
   });
 
   it("is owner-scoped: another user's document is gone", async () => {
@@ -1272,14 +1357,23 @@ describe.skipIf(!PG_URL)("PgStructureReader (needs DOCMIND_TEST_PG_URL)", () => 
     const acme = got?.[0]?.id as string;
     const bolt = got?.[1]?.id as string;
     const mentions = await reader().mentions(ref, [acme, bolt]);
-    expect(mentions.map((m) => [m.entityId === acme ? "acme" : "bolt", m.ordinal])).toEqual([
-      ["acme", 0],
-      ["acme", 1],
-      ["bolt", 1],
-      ["acme", 2],
-      ["bolt", 2],
+    // In passage order. Within one passage the order is by entity id (a random UUID), so it is not asserted:
+    // the pairs are compared after sorting by (ordinal, name) (P6).
+    expect(mentions.map((m) => m.ordinal)).toEqual([...mentions.map((m) => m.ordinal)].sort((a, b) => a - b));
+    const nameOf = new Map(got?.map((e) => [e.id, e.name]));
+    const pairs = mentions
+      .map((m) => [m.ordinal, nameOf.get(m.entityId) as string] as const)
+      .sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+    expect(pairs).toEqual([
+      [0, "Acme Ltd"],
+      [1, "Acme Ltd"],
+      [1, "Bolt Inc"],
+      [2, "Acme Ltd"],
+      [2, "Bolt Inc"],
     ]);
-    expect(mentions.every((m) => m.chunkId.length === 36)).toBe(true);
+    expect(mentions.map((m) => m.chunkId).sort()).toEqual(
+      [ids[0], ids[1], ids[1], ids[2], ids[2]].sort(),
+    );
   });
 
   it("returns null when an entity name does not open", async () => {
@@ -1296,14 +1390,16 @@ describe.skipIf(!PG_URL)("PgStructureReader (needs DOCMIND_TEST_PG_URL)", () => 
 });
 
 describe.skipIf(!PG_URL)(
-  "the co-occurrence queries on about 500 documents (needs DOCMIND_TEST_PG_URL)",
+  "the co-occurrence queries on a library of 500 documents (needs DOCMIND_TEST_PG_URL)",
   () => {
     let fx: PgFixture;
     let selfId: string;
+    const ENTITIES = 5000;
     beforeAll(async () => {
       fx = await startPgFixture();
       const c = await fx.db.owner.connect();
       try {
+        // The library: 500 documents x 8 passages (4000), 5000 entities, one mention per passage, plus the cases below.
         await c.query(
           `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes, content_address, fingerprint)
            SELECT gen_random_uuid(), $1::uuid, $2::uuid, '{"x":1}'::jsonb, '{"x":1}'::jsonb, 'text/plain', 1,
@@ -1314,12 +1410,12 @@ describe.skipIf(!PG_URL)(
         await c.query(
           `INSERT INTO chunks (id, tenant_id, document_id, ordinal, section_ordinal, text_enc, locator, token_count)
            SELECT gen_random_uuid(), d.tenant_id, d.id, o, 0, '{"x":1}'::jsonb, '{"kind":"section","index":0}'::jsonb, 1
-             FROM documents d CROSS JOIN generate_series(0, 3) o`,
+             FROM documents d CROSS JOIN generate_series(0, 7) o`,
         );
         await c.query(
           `INSERT INTO entities (id, tenant_id, owner_id, kind, name_enc, name_key)
            SELECT gen_random_uuid(), $1::uuid, $2::uuid, 'organization', '{"x":1}'::jsonb, lpad(to_hex(g), 64, '0')
-             FROM generate_series(1, 200) g`,
+             FROM generate_series(1, ${ENTITIES}) g`,
           [T1, U1],
         );
         await c.query(`CREATE TEMP TABLE seed_chunks AS
@@ -1327,16 +1423,17 @@ describe.skipIf(!PG_URL)(
         await c.query(`CREATE TEMP TABLE seed_entities AS
           SELECT id, row_number() OVER (ORDER BY id) AS rn FROM entities`);
         await c.query(`INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id)
-          SELECT c.tenant_id, c.id, e.id FROM seed_chunks c JOIN seed_entities e ON e.rn = (c.rn % 200) + 1`);
-        // This document names 50 entities; a hub entity is on every chunk of the library.
+          SELECT c.tenant_id, c.id, e.id FROM seed_chunks c JOIN seed_entities e ON e.rn = (c.rn % ${ENTITIES}) + 1`);
+        // This document (the first by id) names 50 more entities, spread over its 8 passages.
         await c.query(
           `INSERT INTO chunk_entities (tenant_id, chunk_id, entity_id)
            SELECT mc.tenant_id, mc.id, e.id
              FROM (SELECT id, tenant_id FROM documents ORDER BY id LIMIT 1) d
              JOIN chunks mc ON mc.document_id = d.id
-             JOIN seed_entities e ON e.rn <= 50 AND e.rn % 4 = mc.ordinal
+             JOIN seed_entities e ON e.rn <= 50 AND e.rn % 8 = mc.ordinal
            ON CONFLICT DO NOTHING`,
         );
+        // A hub: one entity on every passage of the library, so on every passage of this document too.
         await c.query(
           `INSERT INTO entities (id, tenant_id, owner_id, kind, name_enc, name_key)
            VALUES (gen_random_uuid(), $1::uuid, $2::uuid, 'organization', '{"x":1}'::jsonb, lpad(to_hex(100000), 64, '0'))`,
@@ -1357,11 +1454,13 @@ describe.skipIf(!PG_URL)(
     type PlanNode = {
       "Node Type": string;
       "Relation Name"?: string;
-      "Index Cond"?: string;
+      "Actual Rows"?: number;
       "Actual Loops"?: number;
+      "Rows Removed by Filter"?: number;
       Plans?: PlanNode[];
     };
     const walk = (n: PlanNode): PlanNode[] => [n, ...(n.Plans ?? []).flatMap(walk)];
+    /** Plans and runs `sql` as the app role under the DEFAULT planner settings, with the parameters as literals. */
     async function explain(sql: string, params: unknown[]) {
       return withTenant(fx.app, T1, async (tx) => {
         const inline = sql.replace(/\$(\d+)/g, (_m, n) => {
@@ -1373,48 +1472,73 @@ describe.skipIf(!PG_URL)(
         return { nodes: walk(top.Plan as PlanNode), ms: Number(top["Execution Time"]) };
       });
     }
-    const BIG = ["chunks", "chunk_entities", "documents", "entities"];
-    const LIBRARY = 500;
+    /** Rows a plan node touched: returned plus filtered out, over all its loops. */
+    const visited = (n: PlanNode) =>
+      ((n["Actual Rows"] ?? 0) + (n["Rows Removed by Filter"] ?? 0)) * (n["Actual Loops"] ?? 1);
+    const LARGE = ["chunks", "chunk_entities"];
+    const TABLES = ["chunks", "chunk_entities", "documents", "entities"];
+    // This document has 8 passages and about 70 mention rows; the library has 500 documents, 4000 passages, 8000+ mention rows,
+    // 5000 entities. Anything under 300 visited rows per table cannot have scanned the library, whatever plan the planner picks.
+    const VISITED_BOUND = 300;
 
     async function expectBound(sql: string, params: unknown[]) {
       const { nodes, ms } = await explain(sql, params);
+      // Robust to the plan shape: no table is read beyond this document's neighbourhood...
+      for (const n of nodes) {
+        const rel = n["Relation Name"];
+        if (rel !== undefined && TABLES.includes(rel))
+          expect(visited(n), `${n["Node Type"]} on ${rel}`).toBeLessThan(VISITED_BOUND);
+      }
+      // ...and the two large tables are never sequentially scanned (a tiny table may legitimately be: not asserted on).
       expect(
         nodes
-          .filter((n) => n["Node Type"] === "Seq Scan")
-          .map((n) => n["Relation Name"])
-          .filter((r) => r !== undefined && BIG.includes(r)),
+          .filter((n) => n["Node Type"] === "Seq Scan" && LARGE.includes(n["Relation Name"] ?? ""))
+          .map((n) => n["Relation Name"]),
       ).toEqual([]);
-      // chunk_entities is reached only by an index on its chunk (primary key leads with tenant, chunk)
-      const ce = nodes.filter(
-        (n) => n["Relation Name"] === "chunk_entities" && /Scan/.test(n["Node Type"]),
-      );
-      expect(ce.length).toBeGreaterThan(0);
-      for (const n of ce) {
-        expect(n["Node Type"]).toMatch(/^Index/);
-        expect(n["Index Cond"] ?? "").toMatch(/chunk_id/);
-      }
-      expect(nodes.filter((n) => (n["Actual Loops"] ?? 0) >= LIBRARY)).toEqual([]);
       expect(ms).toBeLessThan(2000);
     }
 
-    it("the candidates query walks out from this document and never scans the library", async () => {
-      await expectBound(CANDIDATES_SQL, [U1, selfId, 20, 200]);
-    });
-    it("the mentions query walks out from this document and never scans the library", async () => {
-      const ids = (
+    const candidateIds = async () =>
+      (
         await withTenant(fx.app, T1, async (tx) =>
-          tx.query<{ entity_id: string }>(CANDIDATES_SQL, [U1, selfId, 20, 200]),
+          tx.query<{ entity_id: string }>(CANDIDATES_SQL, [U1, selfId, T1, 20, 200]),
         )
       ).rows.map((r) => r.entity_id);
-      await expectBound(MENTIONS_SQL, [U1, selfId, ids]);
+
+    it("the candidates query walks out from this document and never scans the library", async () => {
+      await expectBound(CANDIDATES_SQL, [U1, selfId, T1, 20, 200]);
+    });
+    it("the mentions query walks out from this document and never scans the library, hub entity included", async () => {
+      const ids = await candidateIds();
+      expect(ids.length).toBeGreaterThan(20); // the hub and the 50 named entities are in the ranked set
+      await expectBound(MENTIONS_SQL, [U1, selfId, T1, ids]);
     });
     it("returns only this document's rows", async () => {
       const rows = await withTenant(fx.app, T1, async (tx) =>
-        tx.query<{ n: number }>(CANDIDATES_SQL, [U1, selfId, 20, 200]),
+        tx.query<{ n: number }>(CANDIDATES_SQL, [U1, selfId, T1, 20, 200]),
       );
-      // This document has 4 chunks: no entity can be in more than 4 of its passages, whatever the library says of the hub.
-      expect(rows.rows.length).toBeGreaterThan(0);
-      expect(Math.max(...rows.rows.map((r) => r.n))).toBeLessThanOrEqual(4);
+      // This document has 8 passages: the hub is in all 8, never in the library's 4000.
+      expect(Math.max(...rows.rows.map((r) => r.n))).toBe(8);
+      const own = new Set(
+        (await fx.db.owner.query("SELECT id FROM chunks WHERE document_id = $1", [selfId])).rows.map(
+          (r) => r.id as string,
+        ),
+      );
+      const mentions = await withTenant(fx.app, T1, async (tx) =>
+        tx.query<{ chunk_id: string }>(MENTIONS_SQL, [U1, selfId, T1, await candidateIds()]),
+      );
+      expect(mentions.rows.length).toBeGreaterThan(0);
+      expect(mentions.rows.every((r) => own.has(r.chunk_id))).toBe(true);
+    });
+    it("another owner or tenant reads nothing, even with this document's id", async () => {
+      const none = await withTenant(fx.app, T1, async (tx) =>
+        tx.query(CANDIDATES_SQL, [U1B, selfId, T1, 20, 200]),
+      );
+      expect(none.rowCount).toBe(0);
+      const other = await withTenant(fx.app, T1, async (tx) =>
+        tx.query(MENTIONS_SQL, [U1, selfId, T2, await candidateIds()]),
+      );
+      expect(other.rowCount).toBe(0);
     });
   },
 );
@@ -1445,42 +1569,60 @@ import type { StructureReader } from "./structure";
 /** The most candidate entities one read returns: the top 20 plus any tied with the 20th, bounded. */
 export const ENTITY_CANDIDATE_CAP = 200;
 
-/** $1 document, $2 owner. Each passage's section (plaintext) and sealed text; `owned` is false when the document is not the owner's. */
+/**
+ * $1 document, $2 owner, $3 tenant. Each passage's section (plaintext) and sealed text; `owned` is false when the document is
+ * not the owner's (an owner and tenant predicate of its own, not only row-level security). A document with no passages yields
+ * one row with a null `id`.
+ */
 export const HEADINGS_SQL = `SELECT o.owned, c.id, c.section_ordinal, c.text_enc
-   FROM (SELECT EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2) AS owned) o
-   LEFT JOIN chunks c ON o.owned AND c.document_id = $1
+   FROM (SELECT EXISTS (
+           SELECT 1 FROM documents d WHERE d.id = $1 AND d.owner_id = $2 AND d.tenant_id = $3) AS owned) o
+   LEFT JOIN chunks c ON o.owned AND c.tenant_id = $3 AND c.document_id = $1
   ORDER BY c.ordinal`;
 
 /**
- * $1 owner, $2 document, $3 rank limit, $4 row cap. The owner's entities of THIS document's passages: the document, its
- * chunks (`chunks_document_ordinal_key`), their `chunk_entities` rows (the primary key leads with the chunk), counted per
- * entity, ranked by that count; the entity row is read by key only for the ranked few. MATERIALIZED so the planner cannot
- * reorder it into a scan of the owner's library. `rank()` keeps every entity tied with the last wanted one, so a tie at the
- * boundary is broken by name later (names are sealed, SQL cannot), and the cap bounds a document full of equal entities.
+ * $1 owner, $2 document, $3 tenant, $4 rank limit, $5 row cap. The owner's entities of THIS document's passages: the document
+ * (owner and tenant named), its chunks (`chunks_document_ordinal_key`), their `chunk_entities` rows (the primary key leads with
+ * the tenant and the chunk), counted per entity, ranked by that count; the entity row is read by key only for the ranked few.
+ * MATERIALIZED so the planner cannot reorder it into a scan of the owner's library. `rank()` keeps every entity tied with the
+ * last wanted one, so a tie at the boundary is broken by name later (names are sealed, SQL cannot), and the cap bounds a
+ * document full of equal entities.
  */
 export const CANDIDATES_SQL = `WITH counted AS MATERIALIZED (
   SELECT ce.tenant_id, ce.entity_id, count(*)::int AS n
     FROM documents d
     JOIN chunks c ON c.tenant_id = d.tenant_id AND c.document_id = d.id
     JOIN chunk_entities ce ON ce.tenant_id = c.tenant_id AND ce.chunk_id = c.id
-   WHERE d.id = $2 AND d.owner_id = $1
+   WHERE d.id = $2 AND d.owner_id = $1 AND d.tenant_id = $3
    GROUP BY ce.tenant_id, ce.entity_id),
 ranked AS MATERIALIZED (
   SELECT k.tenant_id, k.entity_id, k.n, rank() OVER (ORDER BY k.n DESC) AS r FROM counted k)
 SELECT en.id AS entity_id, en.kind, en.name_enc, k.n
   FROM ranked k
   JOIN entities en ON en.tenant_id = k.tenant_id AND en.id = k.entity_id AND en.owner_id = $1
- WHERE k.r <= $3
+ WHERE k.r <= $4
  ORDER BY k.n DESC, en.id
- LIMIT $4`;
+ LIMIT $5`;
 
-/** $1 owner, $2 document, $3 entity ids. The kept entities' passages in this document, in passage order. */
-export const MENTIONS_SQL = `SELECT ce.entity_id, ce.chunk_id, c.ordinal
-   FROM documents d
-   JOIN chunks c ON c.tenant_id = d.tenant_id AND c.document_id = d.id
-   JOIN chunk_entities ce ON ce.tenant_id = c.tenant_id AND ce.chunk_id = c.id
-  WHERE d.id = $2 AND d.owner_id = $1 AND ce.entity_id = ANY($3::uuid[])
-  ORDER BY c.ordinal, ce.entity_id`;
+/**
+ * $1 owner, $2 document, $3 tenant, $4 entity ids. The kept entities' passages in this document, in passage order. It starts
+ * from this document's passages (MATERIALIZED) and probes `chunk_entities` once per passage through its primary key, in a
+ * LATERAL with a LIMIT (never reached: a passage has at most as many rows as there are ids, at most 200) so the planner
+ * cannot flatten it into a join. A plain `JOIN ... entity_id = ANY($4)` was planned as a sequential scan of all of
+ * `chunk_entities` once a hub entity (on every passage of the library) was among the ids.
+ */
+export const MENTIONS_SQL = `WITH mine AS MATERIALIZED (
+  SELECT c.tenant_id, c.id, c.ordinal
+    FROM documents d
+    JOIN chunks c ON c.tenant_id = d.tenant_id AND c.document_id = d.id
+   WHERE d.id = $2 AND d.owner_id = $1 AND d.tenant_id = $3)
+SELECT x.entity_id, x.chunk_id, m.ordinal
+  FROM mine m
+  CROSS JOIN LATERAL (
+    SELECT ce.entity_id, ce.chunk_id FROM chunk_entities ce
+     WHERE ce.tenant_id = m.tenant_id AND ce.chunk_id = m.id AND ce.entity_id = ANY($4::uuid[])
+     LIMIT ${ENTITY_CANDIDATE_CAP}) x
+ ORDER BY m.ordinal, x.entity_id`;
 
 const SEALED = z.object({ headingPath: z.array(z.string()) }).passthrough();
 const KINDS: readonly string[] = ENTITY_KINDS;
@@ -1508,8 +1650,8 @@ export class PgStructureReader implements StructureReader {
   async title(ref: VisualizeRef): Promise<string | null> {
     const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
       const res = await tx.query<{ title_enc: unknown }>(
-        "SELECT title_enc FROM documents WHERE id = $1 AND owner_id = $2",
-        [ref.documentId, ref.userId],
+        "SELECT title_enc FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+        [ref.documentId, ref.userId, ref.tenantId],
       );
       return res.rows;
     });
@@ -1526,7 +1668,7 @@ export class PgStructureReader implements StructureReader {
         id: string | null;
         section_ordinal: number;
         text_enc: unknown;
-      }>(HEADINGS_SQL, [ref.documentId, ref.userId]);
+      }>(HEADINGS_SQL, [ref.documentId, ref.userId, ref.tenantId]);
       return res.rows;
     });
     if (!rows[0]?.owned) throw new DocumentGoneError();
@@ -1549,7 +1691,7 @@ export class PgStructureReader implements StructureReader {
     const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
       const res = await tx.query<{ entity_id: string; kind: string; name_enc: unknown; n: number }>(
         CANDIDATES_SQL,
-        [ref.userId, ref.documentId, MAX_MAP_ENTITIES, ENTITY_CANDIDATE_CAP],
+        [ref.userId, ref.documentId, ref.tenantId, MAX_MAP_ENTITIES, ENTITY_CANDIDATE_CAP],
       );
       return res.rows;
     });
@@ -1569,7 +1711,7 @@ export class PgStructureReader implements StructureReader {
     const rows = await withTenant(this.pool, ref.tenantId, async (tx) => {
       const res = await tx.query<{ entity_id: string; chunk_id: string; ordinal: number }>(
         MENTIONS_SQL,
-        [ref.userId, ref.documentId, [...entityIds]],
+        [ref.userId, ref.documentId, ref.tenantId, [...entityIds]],
       );
       return res.rows;
     });
@@ -1654,21 +1796,83 @@ export function structureEffect(deps: StructureDeps): Effect<VisualizeRef, StepR
 - [ ] **Step 12: Run to verify pass**
 
 Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/flows/visualize-document/pgStructure.pg.test.ts`
-Expected: PASS, none skipped. If the explain test reports a Seq Scan on a big table, fix the query shape (keep each CTE MATERIALIZED and keyed on the document), do not loosen the assertion.
+Expected: PASS, none skipped. If the explain test reports a table read beyond this document's neighbourhood or a Seq Scan on `chunks` or `chunk_entities`, fix the query shape (keep each CTE MATERIALIZED and keyed on the document, and the `LATERAL ... LIMIT` in `MENTIONS_SQL`), do not loosen the assertion or the seed.
 
 #### 3c-bis. Let experiences accept the structure kinds (types, description, content-free sample)
 
-The flow now loads facts of five kinds, and `visualCapabilities` takes `VisualFactRaw[]`, so the experiences types must know the new kinds before the server typechecks. This is the type-and-capability half of the catalogue change; the catalogue entries, reshapers and fingerprint follow in Task 4.
+The flow now loads facts of five kinds, and `visualCapabilities` takes `VisualFactRaw[]`, so the experiences types must know the new kinds before the server typechecks. `OutlineFact` and `EntityMapFact` are defined here (P14) and Task 4 only consumes them; the catalogue entries, reshapers, ordinals and fingerprint follow in Task 4.
 
-- [ ] **Step 12b: Extend `VisualFactRaw`, `describeFact` and the planner sample** in `packages/experiences/src/visuals.ts`.
+- [ ] **Step 12b: Write the failing capability tests, then extend `VisualFactRaw`, `describeFact` and the planner sample.**
 
-Replace the `VisualFactRaw` type with the exported members plus the two new ones (keep the three existing members' fields exactly as they are today):
+First the tests. In `packages/experiences/src/visuals.test.ts` add `import { jsonPathSelect } from "@loom-ui/hydration";`, extend the existing import from `./visuals` with `type EntityMapFact, type OutlineFact`, and add after the `TABLE` fixture (Task 4 reuses `cid`, `OUTLINE` and `MAP`):
+
+```ts
+const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const OUTLINE: OutlineFact = {
+  kind: "outline",
+  title: "Zebra Report",
+  nodes: ["Zebra-A", "Zebra-B", "Zebra-C"].map((label, i) => ({
+    id: `s${i}`,
+    label,
+    level: 1,
+    passageCount: 1,
+    firstChunkId: cid(i + 1),
+  })),
+  chunkIds: [cid(1), cid(2), cid(3)],
+  ordinal: 16,
+};
+const MAP: EntityMapFact = {
+  kind: "cooccurrence",
+  entities: ["Zebra-Ent-A", "Zebra-Ent-B", "Zebra-Ent-C"].map((name) => ({
+    name,
+    entityKind: "person",
+    passages: 2,
+  })),
+  edges: [
+    { a: 0, b: 1, weight: 2, firstChunkId: cid(1) },
+    { a: 1, b: 2, weight: 2, firstChunkId: cid(2) },
+  ],
+  chunkIds: [cid(1), cid(2)],
+  ordinal: 17,
+};
+
+describe("structure capabilities", () => {
+  it("offers each structure fact as one capability with a count-only description", () => {
+    const caps = capabilitiesOf([OUTLINE, MAP]);
+    expect(caps.map((c) => c.handle)).toEqual(["fact-16", "fact-17"]);
+    expect(caps.map((c) => c.toolSchemaHash)).toEqual([
+      `${PINS["visual.facts"]}#fact-16`,
+      `${PINS["visual.facts"]}#fact-17`,
+    ]);
+    expect(caps[0]?.description).toBe("a tree of 3 sections, 1 level deep");
+    expect(caps[1]?.description).toBe("3 named parties and 2 links between those that appear together");
+    expect(caps.every((c) => c.sensitivity === "sensitive")).toBe(true);
+    // Nothing the planner is shown carries the fact's text (the fixtures are all "Zebra...").
+    const shown = JSON.stringify(caps);
+    for (const secret of ["Zebra-A", "Zebra-B", "Zebra-C", "Zebra Report", "Zebra-Ent"])
+      expect(shown, secret).not.toContain(secret);
+  });
+
+  it("the planner sample carries placeholder nodes and edges, so a nodes or edges binding validates (P3)", () => {
+    const [outline, map] = capabilitiesOf([OUTLINE, MAP]);
+    expect(outline?.sampleOutput).toMatchObject({ kind: "outline", sections: 3, levels: 1 });
+    expect(map?.sampleOutput).toMatchObject({ kind: "cooccurrence", entities: 3, links: 2 });
+    expect(jsonPathSelect(outline?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(map?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(map?.sampleOutput, "edges").ok).toBe(true);
+    // The control: a count-only sample selects nothing, which loom-ui's planner reports as `reshape-invalid`.
+    expect(jsonPathSelect({ kind: "outline", sections: 3, levels: 1 }, "nodes").ok).toBe(false);
+  });
+});
+```
+
+Then the code. In `packages/experiences/src/visuals.ts` replace the `VisualFactRaw` type with the exported members plus the two new ones (keep the three existing members' fields exactly as they are today):
 
 ```ts
 export interface OutlineFact {
   kind: "outline";
   title: string;
-  nodes: { label: string; level: number; passageCount: number; firstChunkId: string }[];
+  nodes: { id: string; label: string; level: number; passageCount: number; firstChunkId: string }[];
   chunkIds: string[];
   ordinal: number;
 }
@@ -1690,7 +1894,7 @@ export type VisualFactRaw = (
 ) & { cites?: readonly FactCite[] };
 ```
 
-Replace `describeFact` and the `sampleOutput` line of `capability` (Plan decision: a structure capability shows counts only, because the existing `sampleOutput: f` would put heading and entity text in the planner prompt, which spec 5 forbids):
+Replace `describeFact` and the `sampleOutput` line of `capability` (Plan decision: a structure capability's sample is counts plus neutral placeholders: the existing `sampleOutput: f` would put heading and entity text in the planner prompt, which spec 5 forbids, while a count-only sample would make a `nodes` or `edges` binding select nothing):
 
 ```ts
 const depthOf = (f: OutlineFact) => Math.max(1, ...f.nodes.map((n) => n.level));
@@ -1704,18 +1908,31 @@ const describeFact = (f: VisualFactRaw) =>
         : f.kind === "cooccurrence"
           ? `${f.entities.length} named parties and ${f.edges.length} links between those that appear together`
           : "a table of facts";
-/** What the planner is shown of a fact: extracted facts show themselves; a structure fact shows counts only. */
+
+/** Neutral stand-ins for a structure fact's nodes and edges: shape only, no document text. They let the planner's JSONPath over the sample (`nodes`, `edges`) select something. */
+const OUTLINE_PLACEHOLDER = [
+  { label: "Section", level: 1 },
+  { label: "Subsection", level: 2 },
+];
+const MAP_PLACEHOLDER = {
+  nodes: [
+    { label: "Entity", group: "person" },
+    { label: "Entity", group: "organization" },
+  ],
+  edges: [{ from: "e0", to: "e1", label: "2" }],
+};
+/** What the planner is shown of a fact: extracted facts show themselves; a structure fact shows counts and placeholders only. */
 const sampleOf = (f: VisualFactRaw): unknown =>
   f.kind === "outline"
-    ? { kind: "outline", sections: f.nodes.length, levels: depthOf(f) }
+    ? { kind: "outline", sections: f.nodes.length, levels: depthOf(f), nodes: OUTLINE_PLACEHOLDER }
     : f.kind === "cooccurrence"
-      ? { kind: "cooccurrence", entities: f.entities.length, links: f.edges.length }
+      ? { kind: "cooccurrence", entities: f.entities.length, links: f.edges.length, ...MAP_PLACEHOLDER }
       : f;
 ```
-and in `capability(...)` use `sampleOutput: sampleOf(f),`. Export `OutlineFact` and `EntityMapFact` from `packages/experiences/src/index.ts` next to `VisualFactRaw`.
+and in `capability(...)` use `sampleOutput: sampleOf(f),`. Export `OutlineFact` and `EntityMapFact` from `packages/experiences/src/index.ts` next to `VisualFactRaw` (`export type { FactCite, FactOrigin, FactRef, OfferedFact, VisualFactRaw, OutlineFact, EntityMapFact } from "./visuals";`).
 
 Run: `pnpm --filter @docmind/experiences typecheck && pnpm --filter @docmind/experiences exec vitest run src/visuals.test.ts`
-Expected: PASS (nothing existing changes for the extracted kinds).
+Expected: PASS (nothing existing changes for the extracted kinds; the two new tests were red before the code).
 
 #### 3d. The step in the flow, both paths
 
@@ -1723,7 +1940,7 @@ Expected: PASS (nothing existing changes for the extracted kinds).
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError } from "../../crypto/fields";
 import { DocumentGoneError } from "../ingest-document/errors";
 import type { EntityCandidate, Mention } from "./cooccurrence";
@@ -1774,6 +1991,8 @@ function setup(over: Partial<StructureReader> = {}) {
 }
 
 describe("visualize-structure step", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("derives the outline (ordinal 16) and the entity map (ordinal 17) and replaces the structure facts", async () => {
     const s = setup();
     expect(await s.run()).toEqual({ outcome: "done", count: 2 });
@@ -1828,18 +2047,41 @@ describe("visualize-structure step", () => {
   });
 
   it("logs the count only, never a heading or a name", async () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const spies = (["info", "log", "warn", "error"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    const [info] = spies;
     await setup().run();
-    const logged = JSON.stringify(info.mock.calls);
-    expect(logged).not.toContain("Zebra");
-    expect(logged).not.toContain("Person1");
+    // The step logs exactly this one line (so the assertion below is not vacuous)...
+    expect(info?.mock.calls).toEqual([["visualize-structure facts", 2]]);
+    // ...and nothing it logs, anywhere, carries a heading, the title or an entity name.
+    const logged = JSON.stringify(spies.map((spy) => spy.mock.calls));
+    for (const secret of ["Zebra", "Person1", "Person2", "Person3"])
+      expect(logged, secret).not.toContain(secret);
   });
 });
 ```
 
 Add to `apps/server/app/flows/visualize-document/flow.test.ts`:
 
-1. In the `stack` function, add the structure reader and the store methods. Replace the `facts:` stub with:
+1. In `stack`, add the structure reader, the structure-aware store stub and the 1.0.0 flow. Change the signature and the state:
+
+```ts
+function stack(
+  replies: string[] | null,
+  o: {
+    provider?: ReturnType<typeof scripted>;
+    executionId?: string;
+    structure?: StructureReader;
+    /** Start the execution on the 1.0.0 flow, as one that was in flight at deploy was. */
+    legacy?: boolean;
+  } = {},
+) {
+  // ...unchanged down to `let held: Fact[] = [];`, then:
+  let structured: StructureFact[] = [];
+```
+
+Replace the `facts:` stub of `deps` and add the reader beside it:
 
 ```ts
     facts: {
@@ -1856,7 +2098,30 @@ Add to `apps/server/app/flows/visualize-document/flow.test.ts`:
     },
     structure: o.structure ?? noStructure(),
 ```
-declare `let structured: StructureFact[] = [];` beside `let held: Fact[] = [];`, add `structure?: StructureReader` to the `o` options type of `stack(...)`, import `type StructureFact` (from `./facts`), `type StructureReader` (from `./structure`) and `noStructure` (from `./testing`), and return `structured: () => structured` from `stack`.
+
+Replace the `buildApp(...)` call and the `run` function so both flow versions are registered (as `compose.ts` will) and the execution starts on the one asked for:
+
+```ts
+  const current = () => visualizeDocumentFlow(() => planner);
+  const legacy = () => visualizeDocumentFlow(() => planner, { legacy: true });
+  const app = buildApp(
+    { kind: "custom", eventStore: sealed },
+    { events: sealed },
+    { visualize: { flow: current(), legacyFlow: legacy(), deps } },
+  );
+  apps.push(app);
+  // ...ref and executionId unchanged, then:
+  const run = async (id: string = executionId) => {
+    const handle = await app.runtime.start(o.legacy ? legacy() : current(), ref, {
+      executionId: id as typeof executionId,
+      principal: { tenant: ref.tenantId, actor: ref.userId },
+    });
+    const state = await handle.waitForCompletion();
+    return VisualizeOutput.parse(state.variables._output);
+  };
+```
+
+and add `structured: () => structured,` to the returned object of `stack`. Imports for the file: `type StructureFact` (from `./facts`, beside `type Fact`), `type StructureReader` (from `./structure`), `noStructure` (from `./testing`, beside `childrenOf`), `flowContentHash, flowHashMatches` (from `@loom/core`, beside the `EventEnvelope` type import), and `visualizeStructureStep`, `LEGACY_VISUALIZE_STEPS` (from `./flow`).
 
 2. Add `noStructure` to `apps/server/app/flows/visualize-document/testing.ts`:
 
@@ -1872,7 +2137,7 @@ export const noStructure = (): StructureReader => ({
 });
 ```
 
-3. Update the identity test (`pins its identity`): `expect(flow.definition.version).toBe("1.1.0");` and the step ids to `["visualize-extract", "visualize-structure", "visualize-load", "visualize-commit"]`, add `visualizeStructureStep` to the imports and `expect(visualizeStructureStep.retry).toEqual(STEP_RETRY);`.
+3. Update the identity test (`pins its identity`): `expect(flow.definition.version).toBe("1.1.0");` and the step ids to `["visualize-extract", "visualize-structure", "visualize-load", "visualize-commit"]`, and add `expect(visualizeStructureStep.retry).toEqual(STEP_RETRY);` (the two imports are listed in item 1).
 
 4. Append these tests inside `describe("visualize-document flow", ...)`:
 
@@ -1939,17 +2204,17 @@ Expected: FAIL (`./structure` effect not registered in the flow, version/steps m
 `plan.ts`, change the facts imports and the load output and effect:
 
 ```ts
-import { type AnyFact, StoredEntry } from "./facts";
+import { type AnyFact, MAX_STORED_FACTS, StoredEntry } from "./facts";
 ```
-(remove `MAX_FACTS, StoredFact, type Fact` from that import), then:
+(this replaces `import { type Fact, MAX_FACTS, StoredFact } from "./facts";`: `Fact`, `MAX_FACTS` and `StoredFact` have no other use in `plan.ts`), then:
 
 ```ts
 export const LoadOutput = z
   .object({
     outcome: z.enum(["done", "document_gone", "failed"]),
     code: z.enum(FAILURE_CODES).optional(),
-    // The extracted facts (up to 16) and the structure facts (up to 2): at most 18 rows, ordinals 0..17.
-    facts: z.array(StoredEntry).max(18),
+    // The extracted facts (up to 16) and the structure facts (up to 2): at most MAX_STORED_FACTS (18) rows, ordinals 0..17.
+    facts: z.array(StoredEntry).max(MAX_STORED_FACTS),
   })
   .strict();
 ```
@@ -1986,7 +2251,7 @@ in `visualizeEffects` return:
     "visualize-load": loadEffect(deps) as unknown as Effect,
 ```
 
-`flow.ts`, add the step, the order, the version and the run logic:
+`flow.ts`: add the step, then replace `VISUALIZE_STEPS`, `runVisualize` and `visualizeDocumentFlow` (everything from `export const VISUALIZE_STEPS` to the end of the file) with the code below. The load step, the commit step, the inputs and the outputs above them are unchanged.
 
 ```ts
 export const visualizeStructureStep = step$({
@@ -1996,38 +2261,213 @@ export const visualizeStructureStep = step$({
   outputSchema: StepResult,
   retry: STEP_RETRY, // no model: it reads this document and derives
 });
-```
-`export const VISUALIZE_STEPS = [visualizeExtractStep, visualizeStructureStep, visualizeLoadStep, visualizeCommitStep];`
-In `runVisualize` replace the block from `if (extracted.model === "none")` through the `extracted.count === 0 &&` condition with:
 
-```ts
+export const VISUALIZE_STEPS = [
+  visualizeExtractStep,
+  visualizeStructureStep,
+  visualizeLoadStep,
+  visualizeCommitStep,
+];
+/** The 1.0.0 steps: what a run that was in flight at deploy was started with (it has no structure step). */
+export const LEGACY_VISUALIZE_STEPS = [visualizeExtractStep, visualizeLoadStep, visualizeCommitStep];
+
+/**
+ * extract (model, facts stored sealed) -> structure (the derived outline and entity map, no model; also on a re-plan that
+ * skips extraction) -> load (the stored facts, for the decision; skipped when there are none) -> one planner decision (over
+ * the facts and the live connections) -> commit (the plan to the document's lineage). `planner` is read after the load
+ * step, so a role that went off in between ends the run as `skipped`. A failure here never reaches the document's ingest
+ * status. `withStructure` is false only for the 1.0.0 flow (see `visualizeDocumentFlow`).
+ */
+export const runVisualize =
+  (
+    planner: () => Planner | undefined,
+    withStructure = true,
+  ): FlowRunner<VisualizeRef, VisualizeOutput> =>
+  async (ctx, input) => {
+    const extracted = await ctx.run(visualizeExtractStep, input);
+    if (extracted.outcome !== "done")
+      return { outcome: extracted.outcome, ...(extracted.code && { code: extracted.code }) };
     if (extracted.model === "none") return { outcome: "skipped" };
     // The structure facts are derived on every run (a re-plan that skips extraction included): no model, this document only.
-    const structured = await ctx.run(visualizeStructureStep, input);
-    if (structured.outcome !== "done") return { outcome: structured.outcome };
+    let derived = 0;
+    if (withStructure) {
+      const structured = await ctx.run(visualizeStructureStep, input);
+      if (structured.outcome !== "done") return { outcome: structured.outcome };
+      derived = structured.count ?? 0;
+    }
     // No facts at all (none extracted and none derived): there is nothing to load, but the connections are live data, so
     // the planner still runs, offered only the connections capability.
-    const stored = (extracted.count ?? 0) + (structured.count ?? 0);
+    const stored = (extracted.count ?? 0) + derived;
     let facts: LoadOutput["facts"] = [];
     if (stored !== 0) {
       const loaded = await ctx.run(visualizeLoadStep, input);
       if (loaded.outcome !== "done") return { outcome: loaded.outcome };
       facts = loaded.facts;
     }
+    const p = planner();
+    if (!p) return { outcome: "skipped" };
+    const plan = await planVisuals(p, facts, ctx);
+    if (plannerUnavailable(plan)) return { outcome: "failed", code: "visuals-model-unavailable" };
+    // With no facts, a plan the planner could not make (it refuses an empty plan) is just nothing to show.
+    if (
+      stored === 0 &&
+      (plan.ops.length === 0 || plan.findings.some((f) => f.severity === "error"))
+    ) {
+      // Codes only, never text: a broken connections binding must not hide behind a quiet `empty`.
+      const codes = plan.findings.filter((f) => f.severity === "error").map((f) => f.code);
+      if (codes.length > 0) console.warn("visualize connections-only plan failed", codes);
+      return { outcome: "empty" };
+    }
+    if (plan.findings.some((f) => f.severity === "error"))
+      return { outcome: "failed", code: "visuals-plan-invalid" };
+    // Facts that do not fit their widget would only hydrate as error placeholders: commit the ones that fit.
+    const byOrdinal = new Map(facts.map((f) => [f.ordinal, f]));
+    const fitted = dropUnfittingOps(plan.ops, (ref) =>
+      ref.kind === "detail" ? byOrdinal.get(ref.ordinal) : undefined,
+    );
+    logDropped("visualize", fitted.dropped);
+    if (fitted.ops.length === 0) return { outcome: "empty" };
+    const shown = fittedSummary(plan, fitted);
+    const committed = await ctx.run(visualizeCommitStep, {
+      ...input,
+      ops: fitted.ops,
+      report: shown.report,
+      ...(shown.summary && { summary: shown.summary, summaryClass: plan.summaryClass }),
+    });
+    return committed.outcome === "done" ? { outcome: "done" } : { outcome: committed.outcome };
+  };
+
+/**
+ * The flow, with the planner of this app. Flows are static modules, but the planner holds a secret and a model: per app.
+ * `legacy` builds the 1.0.0 definition (extract, load, commit; its runner never asks for the structure step) that a run in
+ * flight at deploy needs (see the Plan decision on in-flight runs); the default is 1.1.0.
+ */
+export const visualizeDocumentFlow = (
+  planner: () => Planner | undefined = () => undefined,
+  o: { legacy?: boolean } = {},
+): RegisteredFlow => ({
+  definition: flow$({
+    id: "visualize-document",
+    name: "VisualizeDocument",
+    version: o.legacy ? "1.0.0" : "1.1.0",
+    inputSchema: VisualizeInput,
+    outputSchema: VisualizeOutput,
+    steps: o.legacy ? LEGACY_VISUALIZE_STEPS : VISUALIZE_STEPS,
+  }),
+  runner: runVisualize(planner, !o.legacy) as FlowRunner<unknown, unknown>,
+});
 ```
-and change the later `extracted.count === 0 &&` to `stored === 0 &&`. Update the doc comment above `runVisualize` to read: `extract (model, facts stored sealed) -> structure (derived outline and entity map, no model) -> load (...)`. Bump `version: "1.1.0"` (see the Plan decision on in-flight runs: keep 1.0.0 registered, below) and update the `byOrdinal` typing is inferred (`LoadOutput["facts"]` entries are `AnyFact`-compatible).
+
+`byOrdinal` holds the loaded `AnyFact`s, which are structurally the experiences `VisualFactRaw` union, so `dropUnfittingOps` takes them as they are.
 
 `compose.ts`, add `import { PgStructureReader } from "./flows/visualize-document/pgStructure";` beside the other visualize imports and in the `visualize.deps` object after `facts: new PgVisualFacts(pool, fields),` add `structure: new PgStructureReader(pool, fields),`.
 
 Every other constructor of `VisualizeDeps` in tests (`start.test.ts`, `recovery.test.ts`, `runs.pg.test.ts`, `flow.test.ts`) gets `structure: noStructure()` and, where the `facts` stub is hand-written, `replaceStructure: async () => 0, listAll: async () => []`. `pnpm typecheck:tests` lists each one.
 
-- [ ] **Step 15b: Keep 1.0.0 registered (in-flight runs at deploy).** In `flow.ts` make `runVisualize(planner, withStructure = true)` skip the structure branch when `withStructure` is false, and `visualizeDocumentFlow(planner, o: { legacy?: boolean } = {})` return, for `legacy`, `version: "1.0.0"`, `steps: [visualizeExtractStep, visualizeLoadStep, visualizeCommitStep]` and `runVisualize(planner, false)`. In `compose.ts` set `visualize.legacyFlow = visualizeDocumentFlow(() => planner, { legacy: true })`; in `config.ts` add `legacyFlow?: RegisteredFlow` to the `visualize` dep type and register `...(deps.visualize?.legacyFlow ? [deps.visualize.legacyFlow] : [])` immediately BEFORE `deps.visualize.flow` in `flows` (Loom treats the last-registered version of an id as current, as for chat 1.0.0/1.1.0 in `chats/wiring.ts`). `start.ts` keeps starting by the 1.1.0 flow value. Tests: in `flow.test.ts` assert the two definitions have different `flowHash`es (or ids+versions) and in `config.test.ts` (or the nearest test of the flows list) that `legacyFlow` precedes `flow`; run a 1.0.0 execution to completion and assert it writes no structure fact and records no `visualize-structure` step. Expected: PASS.
+- [ ] **Step 15b: Keep 1.0.0 registered (in-flight runs at deploy).** `flow.ts` already builds both definitions (step 15). Wire and test the registration.
+
+`apps/server/app/config.ts`: add the optional legacy flow to the `visualize` dep, add a helper that orders the registrations, and use it where the flows list is built:
+
+```ts
+  visualize?: { flow: RegisteredFlow; legacyFlow?: RegisteredFlow; deps: VisualizeDeps };
+```
+```ts
+/**
+ * The visualize-document flows to register: the 1.0.0 flow first (when there is one), then the current one. Loom resumes an
+ * execution on the registered version whose hash matches the one recorded at its start, and treats the LAST-registered
+ * version of an id as current (as for chat 1.0.0 and 1.1.0 in `chats/wiring.ts`).
+ */
+export const visualizeFlows = (v: {
+  flow: RegisteredFlow;
+  legacyFlow?: RegisteredFlow;
+}): RegisteredFlow[] => (v.legacyFlow ? [v.legacyFlow, v.flow] : [v.flow]);
+```
+```ts
+    ...(deps.visualize ? visualizeFlows(deps.visualize) : []),
+```
+(that last line replaces `...(deps.visualize ? [deps.visualize.flow] : []),` in `flows`).
+
+`apps/server/app/compose.ts`: in the `visualize` object add, after `flow: visualizeDocumentFlow(() => planner),`:
+
+```ts
+    legacyFlow: visualizeDocumentFlow(() => planner, { legacy: true }),
+```
+`loomVisualsStarter(app.runtime, visualize.flow, ...)` and `start.ts` keep starting by the 1.1.0 flow value, so every new run records the 1.1.0 hash; runs in flight at deploy resume on 1.0.0.
+
+Tests. In `apps/server/app/config.test.ts` add (with `import { visualizeDocumentFlow } from "./flows/visualize-document/flow";` and `visualizeFlows` added to the existing `import { buildApp } from "./config";`):
+
+```ts
+describe("visualizeFlows", () => {
+  it("registers the 1.0.0 visualize flow before the current one, and only the current one without it", () => {
+    const current = visualizeDocumentFlow();
+    const legacy = visualizeDocumentFlow(undefined, { legacy: true });
+    expect(visualizeFlows({ flow: current, legacyFlow: legacy }).map((f) => f.definition.version)).toEqual([
+      "1.0.0",
+      "1.1.0",
+    ]);
+    expect(visualizeFlows({ flow: current }).map((f) => f.definition.version)).toEqual(["1.1.0"]);
+  });
+});
+```
+
+In `apps/server/app/flows/visualize-document/flow.test.ts`, inside `describe("visualize-document flow", ...)` (the `STRUCTURE_READER` fixture is the one of step 13):
+
+```ts
+  it("keeps 1.0.0 beside 1.1.0: the same flow id, its own steps and its own flow hash", () => {
+    const legacy = visualizeDocumentFlow(undefined, { legacy: true });
+    const current = visualizeDocumentFlow();
+    expect(legacy.definition.id).toBe(current.definition.id);
+    expect(legacy.definition.version).toBe("1.0.0");
+    expect(legacy.definition.steps.map((s) => s.id)).toEqual(LEGACY_VISUALIZE_STEPS.map((s) => s.id));
+    expect(legacy.definition.steps.map((s) => s.id)).toEqual([
+      "visualize-extract",
+      "visualize-load",
+      "visualize-commit",
+    ]);
+    expect(flowHashMatches(flowContentHash(current.definition), legacy.definition)).toBe(false);
+    expect(flowHashMatches(flowContentHash(legacy.definition), legacy.definition)).toBe(true);
+  });
+
+  it("finishes a run started on 1.0.0 on the legacy runner: no structure step, no structure fact", async () => {
+    const s = stack([FACTS, PLAN], { legacy: true, structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([0]);
+    expect(s.structured()).toEqual([]);
+    const log = await s.inner.read(s.executionId);
+    const started = log.find((e) => e.eventType === "EXECUTION_STARTED");
+    const recorded = (started?.payload as { flowHash: string }).flowHash;
+    const legacy = visualizeDocumentFlow(undefined, { legacy: true });
+    expect(flowHashMatches(recorded, legacy.definition)).toBe(true);
+    const steps = log
+      .filter((e) => e.eventType === "STEP_STARTED")
+      .map((e) => (e.payload as { stepId: string }).stepId);
+    expect(steps).toContain("visualize-extract");
+    expect(steps).not.toContain("visualize-structure");
+  });
+
+  it("a run started on 1.1.0 records the 1.1.0 hash and the structure step", async () => {
+    const s = stack([FACTS, PLAN], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    const log = await s.inner.read(s.executionId);
+    const started = log.find((e) => e.eventType === "EXECUTION_STARTED");
+    const recorded = (started?.payload as { flowHash: string }).flowHash;
+    expect(flowHashMatches(recorded, visualizeDocumentFlow().definition)).toBe(true);
+    expect(flowHashMatches(recorded, visualizeDocumentFlow(undefined, { legacy: true }).definition)).toBe(false);
+    const steps = log
+      .filter((e) => e.eventType === "STEP_STARTED")
+      .map((e) => (e.payload as { stepId: string }).stepId);
+    expect(steps).toContain("visualize-structure");
+  });
+```
+
+Expected: PASS. (Loom's own resume-by-hash rule is its test suite's; these tests pin DocMind's side: two registered definitions with different hashes, the legacy one without the structure step, the legacy runner never asking for it, and the registration order that makes 1.1.0 current.)
 
 - [ ] **Step 16: Run to verify pass**
 
 Run:
 ```
-pnpm --filter @docmind/server exec vitest run app/flows/visualize-document app/flows/visualize-turn app/ui app/security.test.ts
+pnpm --filter @docmind/server exec vitest run app/flows/visualize-document app/flows/visualize-turn app/ui app/security.test.ts app/config.test.ts
+pnpm --filter @docmind/experiences exec vitest run src/visuals.test.ts
 set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/flows/visualize-document app/ui
 pnpm typecheck && pnpm typecheck:tests && pnpm lint
 ```
@@ -2036,7 +2476,7 @@ Expected: PASS everywhere, pg tests run (not skipped), typecheck clean.
 - [ ] **Step 17: Commit**
 
 ```bash
-git add apps/server/app infra/migrations/0035_visual_facts_structure_kinds.sql docs/codebase-guide.md
+git add apps/server/app packages/experiences infra/migrations/0035_visual_facts_structure_kinds.sql docs/codebase-guide.md
 git commit -m "feat(visuals): structure facts (outline, co-occurrence), shared replace semantics and the visualize-structure step"
 ```
 
@@ -2048,16 +2488,16 @@ git commit -m "feat(visuals): structure facts (outline, co-occurrence), shared r
 - Create: `packages/experiences/src/structureShapes.ts`, `packages/experiences/src/structureShapes.test.ts`
 - Modify: `packages/experiences/src/visuals.ts`, `packages/experiences/src/providers.ts`, `packages/experiences/src/views.ts`
 - Modify (server): `apps/server/app/flows/visualize-document/plan.ts` (the intent)
-- Test: `packages/experiences/src/visuals.test.ts`, `packages/experiences/src/providers.test.ts`, `packages/experiences/src/views.test.ts` (existing), `apps/server/app/flows/visualize-document/{plan,fit}.test.ts`
+- Test: `packages/experiences/src/visuals.test.ts`, `packages/experiences/src/providers.test.ts`, `packages/experiences/src/views.test.ts` (existing), `apps/server/app/flows/visualize-document/{plan,fit,flow}.test.ts`
 
 **Interfaces:**
-- Consumes: the stored shapes of Task 3 (structurally the same as `VisualFactRaw` members below); `diagramProblems`, `MAX_DIAGRAM_NODES` from `@loom-ui/core`.
+- Consumes: the stored shapes of Task 3 and `OutlineFact`, `EntityMapFact`, the extended `VisualFactRaw` and the content-free sample, all defined in Task 3 step 12b (not here, P14); `diagramProblems`, `MAX_DIAGRAM_NODES` from `@loom-ui/core`.
 - Produces:
-  - `visuals.ts`: `VisualFactRaw` gains `OutlineFact = { kind: "outline"; title: string; nodes: { label: string; level: number; passageCount: number; firstChunkId: string }[]; chunkIds: string[]; ordinal: number }` and `EntityMapFact = { kind: "cooccurrence"; entities: { name: string; entityKind: string; passages: number }[]; edges: { a: number; b: number; weight: number; firstChunkId: string }[]; chunkIds: string[]; ordinal: number }` (both exported types, both also carrying `cites?`); catalogue entries `DocumentOutline` and `EntityMap` (kind `Diagram`); `VISUALS_CATALOG.id === "docmind.visuals.v3"`; `VisualEntry` includes both; reshaper families `visual-outline`, `visual-entitymap` (`${family}-${ordinal}` names in `VISUAL_SHAPES`); `fitsShape("DocumentOutline" | "EntityMap", fact)`.
+  - `visuals.ts`: catalogue entries `DocumentOutline` and `EntityMap` (kind `Diagram`); `VISUALS_CATALOG.id === "docmind.visuals.v3"`; `VisualEntry` includes both; reshaper families `visual-outline`, `visual-entitymap`, built into `VISUAL_SHAPES` only as `visual-outline-16` and `visual-entitymap-17`; `entryFitsOrdinal(entry: string, ordinal: number): boolean` (a structure entry reads only its own ordinal, any other entry ordinals 0..15); `fitsShape("DocumentOutline" | "EntityMap", fact)`.
   - `structureShapes.ts`: `outlineDiagram(f: OutlineFact): DiagramShape | null`, `entityMapDiagram(f: EntityMapFact): DiagramShape | null` where `DiagramShape = { layout: "tree" | "network"; nodes: DiagramNode[]; edges: DiagramEdge[] }` (null = does not fit).
   - `providers.ts`: `export const STRUCTURE_FORMAT = "docmind.structure@1"`; `factFormatFingerprint()` ends `+${STRUCTURE_FORMAT}`.
 
-- [ ] **Step 1: Write the failing shape tests**, create `packages/experiences/src/structureShapes.test.ts`:
+- [ ] **Step 1: Write the failing tests.** First the shape tests, create `packages/experiences/src/structureShapes.test.ts`:
 
 ```ts
 import { DiagramValue, MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
@@ -2066,16 +2506,19 @@ import { entityMapDiagram, outlineDiagram } from "./structureShapes";
 import type { EntityMapFact, OutlineFact } from "./visuals";
 
 const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const node = (label: string, level: number, n = 1) => ({
-  label,
-  level,
-  passageCount: 1,
-  firstChunkId: cid(n),
-});
+/** Outline nodes from (label, level) pairs, with the ids `s<index>` the builder gives them. */
+const nodes = (...specs: [string, number][]) =>
+  specs.map(([label, level], i) => ({
+    id: `s${i}`,
+    label,
+    level,
+    passageCount: 1,
+    firstChunkId: cid(i + 1),
+  }));
 const OUTLINE: OutlineFact = {
   kind: "outline",
   title: "Annual report",
-  nodes: [node("Intro", 1), node("Methods", 1), node("Data", 2), node("Model", 2), node("Results", 1)],
+  nodes: nodes(["Intro", 1], ["Methods", 1], ["Data", 2], ["Model", 2], ["Results", 1]),
   chunkIds: [cid(1)],
   ordinal: 16,
 };
@@ -2095,17 +2538,17 @@ const MAP: EntityMapFact = {
 };
 
 describe("outlineDiagram", () => {
-  it("is a tree rooted at the document title, with parent to child edges and the level as the group", () => {
+  it("is a tree rooted at the document title, with parent to child edges, the fact's node ids and the level as the group", () => {
     const v = outlineDiagram(OUTLINE);
     expect(v?.layout).toBe("tree");
     expect(v?.nodes[0]).toEqual({ id: "root", label: "Annual report", group: "0", kind: "document" });
-    expect(v?.nodes.map((n) => [n.label, n.group])).toEqual([
-      ["Annual report", "0"],
-      ["Intro", "1"],
-      ["Methods", "1"],
-      ["Data", "2"],
-      ["Model", "2"],
-      ["Results", "1"],
+    expect(v?.nodes.map((n) => [n.id, n.label, n.group])).toEqual([
+      ["root", "Annual report", "0"],
+      ["s0", "Intro", "1"],
+      ["s1", "Methods", "1"],
+      ["s2", "Data", "2"],
+      ["s3", "Model", "2"],
+      ["s4", "Results", "1"],
     ]);
     expect(v?.edges.map((e) => [e.from, e.to])).toEqual([
       ["root", "s0"],
@@ -2119,16 +2562,22 @@ describe("outlineDiagram", () => {
   });
 
   it("does not fit when the nesting is broken or the diagram is over loom-ui's cap", () => {
-    expect(outlineDiagram({ ...OUTLINE, nodes: [node("Deep", 2), ...OUTLINE.nodes] })).toBeNull(); // first node is level 2
-    expect(outlineDiagram({ ...OUTLINE, nodes: [node("A", 1), node("B", 3), node("C", 1)] })).toBeNull(); // a level is skipped
-    const many = Array.from({ length: MAX_DIAGRAM_NODES }, (_, i) => node(`H${i}`, 1));
+    expect(outlineDiagram({ ...OUTLINE, nodes: nodes(["Deep", 2], ["A", 1], ["B", 1]) })).toBeNull(); // first node is level 2
+    expect(outlineDiagram({ ...OUTLINE, nodes: nodes(["A", 1], ["B", 3], ["C", 1]) })).toBeNull(); // a level is skipped
+    const many = nodes(...Array.from({ length: MAX_DIAGRAM_NODES }, (_, i): [string, number] => [`H${i}`, 1]));
     expect(outlineDiagram({ ...OUTLINE, nodes: many })).toBeNull(); // the root makes 201
   });
 
+  it("does not fit when a node id repeats or is the root's", () => {
+    expect(outlineDiagram({ ...OUTLINE, nodes: OUTLINE.nodes.map((n) => ({ ...n, id: "s0" })) })).toBeNull();
+    expect(
+      outlineDiagram({ ...OUTLINE, nodes: OUTLINE.nodes.map((n, i) => (i === 1 ? { ...n, id: "root" } : n)) }),
+    ).toBeNull();
+  });
+
   it("stays a valid tree at the 120-node cap", () => {
-    const nodes = Array.from({ length: 120 }, (_, i) => node(`H${i}`, (i % 3) + 1 > 1 ? 2 : 1));
-    const fixed = nodes.map((n, i) => (i === 0 ? { ...n, level: 1 } : n));
-    const v = outlineDiagram({ ...OUTLINE, nodes: fixed });
+    const at = nodes(...Array.from({ length: 120 }, (_, i): [string, number] => [`H${i}`, i % 3 === 0 ? 1 : 2]));
+    const v = outlineDiagram({ ...OUTLINE, nodes: at });
     expect(v?.nodes).toHaveLength(121);
     expect(diagramProblems(v as never)).toEqual([]);
   });
@@ -2156,38 +2605,11 @@ describe("entityMapDiagram", () => {
 });
 ```
 
-Add to `packages/experiences/src/visuals.test.ts` (extend the existing import from `./visuals` with `type EntityMapFact, type OutlineFact`, and `refIdOf` is not needed):
+Then the catalogue, reshaper, fit and provider tests, in `packages/experiences/src/visuals.test.ts`. Extend the existing import from `./visuals` with `entryFitsOrdinal`. (The module-level `cid`, `OUTLINE` and `MAP` fixtures and the capability tests were added in Task 3 step 12b; do not redefine them.) Add:
 
 ```ts
 describe("structure widgets", () => {
-  const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
   const doc = "11111111-1111-4111-8111-111111111111";
-  const OUTLINE: OutlineFact = {
-    kind: "outline",
-    title: "Zebra Report",
-    nodes: ["Zebra-A", "Zebra-B", "Zebra-C"].map((label, i) => ({
-      label,
-      level: 1,
-      passageCount: 1,
-      firstChunkId: cid(i + 1),
-    })),
-    chunkIds: [cid(1), cid(2), cid(3)],
-    ordinal: 16,
-  };
-  const MAP: EntityMapFact = {
-    kind: "cooccurrence",
-    entities: ["Zebra-Ent-A", "Zebra-Ent-B", "Zebra-Ent-C"].map((name) => ({
-      name,
-      entityKind: "person",
-      passages: 2,
-    })),
-    edges: [
-      { a: 0, b: 1, weight: 2, firstChunkId: cid(1) },
-      { a: 1, b: 2, weight: 2, firstChunkId: cid(2) },
-    ],
-    chunkIds: [cid(1), cid(2)],
-    ordinal: 17,
-  };
   const cites = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
       documentId: doc,
@@ -2234,52 +2656,56 @@ describe("structure widgets", () => {
     expect(fitsShape("DocumentOutline", undefined)).toBe(false);
     expect(fitsShape("EntityMap", MAP)).toBe(true);
     expect(fitsShape("EntityMap", OUTLINE)).toBe(false);
-    expect(fitsShape("EntityMap", { ...MAP, edges: [{ a: 0, b: 9, weight: 2, firstChunkId: cid(1) }] })).toBe(false);
+    expect(
+      fitsShape("EntityMap", { ...MAP, edges: [{ a: 0, b: 9, weight: 2, firstChunkId: cid(1) }] }),
+    ).toBe(false);
     expect(fitsShape("FigureChart", OUTLINE)).toBe(false); // an outline fits no extracted-fact widget
     expect(fitsShape("KeyFigure", MAP)).toBe(false);
   });
 
-  it("offers each structure fact as one capability with a content-free description and sample", () => {
-    const caps = capabilitiesOf([OUTLINE, MAP]);
-    expect(caps.map((c) => c.handle)).toEqual(["fact-16", "fact-17"]);
-    expect(caps.map((c) => c.toolSchemaHash)).toEqual([
-      `${PINS["visual.facts"]}#fact-16`,
-      `${PINS["visual.facts"]}#fact-17`,
-    ]);
-    const text = JSON.stringify(caps);
-    for (const secret of ["Zebra-A", "Zebra-Report", "Zebra Report", "Zebra-Ent"])
-      expect(text, secret).not.toContain(secret);
-    expect(caps[0]?.description).toBe("a tree of 3 sections, 1 level deep");
-    expect(caps[1]?.description).toBe("3 named parties and 2 links between those that appear together");
-    expect(caps.every((c) => c.sensitivity === "sensitive")).toBe(true);
+  it("builds the structure reshapers only at their reserved ordinals, and an entry reads only its own ordinal (P2)", () => {
+    const keys = Object.keys(VISUAL_SHAPES);
+    for (const k of ["visual-outline-16", "visual-entitymap-17", "visual-kpi-15", "visual-table-0"])
+      expect(keys, k).toContain(k);
+    for (const k of [
+      "visual-outline-17",
+      "visual-outline-3",
+      "visual-entitymap-16",
+      "visual-entitymap-0",
+      "visual-kpi-16",
+      "visual-bar-17",
+      "visual-trend-16",
+      "visual-table-16",
+    ])
+      expect(keys, k).not.toContain(k);
+    expect([16, 17, 3].map((n) => entryFitsOrdinal("DocumentOutline", n))).toEqual([true, false, false]);
+    expect([16, 17, 0].map((n) => entryFitsOrdinal("EntityMap", n))).toEqual([false, true, false]);
+    expect([0, 15, 16, 17].map((n) => entryFitsOrdinal("KeyFigure", n))).toEqual([true, true, false, false]);
+    expect([0, 15, 16, 17].map((n) => entryFitsOrdinal("FactTable", n))).toEqual([true, true, false, false]);
   });
 
   it("a provider reads the fact by ordinal for either entry", () => {
     expect(factProvider(16, doc, "DocumentOutline").reshaping).toMatchObject({ scriptRef: "visual-outline-16" });
     expect(factProvider(17, doc, "EntityMap").reshaping).toMatchObject({ scriptRef: "visual-entitymap-17" });
-    expect(Object.keys(VISUAL_SHAPES)).toContain("visual-outline-16");
-    expect(Object.keys(VISUAL_SHAPES)).toContain("visual-entitymap-17");
   });
 });
 ```
 
-and in the existing "the fact catalogue (chat)" test change `expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v2");` to `"docmind.visuals.v3"`, and in "resolves every entry on web and terminal" append to the expected list: `["DocumentOutline", "Diagram"], ["EntityMap", "Diagram"],`.
-
-Add the chat guard's companion beside the existing sha256 test (the existing test stays exactly as is):
+In the same file, change the existing "the fact catalogue (chat)" test's `expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v2");` to `"docmind.visuals.v3"`; in "resolves every entry on web and terminal" append `["DocumentOutline", "Diagram"], ["EntityMap", "Diagram"],` to the expected list; and change the existing test "register all 64 names" to:
 
 ```ts
-  it("keeps chat's id and entries even though the document catalogue grew", () => {
-    expect(FACT_VISUALS_CATALOG.id).toBe("docmind.visuals.v1");
-    expect(FACT_VISUALS_CATALOG.entries.map((e) => e.name)).toEqual([
-      "FigureChart",
-      "FigureTrend",
-      "KeyFigure",
-      "FactTable",
-    ]);
+  it("register all 66 names: the four fact families at ordinals 0..15, plus the outline at 16 and the map at 17", () => {
+    expect(Object.keys(VISUAL_SHAPES)).toHaveLength(66);
+    for (const f of ["bar", "trend", "kpi", "table"])
+      for (let n = 0; n < 16; n++) expect(() => shapeOf(`visual-${f}-${n}`, [])).toThrow("missing");
+    expect(() => shapeOf("visual-outline-16", [])).toThrow("missing");
+    expect(() => shapeOf("visual-entitymap-17", [])).toThrow("missing");
   });
 ```
 
-Replace the first test of `packages/experiences/src/providers.test.ts` with:
+(The existing chat-catalogue tests already assert the chat id `docmind.visuals.v1`, its four entries and the sha256 guard: no companion test is added, P12.)
+
+The fingerprint test: replace the first test of `packages/experiences/src/providers.test.ts` with:
 
 ```ts
 import { PINS, STRUCTURE_FORMAT, factFormatFingerprint } from "./providers";
@@ -2294,11 +2720,174 @@ describe("factFormatFingerprint", () => {
     expect(factFormatFingerprint().length).toBeLessThanOrEqual(200);
   });
 ```
-(keep the rest of the file; its second test still holds.)
+(keep the rest of the file; its second test still holds).
 
-Add a `views` test (in the existing `packages/experiences/src/views.test.ts`, following how it builds a visuals experience for `turnWithVisuals`/`detailWithVisuals`; copy the closest existing helper there and bind a node of type `DocumentOutline` to a provider pinned `docmind:visual.facts@1#<doc>/fact-16`): `detailWithVisuals` keeps the node under a `fact-16` provider reading `visual-outline-16`, and `turnWithVisuals` returns null for a head whose only node is a `DocumentOutline`.
+The views tests, in `packages/experiences/src/views.test.ts`. Inside `describe("detailWithVisuals", ...)`, before the test "compiles for web and terminal with no findings", add (it uses that describe's `visualsOf`, `kf`, `node`, `DOC`):
 
-Add to `apps/server/app/flows/visualize-document/flow.test.ts` (inside `describe("visualize-document flow", ...)`, using `STRUCTURE_READER` from Task 3) the tests that plan the outline:
+```ts
+  it("adopts the outline at fact-16 and the entity map at fact-17 with their own reshapers, and no other pairing (P2)", () => {
+    const exp = detailWithVisuals(
+      visualsOf([
+        kf("o", "DocumentOutline", "fact-16"),
+        kf("m", "EntityMap", "fact-17"),
+        kf("swap", "DocumentOutline", "fact-17"), // a structure entry on the other structure fact
+        kf("low", "DocumentOutline", "fact-3"), // a structure entry on an extracted fact
+        kf("high", "KeyFigure", "fact-16"), // a fact entry on a structure fact
+      ]),
+      DOC,
+    );
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-o", "v-m"]);
+    expect(exp.providers["fact-16"]).toEqual(factProvider(16, DOC, "DocumentOutline"));
+    expect(exp.providers["fact-17"]).toEqual(factProvider(17, DOC, "EntityMap"));
+    expect((exp.providers["fact-16"]?.reshaping as { scriptRef: string }).scriptRef).toBe("visual-outline-16");
+    expect((exp.providers["fact-17"]?.reshaping as { scriptRef: string }).scriptRef).toBe("visual-entitymap-17");
+    // the dropped pairings left no provider behind
+    for (const h of ["fact-16-b", "fact-17-b", "fact-3"]) expect(exp.providers[h], h).toBeUndefined();
+  });
+```
+
+and inside `describe("turnWithVisuals", ...)`, after the test "gives two entries over one fact separate providers" (uses that describe's `node`, `planned`, `experience`, `CHAT`, `A`, `live`):
+
+```ts
+  it("never adopts a structure widget or a structure ordinal in chat", () => {
+    const e = experience(
+      [
+        node("n1", "DocumentOutline", "p-a"),
+        node("n2", "EntityMap", "p-b"),
+        node("n3", "KeyFigure", "p-c"),
+      ],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-16`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${A}/fact-17`),
+        planned("p-c", "visual.facts", `docmind:visual.facts@1#${A}/fact-16`),
+      ],
+    );
+    // a structure entry is not a chat entry, and a fact entry may not read a structure ordinal: nothing is left
+    expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
+  });
+```
+
+The fit test, in `apps/server/app/flows/visualize-document/fit.test.ts` (merge the type imports: `import type { FactRef, VisualFactRaw } from "@docmind/experiences";` and `import type { Fact, StructureFact } from "./facts";`), after `byOrdinal`:
+
+```ts
+const OUTLINE: StructureFact = {
+  kind: "outline",
+  title: "Zebra Report",
+  nodes: ["A", "B", "C"].map((label, i) => ({
+    id: `s${i}`,
+    label,
+    level: 1,
+    passageCount: 1,
+    firstChunkId: CHUNK,
+  })),
+  chunkIds: [CHUNK],
+  ordinal: 16,
+};
+const lookupOf = (facts: readonly VisualFactRaw[]) => (ref: FactRef) =>
+  ref.kind === "detail" ? facts.find((f) => f.ordinal === ref.ordinal) : undefined;
+```
+and inside `describe("dropUnfittingOps", ...)`:
+
+```ts
+  it("keeps a DocumentOutline bound to the outline fact and drops it when fact-16 holds something else", async () => {
+    const outlineNode = {
+      ...node("outline", "DocumentOutline", "fact-16"),
+      span: 12,
+      binding: { capability: "fact-16", arguments: {}, path: "nodes", priority: "P1" },
+    };
+    const p = await planVisuals(
+      new ReferencePlanner({
+        model: scriptedPlannerModel([JSON.stringify({ summary: "s", nodes: [outlineNode] })]),
+        modelId: "t",
+      }),
+      [FIGURE, OUTLINE],
+      recording(),
+    );
+    expect(p.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const kept = dropUnfittingOps(p.ops, lookupOf([FIGURE, OUTLINE]));
+    expect(inserted(kept.ops)).toEqual(["outline"]);
+    expect(kept.dropped).toEqual([]);
+    // fact-16 now holds a figure: an outline widget does not fit it
+    const gone = dropUnfittingOps(p.ops, lookupOf([FIGURE, { ...FIGURE, ordinal: 16 }]));
+    expect(inserted(gone.ops)).toEqual([]);
+    expect(gone.dropped).toEqual(["DocumentOutline"]);
+    // and a fact that is gone fits nothing
+    expect(inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE])).ops)).toEqual([]);
+  });
+```
+
+The planning tests, in `apps/server/app/flows/visualize-document/plan.test.ts` (add `ENTITY_MAP_ORDINAL, OUTLINE_ORDINAL, type StructureFact` to the import from `./facts`, and `import { shape } from "@docmind/experiences";` merged with the existing `@docmind/experiences` import):
+
+```ts
+describe("planning the structure facts", () => {
+  const chunk = FIGURE.chunkIds[0] as string;
+  const OUTLINE: StructureFact = {
+    kind: "outline",
+    title: "Zebra Report",
+    nodes: ["A", "B", "C"].map((label, i) => ({ id: `s${i}`, label, level: 1, passageCount: 1, firstChunkId: chunk })),
+    chunkIds: [chunk],
+    ordinal: OUTLINE_ORDINAL,
+  };
+  const MAP: StructureFact = {
+    kind: "cooccurrence",
+    entities: ["P1", "P2", "P3"].map((name) => ({ name, entityKind: "person" as const, passages: 2 })),
+    edges: [
+      { a: 0, b: 1, weight: 2, firstChunkId: chunk },
+      { a: 1, b: 2, weight: 2, firstChunkId: chunk },
+    ],
+    chunkIds: [chunk],
+    ordinal: ENTITY_MAP_ORDINAL,
+  };
+  const bind = (id: string, type: string, capability: string, path: string) => ({
+    id,
+    type,
+    label: id,
+    span: 12,
+    props: {},
+    binding: { capability, arguments: {}, path, priority: "P1" },
+  });
+
+  it("plans an outline bound at nodes and a map bound at edges, with no reshape-invalid (P3)", async () => {
+    const planner = new ReferencePlanner({
+      model: scriptedPlannerModel([
+        draft(
+          [bind("outline", "DocumentOutline", "fact-16", "nodes"), bind("map", "EntityMap", "fact-17", "edges")],
+          "The structure",
+        ),
+      ]),
+      modelId: "t",
+    });
+    const plan = await planVisuals(planner, [FIGURE, OUTLINE, MAP], recording());
+    expect(plan.findings.map((f) => f.code)).not.toContain("reshape-invalid");
+    expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const inserted = (plan.ops as { type: string; node?: { id: string } }[])
+      .filter((o) => o.type === "insertNode")
+      .map((o) => o.node?.id);
+    expect(inserted).toEqual(["outline", "map"]);
+  });
+
+  it("the server's reserved ordinals are the ones the experiences reshapers serve", () => {
+    expect(() => shape(`visual-outline-${OUTLINE_ORDINAL}`, [OUTLINE])).not.toThrow();
+    expect(() => shape(`visual-entitymap-${ENTITY_MAP_ORDINAL}`, [MAP])).not.toThrow();
+  });
+});
+```
+
+And the intent test, appended to the same file:
+
+```ts
+describe("the intent", () => {
+  it("tells the planner when to show the outline and the entity map, and when to leave them out", () => {
+    expect(VISUALS_INTENT.objective).toContain("DocumentOutline");
+    expect(VISUALS_INTENT.objective).toContain("EntityMap");
+    expect(VISUALS_INTENT.objective).toMatch(/long, sectioned documents/);
+    expect(VISUALS_INTENT.objective).toMatch(/short or flat documents/);
+  });
+});
+```
+(`VISUALS_INTENT` is already imported by `plan.test.ts`.)
+
+The flow tests, in `apps/server/app/flows/visualize-document/flow.test.ts` (inside `describe("visualize-document flow", ...)`, using `STRUCTURE_READER` from Task 3 step 13). The path is `nodes`: it validates against the placeholder sample of step 12b.
 
 ```ts
   const OUTLINE_NODE = {
@@ -2332,24 +2921,9 @@ Add to `apps/server/app/flows/visualize-document/flow.test.ts` (inside `describe
   });
 ```
 
-Add to `apps/server/app/flows/visualize-document/plan.test.ts`:
-
-```ts
-describe("the intent", () => {
-  it("tells the planner when to show the outline and the entity map, and when to leave them out", async () => {
-    const { VISUALS_INTENT } = await import("./plan");
-    expect(VISUALS_INTENT.objective).toContain("DocumentOutline");
-    expect(VISUALS_INTENT.objective).toContain("EntityMap");
-    expect(VISUALS_INTENT.objective).toMatch(/long, sectioned documents/);
-    expect(VISUALS_INTENT.objective).toMatch(/short or flat documents/);
-  });
-});
-```
-and to `fit.test.ts` a test that `dropUnfittingOps` keeps a `DocumentOutline` node bound to an outline fact and drops it when bound to a figure (mirror the existing KeyFigure/series test there: build the ops with its `node(...)` helper using `type: "DocumentOutline"`, `capability` `fact-16`, and a `factOf` returning the outline fact or a figure).
-
 - [ ] **Step 2: Run to verify failure**
 
-Run: `pnpm --filter @docmind/experiences exec vitest run src/structureShapes.test.ts src/visuals.test.ts src/providers.test.ts src/views.test.ts && pnpm --filter @docmind/server exec vitest run app/flows/visualize-document/plan.test.ts app/flows/visualize-document/fit.test.ts`
+Run: `pnpm --filter @docmind/experiences exec vitest run src/structureShapes.test.ts src/visuals.test.ts src/providers.test.ts src/views.test.ts && pnpm --filter @docmind/server exec vitest run app/flows/visualize-document/plan.test.ts app/flows/visualize-document/fit.test.ts app/flows/visualize-document/flow.test.ts`
 Expected: FAIL (`./structureShapes` missing, catalogue still v2).
 
 - [ ] **Step 3: Implement the diagram builders**, create `packages/experiences/src/structureShapes.ts`:
@@ -2380,22 +2954,22 @@ const accepted = (v: DiagramShape): DiagramShape | null =>
   v.nodes.length <= MAX_DIAGRAM_NODES && diagramProblems(v).length === 0 ? v : null;
 
 /**
- * The document's sections as a tree: a root for the title, one node per section (group = its level), an edge from each
- * node's parent. The parent is the nearest earlier node one level up, so a first node below level 1 or a skipped level
- * does not fit. Labels are text only.
+ * The document's sections as a tree: a root for the title, one node per section under the fact's own node id (group = its
+ * level), an edge from each node's parent. The parent is the nearest earlier node one level up, so a first node below level 1
+ * or a skipped level does not fit; an id that repeats or is "root" does not fit either (`diagramProblems`: unique ids).
+ * Labels are text only.
  */
 export function outlineDiagram(f: OutlineFact): DiagramShape | null {
   const nodes: DiagramNode[] = [{ id: "root", label: f.title, group: "0", kind: "document" }];
   const edges: DiagramEdge[] = [];
   const open = ["root"]; // open[level] is the latest node id at that level
-  for (const [i, n] of f.nodes.entries()) {
+  for (const n of f.nodes) {
     const parent = open[n.level - 1];
     if (parent === undefined) return null;
-    const id = `s${i}`;
-    nodes.push({ id, label: n.label, group: String(n.level), kind: "section" });
-    edges.push({ from: parent, to: id });
+    nodes.push({ id: n.id, label: n.label, group: String(n.level), kind: "section" });
+    edges.push({ from: parent, to: n.id });
     open.length = n.level;
-    open.push(id);
+    open.push(n.id);
   }
   return accepted({ layout: "tree", nodes, edges });
 }
@@ -2422,10 +2996,10 @@ export function entityMapDiagram(f: EntityMapFact): DiagramShape | null {
 `packages/experiences/src/visuals.ts`:
 
 1. Add the import `import { entityMapDiagram, outlineDiagram } from "./structureShapes";` (below `import { KIND, PINS, provider } from "./providers";`).
-2. (Done in Task 3 step 12b: `OutlineFact`, `EntityMapFact`, the extended `VisualFactRaw`.)
+2. (Done in Task 3 step 12b, P14: `OutlineFact`, `EntityMapFact`, the extended `VisualFactRaw`.)
 3. `ENTRIES`: after `["ConnectionMap", "Diagram"],` add `["DocumentOutline", "Diagram"],` and `["EntityMap", "Diagram"],`.
 4. `VISUALS_CATALOG` id: `"docmind.visuals.v3"`. Leave `FACT_ENTRY_NAMES`, `FACT_VISUALS_CATALOG` and the `catalogOf` helper untouched (the chat catalogue is built from the four fact names only, so its bytes do not change).
-5. (Done in Task 3 step 12b: `describeFact`, `depthOf` and `sampleOf`.)
+5. (Done in Task 3 step 12b: `describeFact`, `depthOf`, the placeholders and `sampleOf`.)
 6. `VisualEntry` and `FAMILY`:
 
 ```ts
@@ -2444,6 +3018,15 @@ const FAMILY: Record<VisualEntry, string> = {
   DocumentOutline: "visual-outline",
   EntityMap: "visual-entitymap",
 };
+/** The reserved ordinal each structure entry reads (the server's `OUTLINE_ORDINAL` and `ENTITY_MAP_ORDINAL`: experiences does not import the server; a server test pins them equal). */
+const STRUCTURE_ORDINAL: Partial<Record<VisualEntry, number>> = { DocumentOutline: 16, EntityMap: 17 };
+/** True when `entry` may read the fact at `ordinal`: a structure entry only its own reserved ordinal, any other entry the extracted ones (0..15). */
+export const entryFitsOrdinal = (entry: string, ordinal: number): boolean => {
+  const own = STRUCTURE_ORDINAL[entry as VisualEntry];
+  return own !== undefined
+    ? ordinal === own
+    : Number.isInteger(ordinal) && ordinal >= 0 && ordinal < MAX_VISUAL_FACTS;
+};
 ```
 7. Two entries in `TO`, after `"visual-table"`:
 
@@ -2457,7 +3040,32 @@ const FAMILY: Record<VisualEntry, string> = {
     return v === null ? wrong() : { ...v, ...refsOf(f) };
   },
 ```
-`refsOf` already caps at 16 distinct cites in the fact's order; `fitsShape` and `VISUAL_SHAPES` pick the entries up through `FAMILY`/`TO`.
+`refsOf` already caps at 16 distinct cites in the fact's order; `fitsShape` picks the entries up through `FAMILY`/`TO`.
+
+8. `VISUAL_SHAPES` (P2): replace the `Array.from({ length: MAX_VISUAL_FACTS }, ...)` that builds each family's names so a structure family is built only at its reserved ordinal (the table today would otherwise stop at 15, and a plain widening would also create `visual-kpi-16` and `visual-outline-3`):
+
+```ts
+/** The ordinals a reshaper family serves: an extracted-fact family 0..15, a structure family exactly its reserved one. */
+const ordinalsOf = (family: string): number[] => {
+  const entry = (Object.keys(FAMILY) as VisualEntry[]).find((e) => FAMILY[e] === family);
+  const own = entry === undefined ? undefined : STRUCTURE_ORDINAL[entry];
+  return own !== undefined ? [own] : Array.from({ length: MAX_VISUAL_FACTS }, (_, n) => n);
+};
+
+export const VISUAL_SHAPES: Record<string, (raw: never) => unknown> = Object.fromEntries(
+  Object.entries(TO).flatMap(([family, to]) =>
+    ordinalsOf(family).map((n) => [
+      `${family}-${n}`,
+      (raw: VisualFactRaw[]) => {
+        const f = raw.find((x) => x.ordinal === n);
+        if (!f) throw new Error("visual fact missing");
+        return to(f);
+      },
+    ]),
+  ),
+);
+```
+`MAX_VISUAL_FACTS` stays 16: it is the extraction bound, not a bound on stored ordinals.
 
 `packages/experiences/src/providers.ts`, add above `factFormatFingerprint` and extend it:
 
@@ -2484,8 +3092,9 @@ const FACT_ENTRIES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"];
 const DETAIL_ENTRIES = new Set<string>([...FACT_ENTRIES, "DocumentOutline", "EntityMap"]);
 const TURN_ENTRIES = new Set<string>(FACT_ENTRIES);
 ```
+- In the import from `./visuals` replace `MAX_VISUAL_FACTS,` (no other use in `views.ts`) with `entryFitsOrdinal,`, in biome's order: `type FactRef, type VisualEntry, entryFitsOrdinal, factProvider, factRefOfPin, turnFactProvider`.
 - In `interface Adopt<R>` add `/** The catalogue entries this host draws. */ entries: ReadonlySet<string>;`
-- In `adoptVisuals` change `!VISUAL_ENTRIES.has(n.type)` to `!o.entries.has(n.type)`.
+- In `adoptVisuals` replace the condition `ref.ordinal >= MAX_VISUAL_FACTS || !VISUAL_ENTRIES.has(n.type)` with `!o.entries.has(n.type) || !entryFitsOrdinal(n.type, ref.ordinal)` (P2: a fact entry only reads ordinals below 16, `DocumentOutline` only 16, `EntityMap` only 17).
 - In `detailWithVisuals`'s `adoptVisuals(visuals, { ... })` object add `entries: DETAIL_ENTRIES,`; in `turnWithVisuals`'s add `entries: TURN_ENTRIES,`.
 
 `apps/server/app/flows/visualize-document/plan.ts`, replace `VISUALS_INTENT.objective` with:
@@ -2506,7 +3115,7 @@ Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: clean (`pnpm lint:fix` for formatting only).
 
 ```bash
-git add packages/experiences apps/server/app/flows/visualize-document/plan.ts apps/server/app/flows/visualize-document/plan.test.ts apps/server/app/flows/visualize-document/fit.test.ts
+git add packages/experiences apps/server/app/flows/visualize-document/plan.ts apps/server/app/flows/visualize-document/plan.test.ts apps/server/app/flows/visualize-document/fit.test.ts apps/server/app/flows/visualize-document/flow.test.ts
 git commit -m "feat(visuals): DocumentOutline and EntityMap on catalogue docmind.visuals.v3 (reshapers, fit check, capabilities, fingerprint)"
 ```
 
@@ -2698,9 +3307,9 @@ with
 and add this bullet after the **Extract.** bullet:
 
 ```
-- **Structure.** The `visualize-structure` step (no model call, `STEP_RETRY`) runs after extract, and on a re-plan that skips extraction too. It reads only this document under the owner's key and derives two sealed facts stored in `visual_facts` on reserved ordinals: the **outline** ((ordinal 16); the passages' heading paths as a tree, at most 120 nodes, labels clipped to 80 characters, deepest levels pruned first with their passage counts folded into the parent, none for fewer than 3 headings) and the **entity map** ((ordinal 17); the 20 most-mentioned entities, an edge for each pair sharing at least 2 passages, the 40 strongest edges, entities left with no edge dropped, none for fewer than 3 linked). Extraction keeps its 16 facts (ordinals 0..15), and `PgVisualFacts.replace` and `replaceStructure` each own their own ordinal range, so neither wipes the other. Migration 0035 relaxes the table's `kind` and `ordinal` CHECKs for them (the `kind` column carries `outline` / `cooccurrence`; the sealed fact's own `kind` is authoritative). `list` returns extracted facts only (chat and the extraction re-plan check); `listAll` returns everything (load, the UI reader). A heading or entity name that does not open skips that one fact; a key-store outage fails the step. The entity query (`pgStructure.ts`) is owner-scoped and walks out from this document (`chunks_document_ordinal_key`, then the `chunk_entities` primary key), opening names only for the ranked few.
+- **Structure.** The `visualize-structure` step (no model call, `STEP_RETRY`) runs after extract, and on a re-plan that skips extraction too. It reads only this document under the owner's key and derives two sealed facts stored in `visual_facts` on reserved ordinals: the **outline** (ordinal 16; the passages' heading paths as a tree, at most 120 nodes, labels clipped to 80 characters, deepest levels pruned first with their passage counts folded into the parent, none for fewer than 3 headings) and the **entity map** (ordinal 17; the 20 most-mentioned entities, an edge for each pair sharing at least 2 passages, the 40 strongest edges, entities left with no edge dropped, none for fewer than 3 linked). Extraction keeps its 16 facts (ordinals 0..15), and `PgVisualFacts.replace` and `replaceStructure` each own their own ordinal range, so neither wipes the other. Migration 0035 relaxes the table's `kind` and `ordinal` CHECKs for them (the `kind` column carries `outline` / `cooccurrence`; the sealed fact's own `kind` is authoritative). `list` returns extracted facts only (chat and the extraction re-plan check); `listAll` returns everything (load, the UI reader). A heading or entity name that does not open skips that one fact; a key-store outage fails the step. The entity query (`pgStructure.ts`) is owner-scoped and walks out from this document (`chunks_document_ordinal_key`, then the `chunk_entities` primary key), opening names only for the ranked few.
 ```
-and extend the **Plan.** bullet's end with: ` The planner is offered the structure facts as capabilities whose description and sample are counts only (never a heading or a name), and \`VISUALS_INTENT\` says to show an outline for long, sectioned documents and an entity map when several parties interact.` Update the final sentence of the **Connections.** bullet (`Catalogue ids: ...`) to: `Catalogue ids: the chat catalogue keeps \`docmind.visuals.v1\` (byte-identical, sha256-guarded; chat never offers a structure widget); the document catalogue, which adds the two connections types and \`DocumentOutline\` and \`EntityMap\` (both loom-ui \`Diagram\`), is \`docmind.visuals.v3\`.` and the **Fact-format re-plan.** bullet's first sentence's list of fingerprint parts to add `and the structure format (\`docmind.structure@1\`)`; add: `The structure release re-plans every visualized document once (one planner call each, at most 2 at a time, no extraction): the step derives the structure facts first.`
+and extend the **Plan.** bullet's end with: ` The planner is offered the structure facts as capabilities whose description is counts only and whose sample is counts plus neutral placeholder nodes and edges (never a heading or a name), and \`VISUALS_INTENT\` says to show an outline for long, sectioned documents and an entity map when several parties interact.` Update the final sentence of the **Connections.** bullet (`Catalogue ids: ...`) to: `Catalogue ids: the chat catalogue keeps \`docmind.visuals.v1\` (byte-identical, sha256-guarded; chat never offers a structure widget); the document catalogue, which adds the two connections types and \`DocumentOutline\` and \`EntityMap\` (both loom-ui \`Diagram\`), is \`docmind.visuals.v3\`.` and the **Fact-format re-plan.** bullet's first sentence's list of fingerprint parts to add `and the structure format (\`docmind.structure@1\`)`; add: `The structure release re-plans every visualized document once (one planner call each, at most 2 at a time, no extraction): the step derives the structure facts first.`
 
 `docs/specs/2026-11-08-document-visuals-design.md`, §10: replace the sentence
 
@@ -2725,8 +3334,9 @@ and append at the end of the file a section:
   and `ordinal` CHECKs of 0026 (`kind` also allows `outline` and `cooccurrence`; `ordinal` 0..17); the sealed fact's `kind` decides.
 - `DocumentOutline` (Diagram, tree) and `EntityMap` (Diagram, network) are in the document catalogue `docmind.visuals.v3`;
   the chat catalogue `FACT_VISUALS_CATALOG` is byte-identical (sha256 guard). Their reshapers (`structureShapes.ts`) pass
-  loom-ui's `diagramProblems`, and `fitsShape` drops a misfit before commit.
-- The planner sees counts only for a structure capability. `factFormatFingerprint()` ends `+docmind.structure@1`, which makes
+  loom-ui's `diagramProblems`, and `fitsShape` drops a misfit before commit. `VISUAL_SHAPES` serves them only at ordinals 16
+  and 17, and a document page adopts an entry only on its own ordinal (`entryFitsOrdinal`).
+- The planner sees counts and neutral placeholders only for a structure capability (never a heading or a name). `factFormatFingerprint()` ends `+docmind.structure@1`, which makes
   the boot stale pass re-plan each visualized document once.
 - Not done in c1: timeline and relationships (c2), diagrams in chat, cross-document structure.
 ```
@@ -2759,28 +3369,30 @@ git commit -m "test(visuals): structure diagrams end to end; docs for phase c1"
 | 1 Goal (outline, entity map on the Visuals tab) | Tasks 3 to 5; e2e in Task 5 |
 | 2 S1 (existing data only, no model call) | Task 3 step (`structure.ts` makes no model call; flow test asserts 2 requests); Global Constraints |
 | 2 S2 (derived at visualize time, stored) | Task 3 (step + `replaceStructure`); never live at hydrate |
-| 2 S3 (two kinds `outline`, `cooccurrence`, sealed, cite passages, never sent to a model as text) | Task 3 3a (zod, `chunkIds`), 3b (sealed, pg test), Task 4 (counts-only sample; test asserts no text in capabilities) |
+| 2 S3 (two kinds `outline`, `cooccurrence`, sealed, cite passages, never sent to a model as text) | Task 3 3a (zod, `StructureOrdinal`, `chunkIds`), 3b (sealed, pg test), step 12b (counts-and-placeholders sample; tests assert no fact text in the capabilities and that `nodes`/`edges` validate) |
 | 2 S4 (two catalogue entries on Diagram) | Task 4 (`ENTRIES`, reshaper families, tests) |
-| 2 S5 (document visuals only; chat catalogue byte-identical, sha256 guard) | Task 4 (catalogue untouched, `TURN_ENTRIES`, guard test unchanged plus companion), Task 3 (`list` extracted-only) |
+| 2 S5 (document visuals only; chat catalogue byte-identical, sha256 guard) | Task 4 (catalogue untouched, `TURN_ENTRIES` and `entryFitsOrdinal`, the existing id/entries/sha256 tests unchanged, the chat views test), Task 3 (`list` extracted-only) |
 | 2 S6 (rollout reuses the format re-plan; v3; fingerprint changes) | Task 4 (`STRUCTURE_FORMAT`, id v3, fingerprint test); Task 5 docs |
-| 2 S7 (one migration 0035 relaxing the kind and ordinal CHECKs, no table) | Task 3 3a (migration and its pg test), 3b (`columnKind`), Plan decisions |
+| 2 S7 (one migration 0035 relaxing the kind and ordinal CHECKs, no table) | Task 3 3b (migration step 4b and its pg test; the column carries the fact's own kind), Plan decisions |
 | 3 outline (nodes, root, order, duplicates, cap 120, pruning, fold, <3) | Task 1 (all cases tested) |
 | 3 co-occurrence (counts, top 20, ties by name, edges >=2, 40, isolated dropped, <3 linked) | Task 2 (tested); query in Task 3 3c |
-| 3 Storage (replace beside extracted, own ordinals, cite passages, re-plan path re-derives) | Task 3 3b and 3d (store tests; flow re-run test) |
+| 3 Storage (replace beside extracted, own ordinals, cite passages, re-plan path re-derives) | Task 3 3b and 3d (store tests with disjoint ordinal ranges; flow re-run test) |
 | 3 Errors (unreadable skips that fact, key-store outage fails the step) | Task 3 3c (reader returns null / rethrows), 3d (`structure.test.ts`) |
 | 4 catalogue entries (labels, groups, edges, refs <= 16) | Task 4 (`structureShapes.ts`, `refsOf`, tests) |
 | 4 reshapers pass `diagramProblems`, text-only labels, `fitsShape` | Task 4 (`accepted()` in shapes; visuals tests; `fit.test.ts`) |
-| 4 planning (capabilities with pins, intent sentence, v3, fingerprint) | Task 4 (capabilities test, intent test, providers test) |
-| 5 privacy and cost (sealed, no plaintext in logs/event log, planner counts only, one decrypt pass + one entity query, one planner call rollout) | Task 3 (log test, pg sealed test, index-bound test), Task 4 (no text in capabilities), Task 5 (e2e `assertNoPlaintext`) |
+| 4 planning (capabilities with pins, intent sentence, v3, fingerprint) | Task 3 step 12b and Task 4 (capabilities and sample tests, planning test with no `reshape-invalid`, intent test, providers test) |
+| 5 privacy and cost (sealed, no plaintext in logs/event log, planner counts and neutral placeholders only, one decrypt pass + one entity query, one planner call rollout) | Task 3 (log test, pg sealed test, index-bound test), Task 4 (no text in capabilities), Task 5 (e2e `assertNoPlaintext`) |
 | 6 testing: outline builder / co-occurrence builder | Tasks 1 and 2 |
-| 6 reshapers, refs within cap, `fitsShape` | Task 4 |
+| 6 reshapers, refs within cap, `fitsShape` | Task 4 (shape, visuals, views, fit and plan tests; `VISUAL_SHAPES` at 16 and 17 only) |
 | 6 step on full run and extraction-skipping re-plan; undecryptable field skips only that fact | Task 3 3d |
 | 6 chat sha256 guard unchanged | Task 4 (existing guard untouched) and Task 5 full run |
 | 6 Postgres: sealed, owner-scoped, index-bound, only this document's rows | Task 3 3b and 3c |
 | 6 e2e: long sectioned doc gets both, citation opens the section; short flat gets neither; no plaintext in the event log | Task 5 |
 | 6 Web: both diagrams render (`lu-diagram` registered) | Task 5 step 3 |
+| 3 outline node `{ id, label, level, passageCount, firstChunkId }` (P18) | Task 1 (`id` by position), Task 3 3a (zod), Task 4 (`outlineDiagram` uses it) |
+| S6 rollout: runs in flight at deploy | Task 3 step 15b (1.0.0 stays registered before 1.1.0; hash, runner and registration-order tests) |
 | 7 Out of scope | Not implemented: no timeline, relationships, chat diagrams, cross-document structure, node editing |
 
-**Placeholder scan:** no "TBD"/"TODO"/"similar to"; every code step carries the code. The `views.test.ts` and `fit.test.ts` additions in Task 4 are described against the existing helper in each file because those helpers are not reproduced here; the executor must copy the closest existing test in the same file, which is a named, local instruction rather than an open decision.
+**Placeholder scan:** no "TBD"/"TODO"/"similar to"; every code step carries the code. The views, fit, plan and legacy-flow tests that the first version described against existing helpers are now written out (P13), against helpers verified in the repo (`visualsOf`/`kf` and `experience`/`planned` in `views.test.ts`, `plan`/`node`/`inserted` in `fit.test.ts`, `stack` in `flow.test.ts`).
 
-**Type consistency:** `OutlineDraft`/`CooccurrenceDraft` (Tasks 1, 2) match `StoredEntry` (Task 3: nodes `label/level/passageCount/firstChunkId`, entities `name/entityKind/passages`, edges `a/b/weight/firstChunkId`) and `OutlineFact`/`EntityMapFact` (Task 4) field for field; `OUTLINE_ORDINAL` 16 and `ENTITY_MAP_ORDINAL` 17 are used by the step (Task 3), the capability handles `fact-16`/`fact-17` (Task 4 tests) and the e2e hydrate handles (Task 5); `StructureReader` methods (`title`, `headings`, `entities`, `mentions`) are the same in `structure.ts`, `pgStructure.ts`, `testing.ts` (`noStructure`) and the tests; `visualize-structure` is the id in `flow.ts`, `deps.ts`, `security.ts` and `structure.ts`; `listAll` is read by `plan.ts` `loadEffect` and `ui/readers.ts` and `list` by chat and extract.
+**Type consistency:** `OutlineDraft`/`CooccurrenceDraft` (Tasks 1, 2) match `StoredEntry` (Task 3: nodes `id/label/level/passageCount/firstChunkId`, entities `name/entityKind/passages`, edges `a/b/weight/firstChunkId`) and `OutlineFact`/`EntityMapFact` (Task 3 step 12b, consumed by Task 4) field for field; `OUTLINE_ORDINAL` 16 and `ENTITY_MAP_ORDINAL` 17 are used by the step (Task 3), the capability handles `fact-16`/`fact-17` (step 12b, Task 4 tests), the experiences `STRUCTURE_ORDINAL`/`VISUAL_SHAPES`/`entryFitsOrdinal` (Task 4; a `plan.test.ts` test pins the two copies equal) and the e2e hydrate handles (Task 5); the ordinal schemas are `Ordinal` 0..15 (extracted), `StructureOrdinal` 16 | 17, `StoredEntry` over both and `MAX_STORED_FACTS` 18 in `LoadOutput`; `StructureReader` methods (`title`, `headings`, `entities`, `mentions`) are the same in `structure.ts`, `pgStructure.ts`, `testing.ts` (`noStructure`) and the tests; `visualize-structure` is the id in `flow.ts`, `deps.ts`, `security.ts` and `structure.ts`; `listAll` is read by `plan.ts` `loadEffect` and `ui/readers.ts` and `list` by chat and extract; `visualizeFlows` (config) orders `legacyFlow` (1.0.0) before `flow` (1.1.0).
