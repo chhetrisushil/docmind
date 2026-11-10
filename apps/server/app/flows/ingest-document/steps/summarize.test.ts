@@ -3,7 +3,10 @@ import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/
 import type { ParsedDocument } from "@docmind/parsers";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { describe, expect, it, vi } from "vitest";
+import { FieldKeyStoreError } from "../../../crypto/fields";
 import { bounded } from "../../../llm/bounded";
+import type { TagService } from "../../../tags/service";
+import type { ExistingTag } from "../../../tags/suggestions";
 import type { IngestStartInput } from "../flow";
 import type { EntityMention } from "../pgEntities";
 import { LLM_RETRY } from "../stepEffect";
@@ -58,6 +61,7 @@ function deps(
     summary?: boolean;
     onWrite?: (w: string) => void;
     sleep?: () => Promise<void>;
+    tags?: Pick<TagService, "suggestionContext" | "putSuggestions">;
   } = {},
 ) {
   const results = fakeResults();
@@ -106,6 +110,7 @@ function deps(
       results,
       entities,
       ...(over.llm && { llm: over.llm }),
+      ...(over.tags && { tags: over.tags }),
       summaryMaxChars: 1_000,
       sleep: over.sleep ?? (async () => {}),
     },
@@ -185,5 +190,145 @@ describe("summarize step: LLM_RETRY", () => {
       /^ingest step failed: summarize$/,
     );
     expect(sleep).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts - 1);
+  });
+});
+
+const reduceWith = (suggestedTags: unknown) =>
+  JSON.stringify({
+    tldr: "T",
+    keyPoints: ["k"],
+    entities: ["Acme"],
+    topics: ["t"],
+    suggestedQuestions: ["q?"],
+    suggestedTags,
+  });
+
+function tagsLlm(reduce: string, seen: LlmRequest[] = []): LlmProvider {
+  return Object.assign(
+    {
+      complete: async (r: LlmRequest) => {
+        seen.push(r);
+        const isReduce = (r.system ?? "").startsWith("You combine");
+        return { content: isReduce ? reduce : MAP, stopReason: "end_turn" as const };
+      },
+    },
+    { model: "claude-test" },
+  );
+}
+
+function fakeTags(
+  existing: ExistingTag[],
+  o: {
+    order?: string[];
+    put?: (names: string[]) => void;
+    context?: () => Promise<ExistingTag[] | null>;
+  } = {},
+) {
+  const puts: string[][] = [];
+  const port = {
+    suggestionContext: o.context ?? (async () => existing),
+    putSuggestions: async (_ref: unknown, names: readonly string[]) => {
+      o.order?.push("suggestions");
+      o.put?.([...names]);
+      puts.push([...names]);
+      return true;
+    },
+  };
+  return { puts, port };
+}
+const FIN: ExistingTag = { id: randomUUID(), name: "Finance", linked: false };
+
+describe("summarize step: tag suggestions", () => {
+  it("stores the normalised suggestions after the entities and before the summary", async () => {
+    const order: string[] = [];
+    const t = fakeTags([FIN, { id: randomUUID(), name: "Done", linked: true }], { order });
+    const s = deps({
+      llm: tagsLlm(reduceWith(["finance", "DONE", "New one", "x".repeat(60)])),
+      tags: t.port,
+      onWrite: (w) => order.push(w),
+    });
+    expect(await run(s)).toMatchObject({ outcome: "done" });
+    expect(t.puts).toEqual([["Finance", "New one", "x".repeat(40)]]);
+    expect(order).toEqual(["entities", "suggestions", "summary"]);
+  });
+
+  it("lists the owner's tags in the reduce prompt, ordered as the store gave them", async () => {
+    const seen: LlmRequest[] = [];
+    const t = fakeTags([FIN, { id: randomUUID(), name: "Legal", linked: false }]);
+    await run(deps({ llm: tagsLlm(reduceWith([]), seen), tags: t.port }));
+    const reduce = seen.find((r) => (r.system ?? "").startsWith("You combine"));
+    expect(JSON.stringify(reduce?.messages)).toContain('[\\"Finance\\",\\"Legal\\"]');
+  });
+
+  it("a malformed suggestedTags still stores the summary, and clears the suggestions", async () => {
+    const t = fakeTags([FIN]);
+    const s = deps({ llm: tagsLlm(reduceWith(42)), tags: t.port });
+    expect(await run(s)).toMatchObject({ outcome: "done" });
+    expect(await s.results.hasSummary(s.ref)).toBe(true);
+    expect(t.puts).toEqual([[]]);
+  });
+
+  it("a failing suggestion store, or tag read, never fails ingest", async () => {
+    const boom = fakeTags([FIN], {
+      put: () => {
+        throw new Error("secret-tag-name boom");
+      },
+    });
+    const s1 = deps({ llm: tagsLlm(reduceWith(["a"])), tags: boom.port });
+    expect(await run(s1)).toMatchObject({ outcome: "done" });
+    expect(await s1.results.hasSummary(s1.ref)).toBe(true);
+    const noRead = fakeTags([], {
+      context: async () => {
+        throw new Error("db down");
+      },
+    });
+    const seen: LlmRequest[] = [];
+    const s2 = deps({ llm: tagsLlm(reduceWith(["a"]), seen), tags: noRead.port });
+    expect(await run(s2)).toMatchObject({ outcome: "done" });
+    expect(JSON.stringify(seen)).not.toContain("already uses");
+  });
+
+  it("logs only the class of a swallowed failure, never a name", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = fakeTags([FIN], {
+      put: () => {
+        throw new Error("Zebra-Secret-Tag");
+      },
+    });
+    await run(deps({ llm: tagsLlm(reduceWith(["a"])), tags: boom.port }));
+    expect(JSON.stringify(log.mock.calls)).not.toContain("Zebra");
+    log.mockRestore();
+  });
+
+  it("a key-store outage fails the step, as elsewhere", async () => {
+    const outage = fakeTags([FIN], {
+      context: async () => {
+        throw new FieldKeyStoreError();
+      },
+    });
+    const s = deps({ llm: tagsLlm(reduceWith([])), tags: outage.port });
+    // stepEffect rewrites every failure to a fixed message (the event log): the step fails, no summary is written.
+    await expect(run(s)).rejects.toThrow("ingest step failed: summarize");
+    expect(await s.results.hasSummary(s.ref)).toBe(false);
+  });
+
+  it("without the tag port the prompt and the result are as before", async () => {
+    const seen: LlmRequest[] = [];
+    const s = deps({ llm: tagsLlm(reduceWith(["a"]), seen) });
+    expect(await run(s)).toMatchObject({ outcome: "done" });
+    expect(JSON.stringify(seen)).toContain("up to 3 short topic tags");
+  });
+
+  it("does not read the tags for a document that already has its summary", async () => {
+    let reads = 0;
+    const t = fakeTags([FIN], {
+      context: async () => {
+        reads++;
+        return [FIN];
+      },
+    });
+    const s = deps({ llm: tagsLlm(reduceWith([])), tags: t.port, summary: true });
+    expect(await run(s)).toMatchObject({ outcome: "done", count: 0 });
+    expect(reads).toBe(0);
   });
 });

@@ -3,7 +3,9 @@ import type { KeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import { EntityKeys } from "../../crypto/entityKeys";
 import type { FieldCrypto } from "../../crypto/fields";
+import { TagKeys } from "../../crypto/tagKeys";
 import { type ProviderName, pdfMaxBytes } from "../../llm/roles";
+import { TagService } from "../../tags/service";
 import type { IngestDeps } from "./deps";
 import { IngestConfigError } from "./errors";
 import { type IngestWiring, parseStepTimeoutMs } from "./limits";
@@ -53,6 +55,7 @@ export function pgIngestDeps({
     chunks: new PgChunkStore(pool, fields),
     results: new PgDocumentResults(pool, fields),
     entities: new PgEntityStore(pool, fields, new EntityKeys(keys)),
+    tags: new TagService(pool, fields, new TagKeys(keys)),
     links: new PgLinkStore(pool),
     titles: new PgTitleSource(pool, fields),
     summaryMaxChars: wiring.summaryMaxChars,

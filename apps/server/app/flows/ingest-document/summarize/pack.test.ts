@@ -84,3 +84,23 @@ describe("answer schemas", () => {
     expect([out.suggestedQuestions.length, out.suggestedQuestions[0]?.length]).toEqual([8, 300]);
   });
 });
+
+describe("ReduceAnswer suggestedTags", () => {
+  const base = { tldr: "t", keyPoints: [], entities: [], topics: [], suggestedQuestions: [] };
+  it("keeps the strings of an array, up to 20", () => {
+    expect(ReduceAnswer.parse({ ...base, suggestedTags: ["a", 1, "b"] }).suggestedTags).toEqual([
+      "a",
+      "b",
+    ]);
+    const many = Array.from({ length: 30 }, (_, i) => `t${i}`);
+    expect(ReduceAnswer.parse({ ...base, suggestedTags: many }).suggestedTags).toHaveLength(20);
+  });
+  it("is [] when missing or malformed, and never fails the summary", () => {
+    for (const bad of [undefined, null, "a,b", 42, { a: 1 }]) {
+      const out = ReduceAnswer.parse({ ...base, suggestedTags: bad });
+      expect(out.suggestedTags).toEqual([]);
+      expect(out.tldr).toBe("t");
+    }
+    expect(ReduceAnswer.parse(base).suggestedTags).toEqual([]);
+  });
+});

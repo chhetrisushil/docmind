@@ -11,15 +11,17 @@ import {
   MAP_INSTRUCTION,
   MAP_SYSTEM,
   MapAnswer,
-  REDUCE_INSTRUCTION,
   REDUCE_SYSTEM,
   ReduceAnswer,
+  reduceInstruction,
 } from "./prompts";
 
 export const MAP_CONCURRENCY = 4;
 
 export interface SummaryRun {
   summary: DocumentSummary;
+  /** The model's tag names as it wrote them: `normaliseSuggestions` cleans them. Never part of the stored summary. */
+  suggestedTags: string[];
   groups: { sections: number[]; entities: { name: string; kind: EntityKind }[] }[];
 }
 
@@ -51,7 +53,13 @@ async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>
 export async function summarizeDocument(
   provider: LlmProvider,
   parsed: ParsedDocument,
-  options: { maxChars: number; signal?: AbortSignal; groupChars?: number; concurrency?: number },
+  options: {
+    maxChars: number;
+    signal?: AbortSignal;
+    groupChars?: number;
+    concurrency?: number;
+    existingTags?: readonly string[];
+  },
 ): Promise<SummaryRun | null> {
   const groups = packGroups(
     parsed.sections,
@@ -93,9 +101,15 @@ export async function summarizeDocument(
       ask(MAP_SYSTEM, g.text, MAP_INSTRUCTION, MapAnswer),
     );
     const joined = maps.map((m, i) => `Part ${i + 1}: ${m.summary}`).join("\n\n");
-    const summary = await ask(REDUCE_SYSTEM, joined, REDUCE_INSTRUCTION, ReduceAnswer);
+    const { suggestedTags, ...summary } = await ask(
+      REDUCE_SYSTEM,
+      joined,
+      reduceInstruction(options.existingTags ?? []),
+      ReduceAnswer,
+    );
     return {
       summary,
+      suggestedTags,
       groups: groups.map((g, i) => ({ sections: g.sections, entities: maps[i]?.entities ?? [] })),
     };
   } finally {
