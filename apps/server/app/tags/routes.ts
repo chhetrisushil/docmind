@@ -29,6 +29,7 @@ export const idOf = (raw: string | undefined): string | null => {
   const p = Uuid.safeParse(raw);
   return p.success ? p.data.toLowerCase() : null;
 };
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 export const notFound = (res: ServerResponse, what: string) =>
   sendError(res, 404, "not_found", `${what} not found`);
 
@@ -114,8 +115,9 @@ export function tagRoutes(deps: TagRoutesDeps): Record<string, Handler> {
 
     "DELETE /api/documents/:id/tags/:tagId": auth(async (_req, res, identity, ctx) => {
       const id = idOf(ctx.params.id);
-      const tagId = idOf(ctx.params.tagId);
-      view(res, id && tagId ? await deps.tags.removeFromDocument(identity, id, tagId) : null);
+      // A malformed tag id is an unknown one: removing it is an idempotent no-op, as for any id the document lacks.
+      const tagId = idOf(ctx.params.tagId) ?? NIL_UUID;
+      view(res, id ? await deps.tags.removeFromDocument(identity, id, tagId) : null);
     }),
   };
 }

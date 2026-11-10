@@ -79,7 +79,9 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     ]);
     const clash = await call("alice", "PATCH", `/api/tags/${b.id}`, { name: " ALPHA  2" });
     expect([clash.status, await code(clash)]).toEqual([409, "tag_exists"]);
-    expect((await call("bob", "PATCH", `/api/tags/${a.id}`, { name: "x" })).status).toBe(404);
+    const foreign = await call("bob", "PATCH", `/api/tags/${a.id}`, { name: "x" });
+    const unknown = await call("bob", "PATCH", `/api/tags/${randomUUID()}`, { name: "x" });
+    expect([foreign.status, await foreign.text()]).toEqual([404, await unknown.text()]);
     expect((await call("alice", "PATCH", "/api/tags/not-a-uuid", { name: "x" })).status).toBe(404);
   });
 
@@ -87,7 +89,9 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     const d = await seed();
     const t = await mk("alice", "gone");
     await call("alice", "PUT", `/api/documents/${d}/tags`, { tagIds: [t.id] });
-    expect((await call("bob", "DELETE", `/api/tags/${t.id}`)).status).toBe(404);
+    const foreign = await call("bob", "DELETE", `/api/tags/${t.id}`);
+    const unknown = await call("bob", "DELETE", `/api/tags/${randomUUID()}`);
+    expect([foreign.status, await foreign.text()]).toEqual([404, await unknown.text()]);
     expect((await call("alice", "DELETE", `/api/tags/${t.id}`)).status).toBe(204);
     expect((await h.owner.query("SELECT count(*)::int AS n FROM document_tags")).rows[0].n).toBe(0);
     expect((await call("alice", "DELETE", `/api/tags/${t.id}`)).status).toBe(404);
@@ -113,6 +117,18 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     );
   });
 
+  it("answers 404 and creates nothing when adding to another user's document; a malformed tag id on removal is a no-op", async () => {
+    const bobDoc = await seed(BOB);
+    const res = await call("alice", "POST", `/api/documents/${bobDoc}/tags`, { name: "sneaky" });
+    expect(res.status).toBe(404);
+    expect((await h.owner.query("SELECT count(*)::int AS n FROM tags")).rows[0].n).toBe(0);
+    const d = await seed();
+    expect((await call("alice", "DELETE", `/api/documents/${d}/tags/not-a-uuid`)).status).toBe(200);
+    expect((await call("alice", "DELETE", `/api/documents/${bobDoc}/tags/not-a-uuid`)).status).toBe(
+      404,
+    );
+  });
+
   it("adds by name (creating or reusing), removes one, and refuses a 21st with 409 tag_limit", async () => {
     const d = await seed();
     const add = (name: string) => call("alice", "POST", `/api/documents/${d}/tags`, { name });
@@ -128,7 +144,6 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
       "Finance",
     );
     expect((await call("bob", "DELETE", `/api/documents/${d}/tags/${id}`)).status).toBe(404);
-    expect((await call("alice", "DELETE", `/api/documents/${d}/tags/not-a-uuid`)).status).toBe(404);
   });
 
   it("puts tags on the list rows and tags with suggestedTags on the detail", async () => {
