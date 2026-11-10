@@ -38,6 +38,7 @@ type El = HTMLElement & {
 };
 
 async function setup(initial: DocumentDto, failFirst = false) {
+  let failNext = failFirst;
   const state = { doc: initial };
   const respond = async (): Promise<DocumentTagsResponse> => ({
     tags: state.doc.tags,
@@ -45,8 +46,8 @@ async function setup(initial: DocumentDto, failFirst = false) {
   });
   const api = {
     getDocument: vi.fn(async () => {
-      if (failFirst) {
-        failFirst = false;
+      if (failNext) {
+        failNext = false;
         throw new Error("down");
       }
       return state.doc;
