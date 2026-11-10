@@ -87,6 +87,7 @@ Rejected:
 - **Residual:**
   - Old-format ids, those from runs before deploy, stay readable.
   - Run counts and timing remain as records.
+  - Another process keeps an erased user's id key in its cache until it restarts or a load miss evicts it: erasure calls `forgetSubject` only in the erasing process (no cross-process forget). If that process folds an event of the erased user's `h_` execution it can write `scope` and `app_key` beside the handle again. With one replica this cannot happen; with N replicas see `docs/design/cloud-scaling.md` §4 (S9).
 - `cloud-deploy.md` notes that rolling back past the first `h_` run is unsafe: older code can't parse new ids.
 
 ## 7. Out of scope
