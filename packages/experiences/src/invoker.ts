@@ -65,7 +65,8 @@ export interface UiReaders {
   content(a: { id: string; upto: number; passage?: string }): Promise<RawContent | null>;
   source(a: { id: string; passage: string }): Promise<SourceResult | null>;
   chats(a: { q: string }): Promise<ChatSessionDto[]>;
-  visualFacts(a: { id: string }): Promise<VisualFactRaw[] | null>;
+  /** `extractedOnly`: a chat turn reads the extracted facts only, never the document's derived structure facts. */
+  visualFacts(a: { id: string; extractedOnly?: boolean }): Promise<VisualFactRaw[] | null>;
   turnFacts(a: { chatId: string; ord: number }): Promise<VisualFactRaw[] | null>;
   /** The connections of one of the caller's documents (live); null when it is not the caller's. */
   connections(a: { documentId: string }): Promise<RawConnections | null>;
@@ -92,7 +93,7 @@ const ARGS = {
     .strict(),
   "document.source": z.object({ id: Id, passage: Id.or(z.literal("")).default("") }).strict(),
   "chats.list": z.object({ q: z.string().max(100) }).strict(),
-  "visual.facts": z.object({ id: Id }).strict(),
+  "visual.facts": z.object({ id: Id, extractedOnly: z.literal(true).optional() }).strict(),
   "doc.connections": z.object({ documentId: Id }).strict(),
   "turn.facts": z
     .object({
@@ -200,7 +201,10 @@ export function createInvoker(readers: UiReaders): TransientInvoker {
         if (!a.success) return fail("invalidArgs");
         return {
           key: [target, a.data],
-          exec: async () => (await readers.visualFacts({ id: a.data.id })) ?? fail("notFound"),
+          exec: async () =>
+            (await readers.visualFacts(
+              a.data.extractedOnly ? { id: a.data.id, extractedOnly: true } : { id: a.data.id },
+            )) ?? fail("notFound"),
         };
       }
       case "turn.facts": {

@@ -70,6 +70,29 @@ describe("visualRunRecorder", () => {
     for (const call of s.record.mock.calls.slice(1)) expect(call).toHaveLength(3);
   });
 
+  it("does not stamp a done run of the legacy 1.0.0 flow (it derived no structure), and forgets its id; a current run is still stamped", async () => {
+    const legacyRuns = new Set<string>();
+    const record = vi.fn<VisualRuns["record"]>(async () => {});
+    const rec = visualRunRecorder({ runs: { record }, bus: new InMemoryProgressBus(), legacyRuns });
+    const who = ids();
+    const old = visualizeExecutionId(who.userId, who.documentId, 1);
+    legacyRuns.add(old);
+    rec.onEvent(event(old, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
+    await rec.idle();
+    expect(record).toHaveBeenLastCalledWith(expect.anything(), "done", undefined);
+    expect(record.mock.calls[0]).toHaveLength(3);
+    expect(legacyRuns.size).toBe(0);
+    const fresh = visualizeExecutionId(who.userId, who.documentId, 1, 1);
+    rec.onEvent(event(fresh, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
+    await rec.idle();
+    expect(record).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "done",
+      undefined,
+      factFormatFingerprint(),
+    );
+  });
+
   it("a failed outcome tells the owner's open pages (visuals: failed); other outcomes do not", async () => {
     const s = setup();
     const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);

@@ -773,7 +773,7 @@ describe("a turn's visuals", () => {
       "turn",
     );
     expect(out).toMatchObject({ state: "ready", value: { value: 22 } });
-    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1) });
+    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1), extractedOnly: true });
     expect(r.turnFacts).not.toHaveBeenCalled();
   });
 
@@ -844,6 +844,6 @@ describe("a turn's visuals", () => {
     );
     expect(out.map((o) => o.state).sort()).toEqual(["error", "ready"]);
     expect(r.visualFacts).toHaveBeenCalledTimes(1);
-    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1) });
+    expect(r.visualFacts).toHaveBeenCalledWith({ id: id(1), extractedOnly: true });
   });
 });

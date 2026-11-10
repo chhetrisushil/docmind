@@ -27,6 +27,20 @@ describe("the visualFacts reader", () => {
     await expect(r.visualFacts({ id: "mine" })).resolves.toEqual([]);
     expect(list).toHaveBeenLastCalledWith({ tenantId: "t", userId: "u", documentId: "mine" });
   });
+  it("a chat turn's read (extractedOnly) lists the extracted facts only and never opens the structure facts", async () => {
+    const { readersFor } = await import("./readers");
+    const list = vi.fn(async () => []);
+    const listAll = vi.fn(async () => []);
+    const r = readersFor(
+      { visualFacts: { list, listAll } } as never,
+      { userId: "u", tenantId: "t" } as never,
+    );
+    await r.visualFacts({ id: "d", extractedOnly: true });
+    expect(list).toHaveBeenCalledWith({ tenantId: "t", userId: "u", documentId: "d" });
+    expect(listAll).not.toHaveBeenCalled();
+    await r.visualFacts({ id: "d" });
+    expect(listAll).toHaveBeenCalledTimes(1);
+  });
   it("rethrows any other failure", async () => {
     const { readersFor } = await import("./readers");
     const list = vi.fn(async () => {
@@ -119,6 +133,27 @@ describe("citations on facts", () => {
     ]);
     expect(out[1]?.cites).toEqual([]);
     expect(resolve).toHaveBeenCalledTimes(1); // one lookup for every fact
+    vi.doUnmock("./factCites");
+  });
+  it("resolves at most 16 distinct chunk ids per fact (a widget shows 16 refs), keeping the first ones", async () => {
+    vi.resetModules();
+    const resolve = vi.fn(async (_d: unknown, _w: unknown, ids: readonly string[]) => {
+      return new Map(ids.map((i) => [i, { documentId: D, label: `P ${i}` }]));
+    });
+    vi.doMock("./factCites", () => ({ resolveCites: resolve }));
+    const { readersFor } = await import("./readers");
+    const many = Array.from(
+      { length: 120 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    const list = vi.fn(async () => [fact(16, many)]);
+    const r = readersFor(
+      { visualFacts: { listAll: list }, pool: {}, fields: {} } as never,
+      identity,
+    );
+    const out = (await r.visualFacts({ id: D })) as { cites?: { passageId: string }[] }[];
+    expect(resolve.mock.calls[0]?.[2]).toEqual(many.slice(0, 16));
+    expect(out[0]?.cites?.map((c) => c.passageId)).toEqual(many.slice(0, 16));
     vi.doUnmock("./factCites");
   });
   it("does the same for a turn's facts", async () => {

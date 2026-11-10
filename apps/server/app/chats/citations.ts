@@ -6,6 +6,7 @@ import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { titleBind } from "../documents/repo";
+import { clipText as clip } from "../http/clip";
 import type { StoredPassage } from "./turnItems";
 
 export const SNIPPET_MAX = 280;
@@ -13,14 +14,6 @@ export const DELETED_DOCUMENT = "(deleted document)";
 
 /** `[[<passage id>]]`, with the space before it, so removing one does not leave "claim ." behind. */
 const MARKER = / ?\[\[([0-9a-f-]{36})\]\]/g;
-
-/** At most `max` UTF-16 units, never ending on half a surrogate pair. */
-function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, max);
-  const last = cut.charCodeAt(cut.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
-}
 
 /**
  * D6. `retrieved` is every `passages` item of the turn; `titles` maps a document id to its current title (a

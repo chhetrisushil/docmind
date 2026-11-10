@@ -503,7 +503,8 @@ export const turnFactProvider = (
   ref.kind === "doc"
     ? provider(`fact-${ref.ordinal}`, {
         target: "visual.facts",
-        args: { id: ref.documentId },
+        // A chat turn shows extracted facts only: the reader skips opening the document's structure facts.
+        args: { id: ref.documentId, extractedOnly: true },
         reshaper: `${FAMILY[entry]}-${ref.ordinal}`,
       })
     : provider(`fact-${ref.ordinal}`, {

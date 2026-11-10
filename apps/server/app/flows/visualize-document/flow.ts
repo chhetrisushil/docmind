@@ -91,8 +91,11 @@ export const runVisualize =
   (
     planner: () => Planner | undefined,
     withStructure = true,
+    legacyRuns?: Set<string>,
   ): FlowRunner<VisualizeRef, VisualizeOutput> =>
   async (ctx, input) => {
+    // The 1.0.0 runner derives no structure: note this execution so the recorder does not stamp the current fact format on it.
+    if (!withStructure) legacyRuns?.add(ctx.executionId);
     const extracted = await ctx.run(visualizeExtractStep, input);
     if (extracted.outcome !== "done")
       return { outcome: extracted.outcome, ...(extracted.code && { code: extracted.code }) };
@@ -101,7 +104,8 @@ export const runVisualize =
     let derived = 0;
     if (withStructure) {
       const structured = await ctx.run(visualizeStructureStep, input);
-      if (structured.outcome !== "done") return { outcome: structured.outcome };
+      if (structured.outcome !== "done")
+        return { outcome: structured.outcome, ...(structured.code && { code: structured.code }) };
       derived = structured.count ?? 0;
     }
     // No facts at all (none extracted and none derived): there is nothing to load, but the connections are live data, so
@@ -110,16 +114,18 @@ export const runVisualize =
     let facts: LoadOutput["facts"] = [];
     if (stored !== 0) {
       const loaded = await ctx.run(visualizeLoadStep, input);
-      if (loaded.outcome !== "done") return { outcome: loaded.outcome };
+      if (loaded.outcome !== "done")
+        return { outcome: loaded.outcome, ...(loaded.code && { code: loaded.code }) };
       facts = loaded.facts;
     }
     const p = planner();
     if (!p) return { outcome: "skipped" };
     const plan = await planVisuals(p, facts, ctx);
     if (plannerUnavailable(plan)) return { outcome: "failed", code: "visuals-model-unavailable" };
-    // With no facts, a plan the planner could not make (it refuses an empty plan) is just nothing to show.
+    // With no extracted facts, a plan the planner could not make (it refuses an empty plan) is just nothing to show: the
+    // structure widgets are optional (the planner may leave them out), so a structure-only document is the same case.
     if (
-      stored === 0 &&
+      (extracted.count ?? 0) === 0 &&
       (plan.ops.length === 0 || plan.findings.some((f) => f.severity === "error"))
     ) {
       // Codes only, never text: a broken connections binding must not hide behind a quiet `empty`.
@@ -149,11 +155,12 @@ export const runVisualize =
 /**
  * The flow, with the planner of this app. Flows are static modules, but the planner holds a secret and a model: per app.
  * `legacy` builds the 1.0.0 definition (extract, load, commit; its runner never asks for the structure step) that a run in
- * flight at deploy needs (see the Plan decision on in-flight runs); the default is 1.1.0.
+ * flight at deploy needs (see the Plan decision on in-flight runs); the default is 1.1.0. `legacyRuns` collects the execution
+ * ids the 1.0.0 runner ran, for `visualRunRecorder` (a legacy run that ends `done` is not stamped with the current format).
  */
 export const visualizeDocumentFlow = (
   planner: () => Planner | undefined = () => undefined,
-  o: { legacy?: boolean } = {},
+  o: { legacy?: boolean; legacyRuns?: Set<string> } = {},
 ): RegisteredFlow => ({
   definition: flow$({
     id: "visualize-document",
@@ -163,5 +170,5 @@ export const visualizeDocumentFlow = (
     outputSchema: VisualizeOutput,
     steps: o.legacy ? LEGACY_VISUALIZE_STEPS : VISUALIZE_STEPS,
   }),
-  runner: runVisualize(planner, !o.legacy) as FlowRunner<unknown, unknown>,
+  runner: runVisualize(planner, !o.legacy, o.legacyRuns) as FlowRunner<unknown, unknown>,
 });

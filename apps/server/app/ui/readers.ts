@@ -29,11 +29,13 @@ export interface UiReaderDeps {
   status: DocumentStatusReads;
   blobs: SourceDeps["blobs"];
   registry: SourceDeps["registry"];
-  visualFacts: Pick<VisualFactStore, "listAll">;
+  visualFacts: Pick<VisualFactStore, "list" | "listAll">;
   turnFacts: TurnFactStore;
 }
 
 const PAGE = 100;
+/** loom-ui's MAX_WIDGET_REFS: the passages one widget shows (`refsOf` in experiences). */
+const MAX_REFS = 16;
 /** What a document's `error` says when it is not one of the status model's own sentences. */
 export const FIXED_ERROR = "Processing this document failed.";
 const SENTENCES = new Set<string>(Object.values(STATUS_MESSAGES));
@@ -56,18 +58,20 @@ async function withCites(
   identity: Identity,
   facts: readonly { chunkIds: readonly string[] }[],
 ): Promise<VisualFactRaw[]> {
-  const all = [...new Set(facts.flatMap((f) => f.chunkIds))];
+  // A widget shows at most MAX_REFS (16) passages (`refsOf` in experiences), so only each fact's first 16 distinct ids are
+  // resolved: an outline fact carries up to 120 ids, a map 40.
+  const idsOf = (f: { chunkIds: readonly string[] }) =>
+    [...new Set(f.chunkIds.map((i) => i.toLowerCase()))].slice(0, MAX_REFS);
+  const all = [...new Set(facts.flatMap(idsOf))];
   const found =
     all.length === 0 ? new Map<string, ResolvedCite>() : await resolveCites(deps, identity, all);
   return facts.map((f) => {
     if (f.chunkIds.length === 0) return f as unknown as VisualFactRaw;
-    const seen = new Set<string>();
     const cites: FactCite[] = [];
-    for (const id of f.chunkIds) {
-      const c = found.get(id.toLowerCase());
-      if (c === undefined || seen.has(id.toLowerCase())) continue;
-      seen.add(id.toLowerCase());
-      cites.push({ documentId: c.documentId, passageId: id.toLowerCase(), label: c.label });
+    for (const id of idsOf(f)) {
+      const c = found.get(id);
+      if (c === undefined) continue;
+      cites.push({ documentId: c.documentId, passageId: id, label: c.label });
     }
     return { ...f, cites } as unknown as VisualFactRaw;
   });
@@ -165,16 +169,14 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
       return page.items.slice(0, CHAT_LIST_CAP);
     },
 
-    async visualFacts({ id }) {
+    async visualFacts({ id, extractedOnly }) {
       try {
+        const ref = { tenantId: identity.tenantId, userId: identity.userId, documentId: id };
+        // A chat turn reads the extracted facts only: the structure facts are neither opened nor cited for it.
         return await withCites(
           deps,
           identity,
-          await deps.visualFacts.listAll({
-            tenantId: identity.tenantId,
-            userId: identity.userId,
-            documentId: id,
-          }),
+          extractedOnly ? await deps.visualFacts.list(ref) : await deps.visualFacts.listAll(ref),
         );
       } catch (err) {
         if (isDocumentGone(err)) return null;
