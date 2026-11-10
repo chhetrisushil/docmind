@@ -1,8 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { type DocumentDto, ListDocumentsResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
-import { ALICE, ALICE2, type DocumentHarness, seedDoc, startDocumentServer } from "./testHarness";
+import {
+  ALICE,
+  ALICE2,
+  BOB,
+  type DocumentHarness,
+  seedDoc,
+  startDocumentServer,
+} from "./testHarness";
 
 describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
@@ -126,9 +134,45 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
   });
 
   it("never shows another user's documents, even for a tag id that is not theirs", async () => {
+    const fields = new FieldCrypto(h.keys);
+    const foreignTag = (await h.tags.create(ALICE2, "alice2-tag")).tag.id;
+    const foreignDocs: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const id = await seedDoc(h.owner, h.app, fields, ALICE2, `b${i}`.padEnd(64, "0"), 100 + i);
+      await h.owner.query(
+        "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) SELECT $1, $2, tenant_id, owner_id FROM documents WHERE id = $1",
+        [id, foreignTag],
+      );
+      foreignDocs.push(id);
+    }
+    // Control: alice2 sees his own through his own tag.
+    expect((await ids(await get("alice2", `tags=${foreignTag}`))).sort()).toEqual(
+      [...foreignDocs].sort(),
+    );
+    // Alice filtering by alice2's tag: same answer as an unknown id, and none of another user's documents.
+    const foreign = await get("alice", `tags=${foreignTag}`);
+    const unknown = await get("alice", `tags=${randomUUID()}`);
+    expect([foreign.status, unknown.status]).toEqual([unknown.status, unknown.status]);
+    expect(await foreign.text()).toBe(await unknown.text());
+    for (const qs of [
+      `tags=${foreignTag}`,
+      `tags=${foreignTag},${tag.a}`,
+      `tags=${foreignTag}&match=all`,
+    ]) {
+      const got = await ids(await get("alice", qs));
+      for (const b of foreignDocs) expect(got).not.toContain(b);
+    }
+    // The same in reverse, and a foreign id added to an own filter changes nothing for all/any.
     expect(await ids(await get("alice2", `tags=${tag.a}`))).toEqual([]);
-    expect(await ids(await get("bob", `tags=${tag.a}&match=all`))).toEqual([]);
-    await seedDoc(h.owner, h.app, new FieldCrypto(h.keys), ALICE2, "f".repeat(64), 1);
-    expect(await ids(await get("alice2", ""))).toHaveLength(1);
+    expect(await ids(await get("alice2", `tags=${tag.a},${foreignTag}&match=all`))).toEqual([]);
+    expect((await ids(await get("alice2", `tags=${tag.a},${foreignTag}`))).sort()).toEqual(
+      [...foreignDocs].sort(),
+    );
+  });
+
+  it("collapses a duplicate id: a,a&match=all is a", async () => {
+    expect(await ids(await get("alice", `tags=${tag.a},${tag.a}&match=all`))).toEqual(
+      await ids(await get("alice", `tags=${tag.a}`)),
+    );
   });
 });

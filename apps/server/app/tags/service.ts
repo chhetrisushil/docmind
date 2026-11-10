@@ -135,8 +135,9 @@ export class TagService {
   // Deliberate: one undecryptable row fails the whole read (as a document title does), so corruption is loud, never a silent gap.
   private async open(o: TagOwner, rows: readonly NameRow[]): Promise<DocumentTag[]> {
     const cipher = this.fields.forUser(o.userId);
+    const unique = [...new Map(rows.map((r) => [r.id, r])).values()]; // one decrypt per tag, not per link
     const named = await Promise.all(
-      rows.map(async (r) => ({
+      unique.map(async (r) => ({
         id: r.id,
         name: await cipher.openText(tagNameBind(r.id), r.name_enc),
       })),
