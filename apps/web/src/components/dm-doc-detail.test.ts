@@ -715,8 +715,11 @@ describe("dm-doc-detail: rendered content", () => {
         const page = await ready(t);
         await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
         expect(refresh(page)?.textContent?.trim()).toBe("Refresh visuals");
-        expect(refresh(page)?.getAttribute("aria-label")).toBe("Refresh visuals");
-        expect(refresh(page)?.title).toContain("re-read the document once");
+        expect(refresh(page)?.hasAttribute("aria-label")).toBe(false);
+        const help = page.shadowRoot?.querySelector("[data-visuals-refresh-help]");
+        expect(help?.id).toBe(refresh(page)?.getAttribute("aria-describedby"));
+        expect(help?.textContent).toContain("re-read the document once (one model call)");
+        expect(help?.textContent).toContain("otherwise a re-plan");
       });
 
       it("click calls the retry route once and shows Refreshing… until a visuals event", async () => {
@@ -757,6 +760,41 @@ describe("dm-doc-detail: rendered content", () => {
         t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(409, "not_visualizable"));
         refresh(page)?.click();
         await vi.waitFor(() => expect(note(page)?.textContent).toContain("can't be made"));
+      });
+
+      it("is absent when the visuals failed (Retry is shown instead)", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "failed";
+        const page = await ready(t);
+        await vi.waitFor(() =>
+          expect(page.shadowRoot?.querySelector("[data-visuals-retry]")).not.toBeNull(),
+        );
+        expect(refresh(page)).toBeNull();
+      });
+
+      it("while running over a refresh this page started, stays as a disabled Refreshing…", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        refresh(page)?.click();
+        await vi.waitFor(() => expect(refresh(page)?.textContent?.trim()).toBe("Refreshing…"));
+        t.progress(id(1), "ready", { visuals: "running" });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(refresh(page)?.textContent?.trim()).toBe("Refreshing…");
+        expect(refresh(page)?.disabled).toBe(true);
+        expect(making(page)).toBeNull();
+      });
+
+      it("shows its refusal note as a status", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(429, "too_many_requests"));
+        refresh(page)?.click();
+        await vi.waitFor(() => expect(note(page)).not.toBeNull());
+        expect(note(page)?.getAttribute("role")).toBe("status");
       });
 
       it("is hidden while the visuals are running", async () => {
