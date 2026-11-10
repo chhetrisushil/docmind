@@ -3,7 +3,12 @@ import type { CapabilityRef } from "@loom-ui/planner";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { connectionsCapability } from "./connections";
 import { KIND, PINS, provider } from "./providers";
-import { entityMapDiagram, outlineDiagram } from "./structureShapes";
+import {
+  entityMapDiagram,
+  outlineDiagram,
+  relationshipsDiagram,
+  timelineDiagram,
+} from "./structureShapes";
 
 /**
  * One passage a fact was read from, resolved by the server's reader (owner-scoped, so a deleted document's passage is absent):
@@ -91,6 +96,8 @@ const ENTRIES = [
   ["ConnectionMap", "Diagram"],
   ["DocumentOutline", "Diagram"],
   ["EntityMap", "Diagram"],
+  ["DocumentTimeline", "Diagram"],
+  ["Relationships", "Diagram"],
 ] as const;
 const PROPS: Record<string, string[]> = {
   BarChart: ["unit", "format"],
@@ -121,7 +128,7 @@ const FACT_ENTRY_NAMES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"
 
 /** The closed set of widgets the document planner may bind: to the document's facts, and to its live connections. */
 export const VISUALS_CATALOG: SemanticCatalog = catalogOf(
-  "docmind.visuals.v3",
+  "docmind.visuals.v4",
   ENTRIES.map(([name]) => name),
 );
 
@@ -177,7 +184,11 @@ const describeFact = (f: VisualFactRaw) =>
         ? `a tree of ${f.nodes.length} ${f.nodes.length === 1 ? "section" : "sections"}, ${depthOf(f)} ${depthOf(f) === 1 ? "level" : "levels"} deep`
         : f.kind === "cooccurrence"
           ? `${f.entities.length} named parties and ${f.edges.length} links between those that appear together`
-          : "a table of facts";
+          : f.kind === "timeline"
+            ? `a timeline of ${f.events.length} dated ${f.events.length === 1 ? "event" : "events"}`
+            : f.kind === "relations"
+              ? `${f.entities.length} named parties and ${f.links.length} stated relationships between them`
+              : "a table of facts";
 
 /** Neutral stand-ins for a structure fact's nodes and edges: shape only, no document text. They let the planner's JSONPath over the sample (`nodes`, `edges`) select something. */
 const OUTLINE_PLACEHOLDER = [
@@ -191,18 +202,47 @@ const MAP_PLACEHOLDER = {
   ],
   edges: [{ from: "e0", to: "e1", label: "2" }],
 };
-/** What the planner is shown of a fact: extracted facts show themselves; a structure fact shows counts and placeholders only. */
-const sampleOf = (f: VisualFactRaw): unknown =>
-  f.kind === "outline"
-    ? { kind: "outline", sections: f.nodes.length, levels: depthOf(f), nodes: OUTLINE_PLACEHOLDER }
-    : f.kind === "cooccurrence"
-      ? {
-          kind: "cooccurrence",
-          entities: f.entities.length,
-          links: f.edges.length,
-          ...MAP_PLACEHOLDER,
-        }
-      : f;
+const TIMELINE_PLACEHOLDER = [
+  { label: "Event", at: "2000-01-01" },
+  { label: "Event", at: "2000-06-01" },
+];
+const RELATIONS_PLACEHOLDER = {
+  nodes: [
+    { label: "Party", group: "party" },
+    { label: "Party", group: "party" },
+  ],
+  edges: [{ from: "n0", to: "n1", label: "relation" }],
+};
+/** What the planner is shown of a fact: extracted facts show themselves; every other kind shows counts and neutral placeholders only (no text, no real date). */
+const sampleOf = (f: VisualFactRaw): unknown => {
+  switch (f.kind) {
+    case "outline":
+      return {
+        kind: "outline",
+        sections: f.nodes.length,
+        levels: depthOf(f),
+        nodes: OUTLINE_PLACEHOLDER,
+      };
+    case "cooccurrence":
+      return {
+        kind: "cooccurrence",
+        entities: f.entities.length,
+        links: f.edges.length,
+        ...MAP_PLACEHOLDER,
+      };
+    case "timeline":
+      return { kind: "timeline", events: f.events.length, nodes: TIMELINE_PLACEHOLDER };
+    case "relations":
+      return {
+        kind: "relations",
+        parties: f.entities.length,
+        links: f.links.length,
+        ...RELATIONS_PLACEHOLDER,
+      };
+    default:
+      return f;
+  }
+};
 
 /** The one capability shape of every fact: only the handle, the tool and the pin differ. */
 function capability(f: VisualFactRaw, handle: string, tool: FactTool, pin: string): CapabilityRef {
@@ -291,7 +331,9 @@ export type VisualEntry =
   | "KeyFigure"
   | "FactTable"
   | "DocumentOutline"
-  | "EntityMap";
+  | "EntityMap"
+  | "DocumentTimeline"
+  | "Relationships";
 const FAMILY: Record<VisualEntry, string> = {
   FigureChart: "visual-bar",
   FigureTrend: "visual-trend",
@@ -299,11 +341,15 @@ const FAMILY: Record<VisualEntry, string> = {
   FactTable: "visual-table",
   DocumentOutline: "visual-outline",
   EntityMap: "visual-entitymap",
+  DocumentTimeline: "visual-timeline",
+  Relationships: "visual-relations",
 };
-/** The reserved ordinal each structure entry reads (the server's `OUTLINE_ORDINAL` and `ENTITY_MAP_ORDINAL`: experiences does not import the server; a server test pins them equal). */
+/** The reserved ordinal each non-chart entry reads (the server's `OUTLINE_ORDINAL`, `ENTITY_MAP_ORDINAL`, `TIMELINE_ORDINAL` and `RELATIONS_ORDINAL`: experiences does not import the server; a server test pins them equal). */
 const STRUCTURE_ORDINAL: Partial<Record<VisualEntry, number>> = {
   DocumentOutline: 16,
   EntityMap: 17,
+  DocumentTimeline: 18,
+  Relationships: 19,
 };
 /** True when `entry` may read the fact at `ordinal`: a structure entry only its own reserved ordinal, any other entry the extracted ones (0..15). */
 export const entryFitsOrdinal = (entry: string, ordinal: number): boolean => {
@@ -474,6 +520,14 @@ const TO: Record<string, (f: VisualFactRaw) => unknown> = {
   },
   "visual-entitymap": (f) => {
     const v = f.kind === "cooccurrence" ? entityMapDiagram(f) : null;
+    return v === null ? wrong() : { ...v, ...refsOf(f) };
+  },
+  "visual-timeline": (f) => {
+    const v = f.kind === "timeline" ? timelineDiagram(f) : null;
+    return v === null ? wrong() : { ...v, ...refsOf(f) };
+  },
+  "visual-relations": (f) => {
+    const v = f.kind === "relations" ? relationshipsDiagram(f) : null;
     return v === null ? wrong() : { ...v, ...refsOf(f) };
   },
 };

@@ -36,6 +36,8 @@ export type {
   FactRef,
   OfferedFact,
   OutlineFact,
+  RelationsFact,
+  TimelineFact,
   VisualFactRaw,
 } from "./visuals";
 export type {

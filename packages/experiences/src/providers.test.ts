@@ -11,6 +11,13 @@ describe("factFormatFingerprint", () => {
     expect(factFormatFingerprint().length).toBeLessThanOrEqual(200);
   });
 
+  it("is unchanged by the timeline and relations release, so the boot stale pass re-plans nothing (spec D5)", () => {
+    // The literal is the fingerprint on `main` before this release; a run stamped with it must still read as current.
+    expect(factFormatFingerprint()).toBe(
+      "docmind:visual.facts@1+docmind:turn.facts@1+docmind:doc.connections@1+docmind.structure@1",
+    );
+  });
+
   it("changes when any of the three pins changes, and not when another pin does", () => {
     const saved = { ...PINS };
     const mut = PINS as Record<string, string>;

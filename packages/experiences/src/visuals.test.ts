@@ -17,6 +17,8 @@ import {
   type EntityMapFact,
   FACT_VISUALS_CATALOG,
   type OutlineFact,
+  type RelationsFact,
+  type TimelineFact,
   VISUALS_CATALOG,
   VISUAL_SHAPES,
   type VisualFactRaw,
@@ -137,7 +139,7 @@ describe("the fact catalogue (chat)", () => {
       "KeyFigure",
       "FactTable",
     ]);
-    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v3");
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v4");
   });
 });
 
@@ -158,6 +160,8 @@ describe("the visuals catalogue", () => {
       ["ConnectionMap", "Diagram"],
       ["DocumentOutline", "Diagram"],
       ["EntityMap", "Diagram"],
+      ["DocumentTimeline", "Diagram"],
+      ["Relationships", "Diagram"],
     ]);
   });
   it("gives one bindable, classed capability per fact", () => {
@@ -414,12 +418,14 @@ describe("the visual reshapers", () => {
       shape("visual-kpi-0", [{ ...FIGURE, compare: { label: "2023", value: 1000 } }]),
     ).toMatchObject({ deltaPct: 0.2 });
   });
-  it("register all 66 names: the four fact families at ordinals 0..15, plus the outline at 16 and the map at 17", () => {
-    expect(Object.keys(VISUAL_SHAPES)).toHaveLength(66);
+  it("register all 68 names: the four fact families at ordinals 0..15, the outline at 16, the map at 17, the timeline at 18 and the relations at 19", () => {
+    expect(Object.keys(VISUAL_SHAPES)).toHaveLength(68);
     for (const f of ["bar", "trend", "kpi", "table"])
       for (let n = 0; n < 16; n++) expect(() => shapeOf(`visual-${f}-${n}`, [])).toThrow("missing");
     expect(() => shapeOf("visual-outline-16", [])).toThrow("missing");
     expect(() => shapeOf("visual-entitymap-17", [])).toThrow("missing");
+    expect(() => shapeOf("visual-timeline-18", [])).toThrow("missing");
+    expect(() => shapeOf("visual-relations-19", [])).toThrow("missing");
   });
 });
 
@@ -685,8 +691,8 @@ describe("structure widgets", () => {
       label: `Report, passage ${i + 1}`,
     }));
 
-  it("the document catalogue is v3 and has the two diagram entries; the chat catalogue has neither", () => {
-    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v3");
+  it("the document catalogue is v4 and has the two diagram entries of c1; the chat catalogue has neither", () => {
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v4");
     const web = (name: string) =>
       (VISUALS_CATALOG.entries.find((e) => e.name === name)?.surfaces.web as { kind: string }).kind;
     expect(web("DocumentOutline")).toBe("Diagram");
@@ -773,5 +779,227 @@ describe("structure widgets", () => {
     expect(factProvider(17, doc, "EntityMap").reshaping).toMatchObject({
       scriptRef: "visual-entitymap-17",
     });
+  });
+});
+
+describe("timeline and relationships widgets", () => {
+  const doc = "11111111-1111-4111-8111-111111111111";
+  const cites = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      documentId: doc,
+      passageId: cid(i + 1),
+      label: `Report, passage ${i + 1}`,
+    }));
+  const TIMELINE: TimelineFact = {
+    kind: "timeline",
+    events: [
+      {
+        at: "2024-03-01",
+        precision: "month",
+        when: "Zebra-When-A",
+        label: "Zebra-Event-A",
+        chunkId: cid(1),
+      },
+      {
+        at: "2025-07-01",
+        precision: "quarter",
+        when: "Q3 2025",
+        label: "Zebra-Event-B",
+        chunkId: cid(2),
+      },
+      {
+        at: "2026-02-14",
+        precision: "day",
+        when: "14 Feb 2026",
+        label: "Zebra-Event-C",
+        chunkId: cid(3),
+      },
+    ],
+    chunkIds: [cid(1), cid(2), cid(3)],
+    ordinal: 18,
+  };
+  const RELATIONS: RelationsFact = {
+    kind: "relations",
+    entities: ["Zebra-Party-A", "Zebra-Party-B", "Zebra-Party-C"],
+    links: [
+      { from: 0, to: 1, rel: "Zebra-acquired", chunkId: cid(1) },
+      { from: 1, to: 2, rel: "Zebra-leads", chunkId: cid(2) },
+      { from: 0, to: 2, rel: "Zebra-owns", chunkId: cid(3) },
+    ],
+    chunkIds: [cid(1), cid(2), cid(3)],
+    ordinal: 19,
+  };
+
+  it("the document catalogue is v4: the eight v3 entries come first and are byte for byte what v3 was, then the two new Diagram entries", () => {
+    expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v4");
+    expect(VISUALS_CATALOG.entries.map((e) => e.name)).toEqual([
+      "FigureChart",
+      "FigureTrend",
+      "KeyFigure",
+      "FactTable",
+      "RelatedDocuments",
+      "ConnectionMap",
+      "DocumentOutline",
+      "EntityMap",
+      "DocumentTimeline",
+      "Relationships",
+    ]);
+    // Measured on `main` before this release: a plan stored under v3 compiles against v4 only while these stay identical (spec D5).
+    expect(
+      createHash("sha256")
+        .update(JSON.stringify(VISUALS_CATALOG.entries.slice(0, 8)))
+        .digest("hex"),
+    ).toBe("26bc046f4768d49e9cc97ed29a5689e0d8857f229e7e5e810e22b072eea065aa");
+    const web = (name: string) =>
+      (VISUALS_CATALOG.entries.find((e) => e.name === name)?.surfaces.web as { kind: string }).kind;
+    expect(web("DocumentTimeline")).toBe("Diagram");
+    expect(web("Relationships")).toBe("Diagram");
+    const chat = FACT_VISUALS_CATALOG.entries.map((e) => e.name);
+    expect(chat).not.toContain("DocumentTimeline");
+    expect(chat).not.toContain("Relationships");
+  });
+
+  it("reshapes the timeline to a valid timeline whose refs are the cited passages (at most 16), a quarter shown as written", () => {
+    const v = shape("visual-timeline-18", [{ ...TIMELINE, cites: cites(20) }]) as {
+      layout: string;
+      timeFormat: { granularity: string };
+      nodes: { label: string; at: string }[];
+      refs: { id: string; label: string }[];
+    };
+    expect(v.layout).toBe("timeline");
+    expect(v.timeFormat).toEqual({ granularity: "day" });
+    expect(v.nodes.map((n) => [n.label, n.at])).toEqual([
+      ["Zebra-When-A · Zebra-Event-A", "2024-03-01"],
+      ["Q3 2025 · Zebra-Event-B", "2025-07-01"],
+      ["Zebra-Event-C", "2026-02-14"],
+    ]);
+    expect(v.refs).toHaveLength(16);
+    expect(v.refs[0]).toEqual({ id: `${doc}:${cid(1)}`, label: "Report, passage 1" });
+    expect(checkKindValue("Diagram", v)).toMatchObject({ ok: true });
+    expect((shape("visual-timeline-18", [TIMELINE]) as { refs?: unknown }).refs).toBeUndefined();
+  });
+
+  it("reshapes the relations to a valid labelled network with refs", () => {
+    const v = shape("visual-relations-19", [{ ...RELATIONS, cites: cites(3) }]) as {
+      layout: string;
+      edges: { from: string; to: string; label: string }[];
+      refs: unknown[];
+    };
+    expect(v.layout).toBe("network");
+    expect(v.edges.map((e) => [e.from, e.to, e.label])).toEqual([
+      ["n0", "n1", "Zebra-acquired"],
+      ["n1", "n2", "Zebra-leads"],
+      ["n0", "n2", "Zebra-owns"],
+    ]);
+    expect(v.refs).toHaveLength(3);
+    expect(checkKindValue("Diagram", v)).toMatchObject({ ok: true });
+  });
+
+  it("fitsShape accepts the right fact and rejects every other, as hydration would", () => {
+    expect(fitsShape("DocumentTimeline", TIMELINE)).toBe(true);
+    for (const wrong of [RELATIONS, OUTLINE, MAP, FIGURE, SERIES, TABLE])
+      expect(fitsShape("DocumentTimeline", wrong), wrong.kind).toBe(false);
+    expect(fitsShape("DocumentTimeline", undefined)).toBe(false);
+    expect(fitsShape("Relationships", RELATIONS)).toBe(true);
+    for (const wrong of [TIMELINE, OUTLINE, MAP, FIGURE, SERIES, TABLE])
+      expect(fitsShape("Relationships", wrong), wrong.kind).toBe(false);
+    expect(
+      fitsShape("Relationships", {
+        ...RELATIONS,
+        links: [{ from: 0, to: 9, rel: "r", chunkId: cid(1) }],
+      }),
+    ).toBe(false);
+    expect(fitsShape("DocumentOutline", TIMELINE)).toBe(false);
+    expect(fitsShape("EntityMap", RELATIONS)).toBe(false);
+    expect(fitsShape("FigureChart", TIMELINE)).toBe(false);
+    expect(fitsShape("KeyFigure", RELATIONS)).toBe(false);
+  });
+
+  it("builds the aggregate reshapers only at their own ordinals, and an entry reads only its own ordinal", () => {
+    const keys = Object.keys(VISUAL_SHAPES);
+    for (const k of [
+      "visual-timeline-18",
+      "visual-relations-19",
+      "visual-outline-16",
+      "visual-kpi-15",
+    ])
+      expect(keys, k).toContain(k);
+    for (const k of [
+      "visual-timeline-19",
+      "visual-timeline-17",
+      "visual-timeline-3",
+      "visual-relations-18",
+      "visual-relations-17",
+      "visual-kpi-18",
+      "visual-bar-19",
+      "visual-trend-18",
+      "visual-table-19",
+      "visual-outline-18",
+      "visual-entitymap-19",
+    ])
+      expect(keys, k).not.toContain(k);
+    expect([18, 19, 16, 3].map((n) => entryFitsOrdinal("DocumentTimeline", n))).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    expect([18, 19, 17, 3].map((n) => entryFitsOrdinal("Relationships", n))).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
+    expect([0, 15, 16, 17, 18, 19].map((n) => entryFitsOrdinal("KeyFigure", n))).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(entryFitsOrdinal("DocumentOutline", 18)).toBe(false);
+    expect(entryFitsOrdinal("EntityMap", 19)).toBe(false);
+  });
+
+  it("a provider reads the fact by ordinal for either entry, and the fact pins parse at two digits", () => {
+    expect(factProvider(18, doc, "DocumentTimeline").reshaping).toMatchObject({
+      scriptRef: "visual-timeline-18",
+    });
+    expect(factProvider(19, doc, "Relationships").reshaping).toMatchObject({
+      scriptRef: "visual-relations-19",
+    });
+    expect(factRefOfPin("visual.facts", `${PINS["visual.facts"]}#fact-19`)).toEqual({
+      kind: "detail",
+      ordinal: 19,
+    });
+    expect(factRefOfPin("visual.facts", `${PINS["visual.facts"]}#${doc}/fact-18`)).toEqual({
+      kind: "doc",
+      documentId: doc,
+      ordinal: 18,
+    });
+  });
+
+  it("offers each aggregate as one capability with a count-only description and a content-free sample", () => {
+    const [timeline, relations] = capabilitiesOf([TIMELINE, RELATIONS]);
+    expect([timeline?.handle, relations?.handle]).toEqual(["fact-18", "fact-19"]);
+    expect([timeline?.toolSchemaHash, relations?.toolSchemaHash]).toEqual([
+      `${PINS["visual.facts"]}#fact-18`,
+      `${PINS["visual.facts"]}#fact-19`,
+    ]);
+    expect(timeline?.description).toBe("a timeline of 3 dated events");
+    expect(relations?.description).toBe("3 named parties and 3 stated relationships between them");
+    expect(timeline?.sensitivity).toBe("sensitive");
+    // Nothing the planner is shown carries the fact's text or a real date (the fixtures are all "Zebra" and 2024 to 2026).
+    const shown = JSON.stringify([timeline, relations]);
+    for (const secret of ["Zebra", "2024-03", "2025-07", "2026-02", "Q3 2025", "14 Feb"])
+      expect(shown, secret).not.toContain(secret);
+    // The sample lets a `nodes` (and `edges`) binding validate; a count-only sample would not (loom-ui `reshape-invalid`).
+    expect(timeline?.sampleOutput).toMatchObject({ kind: "timeline", events: 3 });
+    expect(relations?.sampleOutput).toMatchObject({ kind: "relations", parties: 3, links: 3 });
+    expect(jsonPathSelect(timeline?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(relations?.sampleOutput, "nodes").ok).toBe(true);
+    expect(jsonPathSelect(relations?.sampleOutput, "edges").ok).toBe(true);
+    expect(jsonPathSelect({ kind: "timeline", events: 3 }, "nodes").ok).toBe(false);
   });
 });

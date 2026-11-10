@@ -1,11 +1,13 @@
 import { MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
-import type { EntityMapFact, OutlineFact } from "./visuals";
+import type { EntityMapFact, OutlineFact, RelationsFact, TimelineFact } from "./visuals";
 
 export interface DiagramNode {
   id: string;
   label: string;
   group: string;
   kind: string;
+  /** A timeline node's date (`YYYY-MM-DD`); loom-ui refuses a timeline node without a parseable one. */
+  at?: string;
 }
 export interface DiagramEdge {
   from: string;
@@ -13,7 +15,9 @@ export interface DiagramEdge {
   label?: string;
 }
 export interface DiagramShape {
-  layout: "tree" | "network";
+  layout: "tree" | "network" | "timeline";
+  /** How a timeline's dates read (loom-ui `TimeFormat`). */
+  timeFormat?: { granularity: "day" };
   nodes: DiagramNode[];
   edges: DiagramEdge[];
 }
@@ -61,6 +65,45 @@ export function entityMapDiagram(f: EntityMapFact): DiagramShape | null {
     if (pairs.has(pair)) return null; // a-b and b-a are one edge
     pairs.add(pair);
     edges.push({ from: `e${e.a}`, to: `e${e.b}`, label: String(e.weight) });
+  }
+  return accepted({ layout: "network", nodes, edges });
+}
+
+/**
+ * The document's dated events as a timeline: one node per event, `at` its ISO first day, no edges. An event dated to the day
+ * is labelled with its text alone; any coarser event ("Q3 2025", "March 2024") is prefixed with the date as written, so the axis
+ * never implies a day the document did not give. `timeFormat` is date-only (`day`, no zone): a tick is drawn as the written
+ * date in every viewer zone. Null when loom-ui would refuse the value (no events, an `at` that is not a date, over the node cap).
+ */
+export function timelineDiagram(f: TimelineFact): DiagramShape | null {
+  if (f.events.length === 0) return null;
+  const nodes = f.events.map((e, i) => ({
+    id: `t${i}`,
+    label: e.precision === "day" ? e.label : `${e.when} · ${e.label}`,
+    group: e.precision,
+    kind: "event",
+    at: e.at,
+  }));
+  return accepted({ layout: "timeline", timeFormat: { granularity: "day" }, nodes, edges: [] });
+}
+
+/**
+ * The parties as a network (they are already one node per normalised name), a directed edge from to to per link labelled with
+ * the relation: two relations between one pair are two edges. Null when loom-ui would refuse the value, a link names a party
+ * that is not listed, or joins a party to itself.
+ */
+export function relationshipsDiagram(f: RelationsFact): DiagramShape | null {
+  if (f.entities.length < 2 || f.links.length === 0) return null;
+  const nodes = f.entities.map((name, i) => ({
+    id: `n${i}`,
+    label: name,
+    group: "party",
+    kind: "party",
+  }));
+  const edges: DiagramEdge[] = [];
+  for (const l of f.links) {
+    if (l.from === l.to || nodes[l.from] === undefined || nodes[l.to] === undefined) return null;
+    edges.push({ from: `n${l.from}`, to: `n${l.to}`, label: l.rel });
   }
   return accepted({ layout: "network", nodes, edges });
 }
