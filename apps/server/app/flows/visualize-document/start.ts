@@ -170,7 +170,7 @@ export interface VisualsStarter {
   /**
    * On demand: re-runs the document's visuals for `generation` as `<id>-r<n>` with the next free number, unless a run of
    * the document is in flight (or every number is taken: also `running`). The run re-plans over the stored facts and
-   * extracts only when there are none. Throws on a Loom failure other than an id already taken.
+   * extracts only when there are none. The one exception is a re-run the user asked for (this method, not a boot pass): it extracts again when the document's stored extraction predates the current format (spec D5, re-extract once). Throws on a Loom failure other than an id already taken.
    */
   rerun(ref: VisualizeRef, generation: number): Promise<VisualsRerun>;
   /** True while a run of this document's `generation` that this process started has not ended. */
@@ -231,6 +231,12 @@ export interface VisualsStarterOptions {
    */
   afterDone?: Set<string>;
   /**
+   * Shared with the extract step (`ExtractDeps.reextract`): the execution ids of re-runs the USER asked for (`rerun`, the
+   * route's call), so the step extracts again when the stored extraction predates `EXTRACT_FORMAT`. A boot pass never notes
+   * one. Ids only; a lost note just means the run re-plans.
+   */
+  reextract?: Set<string>;
+  /**
    * False while the `visuals` role is off: nothing starts (`start` answers null, the sweep fires nothing), so a
    * deployment without the role records no executions and a later switch-on finds every ready document unvisualized.
    * Default true. Cancel always runs.
@@ -255,6 +261,7 @@ export function loomVisualsStarter(
     running: runningSource,
     runs,
     afterDone,
+    reextract,
     enabled = true,
     pageSize = READY_PAGE,
     onError = logClass("visualize start failed"),
@@ -360,6 +367,7 @@ export function loomVisualsStarter(
     ref: VisualizeRef,
     generation: number,
     assumeDone = false,
+    byUser = false,
   ): Promise<VisualsRerun & { handle?: ExecutionHandle }> => {
     if (!enabled) return { kind: "disabled" };
     const key = genKey(ref.userId, ref.documentId, generation);
@@ -375,6 +383,10 @@ export function loomVisualsStarter(
         if (wasDone && afterDone) {
           if (afterDone.size >= 1000) afterDone.clear(); // ids only; a lost note just means one extraction
           afterDone.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
+        }
+        if (byUser && reextract) {
+          if (reextract.size >= 1000) reextract.clear(); // ids only; a lost note just means the run re-plans
+          reextract.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
         }
         return startOne(ref, generation, n);
       });
@@ -421,7 +433,7 @@ export function loomVisualsStarter(
     fireWith(ref, () => start(ref, generation));
   // The route's re-run is tracked like every other start: a delete's `settle` waits for it, then cancels the run it started.
   const rerun = async (ref: VisualizeRef, generation: number): Promise<VisualsRerun> => {
-    const { handle: _handle, ...answer } = await pend(ref, rerunWith(ref, generation));
+    const { handle: _handle, ...answer } = await pend(ref, rerunWith(ref, generation, false, true));
     return answer;
   };
   return {

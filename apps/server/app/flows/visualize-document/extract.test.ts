@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { tainted } from "@loom/classify";
 import {
@@ -12,7 +12,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { LLM_RETRY } from "../ingest-document/stepEffect";
 import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";
-import type { ExtractionWrite, Fact } from "./facts";
+import { EXTRACT_FORMAT, type ExtractionWrite, type Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
 import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM } from "./prompts";
 import { visualizeExecutionId } from "./start";
@@ -54,12 +54,15 @@ function setup(
     writes: [] as ExtractionWrite[][],
     held: [] as ExtractionWrite[],
     replace: async (_r: VisualizeRef, facts: readonly ExtractionWrite[]) => {
+      store.format = EXTRACT_FORMAT;
       store.writes.push([...facts]);
       store.held = [...facts];
       return facts.length;
     },
     list: async () => store.held.filter((f) => f.ordinal < 16) as Fact[],
     aggregateCount: async () => store.held.filter((f) => f.ordinal >= 18).length,
+    format: null as string | null,
+    extractFormat: async () => store.format,
   };
   const d = {
     guard: { begin: async () => {} },
@@ -700,5 +703,185 @@ describe("fix round 1: a lenient answer and a slow model", () => {
     expect(src.match(/extractLlm/g)).toHaveLength(1);
     expect(src.indexOf("extractLlm")).toBeLessThan(src.indexOf("const visualizeTurn"));
     expect(src).not.toMatch(/visualsPlanner\([^)]*visualsExtract/);
+  });
+});
+
+describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-c2 document", () => {
+  const ctxOf = (s: ReturnType<typeof setup>, n = 1) =>
+    ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+  const noteFor = (s: ReturnType<typeof setup>, n = 1) =>
+    new Set([visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n)]);
+  const existing = { ...GOOD, ordinal: 0 } as Fact;
+
+  it("a re-run the user asked for extracts a document with no stamp, stamps it, and consumes its note", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    expect(s.store.format).toBeNull();
+    const reextract = noteFor(s);
+    expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
+      outcome: "done",
+      count: 1,
+      aggregates: 2,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(1);
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0, 18, 19]);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+    expect(reextract.size).toBe(0);
+  });
+
+  it("a second re-run does not extract, even for a document whose extraction found no timeline or relations", async () => {
+    const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+    const s = setup({ llm });
+    s.store.held = [existing];
+    await extractEffect({ ...s.d, reextract: noteFor(s, 1) }).execute(s.ref, ctxOf(s, 1));
+    expect(requests).toHaveLength(1);
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0]);
+    const second = noteFor(s, 2);
+    expect(await extractEffect({ ...s.d, reextract: second }).execute(s.ref, ctxOf(s, 2))).toEqual({
+      outcome: "done",
+      count: 1,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(1);
+    expect(second.size).toBe(0);
+  });
+
+  it("the re-run of a document a c2 extraction stamped does not extract", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    s.store.format = EXTRACT_FORMAT;
+    expect(await extractEffect({ ...s.d, reextract: noteFor(s) }).execute(s.ref, ctxOf(s))).toEqual(
+      {
+        outcome: "done",
+        count: 1,
+        model: "claude-test",
+      },
+    );
+    expect(requests).toEqual([]);
+    expect(s.store.writes).toEqual([]);
+  });
+
+  it("an older stamp counts as pre-c2: a later bump of the format re-extracts once more", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    s.store.format = "docmind.extract@1";
+    await extractEffect({ ...s.d, reextract: noteFor(s) }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(1);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+  });
+
+  it("a re-ingest whose extraction failed leaves the stamp NULL, so the user's re-run extracts", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = []; // the re-ingest cleared the facts; its extraction failed: no stamp
+    s.store.format = null;
+    await extractEffect({ ...s.d, reextract: noteFor(s) }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(1);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+  });
+
+  it("a zero-fact document whose last run was done is extracted by the user's re-run when it has no stamp, and not when stamped", async () => {
+    const done = { last: async () => ({ run: 0, state: "done" as const, code: null }) };
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    await extractEffect({ ...s.d, runs: done, reextract: noteFor(s) }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(1);
+    const t = setup({ llm });
+    t.store.format = EXTRACT_FORMAT;
+    await extractEffect({ ...t.d, runs: done, reextract: noteFor(t) }).execute(t.ref, ctxOf(t));
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each([
+    ["a pre-c2 document (no stamp)", null],
+    ["a document an older format stamped", "docmind.extract@1"],
+    ["a document the current format stamped", EXTRACT_FORMAT],
+  ])(
+    "a boot pass never extracts: an un-noted re-run of %s re-plans over its stored facts, and another run's note is left alone",
+    async (_name, format) => {
+      const { llm, requests } = scripted(() => answer());
+      const s = setup({ llm });
+      s.store.held = [existing];
+      s.store.format = format;
+      const reextract = noteFor(s, 7);
+      expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s, 1))).toEqual({
+        outcome: "done",
+        count: 1,
+        model: "claude-test",
+      });
+      expect(requests).toEqual([]);
+      expect(s.store.writes).toEqual([]);
+      expect(s.store.format).toBe(format);
+      expect(reextract.size).toBe(1);
+    },
+  );
+
+  it("a first attempt that fails keeps the note: the retried step extracts again, stamps the document and only then spends the note", async () => {
+    const replies = ["not json", answer()];
+    const noteSeen: boolean[] = [];
+    const { llm, requests } = scripted(() => {
+      const reply = replies.shift() as string;
+      noteSeen.push(reextract.has(id));
+      return reply;
+    });
+    const s = setup({ llm });
+    s.store.held = [existing];
+    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const reextract = new Set([id]);
+    expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
+      outcome: "done",
+      count: 1,
+      aggregates: 2,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(2);
+    expect(noteSeen).toEqual([true, true]);
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0, 18, 19]);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+    expect(reextract.size).toBe(0);
+  });
+
+  it("a write that fails keeps the note too: the retry extracts again", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const reextract = new Set([id]);
+    const write = s.store.replace;
+    let failures = 1;
+    s.store.replace = async (r, facts) => {
+      if (failures-- > 0) throw new LlmUnavailableError();
+      return write(r, facts);
+    };
+    await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(2);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+    expect(reextract.size).toBe(0);
+  });
+
+  it("the automatic run extracts as before and stamps the format (a new upload or re-ingest)", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    const ctx = { executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1) } as never;
+    await extractEffect(s.d).execute(s.ref, ctx);
+    expect(requests).toHaveLength(1);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+  });
+
+  it('backstop (the real guard is the type `Pick<VisualFactStore, "list">` and the behavioural test in visualize-turn/flow.test.ts): chat\'s sources do not mention the stamp', () => {
+    for (const file of [
+      "../visualize-turn/steps.ts",
+      "../visualize-turn/deps.ts",
+      "../visualize-turn/pgTurnFacts.ts",
+    ]) {
+      const source = readFileSync(resolve(__dirname, file), "utf8");
+      expect(source, file).not.toMatch(
+        /extractFormat|EXTRACT_FORMAT|visual_extract_format|aggregateCount/,
+      );
+    }
   });
 });

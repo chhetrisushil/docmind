@@ -92,10 +92,22 @@ function stack(o: {
   const model = scripted(o.replies);
   const planner = visualsPlanner(model.llm, o.key ?? KEY);
   let held: Fact[] = [];
+  // The document store chat reads is typed `Pick<VisualFactStore, "list">`; at run time every member it touches is recorded,
+  // so a test can prove chat never reaches `replace`, `extractFormat` or `aggregateCount` (the c2 extraction stamp).
+  const touched: string[] = [];
+  const storedDocumentFacts = new Proxy(
+    { list: async () => o.storedFacts ?? [] } as Record<string, unknown>,
+    {
+      get: (target, key) => {
+        touched.push(String(key));
+        return target[key as string];
+      },
+    },
+  ) as unknown as TurnVisualizeDeps["stored"];
   const deps: TurnVisualizeDeps = {
     guard: { begin: async () => {} },
     turn: { read: async () => (o.turn === undefined ? CITED : o.turn) },
-    stored: { list: async () => o.storedFacts ?? [] },
+    stored: storedDocumentFacts,
     turnFacts: {
       list: async () => held,
       replace: async (_r, facts) => {
@@ -142,7 +154,18 @@ function stack(o: {
     );
     return TurnOutput.parse((await handle.waitForCompletion()).variables._output);
   };
-  return { inner, sealed, lineage, frames, model, ref, executionId, run, heldFacts: () => held };
+  return {
+    inner,
+    sealed,
+    lineage,
+    frames,
+    model,
+    ref,
+    executionId,
+    run,
+    heldFacts: () => held,
+    touched,
+  };
 }
 
 describe("visualize-turn flow", () => {
@@ -223,6 +246,14 @@ describe("visualize-turn flow", () => {
     const s = stack({ replies: [EXTRACTED, plan()], storedFacts: [] });
     expect(await s.run()).toEqual({ outcome: "visualized" });
     expect(s.model.requests).toHaveLength(2); // one extract window, one planner call
+  });
+
+  it("chat's extraction never writes or reads the document store's extraction stamp (spec D5: it only lists stored facts)", async () => {
+    const s = stack({ replies: [EXTRACTED, plan()], storedFacts: [] });
+    expect(await s.run()).toEqual({ outcome: "visualized" });
+    expect(s.model.requests).toHaveLength(2);
+    expect(s.heldFacts()).toHaveLength(1);
+    expect(new Set(s.touched)).toEqual(new Set(["list"]));
   });
 
   it("a re-run ending nothing keeps the head's facts: a turn that already has facts is re-planned, never re-extracted", async () => {

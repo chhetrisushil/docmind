@@ -475,6 +475,27 @@ describe("rerun and the retry sweep", () => {
     );
   });
 
+  it("notes a user's re-run for the extract step (so it can extract again), and never a boot pass's", async () => {
+    const f = fake();
+    const reextract = new Set<string>();
+    const r = ref();
+    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    expect(await starter.rerun(r, 2)).toEqual({ kind: "started", rerun: 1 });
+    expect([...reextract]).toEqual([visualizeExecutionId(r.userId, r.documentId, 2, 1)]);
+  });
+
+  it("notes nothing when the visuals role is off (nothing starts)", async () => {
+    const f = fake();
+    const reextract = new Set<string>();
+    const off = loomVisualsStarter(f.runtime, flow, {
+      runs: runsStore(),
+      reextract,
+      enabled: false,
+    });
+    expect(await off.rerun(ref(), 1)).toEqual({ kind: "disabled" });
+    expect(reextract.size).toBe(0);
+  });
+
   it("answers running while a run of the document is in flight (the automatic run included), then starts again once it ends", async () => {
     const f = fake();
     const starter = loomVisualsStarter(f.runtime, flow);
@@ -781,13 +802,16 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const headed = mk();
     const bare = mk();
     const afterDone = new Set<string>();
+    const reextract = new Set<string>();
     const starter = loomVisualsStarter(s.runtime, flow, {
       unrecorded: page([headed, bare]),
       visualized: async (d) => d.documentId === headed.documentId,
       runs: s.runs,
       afterDone,
+      reextract,
     });
     expect(await starter.sweep()).toBe(1);
+    expect(reextract.size).toBe(0); // a boot pass is not a user's press: never noted
     const id = visualizeExecutionId(headed.userId, headed.documentId, 1, 1);
     expect(s.started).toEqual([id]);
     expect(afterDone.has(id)).toBe(true);
