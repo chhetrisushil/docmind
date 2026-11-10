@@ -113,6 +113,54 @@ describe("visualRunRecorder", () => {
     ]);
   });
 
+  it("calls onEnded with the execution id after the end is recorded and before the page is told", async () => {
+    const order: string[] = [];
+    const record = vi.fn<VisualRuns["record"]>(async () => void order.push("record"));
+    const bus = new InMemoryProgressBus();
+    const who = ids();
+    bus.subscribe({ userId: who.userId }, () => order.push("told"));
+    const rec = visualRunRecorder({
+      runs: { record },
+      bus,
+      onEnded: (executionId) => order.push(`ended ${executionId}`),
+    });
+    const id = legacyVisualizeId(who.userId, who.documentId, 1);
+    rec.onEvent(
+      event(id, "EXECUTION_COMPLETED", {
+        output: { outcome: "failed", code: "visuals-model-unavailable" },
+      }),
+    );
+    await rec.idle();
+    expect(order).toEqual(["record", `ended ${id}`, "told"]);
+  });
+
+  it("a record() rejection neither calls onEnded nor tells the page; it is reported", async () => {
+    const record = vi.fn<VisualRuns["record"]>(async () => {
+      throw new RangeError("db down");
+    });
+    const bus = new InMemoryProgressBus();
+    const who = ids();
+    const seen: DocumentProgressEvent[] = [];
+    bus.subscribe({ userId: who.userId }, (e) => seen.push(e));
+    const onEnded = vi.fn();
+    const errors: unknown[] = [];
+    const rec = visualRunRecorder({
+      runs: { record },
+      bus,
+      onEnded,
+      onError: (e) => errors.push(e),
+    });
+    rec.onEvent(
+      event(legacyVisualizeId(who.userId, who.documentId, 1), "EXECUTION_COMPLETED", {
+        output: { outcome: "failed", code: "visuals-model-unavailable" },
+      }),
+    );
+    await rec.idle();
+    expect(onEnded).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    expect(errors).toHaveLength(1);
+  });
+
   it("a thrown failure records failed/internal and notifies; a cancel records but does not notify", async () => {
     const s = setup();
     const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
@@ -189,6 +237,37 @@ describe("visualRunRecorder with new-format ids", () => {
         undefined,
         factFormatFingerprint(),
       );
+    } finally {
+      opaqueIds.install(undefined);
+    }
+  });
+
+  it("a new-format run's end is recorded, then onEnded gets the opaque execution id, then the page is told", async () => {
+    const T = randomUUID();
+    const who = ids();
+    const t = testOpaqueIds();
+    t.store.add(who.userId, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: who.userId });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store));
+    try {
+      const order: string[] = [];
+      const record = vi.fn<VisualRuns["record"]>(async () => void order.push("record"));
+      const bus = new InMemoryProgressBus();
+      bus.subscribe({ userId: who.userId }, () => order.push("told"));
+      const rec = visualRunRecorder({
+        runs: { record },
+        bus,
+        onEnded: (executionId) => order.push(`ended ${executionId}`),
+      });
+      const id = user.visualize(who.documentId, 3, 2);
+      expect(id).toMatch(/^h_[^:]+:visualize-.+\.3-r2$/);
+      rec.onEvent(
+        event(id, "EXECUTION_COMPLETED", {
+          output: { outcome: "failed", code: "visuals-model-unavailable" },
+        }),
+      );
+      await rec.idle();
+      expect(order).toEqual(["record", `ended ${id}`, "told"]);
     } finally {
       opaqueIds.install(undefined);
     }

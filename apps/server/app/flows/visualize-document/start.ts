@@ -166,6 +166,11 @@ export interface VisualsStarter {
   /** True while a run of this document's `generation` that this process started has not ended. */
   running(ref: Pick<VisualizeRef, "userId" | "documentId">, generation: number): boolean;
   /**
+   * The event feed recorded this execution's end: it no longer counts as `running`, even before Loom settles its handle
+   * (which waits for the post-terminal housekeeping), so the detail never answers `running` after the page was told the end.
+   */
+  ended(executionId: string): void;
+  /**
    * A run recorded as `running` that this process is not tracking may have ended with its end event lost (the feed is live
    * only, and its writes are dropped at shutdown). Asks Loom for the execution's state and, when it is terminal, repairs
    * the row from the output (ids and enums only) and answers the repaired run; otherwise answers `last` unchanged. Never throws.
@@ -467,6 +472,7 @@ export function loomVisualsStarter(
     start,
     rerun,
     running: isRunning,
+    ended: (executionId) => tracker.end(executionId),
     reconcile,
     fire: (ref, generation) => void fire(ref, generation),
     async settle(identity, documentId) {

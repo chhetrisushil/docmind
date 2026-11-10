@@ -22,6 +22,46 @@ describe("rerunTracker", () => {
     expect(t.running("k")).toBe(false);
   });
 
+  it("end: a run whose end was recorded stops counting before its handle settles; the late settle is a no-op", async () => {
+    const t = rerunTracker();
+    const a = handle();
+    const b = handle();
+    t.track("k", "e1", a.h);
+    t.track("k", "e2", b.h);
+    t.end("e1");
+    expect(t.running("k")).toBe(true); // e2 is still open
+    t.end("e2");
+    t.end("unknown"); // fine
+    expect(t.running("k")).toBe(false);
+    const c = handle();
+    t.track("k", "e3", c.h); // a new run of the key
+    a.done();
+    b.done();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(t.running("k")).toBe(true); // the old handles settling never drop the new run
+    t.end("e3");
+    expect(t.running("k")).toBe(false);
+  });
+
+  it("end before track: a run whose end arrived first is never tracked, once; the memory is bounded (oldest forgotten)", () => {
+    const t = rerunTracker();
+    t.end("early");
+    t.track("k", "early", handle().h); // the end event beat the start's track()
+    expect(t.running("k")).toBe(false);
+    t.track("k", "early", handle().h); // the same id is not remembered forever: a later track counts
+    expect(t.running("k")).toBe(true);
+
+    const u = rerunTracker();
+    for (let i = 0; i < 256; i++) u.end(`e${i}`);
+    u.end("e256"); // pushes e0 out
+    u.track("k2", "e0", handle().h);
+    expect(u.running("k2")).toBe(true); // forgotten: tracked
+    u.track("k3", "e256", handle().h);
+    expect(u.running("k3")).toBe(false); // remembered: dropped
+    u.track("k4", "e1", handle().h);
+    expect(u.running("k4")).toBe(false); // the bound is 256, so e1 is still held
+  });
+
   it("does not track a handle that cannot be awaited", () => {
     const t = rerunTracker();
     t.track("k", "e1", {} as ExecutionHandle);

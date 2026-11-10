@@ -92,6 +92,8 @@ export function visualRunRecorder(o: {
   bus: ProgressBus;
   /** Execution ids the legacy 1.0.0 runner ran (`visualizeDocumentFlow`'s `legacyRuns`): such a run derived no structure, so it is not stamped. */
   legacyRuns?: Set<string>;
+  /** Called with the execution id once its end is recorded, before the page is told: the starter stops counting it as running. */
+  onEnded?: (executionId: string) => void;
   onError?: (err: unknown) => void;
 }): { onEvent(e: EventEnvelope): void; idle(): Promise<void> } {
   const report = o.onError ?? logClass;
@@ -134,6 +136,9 @@ export function visualRunRecorder(o: {
             // re-planned once more at the next boot (one bounded extra planner call). A NULL stamp counts as stale (migration 0032), so a
             // document never stamped is re-planned at each boot until a live end event stamps it.
           );
+          // The detail reads this process's in-flight runs before the table, and Loom settles the handle only after its
+          // post-terminal housekeeping: drop the run now, so a page told the end never reads `running` afterwards.
+          o.onEnded?.(e.executionId);
           if (end.state === "failed" && end.notify)
             o.bus.publish(
               { userId: id.userId },
