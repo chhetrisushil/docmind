@@ -6,3 +6,4 @@ export * from "./ui";
 export * from "./locator";
 export * from "./intents";
 export * from "./sources";
+export * from "./tags";
