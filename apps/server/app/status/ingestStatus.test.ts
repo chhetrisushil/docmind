@@ -434,4 +434,16 @@ describe("IngestStatus with new-format ids", () => {
     expect(rows?.every((r) => r.state === null)).toBe(true);
     expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toBeUndefined();
   });
+
+  it("forDocument loads the user itself on a cold cache: an h_ run that was never folded is refreshed and found", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: U });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // cold: this process has not cached the user
+    expect(opaqueIds.known(user.handle)).toBe(false);
+    const { log, status } = setup();
+    await status.boot();
+    log.append(...ingestRun(user.ingest(D1, 2), "ready")); // in the log, never fed live: only the read-repair can fold it
+    expect(await status.forDocument(ALICE, D1, 2)).toMatchObject({ status: "ready" });
+  });
 });
