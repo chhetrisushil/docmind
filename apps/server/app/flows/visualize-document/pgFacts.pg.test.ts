@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../../db/tenant";
 import { PG_URL } from "../../db/testSupport";
 import { deleteDocument } from "../../documents/repo";
+import { bumpGeneration } from "../../documents/repo";
 import { T1, T2, U1B } from "../../documents/testHarness";
 import { DocumentGoneError } from "../ingest-document/errors";
 import { type PgFixture, startPgFixture } from "../ingest-document/pgFixture";
@@ -487,5 +488,99 @@ describe.skipIf(!PG_URL)("PgVisualFacts (needs DOCMIND_TEST_PG_URL)", () => {
         "x".repeat(65),
       ]),
     ).rejects.toThrow(/check/i);
+  });
+
+  it("a stale writer that read its generation before a concurrent re-ingest bump writes nothing (the fence serialises against the bump)", async () => {
+    for (const which of ["replace", "replaceStructure"] as const) {
+      const ref = await fx.doc(`d${which === "replace" ? "0" : "1"}`.repeat(32));
+      const chunk = await seedChunk(ref);
+      const store = new PgVisualFacts(fx.app, fx.fields);
+      await fx.db.owner.query("UPDATE documents SET ingest_generation = 5 WHERE id = $1", [
+        ref.documentId,
+      ]);
+      await store.replace(ref, [fig(0, chunk)], undefined, 5);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let bumpedNow: () => void = () => {};
+      const bumpedSignal = new Promise<void>((r) => {
+        bumpedNow = r;
+      });
+      // The bump's transaction holds the row lock, uncommitted, while the stale writer starts.
+      const bump = withTenant(fx.app, ref.tenantId, async (tx) => {
+        await bumpGeneration(tx, ref.documentId, ref.userId, 5);
+        bumpedNow();
+        await gate;
+      });
+      await bumpedSignal;
+      const stale =
+        which === "replace"
+          ? store.replace(ref, [], undefined, 5)
+          : store.replaceStructure(ref, [outlineFact(chunk)], undefined, 5);
+      const outcome = stale.then(
+        () => "wrote",
+        (e: unknown) => (e instanceof DocumentGoneError ? "gone" : "other"),
+      );
+      await new Promise((r) => setTimeout(r, 400));
+      release();
+      await bump;
+      expect(await outcome).toBe("gone");
+      expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([0]);
+    }
+  });
+
+  it("an aborted extraction write rolls the facts and the stamp back together", async () => {
+    const ref = await fx.doc("d2".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    await store.replace(ref, [fig(0, chunk)]);
+    await fx.db.owner.query("UPDATE documents SET visual_extract_format = NULL WHERE id = $1", [
+      ref.documentId,
+    ]);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(store.replace(ref, [fig(1, chunk)], ac.signal)).rejects.toThrow();
+    expect(await store.extractFormat(ref)).toBeNull();
+    expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([0]);
+  });
+
+  it("the database refuses an extracted kind at 16 or 17, by the pinned constraint", async () => {
+    const ref = await fx.doc("d3".repeat(32));
+    const chunk = await seedChunk(ref);
+    const insert = (kind: string, ordinal: number) =>
+      fx.db.owner.query(
+        "INSERT INTO visual_facts (id, tenant_id, owner_id, document_id, kind, ordinal, fact_enc, chunk_ids) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, '{}'::jsonb, $6::uuid[])",
+        [ref.tenantId, ref.userId, ref.documentId, kind, ordinal, [chunk]],
+      );
+    await expect(insert("figure", 16)).rejects.toThrow(/visual_facts_kind_ordinal_check/);
+    await expect(insert("series", 17)).rejects.toThrow(/visual_facts_kind_ordinal_check/);
+    await expect(insert("factTable", 16)).rejects.toThrow(/visual_facts_kind_ordinal_check/);
+  });
+
+  it("aggregateCount and extractFormat decrypt nothing", async () => {
+    const ref = await fx.doc("d4".repeat(32));
+    const chunk = await seedChunk(ref);
+    const { timeline, relations } = aggregateFacts(chunk);
+    await new PgVisualFacts(fx.app, fx.fields).replace(ref, [fig(0, chunk), timeline, relations]);
+    const opened: string[] = [];
+    const spy = {
+      forUser: (u: string) => {
+        const c = fx.fields.forUser(u);
+        return {
+          ...c,
+          open: async (bind: string, env: unknown) => {
+            opened.push(bind);
+            return c.open(bind, env);
+          },
+        };
+      },
+    } as unknown as typeof fx.fields;
+    const store = new PgVisualFacts(fx.app, spy);
+    expect(await store.aggregateCount(ref)).toBe(2);
+    expect(await store.extractFormat(ref)).toBe(EXTRACT_FORMAT);
+    expect(opened).toEqual([]);
+    await store.listAll(ref); // the control: reading facts does open them
+    expect(opened.length).toBe(3);
   });
 });

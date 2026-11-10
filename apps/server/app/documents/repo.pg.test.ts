@@ -128,4 +128,19 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
     // Another user of the same tenant cannot bump it.
     expect(await withTenant(app, T1, (tx) => bumpGeneration(tx, doc.id, U1B, 3))).toBeNull();
   });
+
+  it("bumpGeneration clears the extraction format stamp, so the new generation extracts again", async () => {
+    const doc = await newDoc(T1, U1, FP("c"));
+    await withTenant(app, T1, (tx) => insertDocument(tx, doc));
+    await db.owner.query(
+      "UPDATE documents SET visual_extract_format = 'docmind.extract@2' WHERE id = $1",
+      [doc.id],
+    );
+    await withTenant(app, T1, (tx) => bumpGeneration(tx, doc.id, U1, 2));
+    const { rows } = await db.owner.query(
+      "SELECT visual_extract_format AS f FROM documents WHERE id = $1",
+      [doc.id],
+    );
+    expect(rows[0].f).toBeNull();
+  });
 });

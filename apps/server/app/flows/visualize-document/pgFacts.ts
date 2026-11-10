@@ -140,8 +140,10 @@ export class PgVisualFacts implements VisualFactStore {
       if (generation !== undefined) {
         // The step guard checked this at begin; a re-ingest can land after that. Under the document lock, a run of a
         // superseded generation writes nothing (the same outcome as the guard: the document is gone for this run).
+        // FOR NO KEY UPDATE conflicts with a re-ingest's generation bump (lockDocument's KEY SHARE does not), so a bump in
+        // flight commits first and this read sees it. No deadlock: the bump locks only this one documents row.
         const { rows } = await tx.query<{ ingest_generation: number }>(
-          "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+          "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3 FOR NO KEY UPDATE",
           [ref.documentId, ref.userId, ref.tenantId],
         );
         if (Number(rows[0]?.ingest_generation) !== generation) throw new DocumentGoneError();
