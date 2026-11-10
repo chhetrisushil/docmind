@@ -280,6 +280,37 @@ describe("erasureDeps", () => {
     expect(t.ids.cached(USER)).toBeUndefined();
   });
 
+  it("while Loom shreds the h_ subject, a cache hit builds no h_ id; after a park it builds them again", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const seen: Record<string, unknown> = {};
+    let outcome: "parked" | "erased" = "parked";
+    const { parts: p } = parts({
+      ids: t.ids,
+      app: {
+        eraseSubject: async () => {
+          // What a concurrent document delete or a visuals reconcile does mid-shred (the key may already be destroyed by Loom).
+          seen.cached = t.ids.cached(USER);
+          seen.load = await t.ids.load(who);
+          seen.ensure = await t.ids.ensureUser(who).then(
+            () => "built",
+            (e: Error) => e.constructor.name,
+          );
+          return { outcome };
+        },
+      },
+    });
+    const deps = erasureDeps(p);
+    await deps.eraseSubject(`h_${user.handle}`);
+    expect(seen).toEqual({ cached: undefined, load: false, ensure: "FieldKeyUnavailableError" });
+    expect(t.ids.cached(USER)).toBeDefined(); // parked: the key lives, the retried stop can name the h_ runs
+    outcome = "erased";
+    await t.keys.destroy(`h_${user.handle}`);
+    await deps.eraseSubject(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeUndefined();
+  });
+
   it("keeps the cached id key when the shred did not erase (parked or unknown)", async () => {
     const t = testOpaqueIds();
     t.store.add(USER, TENANT);

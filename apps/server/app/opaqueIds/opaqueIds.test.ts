@@ -742,11 +742,10 @@ describe("review fixes", () => {
     expect(legacyIds.ingest(U, D.toUpperCase(), 2)).toBe(legacyIds.ingest(U, D, 2));
   });
 
-  it("handleOf and handleOfId strip the lineage stream prefix like subjectOf (6)", async () => {
-    const { ids, userIds: u } = await userIds();
+  it("handleOf strips the lineage stream prefix like subjectOf (6)", async () => {
+    const { userIds: u } = await userIds();
     const line = `__loom_ui_lineage__:${u.documentLineage(D)}`;
     expect(opaqueIds.handleOf(line)).toBe(u.handle);
-    expect(ids.handleOfId(line)).toBe(u.handle);
     expect(opaqueIds.handleOf(`__loom_ui_lineage__:${legacyIds.documentLineage(U, D)}`)).toBeNull();
   });
 

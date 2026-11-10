@@ -7,6 +7,7 @@ import {
   type SensitiveMap,
   foldedStates,
 } from "@loom/plugin-read-model";
+import { existingUser } from "../documents/executionCandidates";
 import type { ProgressBus } from "../documents/progress";
 import { legacyIds, opaqueIds } from "../opaqueIds";
 import { ensureGate } from "./ensureGate";
@@ -185,9 +186,9 @@ export class IngestStatus implements DocumentStatusReads {
   ): Promise<StatusView> {
     // The writer refreshes (read-repair by execution id: a document with no row has no key to find); the reader reads. The row may
     // be under either id format (a run from before the deploy, or one after), so both candidates are refreshed.
-    await opaqueIds.loadUser(identity);
     const id = documentId.toLowerCase();
-    const user = opaqueIds.current()?.cached(identity.userId);
+    const ids = opaqueIds.current();
+    const user = ids && (await existingUser(ids, identity));
     await this.service.refresh(
       INGEST_STATUS_MODEL,
       [

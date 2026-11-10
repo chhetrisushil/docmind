@@ -73,7 +73,7 @@ const NIL_UUID = "00000000-0000-0000-0000-000000000000";
  * The one module that builds and parses execution and lineage ids, in both formats (O5). The new format needs the user's id key, which
  * is async to fetch and then cached: `ensureUser` and `ensureHandle` are the async entry points, `parse` and the `UserIds` builders are
  * synchronous. A `parse` of an old-format id never needs the cache; of a new-format id it answers null on a cache miss, so a caller that
- * can see such an id first awaits `ensureHandle(handleOf(id))` (see `handleOfId`).
+ * can see such an id first awaits `ensureHandle(handleOf(id))` (see `opaqueIds.handleOf`).
  */
 export class OpaqueIds {
   private readonly byHandle = new Map<string, Entry>();
@@ -86,6 +86,12 @@ export class OpaqueIds {
   private readonly fetches = new Map<string, Set<{ cancelled: boolean }>>();
   /** Handles the store said nobody holds, with an expiry: an erased user's leftover ids must not cost a lookup each. */
   private readonly misses = new Map<string, number>();
+  /**
+   * Handles whose `h_` subject is being shredded right now (`retireHandle`, until `unretireHandle`). Loom destroys the handle's key inside
+   * `eraseSubject`, before the cache is told: while a handle is here no read or mint hands out its builders, so a concurrent cache hit
+   * cannot build an `h_` id against a key that may already be gone. Entries live only for the duration of one shred call.
+   */
+  private readonly retiring = new Set<string>();
 
   constructor(
     private readonly keys: Pick<KeyStore, "get" | "getOrCreate" | "wasDestroyed">,
@@ -105,7 +111,10 @@ export class OpaqueIds {
   /** The user's builders, minting the key and the handle on a user's first new-format start. A key-store outage throws (never a plaintext fallback). */
   async ensureUser(who: { tenantId: string; userId: string }): Promise<UserIds> {
     const hit = this.byUser.get(who.userId);
-    if (hit) return hit.ids;
+    if (hit) {
+      if (this.retiring.has(hit.ids.handle)) throw new FieldKeyUnavailableError();
+      return hit.ids;
+    }
     let pending = this.inflight.get(who.userId);
     if (!pending) {
       const started = this.mint(who);
@@ -166,7 +175,7 @@ export class OpaqueIds {
     if ((await guarded(() => this.store.claim(who, handle))) !== handle)
       throw new HandleMismatchError();
     if (await this.handleRetired(handle)) throw new FieldKeyUnavailableError();
-    if (ticket.cancelled) throw new FieldKeyUnavailableError();
+    if (ticket.cancelled || this.retiring.has(handle)) throw new FieldKeyUnavailableError();
     return this.put(who.userId, key, handle);
   }
 
@@ -176,7 +185,7 @@ export class OpaqueIds {
    */
   async ensureHandle(handle: string): Promise<UserIds | null> {
     const hit = this.byHandle.get(handle);
-    if (hit) return hit.ids;
+    if (hit) return this.retiring.has(handle) ? null : hit.ids;
     if (!HANDLE_RE.test(handle)) return null;
     const missUntil = this.misses.get(handle);
     if (missUntil !== undefined && missUntil > Date.now()) return null;
@@ -210,7 +219,7 @@ export class OpaqueIds {
 
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
     const hit = this.byUser.get(userId);
-    if (hit) return hit;
+    if (hit) return this.retiring.has(handle) ? null : hit;
     const ticket = this.ticket([`u:${userId}`, `h:${handle}`]);
     try {
       let dek: Buffer | null;
@@ -226,7 +235,7 @@ export class OpaqueIds {
         this.recordMiss(handle); // only a cache of the durable answer
         return null;
       }
-      if (ticket.cancelled) return null; // forgotten while the key was being fetched
+      if (ticket.cancelled || this.retiring.has(handle)) return null; // forgotten or being shredded while the key was being fetched
       return this.put(userId, key, handle);
     } finally {
       ticket.done();
@@ -282,7 +291,8 @@ export class OpaqueIds {
    * calls it first. False when the user has no handle yet (every id of theirs is old-format, which needs no key) or the key is gone.
    */
   async load(who: { tenantId: string; userId: string }): Promise<boolean> {
-    if (this.byUser.has(who.userId)) return true;
+    const cached = this.byUser.get(who.userId);
+    if (cached) return !this.retiring.has(cached.ids.handle);
     const handle = await guarded(() => this.store.read(who));
     if (handle === null) return false;
     return (await this.ensureHandle(handle)) !== null;
@@ -307,6 +317,21 @@ export class OpaqueIds {
     // store's durable tombstone for `h_<handle>`, so nothing here needs to remember the retirement.
   }
 
+  /**
+   * The erasure is about to shred the `h_<handle>` subject: until `unretireHandle`, nothing hands out this handle's builders (`cached`,
+   * `load`, `ensureUser` and `ensureHandle` refuse, and an in-flight fetch does not cache). The cache entry itself is kept, so a shred that
+   * parks (the key is alive, the retried stop must name the `h_` runs) resumes from the cache once it is un-retired.
+   */
+  retireHandle(handle: string): void {
+    this.retiring.add(handle);
+    this.cancel(`h:${handle}`);
+  }
+
+  /** The shred call returned (or threw): from here the key store's durable tombstone answers for a destroyed key. */
+  unretireHandle(handle: string): void {
+    this.retiring.delete(handle);
+  }
+
   /** Drops a user from the cache (erasure, after the key is destroyed). */
   forget(userId: string): void {
     this.cancel(`u:${userId}`);
@@ -318,12 +343,8 @@ export class OpaqueIds {
 
   /** The user's builders if cached, else undefined. For code that cannot await; a miss is a bug in the caller's entry point. */
   cached(userId: string): UserIds | undefined {
-    return this.byUser.get(userId)?.ids;
-  }
-
-  /** The handle of a new-format execution id (so a caller can `ensureHandle` first), or null for any other id. */
-  handleOfId(id: string): string | null {
-    return handleOfAnyId(id);
+    const entry = this.byUser.get(userId);
+    return entry && !this.retiring.has(entry.ids.handle) ? entry.ids : undefined;
   }
 
   /** What an execution or conversation id names, or null (unknown shape, unknown handle, a token that fails authentication). */
@@ -331,7 +352,7 @@ export class OpaqueIds {
     return this.resolve(shapeOfExecution(id));
   }
 
-  /** What a lineage line's experience id names (`visuals-...` or `turnvisuals-...`). */
+  /** Phase 2 reader (no production caller yet; the tests cover it). What a lineage line's experience id names (`visuals-...` or `turnvisuals-...`). */
   parseLineage(id: string): ParsedId | null {
     return this.resolve(shapeOfLineage(id));
   }

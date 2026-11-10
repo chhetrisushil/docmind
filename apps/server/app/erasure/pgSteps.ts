@@ -4,6 +4,7 @@ import { CHAT_ACTIVITY_MODEL } from "../chats/sessions";
 import { pgSessionLock } from "../db/sessionLock";
 import { withTenant } from "../db/tenant";
 import { handleListerPrefixes, prefixExtensions, userPrefixes } from "../opaqueIds";
+import { PgHandleStore } from "../opaqueIds/pgHandles";
 import { INGEST_STATUS_MODEL } from "../status/model";
 import type { ErasureDeps } from "./eraser";
 import type { ErasureRequest } from "./types";
@@ -41,14 +42,9 @@ export function pgErasureSql(
 ): Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf"> {
   const { app, loom } = o;
   /** The user's `users.id_handle`, read under the tenant while the row exists; null when there is none (or no row). */
+  const handles = new PgHandleStore(app);
   const handleOf = (req: ErasureRequest): Promise<string | null> =>
-    withTenant(app, req.tenantId, async (tx) => {
-      const { rows } = await tx.query<{ id_handle: string | null }>(
-        "SELECT id_handle FROM users WHERE id = $1 AND tenant_id = $2",
-        [req.userId, req.tenantId],
-      );
-      return rows[0]?.id_handle ?? null;
-    });
+    handles.read({ tenantId: req.tenantId, userId: req.userId });
   return {
     lock: pgErasureLock(o.locks),
     handleOf,
