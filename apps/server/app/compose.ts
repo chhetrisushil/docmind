@@ -240,6 +240,7 @@ export function buildServer(options: ComposeOptions) {
   const visualRuns = new PgVisualRuns(pool);
   const tags = new TagService(pool, fields, new TagKeys(keys));
   const afterDone = new Set<string>();
+  const reextract = new Set<string>(); // re-runs the user asked for: the extract step extracts again when the stored extraction predates c2
   const legacyRuns = new Set<string>(); // executions the 1.0.0 flow ran: the recorder does not stamp them current
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
@@ -257,6 +258,7 @@ export function buildServer(options: ComposeOptions) {
       gate: visualizeGate,
       runs: visualRuns,
       afterDone,
+      reextract,
       ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
       ...(visualsLlm && { llm: visualsLlm }),
       // The document extraction's own provider: a longer answer cap and timeout than the planner's and chat's.
@@ -349,6 +351,7 @@ export function buildServer(options: ComposeOptions) {
     running: pgRunningRuns(pool),
     runs: visualRuns,
     afterDone,
+    reextract,
     enabled: visualsLlm !== undefined,
   });
   const turns =

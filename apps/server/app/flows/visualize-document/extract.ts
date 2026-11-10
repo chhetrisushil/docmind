@@ -21,6 +21,7 @@ import {
   type AggregateFact,
   DocumentAnswer,
   type DraftFact,
+  EXTRACT_FORMAT,
   ExtractAnswer,
   RELATIONS_ORDINAL,
   TIMELINE_ORDINAL,
@@ -55,7 +56,7 @@ export type ModelUnavailableEnd = { outcome: "failed"; code: "visuals-model-unav
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
-  facts: Pick<VisualFactStore, "replace" | "list" | "aggregateCount">;
+  facts: Pick<VisualFactStore, "replace" | "list" | "aggregateCount" | "extractFormat">;
   /** The most chunk text read, in chunk order (the summary cap, DOCMIND_SUMMARY_MAX_CHARS): it bounds the model calls. */
   summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */
@@ -69,6 +70,14 @@ export interface ExtractDeps extends StepSeams {
    * overwrote it in visual_runs). In-process only: a run recovered after a crash has no note and may extract once.
    */
   afterDone?: Set<string>;
+  /**
+   * Execution ids of re-runs the USER asked for (the starter's `rerun`; a boot pass never notes one). A noted re-run extracts
+   * again when the document's stored extraction predates this format (`extractFormat` is missing or not `EXTRACT_FORMAT`),
+   * which is how an existing document gets its timeline and relations once (spec D5). The step reads the note and spends it
+   * only after the extraction write succeeded (or when it settles without extracting), so a retried attempt still finds it.
+   * In-process only: a run recovered after a crash has no note and re-plans over what is stored.
+   */
+  reextract?: Set<string>;
 }
 
 export type Chunk = { id: string; text: string };
@@ -232,20 +241,32 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       const model = String((llm as { model?: unknown }).model ?? "unknown").slice(0, 200);
       // A re-run (`-r<n>`) re-plans over the stored facts without extracting, when there are some or the previous run
       // already ended `done` (a document that has no facts: its plan is the connections alone). It extracts otherwise.
+      const spend = () => {
+        if (executionId !== undefined) deps.reextract?.delete(executionId);
+      };
       const id = executionId === undefined ? null : parseVisualizeExecution(executionId);
       const rerun = id?.rerun ?? 0;
       if (executionId !== undefined && id && rerun > 0) {
         // The starter's note is read once and removed here (stored facts or not), so the set never fills up over a large boot.
         const noted = deps.afterDone?.delete(executionId) === true;
+        // The user's note is only READ here: it is spent after an extraction has been WRITTEN (`spend`) or when this step
+        // settles without one, so a retried attempt still finds it.
+        const asked = deps.reextract?.has(executionId) === true;
         const stored = await deps.facts.list(ref);
         // A timeline or relations fact is a stored fact too: the model already answered for this document.
         const held = await deps.facts.aggregateCount(ref);
-        if (stored.length > 0 || held > 0)
-          return { count: stored.length, ...(held > 0 && { aggregates: held }), model };
-        // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
-        // is the sure source; the reader only helps if it runs before this run's own `running` record lands.
-        const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
-        if (noted || (last?.state === "done" && last.run < rerun)) return { count: 0, model };
+        // The user's own re-run of a document whose extraction predates this format extracts once more, and the extraction
+        // stamps it (spec D5). Every other re-run re-plans over what is stored, a boot pass's included.
+        const predates = asked && (await deps.facts.extractFormat(ref)) !== EXTRACT_FORMAT;
+        if (asked && !predates) spend();
+        if (!predates) {
+          if (stored.length > 0 || held > 0)
+            return { count: stored.length, ...(held > 0 && { aggregates: held }), model };
+          // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
+          // is the sure source; the reader only helps if it runs before this run's own `running` record lands.
+          const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
+          if (noted || (last?.state === "done" && last.run < rerun)) return { count: 0, model };
+        }
       }
       const ids = (await deps.chunks.sectionsOf(ref)).map((s) => s.id);
       const chunks = await readChunks(
@@ -262,6 +283,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
         if (!(err instanceof LlmRefusalError)) throw err;
         // A refusal is no facts, not a failure; the stored facts (and aggregates) must reflect this run, so clear them.
         await deps.facts.replace(ref, [], signal, generation);
+        spend();
         return { count: 0, model };
       }
       const { facts, dropped } = admit(extraction.drafts, texts, new Set(ids));
@@ -269,6 +291,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       console.info("visualize-extract dropped ungrounded facts", dropped);
       const aggregates = aggregatesOf(extraction, ids);
       await deps.facts.replace(ref, [...facts, ...aggregates], signal, generation);
+      spend();
       return {
         count: facts.length,
         ...(aggregates.length > 0 && { aggregates: aggregates.length }),

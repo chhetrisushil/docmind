@@ -37,6 +37,8 @@ export interface VisualizeDeps extends StepSeams {
   /** The run reader and the starter's note of re-runs after a `done` run: a zero-fact document is re-planned without extraction. */
   runs?: Pick<VisualRuns, "last">;
   afterDone?: Set<string>;
+  /** The execution ids of re-runs the user asked for, shared with the starter (`VisualsStarterOptions.reextract`): the extract step reads and removes its note. */
+  reextract?: Set<string>;
   /** The planner over the same provider (R19: keyed decision ids); absent when the role is off. */
   planner?: Planner;
 }
