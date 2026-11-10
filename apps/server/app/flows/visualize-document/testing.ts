@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ReferencePlanner } from "@loom-ui/planner";
 import type { DecideContext, PlanResult, PlannerModel } from "@loom-ui/planner";
-import type { Fact } from "./facts";
+import { type AggregateFact, type Fact, RELATIONS_ORDINAL, TIMELINE_ORDINAL } from "./facts";
 import { planVisuals } from "./plan";
 import type { StructureReader } from "./structure";
 
@@ -87,3 +87,51 @@ export const noStructure = (): StructureReader => ({
   entities: async () => [],
   mentions: async () => [],
 });
+
+/** A valid timeline (3 events, ordinal 18) and relations fact (3 parties, 3 links, ordinal 19), all citing `chunk`, every text starting `Zebra-`. */
+export function aggregateFacts(chunk: string): {
+  timeline: AggregateFact;
+  relations: AggregateFact;
+} {
+  return {
+    timeline: {
+      kind: "timeline",
+      events: [
+        {
+          at: "2024-03-01",
+          precision: "month",
+          when: "March 2024",
+          label: "Zebra-Event-One",
+          chunkId: chunk,
+        },
+        {
+          at: "2025-07-01",
+          precision: "quarter",
+          when: "Q3 2025",
+          label: "Zebra-Event-Two",
+          chunkId: chunk,
+        },
+        {
+          at: "2026-02-14",
+          precision: "day",
+          when: "14 February 2026",
+          label: "Zebra-Event-Three",
+          chunkId: chunk,
+        },
+      ],
+      chunkIds: [chunk],
+      ordinal: TIMELINE_ORDINAL,
+    },
+    relations: {
+      kind: "relations",
+      entities: ["Zebra-Party-A", "Zebra-Party-B", "Zebra-Party-C"],
+      links: [
+        { from: 0, to: 1, rel: "acquired", chunkId: chunk },
+        { from: 1, to: 2, rel: "leads", chunkId: chunk },
+        { from: 0, to: 2, rel: "owns", chunkId: chunk },
+      ],
+      chunkIds: [chunk],
+      ordinal: RELATIONS_ORDINAL,
+    },
+  };
+}

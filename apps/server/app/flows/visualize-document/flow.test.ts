@@ -17,7 +17,14 @@ import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { PermanentIngestError } from "../ingest-document/errors";
 import { LLM_RETRY, STEP_RETRY } from "../ingest-document/stepEffect";
 import type { VisualizeDeps } from "./deps";
-import type { Fact, StructureFact } from "./facts";
+import {
+  AGGREGATE_ORDINAL_BASE,
+  EXTRACT_FORMAT,
+  type ExtractionWrite,
+  type Fact,
+  STRUCTURE_ORDINAL_BASE,
+  type StructureFact,
+} from "./facts";
 import {
   LEGACY_VISUALIZE_STEPS,
   VISUALIZE_STEPS,
@@ -118,7 +125,8 @@ function stack(
     content: new InMemoryContentStore(),
   });
   const model = o.provider ?? (replies ? scripted(replies) : undefined);
-  let held: Fact[] = [];
+  let held: ExtractionWrite[] = [];
+  let stamped = false;
   let structured: StructureFact[] = [];
   const planner = model && visualsPlanner(model.llm, KEY);
   const deps: VisualizeDeps = {
@@ -129,6 +137,7 @@ function stack(
     },
     facts: {
       replace: async (_r, facts) => {
+        stamped = true;
         held = [...facts];
         return facts.length;
       },
@@ -136,11 +145,13 @@ function stack(
         structured = [...facts];
         return facts.length;
       },
-      list: async () => held,
+      list: async () => held.filter((f) => f.ordinal < STRUCTURE_ORDINAL_BASE) as Fact[],
       listAll: async () => {
         if (o.listAllError) throw o.listAllError;
-        return [...held, ...structured];
+        return [...held, ...structured].sort((a, b) => a.ordinal - b.ordinal);
       },
+      aggregateCount: async () => held.filter((f) => f.ordinal >= AGGREGATE_ORDINAL_BASE).length,
+      extractFormat: async () => (stamped ? EXTRACT_FORMAT : null),
     },
     structure: o.structure ?? noStructure(),
     summaryMaxChars: 400_000,
@@ -189,7 +200,7 @@ function stack(
     run,
     held: () => held,
     structured: () => structured,
-    hold: (facts: Fact[]) => {
+    hold: (facts: ExtractionWrite[]) => {
       held = facts;
     },
   };

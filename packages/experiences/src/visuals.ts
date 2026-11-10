@@ -29,6 +29,25 @@ export interface EntityMapFact {
   chunkIds: string[];
   ordinal: number;
 }
+export interface TimelineFact {
+  kind: "timeline";
+  events: {
+    at: string;
+    precision: "day" | "month" | "quarter" | "year";
+    when: string;
+    label: string;
+    chunkId: string;
+  }[];
+  chunkIds: string[];
+  ordinal: number;
+}
+export interface RelationsFact {
+  kind: "relations";
+  entities: string[];
+  links: { from: number; to: number; rel: string; chunkId: string }[];
+  chunkIds: string[];
+  ordinal: number;
+}
 
 /** A fact the visualize step stored for a document; structurally the server's `AnyFact` (which experiences does not depend on) plus the reader's `cites`. */
 export type VisualFactRaw = (
@@ -59,6 +78,8 @@ export type VisualFactRaw = (
     }
   | OutlineFact
   | EntityMapFact
+  | TimelineFact
+  | RelationsFact
 ) & { cites?: readonly FactCite[] };
 
 const ENTRIES = [

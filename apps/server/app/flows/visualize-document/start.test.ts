@@ -385,6 +385,8 @@ describe("a start still pending when the cancel runs", () => {
             replaceStructure: async () => 0,
             list: async () => [],
             listAll: async () => [],
+            aggregateCount: async () => 0,
+            extractFormat: async () => null,
           },
           structure: noStructure(),
           summaryMaxChars: 400_000,

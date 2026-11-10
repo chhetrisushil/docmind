@@ -6,30 +6,37 @@ import { withTenant } from "../../db/tenant";
 import { DocumentGoneError } from "../ingest-document/errors";
 import { lockDocument } from "../ingest-document/pgEntities";
 import {
+  AGGREGATE_ORDINAL_BASE,
   type AnyFact,
   ENTITY_MAP_ORDINAL,
+  EXTRACT_FORMAT,
+  type ExtractionWrite,
   type Fact,
   OUTLINE_ORDINAL,
+  RELATIONS_ORDINAL,
   STRUCTURE_ORDINAL_BASE,
   StoredEntry,
   StoredFact,
   type StructureFact,
+  TIMELINE_ORDINAL,
+  isAggregateFact,
 } from "./facts";
 
 export type VisualizeRef = { tenantId: string; userId: string; documentId: string };
 
 export interface VisualFactStore {
   /**
-   * Replaces the document's EXTRACTED facts (ordinals below 16) in one transaction; returns the rows written. The structure
-   * facts (ordinals 16 and 17) are not touched.
+   * Replaces the document's EXTRACTION-owned rows in one transaction: the extracted facts (ordinals 0..15) and the model's
+   * aggregates (the timeline at 18, the relations at 19), together, so an extraction with no timeline removes the old one.
+   * Returns the rows written. The structure facts (16 and 17) are not touched.
    */
   replace(
     ref: VisualizeRef,
-    facts: readonly Fact[],
+    facts: readonly ExtractionWrite[],
     signal?: AbortSignal,
     generation?: number,
   ): Promise<number>;
-  /** Replaces the document's STRUCTURE facts (ordinals 16 and 17) in one transaction; the extracted facts are not touched. */
+  /** Replaces the document's STRUCTURE facts (ordinals 16 and 17) in one transaction; every other row is not touched. */
   replaceStructure(
     ref: VisualizeRef,
     facts: readonly StructureFact[],
@@ -38,11 +45,33 @@ export interface VisualFactStore {
   ): Promise<number>;
   /** The document's extracted facts in ordinal order: what chat and the extraction re-plan check read. Throws DocumentGoneError if the user does not own it. */
   list(ref: VisualizeRef): Promise<Fact[]>;
-  /** Every fact of the document, structure facts included, in ordinal order. Throws DocumentGoneError if the user does not own it. */
+  /** Every fact of the document, structure facts and aggregates included, in ordinal order. Throws DocumentGoneError if the user does not own it. */
   listAll(ref: VisualizeRef): Promise<AnyFact[]>;
+  /** How many aggregate rows (timeline, relations) the document has. Counts rows only: nothing is opened. Throws DocumentGoneError if the user does not own it. */
+  aggregateCount(ref: VisualizeRef): Promise<number>;
+  /** The format of the extraction that last wrote this document's facts (`EXTRACT_FORMAT`), or null when it was extracted before the stamp existed. Throws DocumentGoneError if the user does not own it. */
+  extractFormat(ref: VisualizeRef): Promise<string | null>;
 }
 
 const factBind = (id: string) => `visualfact:${id}:fact`;
+
+/** The ordinal each aggregate kind lives at. */
+const AGGREGATE_ORDINAL = { timeline: TIMELINE_ORDINAL, relations: RELATIONS_ORDINAL } as const;
+
+/** True when `f` is a row the extraction writer owns: a fact at 0..15, the timeline at 18 or the relations at 19. */
+const extractionOwns = (f: ExtractionWrite): boolean =>
+  isAggregateFact(f)
+    ? f.ordinal === AGGREGATE_ORDINAL[f.kind]
+    : Number.isInteger(f.ordinal) && f.ordinal >= 0 && f.ordinal < STRUCTURE_ORDINAL_BASE;
+
+/**
+ * The ordinals each writer replaces, as a SQL predicate over `ordinal` with `$4` = 16 and `$5` = 18: extraction owns
+ * `< 16` and `>= 18`, structure owns `>= 16` and `< 18`. The two sets are disjoint and together cover 0..19.
+ */
+const OWNED = {
+  extraction: "(ordinal < $4 OR ordinal >= $5)",
+  structure: "(ordinal >= $4 AND ordinal < $5)",
+} as const;
 
 export class PgVisualFacts implements VisualFactStore {
   constructor(
@@ -53,13 +82,19 @@ export class PgVisualFacts implements VisualFactStore {
   // `async`, so a refused range is a rejected promise (as every caller and test sees it), never a synchronous throw.
   async replace(
     ref: VisualizeRef,
-    facts: readonly Fact[],
+    facts: readonly ExtractionWrite[],
     signal?: AbortSignal,
     generation?: number,
   ): Promise<number> {
-    if (facts.some((f) => f.ordinal >= STRUCTURE_ORDINAL_BASE))
-      throw new Error("extracted facts use ordinals below 16");
-    return this.write(ref, facts, "<", signal, generation);
+    if (!facts.every(extractionOwns))
+      throw new Error(
+        "extraction writes ordinals 0..15, the timeline at 18 and the relations at 19",
+      );
+    // Refuse an aggregate no reader could parse: the step fails here, instead of every `listAll` failing on every later run.
+    for (const f of facts)
+      if (isAggregateFact(f) && !StoredEntry.safeParse(f).success)
+        throw new Error("aggregate fact has an unexpected shape");
+    return this.write(ref, facts, "extraction", signal, generation);
   }
 
   async replaceStructure(
@@ -74,14 +109,14 @@ export class PgVisualFacts implements VisualFactStore {
     for (const f of facts)
       if (!StoredEntry.safeParse(f).success)
         throw new Error("structure fact has an unexpected shape");
-    return this.write(ref, facts, ">=", signal, generation);
+    return this.write(ref, facts, "structure", signal, generation);
   }
 
-  /** `side` is the comparison of the writer's range against the base ordinal: `<` (extracted) or `>=` (structure). */
+  /** `owner` names the writer: it decides which ordinals the transaction deletes before it inserts. */
   private async write(
     ref: VisualizeRef,
     facts: readonly AnyFact[],
-    side: "<" | ">=",
+    owner: keyof typeof OWNED,
     signal?: AbortSignal,
     generation?: number,
   ): Promise<number> {
@@ -92,7 +127,7 @@ export class PgVisualFacts implements VisualFactStore {
         const id = randomUUID();
         return {
           id,
-          // The column carries the fact's own kind (migration 0035 widened its CHECK); the sealed fact's `kind` is what readers use.
+          // The column carries the fact's own kind (migrations 0035 and 0037 widened its CHECKs); the sealed fact's `kind` is what readers use.
           kind: f.kind,
           ordinal: f.ordinal,
           chunkIds: f.chunkIds,
@@ -113,8 +148,8 @@ export class PgVisualFacts implements VisualFactStore {
       }
       await tx.query(
         `DELETE FROM visual_facts
-          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ordinal ${side} $4`,
-        [ref.tenantId, ref.userId, ref.documentId, STRUCTURE_ORDINAL_BASE],
+          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ${OWNED[owner]}`,
+        [ref.tenantId, ref.userId, ref.documentId, STRUCTURE_ORDINAL_BASE, AGGREGATE_ORDINAL_BASE],
       );
       for (const r of rows) {
         await tx.query(
@@ -123,6 +158,12 @@ export class PgVisualFacts implements VisualFactStore {
           [r.id, ref.tenantId, ref.userId, ref.documentId, r.kind, r.ordinal, r.sealed, r.chunkIds],
         );
       }
+      // Only the extraction write stamps: the stamp says which extraction made these facts (spec D5), in the same transaction.
+      if (owner === "extraction")
+        await tx.query(
+          "UPDATE documents SET visual_extract_format = $4 WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+          [ref.documentId, ref.userId, ref.tenantId, EXTRACT_FORMAT],
+        );
       if (signal?.aborted) throw new ParseAbortedError();
     });
     return rows.length;
@@ -132,9 +173,32 @@ export class PgVisualFacts implements VisualFactStore {
     return this.read(ref, StoredEntry, "");
   }
 
-  /** Extracted facts only: the structure rows are filtered in SQL, so chat never opens or parses them. */
+  /** Extracted facts only: every other row is filtered in SQL, so chat never opens or parses it. */
   async list(ref: VisualizeRef): Promise<Fact[]> {
     return (await this.read(ref, StoredFact, `AND ordinal < ${STRUCTURE_ORDINAL_BASE}`)) as Fact[];
+  }
+
+  async aggregateCount(ref: VisualizeRef): Promise<number> {
+    const res = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      await lockDocument(tx, ref);
+      return tx.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM visual_facts
+          WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ordinal >= $4`,
+        [ref.tenantId, ref.userId, ref.documentId, AGGREGATE_ORDINAL_BASE],
+      );
+    });
+    return res.rows[0]?.n ?? 0;
+  }
+
+  async extractFormat(ref: VisualizeRef): Promise<string | null> {
+    const res = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      await lockDocument(tx, ref);
+      return tx.query<{ format: string | null }>(
+        "SELECT visual_extract_format AS format FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+        [ref.documentId, ref.userId, ref.tenantId],
+      );
+    });
+    return res.rows[0]?.format ?? null;
   }
 
   private async read(
