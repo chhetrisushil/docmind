@@ -48,11 +48,13 @@ Every task's requirements include these (values copied from the spec):
 - Privacy: tag names and suggestions are sealed per user. They never appear in logs, the event log, lineage or error messages. The user's tag names are sent to their configured model provider inside the summary and suggestion prompts. This is the same trust boundary as the document text already sent.
 - Cost: no extra call at ingest; one small call per "Suggest tags" press, whose input is the summary, not the document.
 - Out of scope: tag colours, nesting and sharing; tags on chats; filtering chat retrieval by tag ("ask only within tag X"); automatic tagging without review; a bulk-tag action on several selected documents.
-- Verification commands (run from the worktree root `/Users/such/workspace/docmind/.worktrees/document-tags`): `pnpm typecheck`, `pnpm typecheck:tests`, `pnpm lint`, and the suites named in each task. The worktree has no `node_modules` yet: run `pnpm install` once first (the sibling `.worktrees/loom` and `.worktrees/loom-ui` links make the `link:../loom` overrides resolve). Postgres suites need `set -a; . ./.env; set +a` first (it sets `DOCMIND_TEST_PG_URL`, the separate test cluster); **a skipped pg test is not a pass**: check the vitest summary shows the pg tests ran. Run one file with `pnpm --filter @docmind/server exec vitest run <path>` (web: `--filter @docmind/web`, contracts: `--filter @docmind/contracts`).
+- Verification commands (run from the worktree root `/Users/such/workspace/docmind/.worktrees/document-tags`): `pnpm typecheck`, `pnpm typecheck:tests`, `pnpm lint`, and the suites named in each task. The worktree has no `node_modules` yet: run `pnpm install` once first (the sibling `.worktrees/loom` and `.worktrees/loom-ui` links make the `link:../loom` overrides resolve). Postgres suites need `set -a; . ./.env; set +a` first (it sets `DOCMIND_TEST_PG_URL`, the separate test cluster); **a skipped pg test is not a pass**: check the vitest summary shows the pg tests ran. Run one file with `pnpm --filter @docmind/server exec vitest run <path>` (web: `--filter @docmind/web`, contracts: `--filter @docmind/contracts`). Task 1 Step 0 makes the server and web test runs read `@docmind/contracts` and `@docmind/experiences` from `src`, so these single-suite runs never read a stale `dist`; `pnpm typecheck` and `pnpm typecheck:tests` go through turbo, which builds the dependencies first. **Lint:** every code block in this plan was run through Biome 1.9.4 with the repo's `biome.json` (format, organizeImports, recommended rules, so no non-null assertions); each task ends with `pnpm lint`, which must pass. If it flags formatting or import order in code you pasted, run `pnpm lint:fix`, re-run the task's tests and commit the result.
+- Erasure: a user's on-demand `suggest-tags` starts are settled and cancelled by the erasure pipeline like the ingest, visualize and title starts (Task 5 Step 9a). The user's tag names and suggestions must be absent from every table after erasure (the erasure end-to-end scan, Task 8 Step 2a).
+- Library table: each row shows its tags as clickable chips, a loom-ui token cell (`{ tokens: [{ id, label }] }`, loom-ui pin `fc34435285e3411b720107f06990d5f0d76a67c2`); clicking a chip filters the list to that tag alone (Task 6). There is no text-column fallback.
 
 ## Plan decisions (where the spec is silent, or the code constrains it)
 
-Each was verified against the code at `main` 54e358d and the Loom pin 4af27eaa.
+Each was verified against the code at `main` 54e358d, the Loom pin 4af27eaa and the loom-ui pin fc34435 (token cells).
 
 **D1. Flow hash: ingest-document does NOT need a bump.** `flowContentHash` (`/Users/such/workspace/loom/packages/core/src/flowHash.ts`) is SHA-256 over `flow id`, `version`, `deadlineMs`, and per step `id | toolId | timeoutMs | retry`. It excludes zod schemas, handler code and prompts, and DocMind sets no `codeFingerprint` (grep: none). The summary step's prompt and its inputs live inside the effect (its step input is still the ids-only `IngestStartInput`), so the hash cannot move. Contrast `visualize-document` 1.0.0 to 1.1.0: that change added a step (`visualize-structure`), which changes the step list and so the hash (measured on `main`: 1.0.0 `sha256:d8491324…`, 1.1.0 `sha256:d3bfb104…`). The ingest hash on `main` is `sha256:e9c2819cd68e5b3d2bae57d5ef9e7d55af3067a99db66e225b00f0adfa864dc4` (version 3.0.0). Task 4 pins that literal in a test, so a later edit that does change the graph fails loudly. Consequences: ingest stays 3.0.0, no `legacy` definition, no resume test. An execution in flight at deploy resumes on the new summarize code; its `summarize` step either already completed (its result is in the log and is not re-run) or runs once with the new code. The rollback note in `cloud-deploy.md` (Task 8) says rolling back is safe for ingest, and that the new `suggest-tags` 1.0.0 flow is not recovery-owned.
 
@@ -66,9 +68,9 @@ Each was verified against the code at `main` 54e358d and the Loom pin 4af27eaa.
 
 **D6. Ordering and failure policy in the summarize step.** The suggestions are written before `putSummary` (the summary stays last: its presence means "done", D2 of ingest). A problem reading the tag context or writing suggestions is logged by class and ignored, except a key-store error, a document-gone condition and an abort, which end the step exactly as elsewhere (`isDocumentGone`, `isAbort`, `FieldKeyStoreError`). A missing or malformed `suggestedTags` is `[]`.
 
-**D7. Listing.** `listDocuments` gains an optional filter and tenant. `any` is the spec's correlated `EXISTS`. `all` is `documents.id IN (SELECT dt.document_id … GROUP BY dt.document_id HAVING count(*) = cardinality($ids))`, which is the spec's count form made set-based so the planner can start from the tag index (the correlated form walks the library in date order when a tag is rare); the EXPLAIN test (Task 3) guards it. A filter of exactly one tag is `any` whatever `match` says. The cursor carries `f`, 16 hex characters of SHA-256 over `<match>|<sorted ids>`, absent when there is no filter; a cursor whose `f` differs from the request's answers 400 `invalid_cursor`. A foreign or unknown tag id in the filter simply matches nothing (no existence oracle).
+**D7. Listing.** `listDocuments` gains a filter and a required tenant (every listing names the owner and the tenant). `any` is the spec's correlated `EXISTS`. `all` is `documents.id IN (SELECT dt.document_id … GROUP BY dt.document_id HAVING count(*) = cardinality($ids))`, which is the spec's count form made set-based so the planner can start from the tag index (the correlated form walks the library in date order when a tag is rare); a result-equality test against a brute-force read of the links guards its answers, and an EXPLAIN test (Task 3) checks that the selective case starts from the tag index. A filter of exactly one tag is `any` whatever `match` says. The cursor carries `f`, 16 hex characters of SHA-256 over `<match>|<sorted ids>`, absent when there is no filter; a cursor whose `f` differs from the request's answers 400 `invalid_cursor`. A foreign or unknown tag id in the filter simply matches nothing (no existence oracle).
 
-**D8. The library page is a hydrated view, not `GET /api/documents`.** The web draws the table through the `library` experience (`packages/experiences/src/views.ts`): the `documents` provider (`documents.list`) is served by `UiReaders.documents`. So the web filter reaches the server as hydration parameters `tags` (comma-separated ids) and `match` on that provider's `overridable` list (the counts providers stay unfiltered). Raw output of `documents.list` and `document.get` now carries `tags`, so both pins go to `@2` (`PINS` in `providers.ts`). loom-ui's `Table` cells are plain strings, so **a row cannot hold clickable chips**: the table gets a **Tags** column of names joined with ", ", and the tag bar is the filter surface. Clicking a chip inside a row (spec §6) is not plannable without a loom-ui change (request it from the peer session `loom-ba`, then pin); this plan delivers everything else in §6 and says so in Task 6.
+**D8. The library page is a hydrated view, not `GET /api/documents`.** The web draws the table through the `library` experience (`packages/experiences/src/views.ts`): the `documents` provider (`documents.list`) is served by `UiReaders.documents`. So the web filter reaches the server as hydration parameters `tags` (comma-separated ids) and `match` on that provider's `overridable` list (the counts providers stay unfiltered). Raw output of `documents.list` and `document.get` now carries `tags`, so both pins go to `@2` (`PINS` in `providers.ts`). the Tags column of the table is a loom-ui **token cell**, `{ tokens: [{ id, label }] }` (one token per tag: the tag id is a valid token id, and 20 tags per document equals the cell cap of 20). The table's `TABLE_TOKEN` action carries `{ rowKey, tokenId }` (the table has `rowKeys`), and the page answers it by filtering the list to that tag alone, which writes the address (spec §6, "click a chip in a row"). The token cell is in loom-ui from `fc34435` (the pin; PR #131); Task 6 opens with a gate that checks the linked loom-ui has it and stops if not (there is no text-column fallback).
 
 **D9. `suggest-tags` runs.** Execution id `u_<user>:suggest-tags-<document>-r<n>`; `n` comes from `rerunTracker.probe` (a restart resets the in-process counter, `probe` skips ids Loom already holds; after 999 presses for one document the route answers 409 `suggest_running`, an accepted limit). Not added to `recoveryOwns`: an interrupted run is simply pressed again (the page's busy state ends after 60 s, as for visuals). Its step output is `{outcome}` only; its start input is ids only; no `sensitive.ts` entry is needed. A document or user deleted mid-run is safe: the write is `INSERT … SELECT FROM documents WHERE id AND owner_id AND tenant_id` (no row means gone) and the sealing key of an erased user is unavailable.
 
@@ -78,9 +80,35 @@ Each was verified against the code at `main` 54e358d and the Loom pin 4af27eaa.
 
 ---
 
+## Amendments (preflight)
+
+This plan was amended after the pre-flight scan (`preflight.md`, F1 to F16) and the rulings recorded with it. Each finding maps to the task and step that now carries the fix.
+
+| Finding | Ruling | Where |
+|---|---|---|
+| F1 token-cell ruling absent | Row chips are a loom-ui token cell (pin `fc34435`, PR #131); Task 6 opens with a gate and has no text-column fallback; the page answers `TABLE_TOKEN`; a web test clicks a chip | D8, Global Constraints, Task 6 Step 0, Step 1 (reshaper), Step 7 Part B (`onTagChip`, tests); Task 8 docs; self-review |
+| F2 tests read stale `dist` | vitest and vite aliases for `@docmind/contracts` and `@docmind/experiences` to `src`; build and typecheck checked by reading the configs | Task 1 Step 0, Verification paragraph |
+| F3 EXPLAIN test flaky and non-discriminating | Deterministic seed and `ANALYZE`, like `ui/connections.pg.test.ts`; plan asserted for the selective case only, with the index name; no timing; plus an equality test against a brute-force read | Task 3 Step 3 (`tags.explain.pg.test.ts`), D7 |
+| F4 lint | Every complete-file block run through Biome (format, organizeImports, recommended rules); non-null assertions and unused template literals replaced; each task ends with `pnpm lint` | Verification paragraph; Tasks 2, 7 (`tagOf`, `act(api, id)`), Task 3 (explain test); all blocks |
+| F5 fake server split | The fake server's tag routes move to Task 6 Step 7 Part A; the `replaceState` instruction becomes a `url` parameter of `setup` | Task 6 Step 7; Task 7 Step 1 |
+| F6 assertions that cannot fail | Ids with hex letters (contracts test, hydrate test); no-op `replace` removed; the step's privacy test makes the store fail with a message holding the tag and checks output, event and log | Task 1 Step 1, Task 6 Step 1, Task 5 Step 3 |
+| F7 duplication | One `defaultSleep` (exported from `chat-title/step.ts`) and one `authed` wrapper (`tags/routes.ts`); shared server helpers `callApi`, `errorCode`, `seedNext`; shared web helpers in `testing/tags.ts` | Task 5 Steps 4 and 8, Task 3 Steps 3 and 5, Task 6 Step 5, Tasks 7 and 8 tests |
+| F8 suggest-tags starts at erasure | The starter gains `settle` and `cancel`; `erasure/wire.ts` settles, awaits and cancels them like the other starts; unit tests for both | Task 5 Steps 5 and 9a, Global Constraints |
+| F9 callers outside the file lists | `repo.pg.test.ts` (`toDto`) and `ui.pg.test.ts` (`readersFor` deps, then the `documents` arguments) are listed and updated in the task that changes the signature | Task 3 Files and Step 6, Task 6 Files and Step 2 |
+| F10 Files line | `answering`, `idOf`, `notFound`, `authed` are exported from the start in Task 3; Task 5 no longer edits `routes.ts` | Task 3 Files and Step 5, Task 5 Files |
+| F11 SQL predicates | `tenantId` is required in `ListPage` and the query; `pgDocumentReads` passes it; `readSuggestions` names owner and tenant in the join; `putSuggestions` explains its conflict target | Task 3 Steps 4 and 6, Task 2 (`service.ts`) |
+| F12 empty `aria-describedby` | `ifDefined` | Task 7 Step 2 |
+| F13 e2e order dependence | `vi` imported at the top; `beforeEach` resets the model answers and deletes the tags | Task 8 Step 2 |
+| F14 unused import | `randomUUID` removed from `suggestRoutes.pg.test.ts` | Task 5 Step 8 |
+| F15 hash test brittleness | No change (intentional) | Task 4 |
+| F16 erasure needles | `seedUser` seeds a tag and a suggestion carrying sentinels; `assertErased` scans for them and counts the rows | Task 8 Step 2a |
+
+---
+
 ## Task 1: Names, keys and the suggestion normaliser (pure)
 
 **Files:**
+- Modify: `apps/server/vitest.config.ts`, `apps/web/vite.config.ts` (tests read `@docmind/contracts` and `@docmind/experiences` from `src`)
 - Create: `packages/contracts/src/tags.ts`, `packages/contracts/src/tags.test.ts`
 - Modify: `packages/contracts/src/index.ts` (add `export * from "./tags";`)
 - Create: `apps/server/app/crypto/tagKeys.ts`, `apps/server/app/crypto/tagKeys.test.ts`
@@ -99,6 +127,40 @@ Each was verified against the code at `main` 54e358d and the Loom pin 4af27eaa.
   - `normaliseSuggestions(raw: unknown, existingTags: readonly ExistingTag[]): string[]`
   - `tagInstruction(existing: readonly string[]): string`
 
+- [ ] **Step 0: Tests read `src`, not a stale `dist` (preflight F2)**
+
+`@docmind/contracts` and `@docmind/experiences` have `main: ./dist/index.js`, and `pnpm --filter … exec vitest` does not go through turbo's `^build`. Today `apps/server/vitest.config.ts` has no alias for either package and `apps/web/vite.config.ts` aliases only contracts, so any test that imports a package whose `src` this plan edits would run against old `dist` code. Alias both to `src`, as the web config already does for contracts.
+
+In `apps/server/vitest.config.ts`, add two entries to the `resolve.alias` array (after the `@docmind/vector-pg` one):
+
+```ts
+      {
+        find: /^@docmind\/contracts$/,
+        replacement: resolve(__dirname, "../../packages/contracts/src/index.ts"),
+      },
+      {
+        find: /^@docmind\/experiences$/,
+        replacement: resolve(__dirname, "../../packages/experiences/src/index.ts"),
+      },
+```
+
+and extend the comment above the array with `// @docmind/contracts and @docmind/experiences load from source too, so a suite never reads a stale dist.` In `apps/web/vite.config.ts`, replace the `contracts` constant's comment and alias with:
+
+```ts
+// @docmind/contracts and @docmind/experiences are CommonJS builds; tests take their TypeScript source instead.
+const contracts = fileURLToPath(new URL("../../packages/contracts/src/index.ts", import.meta.url));
+const experiences = fileURLToPath(
+  new URL("../../packages/experiences/src/index.ts", import.meta.url),
+);
+```
+
+and `alias: { "@docmind/contracts": contracts, "@docmind/experiences": experiences },`.
+
+Why the build and typecheck are unaffected (checked by reading the configs): `apps/server/tsconfig.json` (what `pnpm --filter @docmind/server build` runs, `tsc -p tsconfig.json`) includes only `app/**/*`, `scripts/**/*` and `loom.config.ts`, so `vitest.config.ts` is not compiled by the build; it is in `tsconfig.test.json` (`typecheck:tests`), where the new entries use the same `resolve(__dirname, …)` form as the existing ones. `tsc` resolves the packages through their `types`, not through Vite aliases. In the web app, only tests and `src/testing/*` import `@docmind/experiences` (`grep -rln "@docmind/experiences" apps/web/src`), none of which `vite build` bundles, so the production bundle is unchanged; `tsc -p tsconfig.json --noEmit` ignores the Vite alias, and `vite.config.ts` stays inside the existing `include`. Both aliases were exercised before this plan was amended: a server run of `app/ui/routes.test.ts` and `app/ui/visuals.e2e.test.ts`, and a web run of `guards.test.ts`, `dm-doc-detail.test.ts` and `ui/elements.test.ts`, all passed with the experiences alias in place. If a later change makes the alias break a build, the fallback is a pre-test step: `pnpm --filter @docmind/contracts build && pnpm --filter @docmind/experiences build` before each single-suite run.
+
+Run: `pnpm --filter @docmind/server exec vitest run app/ui/routes.test.ts && pnpm --filter @docmind/web exec vitest run src/ui/elements.test.ts && pnpm typecheck:tests`
+Expected: PASS (nothing else changed yet).
+
 - [ ] **Step 1: Write the failing contract tests**
 
 Create `packages/contracts/src/tags.test.ts`:
@@ -115,7 +177,8 @@ import {
   normaliseTagName,
 } from "./tags";
 
-const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+// Ids with hex letters (a00000000001), so the case tests below can fail: an upper-cased digit-only id is unchanged.
+const id = (n: number) => `00000000-0000-4000-8000-${(0xa00000000000 + n).toString(16)}`;
 
 describe("cleanTagName", () => {
   it("trims, keeps inner spacing and case, and counts characters not code units", () => {
@@ -159,13 +222,15 @@ describe("tag schemas", () => {
     expect(TagNameRequest.parse({ name: " a " })).toEqual({ name: "a" });
   });
   it("SetDocumentTagsRequest lowercases ids and holds at most 20", () => {
-    const up = id(1).toUpperCase().replace(/-4/, "-4");
-    expect(SetDocumentTagsRequest.parse({ tagIds: [up] }).tagIds).toEqual([up.toLowerCase()]);
+    const up = id(1).toUpperCase();
+    expect(up).not.toBe(id(1)); // the input really differs in case
+    expect(SetDocumentTagsRequest.parse({ tagIds: [up] }).tagIds).toEqual([id(1)]);
     const many = Array.from({ length: 21 }, (_, i) => id(i + 1));
     expect(SetDocumentTagsRequest.safeParse({ tagIds: many }).success).toBe(false);
   });
   it("TagIdList: empty is none, duplicates collapse, more than 10 or a bad id is refused", () => {
     expect(TagIdList.parse("")).toEqual([]);
+    expect(id(1).toUpperCase()).not.toBe(id(1));
     expect(TagIdList.parse(`${id(1)},${id(2)},${id(1).toUpperCase()}`)).toEqual([id(1), id(2)]);
     const eleven = Array.from({ length: 11 }, (_, i) => id(i + 1)).join(",");
     expect(TagIdList.safeParse(eleven).success).toBe(false);
@@ -424,7 +489,8 @@ const tag = (name: string, linked = false): ExistingTag => ({
 describe("parseSuggestedTags", () => {
   it("keeps strings from an array and turns anything else into []", () => {
     expect(parseSuggestedTags(["a", 3, null, "b"])).toEqual(["a", "b"]);
-    for (const bad of [undefined, null, "a,b", 7, { 0: "a" }]) expect(parseSuggestedTags(bad)).toEqual([]);
+    for (const bad of [undefined, null, "a,b", 7, { 0: "a" }])
+      expect(parseSuggestedTags(bad)).toEqual([]);
   });
   it("looks at no more than 20 entries", () => {
     expect(parseSuggestedTags(Array.from({ length: 50 }, (_, i) => `t${i}`))).toHaveLength(20);
@@ -437,9 +503,10 @@ describe("normaliseSuggestions", () => {
   });
   it("clips to 40 characters, drops empty and control-character names, and dedupes", () => {
     const long = "x".repeat(60);
-    expect(
-      normaliseSuggestions([long, "", "   ", "a\nb", "Dup", "dup", " DUP "], []),
-    ).toEqual(["x".repeat(40), "Dup"]);
+    expect(normaliseSuggestions([long, "", "   ", "a\nb", "Dup", "dup", " DUP "], [])).toEqual([
+      "x".repeat(40),
+      "Dup",
+    ]);
   });
   it("allows at most 3 new names, but existing ones past them still count", () => {
     const existing = [tag("Old1"), tag("Old2"), tag("Old3")];
@@ -449,7 +516,12 @@ describe("normaliseSuggestions", () => {
   });
   it("caps the result at 5", () => {
     const existing = Array.from({ length: 8 }, (_, i) => tag(`E${i}`.padEnd(i + 2, "z")));
-    expect(normaliseSuggestions(existing.map((t) => t.name), existing)).toHaveLength(5);
+    expect(
+      normaliseSuggestions(
+        existing.map((t) => t.name),
+        existing,
+      ),
+    ).toHaveLength(5);
   });
   it("drops a name already linked to the document, whatever its spelling", () => {
     expect(normaliseSuggestions(["finance", "new"], [tag("Finance", true)])).toEqual(["new"]);
@@ -566,7 +638,7 @@ Expected: PASS. (The `caps the result at 5` test builds eight distinct existing 
 - [ ] **Step 13: Commit**
 
 ```bash
-git add packages/contracts apps/server/app/crypto apps/server/app/tags
+git add packages/contracts apps/server/app/crypto apps/server/app/tags apps/server/vitest.config.ts apps/web/vite.config.ts
 git commit -m "feat(tags): tag name contracts, keyed lookup hash and the suggestion normaliser"
 ```
 
@@ -679,19 +751,14 @@ Create `apps/server/app/tags/service.pg.test.ts`:
 import { randomUUID } from "node:crypto";
 import { MAX_TAGS_PER_USER } from "@docmind/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { TagKeys } from "../crypto/tagKeys";
 import { FieldKeyUnavailableError } from "../crypto/fields";
+import { TagKeys } from "../crypto/tagKeys";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { insertDocument } from "../documents/repo";
 import { T1, T2, U1, U1B, U2, newDocument } from "../documents/testHarness";
 import { type PgFixture, startPgFixture } from "../flows/ingest-document/pgFixture";
-import {
-  TagExistsError,
-  TagLimitError,
-  TagService,
-  UnknownTagError,
-} from "./service";
+import { TagExistsError, TagLimitError, TagService, UnknownTagError } from "./service";
 
 const A = { tenantId: T1, userId: U1 };
 const A2 = { tenantId: T1, userId: U1B };
@@ -722,6 +789,13 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
   };
   const count = async (sql: string, args: unknown[] = []) =>
     (await fx.db.owner.query(sql, args)).rows[0].n as number;
+  /** Links the document to a tag by name and answers that tag (no non-null assertions: the lint rule forbids them). */
+  const tagOf = async (who: typeof A, documentId: string, name: string) => {
+    const added = await svc.addToDocument(who, documentId, name);
+    const tag = added?.tags.find((t) => t.name === name);
+    if (!tag) throw new Error("the tag was not added");
+    return tag;
+  };
 
   beforeAll(async () => {
     fx = await startPgFixture();
@@ -789,8 +863,10 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
 
   it("isolates tenants with row-level security", async () => {
     await svc.create(A, "visible to a1 only");
-    const seen = await withTenant(fx.app, T2, async (tx) =>
-      (await tx.query("SELECT count(*)::int AS n FROM tags")).rows[0].n,
+    const seen = await withTenant(
+      fx.app,
+      T2,
+      async (tx) => (await tx.query("SELECT count(*)::int AS n FROM tags")).rows[0].n,
     );
     expect(seen).toBe(0);
     expect(await svc.list(B)).toEqual([]);
@@ -799,11 +875,13 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
   it("cascades: a deleted document drops its links and suggestions, a deleted tag its links, a deleted user everything", async () => {
     const d1 = await doc();
     const d2 = await doc();
-    const t = (await svc.addToDocument(A, d1, "keep"))!.tags[0]!;
+    const t = await tagOf(A, d1, "keep");
     await svc.addToDocument(A, d2, "keep");
     await svc.putSuggestions({ ...A, documentId: d1 }, ["s1"]);
     await fx.db.owner.query("DELETE FROM documents WHERE id = $1", [d1]);
-    expect(await count("SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1", [d1])).toBe(0);
+    expect(
+      await count("SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1", [d1]),
+    ).toBe(0);
     expect(await count("SELECT count(*)::int AS n FROM document_tag_suggestions")).toBe(0);
     expect(await count("SELECT count(*)::int AS n FROM tags WHERE id = $1", [t.id])).toBe(1); // a tag with no documents stays
     expect(await svc.remove(A, t.id)).toBe(true);
@@ -813,7 +891,9 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
     await svc.putSuggestions({ ...gone, documentId: await doc(gone) }, ["s"]);
     await fx.db.owner.query("DELETE FROM users WHERE id = $1", [gone.userId]); // erasure's `rows` step
     for (const table of ["tags", "document_tags", "document_tag_suggestions"])
-      expect(await count(`SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`, [gone.userId])).toBe(0);
+      expect(
+        await count(`SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`, [gone.userId]),
+      ).toBe(0);
   });
 
   it("crypto-shredding: once the key is destroyed the names cannot be opened", async () => {
@@ -852,7 +932,10 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
     const d = await doc();
     const x = (await svc.create(A, "x")).tag;
     const y = (await svc.create(A, "y")).tag;
-    expect((await svc.setForDocument(A, d, [x.id, y.id, x.id]))?.tags.map((t) => t.name)).toEqual(["x", "y"]);
+    expect((await svc.setForDocument(A, d, [x.id, y.id, x.id]))?.tags.map((t) => t.name)).toEqual([
+      "x",
+      "y",
+    ]);
     await svc.putSuggestions({ ...A, documentId: d }, ["X", "fresh"]);
     expect((await svc.detail(A, d))?.suggestedTags).toEqual(["fresh"]); // "X" is linked as "x"
     expect((await svc.removeFromDocument(A, d, x.id))?.tags.map((t) => t.name)).toEqual(["y"]);
@@ -873,9 +956,12 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
 
   it("stores suggestions sealed, replaces the row, and reports a gone document", async () => {
     const d = await doc();
-    expect(await svc.putSuggestions({ ...A, documentId: d }, ["Zebra-Secret-Suggestion"])).toBe(true);
+    expect(await svc.putSuggestions({ ...A, documentId: d }, ["Zebra-Secret-Suggestion"])).toBe(
+      true,
+    );
     expect(await svc.putSuggestions({ ...A, documentId: d }, ["second"])).toBe(true);
-    const row = (await fx.db.owner.query("SELECT to_jsonb(s) AS r FROM document_tag_suggestions s")).rows;
+    const row = (await fx.db.owner.query("SELECT to_jsonb(s) AS r FROM document_tag_suggestions s"))
+      .rows;
     expect(row).toHaveLength(1);
     expect(JSON.stringify(row)).not.toContain("Zebra");
     expect((await svc.detail(A, d))?.suggestedTags).toEqual(["second"]);
@@ -1054,7 +1140,10 @@ export class TagService {
   private async open(o: TagOwner, rows: readonly NameRow[]): Promise<DocumentTag[]> {
     const cipher = this.fields.forUser(o.userId);
     const named = await Promise.all(
-      rows.map(async (r) => ({ id: r.id, name: await cipher.openText(tagNameBind(r.id), r.name_enc) })),
+      rows.map(async (r) => ({
+        id: r.id,
+        name: await cipher.openText(tagNameBind(r.id), r.name_enc),
+      })),
     );
     return named.sort(byName);
   }
@@ -1117,11 +1206,10 @@ export class TagService {
 
   async remove(o: TagOwner, id: string): Promise<boolean> {
     return withTenant(this.pool, o.tenantId, async (tx) => {
-      const r = await tx.query("DELETE FROM tags WHERE id = $1 AND owner_id = $2 AND tenant_id = $3", [
-        id,
-        o.userId,
-        o.tenantId,
-      ]);
+      const r = await tx.query(
+        "DELETE FROM tags WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+        [id, o.userId, o.tenantId],
+      );
       return r.rowCount === 1;
     });
   }
@@ -1168,7 +1256,8 @@ export class TagService {
           await tx.query<{ names_enc: unknown; stamp: string | null }>(
             `SELECT s.names_enc, s.updated_at::text AS stamp
                FROM documents d
-               LEFT JOIN document_tag_suggestions s ON s.document_id = d.id
+               LEFT JOIN document_tag_suggestions s
+                 ON s.document_id = d.id AND s.owner_id = d.owner_id AND s.tenant_id = d.tenant_id
               WHERE d.id = $1 AND d.owner_id = $2 AND d.tenant_id = $3`,
             [documentId, o.userId, o.tenantId],
           )
@@ -1176,7 +1265,9 @@ export class TagService {
     );
     if (!row) return null;
     if (row.names_enc == null) return { names: [], stamp: null };
-    const opened = await this.fields.forUser(o.userId).open(suggestionsBind(documentId), row.names_enc);
+    const opened = await this.fields
+      .forUser(o.userId)
+      .open(suggestionsBind(documentId), row.names_enc);
     return { names: parseSuggestedTags(opened), stamp: row.stamp };
   }
 
@@ -1237,7 +1328,8 @@ export class TagService {
           "SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3",
           [documentId, o.userId, o.tenantId],
         );
-        if ((n.rows[0] as { n: number }).n >= MAX_TAGS_PER_DOCUMENT) throw new TagLimitError("document");
+        if ((n.rows[0] as { n: number }).n >= MAX_TAGS_PER_DOCUMENT)
+          throw new TagLimitError("document");
         await tx.query(
           "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) VALUES ($1, $2, $3, $4)",
           [documentId, id, o.tenantId, o.userId],
@@ -1247,7 +1339,11 @@ export class TagService {
     });
   }
 
-  async addToDocument(o: TagOwner, documentId: string, raw: string): Promise<DocumentTagsView | null> {
+  async addToDocument(
+    o: TagOwner,
+    documentId: string,
+    raw: string,
+  ): Promise<DocumentTagsView | null> {
     return (await this.link(o, documentId, raw)) ? this.detail(o, documentId) : null;
   }
 
@@ -1317,6 +1413,8 @@ export class TagService {
         );
         return exists;
       }
+      // The SELECT names owner and tenant, and the composite foreign key ties the row to that document, so the conflict
+      // target (the document's own row) can only ever be the owner's.
       const r = await tx.query(
         `INSERT INTO document_tag_suggestions (document_id, tenant_id, owner_id, names_enc)
          SELECT d.id, d.tenant_id, d.owner_id, $4::jsonb
@@ -1374,7 +1472,10 @@ export class TagService {
   }
 }
 
-async function lockDocumentRead(tx: PoolClient, o: TagOwner & { documentId: string }): Promise<boolean> {
+async function lockDocumentRead(
+  tx: PoolClient,
+  o: TagOwner & { documentId: string },
+): Promise<boolean> {
   const { rowCount } = await tx.query(
     "SELECT 1 FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
     [o.documentId, o.userId, o.tenantId],
@@ -1403,13 +1504,15 @@ git commit -m "feat(tags): migration 0036 (tags, links, suggestions) and the Tag
 
 **Files:**
 - Modify: `packages/contracts/src/documents.ts` (`DocumentDto`, `ListDocumentsQuery`), `packages/contracts/src/documents.test.ts`
-- Create: `apps/server/app/tags/routes.ts`
+- Create: `apps/server/app/tags/routes.ts` (also exports `authed`, `answering`, `idOf` and `notFound`, which Task 5's routes reuse)
 - Modify: `apps/server/app/documents/cursor.ts`, `apps/server/app/documents/cursor.test.ts`
 - Modify: `apps/server/app/documents/repo.ts` (`toDto`, `listDocumentsQuery`, `listDocuments`)
 - Modify: `apps/server/app/documents/routes.ts` (deps, list, detail, upload duplicate, retry)
 - Modify: `apps/server/app/ui/readers.ts` (deps, `documents`, `document`)
-- Modify: `apps/server/app/compose.ts` (build the `TagService`, mount the routes, give it to the document routes and readers)
-- Modify: `apps/server/app/documents/testHarness.ts` (a `tags` service and the routes)
+- Modify: `apps/server/app/chats/tools/pgDocumentReads.ts` (the listing now names the tenant)
+- Modify: `apps/server/app/compose.ts` (build the `TagService`, mount the routes, give it to the document routes and readers, return it)
+- Modify: `apps/server/app/documents/testHarness.ts` (a `tags` service and the routes; the shared helpers `callApi`, `errorCode`, `seedNext`)
+- Modify (their callers of the changed signatures): `apps/server/app/documents/repo.pg.test.ts` (`toDto` takes a fourth argument), `apps/server/app/ui/ui.pg.test.ts` (`readersFor` deps need `tags`)
 - Test: `apps/server/app/tags/routes.pg.test.ts`, `apps/server/app/documents/tags.list.pg.test.ts`, `apps/server/app/documents/tags.explain.pg.test.ts`
 - Modify (mechanical): every fixture `pnpm typecheck:tests` flags for the new required `tags` (likely `packages/experiences/src/{terminal,hydrate,reshapers}.test.ts`, `apps/web/src/{ui/session,state/uploads,api/client}.test.ts`, `apps/web/src/components/{dm-doc-detail,dm-upload-zone,dm-documents-page}.test.ts`, `apps/web/src/testing/fakeServer.ts`, and server tests that build a `DocumentDto`): add `tags: []`
 
@@ -1419,9 +1522,10 @@ git commit -m "feat(tags): migration 0036 (tags, links, suggestions) and the Tag
   - `DocumentDto.tags: DocumentTag[]` (required) and `DocumentDto.suggestedTags?: string[]` (detail only)
   - `ListDocumentsQuery.tags?: string[]` (parsed), `ListDocumentsQuery.match: "any" | "all"`
   - `toDto(row, cipher, view, extra: { tags: DocumentTag[]; suggestedTags?: string[] })`
-  - `interface TagFilter { tagIds: readonly string[]; match: "any" | "all" }`; `listDocumentsQuery(ownerId, page: { cursor; limit; tenantId?: string; filter?: TagFilter }): { sql: string; params: unknown[] }`; `listDocuments(tx, ownerId, page)` (same page type)
+  - `interface TagFilter { tagIds: readonly string[]; match: "any" | "all" }`; `listDocumentsQuery(ownerId, page: { cursor; limit; tenantId: string; filter?: TagFilter }): { sql: string; params: unknown[] }` (`tenantId` is required: every listing names the owner and the tenant); `listDocuments(tx, ownerId, page)` (same page type)
   - `filterFingerprint(filter: { tagIds: readonly string[]; match: "any" | "all" } | undefined): string` (`""` for none, else 16 hex); `encodeCursor(row, fingerprint?)`; `decodeCursor(c): { t: string; i: string; f?: string } | null`
-  - `tagRoutes(deps: { authenticator: Authenticator; tags: TagService }): Record<string, Handler>`
+  - `tagRoutes(deps: { authenticator: Authenticator; tags: TagService }): Record<string, Handler>`; also exported from `tags/routes.ts`: `authed(authenticator): (handler: AuthedHandler) => Handler` (session, `no-store`, the service's errors as answers), `answering`, `idOf`, `notFound`
+  - test helpers in `documents/testHarness.ts`: `callApi(h, user | null, method, path, body?, type?)`, `errorCode(res)`, `seedNext(h, who?)`
   - `DocumentRoutesDeps.tags: TagService`; `UiReaderDeps.tags: Pick<TagService, "forDocuments" | "detail">`; `DocumentHarness.tags: TagService`
 
 - [ ] **Step 1: Contracts, test first**
@@ -1565,26 +1669,72 @@ First extend the harness. In `apps/server/app/documents/testHarness.ts`:
 - in `startDocumentServer`, right after `const fields = new FieldCrypto(keys);` add `const tags = new TagService(app, fields, new TagKeys(keys));`
 - pass `tags` in the object given to `wrap({ pool: app, … })` (a new line `tags,` after `starts: new StartScheduler(ingest.port),`)
 - in `createHttpServer({ ...documentRoutes({ ...wrapped, starts }),` add `...tagRoutes({ authenticator: testAuthenticator, tags: wrapped.tags }),` and, in the `readers: {…}` object, `tags: wrapped.tags,`
-- add `tags: wrapped.tags,` to the returned harness object.
+- add `tags: wrapped.tags,` to the returned harness object;
+- add these exported helpers, which every tag route test shares (Tasks 3, 5 and 8 import them; no test file keeps its own copy):
+
+```ts
+/** A request to the harness server as a test user (`null`: no session). A string body is sent as it is. */
+export const callApi = (
+  h: Pick<DocumentHarness, "base">,
+  user: string | null,
+  method: string,
+  path: string,
+  body?: unknown,
+  type = "application/json",
+) =>
+  fetch(`${h.base}${path}`, {
+    method,
+    headers: {
+      ...(user && { "x-test-user": user }),
+      ...(body !== undefined && { "content-type": type }),
+    },
+    ...(body !== undefined && { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
+
+/** The `error.code` of a failed answer. */
+export const errorCode = async (res: Response) =>
+  ((await res.json()) as { error?: { code?: string } }).error?.code;
+
+let seeded = 0;
+/** One document of `who` with a content address no other document made by this helper shares (the counter is per test file). */
+export const seedNext = (
+  h: Pick<DocumentHarness, "owner" | "app" | "keys">,
+  who: Identity = ALICE,
+) =>
+  seedDoc(
+    h.owner,
+    h.app,
+    new FieldCrypto(h.keys),
+    who,
+    (++seeded).toString(16).padStart(64, "0"),
+    0,
+  );
+```
 
 Create `apps/server/app/tags/routes.pg.test.ts`:
 
 ```ts
 import { randomUUID } from "node:crypto";
 import {
+  type DocumentDto,
   DocumentTagsResponse,
   ListTagsResponse,
   TagResponse,
-  type DocumentDto,
 } from "@docmind/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
-import { ALICE, BOB, type DocumentHarness, seedDoc, startDocumentServer } from "../documents/testHarness";
+import {
+  ALICE,
+  BOB,
+  type DocumentHarness,
+  callApi,
+  errorCode as code,
+  seedNext,
+  startDocumentServer,
+} from "../documents/testHarness";
 
 describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
-  let n = 0;
   beforeAll(async () => {
     h = await startDocumentServer();
   });
@@ -1593,24 +1743,17 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     await h.owner.query("DELETE FROM tags");
     await h.owner.query("DELETE FROM documents");
   });
-  const call = (user: string | null, method: string, path: string, body?: unknown, type = "application/json") =>
-    fetch(`${h.base}${path}`, {
-      method,
-      headers: {
-        ...(user && { "x-test-user": user }),
-        ...(body !== undefined && { "content-type": type }),
-      },
-      ...(body !== undefined && { body: typeof body === "string" ? body : JSON.stringify(body) }),
-    });
-  const code = async (res: Response) => ((await res.json()) as { error?: { code?: string } }).error?.code;
-  const seed = (who = ALICE) =>
-    seedDoc(h.owner, h.app, new FieldCrypto(h.keys), who, (++n).toString(16).padStart(64, "0"), 0);
+  const call = (user: string | null, method: string, path: string, body?: unknown, type?: string) =>
+    callApi(h, user, method, path, body, type);
+  const seed = (who = ALICE) => seedNext(h, who);
   const mk = async (user: string, name: string) =>
     TagResponse.parse(await (await call(user, "POST", "/api/tags", { name })).json()).tag;
 
   it("needs a session, JSON, and a valid name", async () => {
     expect((await call(null, "GET", "/api/tags")).status).toBe(401);
-    expect((await call("alice", "POST", "/api/tags", '{"name":"a"}', "text/plain")).status).toBe(415);
+    expect((await call("alice", "POST", "/api/tags", '{"name":"a"}', "text/plain")).status).toBe(
+      415,
+    );
     for (const name of ["", "   ", "x".repeat(41), "a\nb"]) {
       const res = await call("alice", "POST", "/api/tags", { name });
       expect([res.status, await code(res)]).toEqual([400, "invalid_request"]);
@@ -1634,17 +1777,22 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     await mk("alice", "Apple");
     await mk("bob", "bob-only");
     const res = await call("alice", "GET", "/api/tags");
-    expect(ListTagsResponse.parse(await res.json()).tags.map((t) => [t.name, t.documents])).toEqual([
-      ["Apple", 0],
-      ["banana", 1],
-    ]);
+    expect(ListTagsResponse.parse(await res.json()).tags.map((t) => [t.name, t.documents])).toEqual(
+      [
+        ["Apple", 0],
+        ["banana", 1],
+      ],
+    );
   });
 
   it("renames, answers 409 tag_exists on a collision, and 404 for a foreign or malformed id", async () => {
     const a = await mk("alice", "alpha");
     const b = await mk("alice", "beta");
     const ok = await call("alice", "PATCH", `/api/tags/${a.id}`, { name: "Alpha 2" });
-    expect([ok.status, TagResponse.parse(await ok.json()).tag]).toEqual([200, { id: a.id, name: "Alpha 2" }]);
+    expect([ok.status, TagResponse.parse(await ok.json()).tag]).toEqual([
+      200,
+      { id: a.id, name: "Alpha 2" },
+    ]);
     const clash = await call("alice", "PATCH", `/api/tags/${b.id}`, { name: " ALPHA  2" });
     expect([clash.status, await code(clash)]).toEqual([409, "tag_exists"]);
     expect((await call("bob", "PATCH", `/api/tags/${a.id}`, { name: "x" })).status).toBe(404);
@@ -1672,9 +1820,13 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
       expect([bad.status, await code(bad)]).toEqual([400, "invalid_tag"]);
     }
     const bobDoc = await seed(BOB);
-    expect((await call("alice", "PUT", `/api/documents/${bobDoc}/tags`, { tagIds: [] })).status).toBe(404);
+    expect(
+      (await call("alice", "PUT", `/api/documents/${bobDoc}/tags`, { tagIds: [] })).status,
+    ).toBe(404);
     const many = Array.from({ length: 21 }, () => randomUUID());
-    expect((await call("alice", "PUT", `/api/documents/${d}/tags`, { tagIds: many })).status).toBe(400);
+    expect((await call("alice", "PUT", `/api/documents/${d}/tags`, { tagIds: many })).status).toBe(
+      400,
+    );
   });
 
   it("adds by name (creating or reusing), removes one, and refuses a 21st with 409 tag_limit", async () => {
@@ -1688,7 +1840,9 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     expect([over.status, await code(over)]).toEqual([409, "tag_limit"]);
     const id = (finance[0] as { id: string }).id;
     const removed = await call("alice", "DELETE", `/api/documents/${d}/tags/${id}`);
-    expect(DocumentTagsResponse.parse(await removed.json()).tags.map((t) => t.name)).not.toContain("Finance");
+    expect(DocumentTagsResponse.parse(await removed.json()).tags.map((t) => t.name)).not.toContain(
+      "Finance",
+    );
     expect((await call("bob", "DELETE", `/api/documents/${d}/tags/${id}`)).status).toBe(404);
     expect((await call("alice", "DELETE", `/api/documents/${d}/tags/not-a-uuid`)).status).toBe(404);
   });
@@ -1697,9 +1851,13 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
     const d = await seed();
     await call("alice", "POST", `/api/documents/${d}/tags`, { name: "one" });
     await h.tags.putSuggestions({ ...ALICE, documentId: d }, ["maybe"]);
-    const detail = (await (await call("alice", "GET", `/api/documents/${d}`)).json()) as DocumentDto;
+    const detail = (await (
+      await call("alice", "GET", `/api/documents/${d}`)
+    ).json()) as DocumentDto;
     expect([detail.tags.map((t) => t.name), detail.suggestedTags]).toEqual([["one"], ["maybe"]]);
-    const list = (await (await call("alice", "GET", "/api/documents")).json()) as { items: DocumentDto[] };
+    const list = (await (await call("alice", "GET", "/api/documents")).json()) as {
+      items: DocumentDto[];
+    };
     expect(list.items[0]?.tags.map((t) => t.name)).toEqual(["one"]);
     expect(list.items[0]?.suggestedTags).toBeUndefined();
   });
@@ -1729,13 +1887,27 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
     const fields = new FieldCrypto(h.keys);
     docs = [];
     for (let i = 0; i < 7; i++)
-      docs.push(await seedDoc(h.owner, h.app, fields, ALICE, (i + 1).toString(16).padStart(64, "0"), (i + 1) * 10));
+      docs.push(
+        await seedDoc(
+          h.owner,
+          h.app,
+          fields,
+          ALICE,
+          (i + 1).toString(16).padStart(64, "0"),
+          (i + 1) * 10,
+        ),
+      );
     const mk = async (name: string) => (await h.tags.create(ALICE, name)).tag.id;
     tag = { a: await mk("a"), b: await mk("b"), c: await mk("c") };
     const link = (name: "a" | "b" | "c", idx: number[]) =>
-      Promise.all(idx.map((i) => h.owner.query(
-        "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) SELECT $1, $2, tenant_id, owner_id FROM documents WHERE id = $1",
-        [docs[i], tag[name]])));
+      Promise.all(
+        idx.map((i) =>
+          h.owner.query(
+            "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) SELECT $1, $2, tenant_id, owner_id FROM documents WHERE id = $1",
+            [docs[i], tag[name]],
+          ),
+        ),
+      );
     await link("a", [0, 1, 2, 4]);
     await link("b", [1, 2, 3]);
     await link("c", [2]);
@@ -1748,9 +1920,13 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
 
   it("any: a document with at least one of the tags; all: with every one; newest first", async () => {
     expect(await ids(await get("alice", `tags=${tag.a},${tag.b}`))).toEqual(at(0, 1, 2, 3, 4));
-    expect(await ids(await get("alice", `tags=${tag.a},${tag.b}&match=any`))).toEqual(at(0, 1, 2, 3, 4));
+    expect(await ids(await get("alice", `tags=${tag.a},${tag.b}&match=any`))).toEqual(
+      at(0, 1, 2, 3, 4),
+    );
     expect(await ids(await get("alice", `tags=${tag.a},${tag.b}&match=all`))).toEqual(at(1, 2));
-    expect(await ids(await get("alice", `tags=${tag.a},${tag.b},${tag.c}&match=all`))).toEqual(at(2));
+    expect(await ids(await get("alice", `tags=${tag.a},${tag.b},${tag.c}&match=all`))).toEqual(
+      at(2),
+    );
     expect(await ids(await get("alice", `tags=${tag.a}&match=all`))).toEqual(at(0, 1, 2, 4)); // one tag: same as any
     expect(await ids(await get("alice", "match=all"))).toHaveLength(7); // no tags: unfiltered, match ignored
     expect(await ids(await get("alice", "tags="))).toHaveLength(7);
@@ -1765,7 +1941,10 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
       const seen: string[] = [];
       let cursor: string | null = null;
       for (let guard = 0; guard < 10; guard++) {
-        const res: Response = await get("alice", `${qs}&limit=2${cursor ? `&cursor=${cursor}` : ""}`);
+        const res: Response = await get(
+          "alice",
+          `${qs}&limit=2${cursor ? `&cursor=${cursor}` : ""}`,
+        );
         const page = ListDocumentsResponse.parse(await res.json());
         seen.push(...page.items.map((d) => d.id));
         cursor = page.nextCursor;
@@ -1776,22 +1955,42 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
   });
 
   it("answers 400 invalid_cursor when a cursor is reused under a changed filter, and accepts the same filter", async () => {
-    const first = ListDocumentsResponse.parse(await (await get("alice", `tags=${tag.a}&limit=1`)).json());
+    const first = ListDocumentsResponse.parse(
+      await (await get("alice", `tags=${tag.a}&limit=1`)).json(),
+    );
     const cursor = first.nextCursor as string;
-    for (const qs of [`tags=${tag.b}`, `tags=${tag.a},${tag.b}`, "", `tags=${tag.a},${tag.b}&match=all`]) {
+    for (const qs of [
+      `tags=${tag.b}`,
+      `tags=${tag.a},${tag.b}`,
+      "",
+      `tags=${tag.a},${tag.b}&match=all`,
+    ]) {
       const res = await get("alice", `${qs}&limit=1&cursor=${cursor}`);
-      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([400, "invalid_cursor"]);
+      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+        400,
+        "invalid_cursor",
+      ]);
     }
-    expect((await get("alice", `tags=${tag.a}&match=all&limit=1&cursor=${cursor}`)).status).toBe(200); // one tag: same filter
+    expect((await get("alice", `tags=${tag.a}&match=all&limit=1&cursor=${cursor}`)).status).toBe(
+      200,
+    ); // one tag: same filter
     const plain = ListDocumentsResponse.parse(await (await get("alice", "limit=1")).json());
-    expect((await get("alice", `tags=${tag.a}&limit=1&cursor=${plain.nextCursor}`)).status).toBe(400);
+    expect((await get("alice", `tags=${tag.a}&limit=1&cursor=${plain.nextCursor}`)).status).toBe(
+      400,
+    );
   });
 
   it("refuses a malformed filter with 400 invalid_request", async () => {
-    const eleven = Array.from({ length: 11 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`).join(",");
+    const eleven = Array.from(
+      { length: 11 },
+      (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+    ).join(",");
     for (const qs of ["tags=nope", `tags=${eleven}`, `tags=${tag.a}&match=some`]) {
       const res = await get("alice", qs);
-      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([400, "invalid_request"]);
+      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+        400,
+        "invalid_request",
+      ]);
     }
   });
 
@@ -1804,43 +2003,58 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
 });
 ```
 
-Create `apps/server/app/documents/tags.explain.pg.test.ts`:
+Create `apps/server/app/documents/tags.explain.pg.test.ts` (preflight F3: modelled on `ui/connections.pg.test.ts`: a deterministic seed, `ANALYZE`, the plan under the default planner settings; only the selective case asserts a plan, and the equality test is what guards the answers of `any` and `all`; it does not claim to tell the set-based `all` from the correlated count form, and has no timing assertion):
 
 ```ts
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { type PgFixture, startPgFixture } from "../flows/ingest-document/pgFixture";
+import { type TagFilter, listDocumentsQuery } from "./repo";
 import { T1, T2, U1, U1B, U2 } from "./testHarness";
-import { listDocumentsQuery } from "./repo";
 
-type PlanNode = { "Node Type": string; "Relation Name"?: string; Plans?: PlanNode[] };
+type PlanNode = {
+  "Node Type": string;
+  "Relation Name"?: string;
+  "Index Name"?: string;
+  Plans?: PlanNode[];
+};
 const walk = (n: PlanNode): PlanNode[] => [n, ...(n.Plans ?? []).flatMap(walk)];
 
+// Like ui/connections.pg.test.ts: a seeded library, ANALYZE, the plan under the default planner settings. The ids are
+// deterministic (a counter, not gen_random_uuid()), so the physical layout the planner sees is the same on every run, and
+// only the selective case asserts a plan.
 describe.skipIf(!PG_URL)("the tag filter on a seeded library (needs DOCMIND_TEST_PG_URL)", () => {
   let fx: PgFixture;
   let rare: string; // on 6 of U1's 600 documents
-  let common: string; // on about a fortieth of them
+  let common: string; // on about 7% of them
+  let other: string; // on about 7% of them, together with `common` on some
   beforeAll(async () => {
     fx = await startPgFixture();
-    const q = (sql: string, args: unknown[]) => fx.db.owner.query(sql, args);
-    // U1 has 600 documents; two other users hold 3000 each, so the owner predicate must be selective.
-    for (const [tenant, owner, docs] of [[T1, U1, 600], [T1, U1B, 3000], [T2, U2, 3000]] as const) {
+    const q = (sql: string, args: unknown[] = []) => fx.db.owner.query(sql, args);
+    // U1 has 600 documents; two other users hold 3000 each, so the owner predicate is selective. `base` keeps the ids apart.
+    for (const [tenant, owner, docs, base] of [
+      [T1, U1, 600, 0x1000],
+      [T1, U1B, 3000, 0x100000],
+      [T2, U2, 3000, 0x200000],
+    ] as const) {
       await q(
         `INSERT INTO documents (id, tenant_id, owner_id, title_enc, filename_enc, mime, size_bytes, content_address, fingerprint, created_at)
-         SELECT gen_random_uuid(), $1::uuid, $2::uuid, '{}', '{}', 'text/plain', 1,
-                'hmac-sha256:' || lpad(to_hex(g), 64, '0'), lpad(to_hex(g), 64, '0'), now() - make_interval(secs => g)
+         SELECT lpad(to_hex($4::bigint + g), 32, '0')::uuid, $1::uuid, $2::uuid, '{}', '{}', 'text/plain', 1,
+                'hmac-sha256:' || lpad(to_hex($4::bigint + g), 64, '0'), lpad(to_hex($4::bigint + g), 64, '0'),
+                now() - make_interval(secs => g)
            FROM generate_series(1, $3::int) g`,
-        [tenant, owner, docs],
+        [tenant, owner, docs, base],
       );
       await q(
         `INSERT INTO tags (id, tenant_id, owner_id, name_enc, name_bind)
-         SELECT gen_random_uuid(), $1::uuid, $2::uuid, '{}', decode(md5($2::text || g::text) || md5(g::text || $2::text), 'hex')
+         SELECT lpad(to_hex($3::bigint + g), 32, '0')::uuid, $1::uuid, $2::uuid, '{}',
+                decode(md5($2::text || g::text) || md5(g::text || $2::text), 'hex')
            FROM generate_series(1, 41) g`,
-        [tenant, owner],
+        [tenant, owner, base],
       );
     }
-    // Three tags per document, spread over the first 40 tags of its owner.
+    // Three of the first 40 tags per document, by the document's rank among its owner's documents (deterministic).
     await q(
       `INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id)
        SELECT DISTINCT d.id, t.id, d.tenant_id, d.owner_id
@@ -1848,57 +2062,91 @@ describe.skipIf(!PG_URL)("the tag filter on a seeded library (needs DOCMIND_TEST
          JOIN (SELECT id, owner_id, row_number() OVER (PARTITION BY owner_id ORDER BY id) AS tn FROM tags) t
            ON t.owner_id = d.owner_id AND t.tn <= 40
           AND t.tn IN ((d.rn % 40) + 1, ((d.rn * 7) % 40) + 1, ((d.rn * 13) % 40) + 1)`,
-      [],
     );
-    const tag41 = (await q(
-      `SELECT id FROM (SELECT id, row_number() OVER (ORDER BY id) AS tn FROM tags WHERE owner_id = $1) t WHERE tn = 41`, [U1])).rows[0].id;
+    const nth = async (n: number) =>
+      (await q("SELECT id FROM tags WHERE owner_id = $1 ORDER BY id OFFSET $2 LIMIT 1", [U1, n]))
+        .rows[0].id as string;
+    common = await nth(1); // the 2nd tag
+    other = await nth(7); // the 8th tag: on every document that has the 2nd and whose rank is 1 mod 40
+    rare = await nth(40); // the 41st tag: on no document yet, then on 6 of those that hold `common`
     await q(
       `INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id)
-       SELECT id, $2, tenant_id, owner_id FROM documents WHERE owner_id = $1 ORDER BY id LIMIT 6`,
-      [U1, tag41],
+       SELECT document_id, $3, tenant_id, owner_id FROM document_tags WHERE owner_id = $1 AND tag_id = $2 ORDER BY document_id LIMIT 6`,
+      [U1, common, rare],
     );
-    rare = tag41;
-    common = (await q(
-      `SELECT id FROM (SELECT id, row_number() OVER (ORDER BY id) AS tn FROM tags WHERE owner_id = $1) t WHERE tn = 1`, [U1])).rows[0].id;
-    await q("ANALYZE", []);
+    await q("ANALYZE");
   }, 120_000);
   afterAll(async () => void (await fx?.close()));
 
-  const lit = (v: unknown) => (v === null ? "NULL" : Array.isArray(v) ? `'{${v.join(",")}}'` : `'${v}'`);
-  async function explain(filter: { tagIds: string[]; match: "any" | "all" }) {
-    const { sql, params } = listDocumentsQuery(U1, { cursor: null, limit: 51, tenantId: T1, filter });
-    // Literals, so the planner sees the values; the plan is the one the app's prepared query gets for them.
+  const lit = (v: unknown) =>
+    v === null ? "NULL" : Array.isArray(v) ? `'{${v.join(",")}}'` : `'${v}'`;
+  const query = (filter: TagFilter, limit = 51) =>
+    listDocumentsQuery(U1, { cursor: null, limit, tenantId: T1, filter });
+
+  /** Plans and runs the listing as the app role, with the parameters as literals so the planner sees the values. */
+  async function explain(filter: TagFilter) {
+    const { sql, params } = query(filter);
     const inline = sql.replace(/\$(\d+)/g, (_m, i) => lit(params[Number(i) - 1]));
     return withTenant(fx.app, T1, async (tx) => {
       const res = await tx.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${inline}`);
-      const top = res.rows[0]["QUERY PLAN"][0];
-      return { nodes: walk(top.Plan as PlanNode), ms: Number(top["Execution Time"]) };
+      return walk(res.rows[0]["QUERY PLAN"][0].Plan as PlanNode);
     });
   }
+  const idsOf = async (filter: TagFilter) => {
+    const { sql, params } = query(filter, 1000);
+    const rows = await withTenant(
+      fx.app,
+      T1,
+      async (tx) => (await tx.query<{ id: string }>(sql, params)).rows,
+    );
+    return rows.map((r) => r.id).sort();
+  };
 
-  it.each([
-    ["any, a rare tag", () => ({ tagIds: [rare], match: "any" as const })],
-    ["any, two tags", () => ({ tagIds: [rare, common], match: "any" as const })],
-    ["all, a rare and a common tag", () => ({ tagIds: [rare, common], match: "all" as const })],
-  ])("%s starts from the tag index and never scans the library", async (_n, filter) => {
-    const { nodes, ms } = await explain(filter());
+  it("a rare tag is reached through the tag index, never by scanning the library", async () => {
+    const nodes = await explain({ tagIds: [rare], match: "any" });
     const seq = nodes.filter((n) => n["Node Type"] === "Seq Scan").map((n) => n["Relation Name"]);
     expect(seq.filter((r) => r === "document_tags" || r === "documents")).toEqual([]);
-    expect(
-      nodes.some((n) => n["Relation Name"] === "document_tags" && /^Index/.test(n["Node Type"])),
-    ).toBe(true);
-    expect(ms).toBeLessThan(2000);
+    expect(nodes.some((n) => n["Index Name"] === "document_tags_owner_tag_idx")).toBe(true);
   });
 
-  it("returns what the filter says on the seeded library", async () => {
-    const { sql, params } = listDocumentsQuery(U1, { cursor: null, limit: 100, tenantId: T1, filter: { tagIds: [rare], match: "any" } });
-    const rows = await withTenant(fx.app, T1, async (tx) => (await tx.query(sql, params)).rows);
-    expect(rows).toHaveLength(6);
+  it("any and all return exactly what a brute-force read of the links says", async () => {
+    const links = (
+      await fx.db.owner.query<{ document_id: string; tag_id: string }>(
+        "SELECT document_id, tag_id FROM document_tags WHERE owner_id = $1",
+        [U1],
+      )
+    ).rows;
+    const held = new Map<string, Set<string>>();
+    for (const l of links)
+      held.set(l.document_id, (held.get(l.document_id) ?? new Set()).add(l.tag_id));
+    const brute = (tagIds: string[], match: "any" | "all") =>
+      [...held]
+        .filter(([, tags]) =>
+          match === "all" ? tagIds.every((t) => tags.has(t)) : tagIds.some((t) => tags.has(t)),
+        )
+        .map(([doc]) => doc)
+        .sort();
+    const cases: [string[], "any" | "all"][] = [
+      [[rare], "any"],
+      [[rare, common], "any"],
+      [[rare, common], "all"],
+      [[common, other], "any"],
+      [[common, other], "all"],
+    ];
+    for (const [tagIds, match] of cases) {
+      const want = brute(tagIds, match);
+      expect(want.length).toBeGreaterThan(0); // each case selects something
+      expect(await idsOf({ tagIds, match })).toEqual(want);
+    }
+    // All is narrower than Any for two common tags: the two forms really differ on this data.
+    expect((await idsOf({ tagIds: [common, other], match: "all" })).length).toBeLessThan(
+      (await idsOf({ tagIds: [common, other], match: "any" })).length,
+    );
   });
 });
 ```
 
-(If the planner picks a plan that fails an assertion, change the SQL shape in `listDocumentsQuery`, never the assertion: the point of the test is that the filter does not scan the library.)
+(The seed, the migration and the query of this task were run together before the plan was amended: the plan test and the equality test passed on three runs.)
 
 Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/tags/routes.pg.test.ts app/documents/tags.list.pg.test.ts app/documents/tags.explain.pg.test.ts`
 Expected: FAIL (`../tags/routes` and `listDocumentsQuery` do not exist).
@@ -1906,7 +2154,7 @@ Expected: FAIL (`../tags/routes` and `listDocumentsQuery` do not exist).
 - [ ] **Step 4: `repo.ts`: `toDto`, the listing query**
 
 In `apps/server/app/documents/repo.ts`:
-- change the first import to `import { type DocumentDto, type DocumentTag, DocumentStats, DocumentSummary } from "@docmind/contracts";`
+- change the first import to `import { type DocumentDto, DocumentStats, DocumentSummary, type DocumentTag } from "@docmind/contracts";`
 - replace `toDto`'s signature and result:
 
 ```ts
@@ -1950,35 +2198,34 @@ export interface TagFilter {
 export interface ListPage {
   cursor: { t: string; i: string } | null;
   limit: number;
-  /** Named in the query when given (and required with a tag filter): the explicit tenant predicate, beside row-level security. */
-  tenantId?: string;
+  /** Named in every listing: the explicit tenant predicate, beside row-level security. */
+  tenantId: string;
   filter?: TagFilter;
 }
 
 /**
  * The library page query. The tag filter is part of the WHERE, before the cursor's page cut, so a page is always full and a
- * cursor stays valid within one filter. Every predicate names the owner (and the tenant with a filter). `any` is an EXISTS;
+ * cursor stays valid within one filter. Every predicate names the owner and the tenant. `any` is an EXISTS;
  * `all` takes the documents holding as many of the ids as there are ids (one tag is `any`). No user text is in the SQL.
  */
 export function listDocumentsQuery(
   ownerId: string,
   page: ListPage,
 ): { sql: string; params: unknown[] } {
-  const params: unknown[] = [ownerId, page.cursor?.t ?? null, page.cursor?.i ?? null, page.limit + 1];
+  const params: unknown[] = [
+    ownerId,
+    page.cursor?.t ?? null,
+    page.cursor?.i ?? null,
+    page.limit + 1,
+    page.tenantId,
+  ];
   let where =
-    "owner_id = $1 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))";
-  let tenant = "";
-  if (page.tenantId !== undefined) {
-    params.push(page.tenantId);
-    tenant = `$${params.length}::uuid`;
-    where += ` AND tenant_id = ${tenant}`;
-  }
+    "owner_id = $1 AND tenant_id = $5::uuid AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))";
   const ids = [...new Set((page.filter?.tagIds ?? []).map((t) => t.toLowerCase()))];
   if (ids.length > 0) {
-    if (tenant === "") throw new Error("a tag filter needs the tenant");
     params.push(ids);
     const list = `$${params.length}::uuid[]`;
-    const mine = `dt.owner_id = $1 AND dt.tenant_id = ${tenant} AND dt.tag_id = ANY(${list})`;
+    const mine = `dt.owner_id = $1 AND dt.tenant_id = $5::uuid AND dt.tag_id = ANY(${list})`;
     where +=
       ids.length > 1 && page.filter?.match === "all"
         ? ` AND documents.id IN (SELECT dt.document_id FROM document_tags dt WHERE ${mine} GROUP BY dt.document_id HAVING count(*) = cardinality(${list}))`
@@ -2007,7 +2254,7 @@ export async function listDocuments(
 }
 ```
 
-(`chats/tools/pgDocumentReads.ts` calls `listDocuments(tx, ownerId, { cursor, limit })`: still valid, the new fields are optional.)
+(`chats/tools/pgDocumentReads.ts` is the one other caller: it passes `tenantId: scope.tenantId`, see Step 6.)
 
 - [ ] **Step 5: The tag routes**
 
@@ -2041,14 +2288,15 @@ export interface TagRoutesDeps {
 }
 
 /** A malformed id answers exactly like a missing or foreign one. */
-const idOf = (raw: string | undefined): string | null => {
+export const idOf = (raw: string | undefined): string | null => {
   const p = Uuid.safeParse(raw);
   return p.success ? p.data.toLowerCase() : null;
 };
-const notFound = (res: ServerResponse, what: string) => sendError(res, 404, "not_found", `${what} not found`);
+export const notFound = (res: ServerResponse, what: string) =>
+  sendError(res, 404, "not_found", `${what} not found`);
 
 /** The service's errors as answers. Fixed texts: a tag name never reaches a message. */
-async function answering(res: ServerResponse, work: () => Promise<void>): Promise<void> {
+export async function answering(res: ServerResponse, work: () => Promise<void>): Promise<void> {
   try {
     await work();
   } catch (err) {
@@ -2057,7 +2305,9 @@ async function answering(res: ServerResponse, work: () => Promise<void>): Promis
         res,
         409,
         "tag_limit",
-        err.limit === "document" ? "a document holds at most 20 tags" : "you can have at most 200 tags",
+        err.limit === "document"
+          ? "a document holds at most 20 tags"
+          : "you can have at most 200 tags",
       );
     if (err instanceof TagExistsError)
       return sendError(res, 409, "tag_exists", "a tag with this name already exists");
@@ -2068,17 +2318,20 @@ async function answering(res: ServerResponse, work: () => Promise<void>): Promis
   }
 }
 
-/** The tag API (spec section 5). Every route takes tenant and user from the session; every answer carries decrypted names, so none is cached. */
-export function tagRoutes(deps: TagRoutesDeps): Record<string, Handler> {
-  const auth = (handler: AuthedHandler): Handler =>
-    requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
+/** A handler behind the session: tenant and user come from it, the answer is never cached (it carries decrypted names), the service's errors become answers. The one wrapper both route files use. */
+export const authed =
+  (authenticator: Authenticator) =>
+  (handler: AuthedHandler): Handler =>
+    requireAuth(authenticator, async (req, res, identity, ctx) => {
       res.setHeader("cache-control", "no-store");
       await answering(res, async () => void (await handler(req, res, identity, ctx)));
     });
+
+/** The tag API (spec section 5). Every route takes tenant and user from the session. */
+export function tagRoutes(deps: TagRoutesDeps): Record<string, Handler> {
+  const auth = authed(deps.authenticator);
   const view = (res: ServerResponse, answer: Awaited<ReturnType<TagService["detail"]>>) =>
-    answer
-      ? json(res, 200, answer satisfies DocumentTagsResponse)
-      : notFound(res, "document");
+    answer ? json(res, 200, answer satisfies DocumentTagsResponse) : notFound(res, "document");
 
   return {
     "GET /api/tags": auth(async (_req, res, identity) => {
@@ -2239,7 +2492,13 @@ In `apps/server/app/ui/readers.ts`: import `type TagService` from `../tags/servi
       );
 ```
 
-In `apps/server/app/compose.ts`: add imports `import { TagKeys } from "./crypto/tagKeys";`, `import { tagRoutes } from "./tags/routes";`, `import { TagService } from "./tags/service";`; right after `const visualRuns = new PgVisualRuns(pool);` (before `buildApp`, which Task 5 gives the tags too) add `const tags = new TagService(pool, fields, new TagKeys(keys));`; add `tags,` to the `documentRoutes({ … })` argument (after `status,`) and `tags,` to the `readers: { … }` object; add `...tagRoutes({ authenticator, tags }),` right after the `...documentRoutes({ … }),` spread.
+In `apps/server/app/compose.ts`: add imports `import { TagKeys } from "./crypto/tagKeys";`, `import { tagRoutes } from "./tags/routes";`, `import { TagService } from "./tags/service";`; right after `const visualRuns = new PgVisualRuns(pool);` (before `buildApp`, which Task 5 gives the tags too) add `const tags = new TagService(pool, fields, new TagKeys(keys));`; add `tags,` to the `documentRoutes({ … })` argument (after `status,`) and `tags,` to the `readers: { … }` object; add `...tagRoutes({ authenticator, tags }),` right after the `...documentRoutes({ … }),` spread; and add `tags,` to the object `buildServer` returns (`/** The tag service; the erasure end-to-end seed writes a suggestion through it. */`).
+
+In `apps/server/app/chats/tools/pgDocumentReads.ts` (line 68) the page call becomes `listDocuments(tx, scope.ownerId, { cursor: at, limit: PAGE, tenantId: scope.tenantId })` (the tenant is now required).
+
+Callers of the two changed signatures that this task must fix itself (the typecheck of tests flags the first; the second fails at run time with a `TypeError`, not only as a type error):
+- `apps/server/app/documents/repo.pg.test.ts` lines 46, 85 and 112: add the fourth argument, `toDto(…, UPLOADED, { tags: [] })`.
+- `apps/server/app/ui/ui.pg.test.ts` (the `readersFor({ pool: h.app, fields: counting, … })` call near line 228, and every other `UiReaderDeps` literal that `grep -rn "visualFacts: new PgVisualFacts" apps/server` finds): add `tags: new TagService(h.app, fields, new TagKeys(h.keys)),` (imports `TagKeys` from `../crypto/tagKeys` and `TagService` from `../tags/service`; use the file's own pool, fields and key store variables).
 
 - [ ] **Step 7: Run everything**
 
@@ -2518,48 +2777,70 @@ const PARSED: ParsedDocument = {
   media: [],
 };
 
-describe.skipIf(!PG_URL)("the summarize step with the real tag service (needs DOCMIND_TEST_PG_URL)", () => {
-  let fx: PgFixture;
-  beforeAll(async () => {
-    fx = await startPgFixture();
-  });
-  afterAll(async () => void (await fx?.close()));
-
-  it("writes the document's suggestions, mapped onto its owner's existing tags, and the sealed summary", async () => {
-    const ref = await fx.doc(randomUUID().replaceAll("-", "").padEnd(64, "0"));
-    const tags = new TagService(fx.app, fx.fields, new TagKeys(fx.keys));
-    await tags.create(ref, "Finance");
-    const llm: LlmProvider & { model: string } = {
-      model: "claude-test",
-      complete: async (r: LlmRequest) => ({
-        content: (r.system ?? "").startsWith("You combine")
-          ? JSON.stringify({
-              tldr: "T", keyPoints: [], entities: [], topics: [], suggestedQuestions: [],
-              suggestedTags: ["FINANCE", "Brand new"],
-            })
-          : JSON.stringify({ summary: "s", entities: [] }),
-        stopReason: "end_turn",
-      }),
-    };
-    const results = new PgDocumentResults(fx.app, fx.fields);
-    const effect = summarizeEffect({
-      guard: { begin: async () => {} },
-      parsed: { put: async () => {}, take: async () => PARSED, has: async () => true, drop: async () => {} },
-      chunks: { replace: async () => 0, count: async () => 1, read: async () => [], sectionsOf: async () => [] },
-      results,
-      entities: { replaceForDocument: async () => 0, sharedWith: async () => [] },
-      llm,
-      tags,
-      summaryMaxChars: 1_000,
-      sleep: async () => {},
+describe.skipIf(!PG_URL)(
+  "the summarize step with the real tag service (needs DOCMIND_TEST_PG_URL)",
+  () => {
+    let fx: PgFixture;
+    beforeAll(async () => {
+      fx = await startPgFixture();
     });
-    expect(await effect.execute(ref, {} as never)).toMatchObject({ outcome: "done" });
-    expect(await results.hasSummary(ref)).toBe(true);
-    expect((await tags.detail(ref, ref.documentId))?.suggestedTags).toEqual(["Finance", "Brand new"]);
-    const raw = (await fx.db.owner.query("SELECT to_jsonb(s) AS r FROM document_tag_suggestions s")).rows;
-    expect(JSON.stringify(raw)).not.toContain("Brand new");
-  });
-});
+    afterAll(async () => void (await fx?.close()));
+
+    it("writes the document's suggestions, mapped onto its owner's existing tags, and the sealed summary", async () => {
+      const ref = await fx.doc(randomUUID().replaceAll("-", "").padEnd(64, "0"));
+      const tags = new TagService(fx.app, fx.fields, new TagKeys(fx.keys));
+      await tags.create(ref, "Finance");
+      const llm: LlmProvider & { model: string } = {
+        model: "claude-test",
+        complete: async (r: LlmRequest) => ({
+          content: (r.system ?? "").startsWith("You combine")
+            ? JSON.stringify({
+                tldr: "T",
+                keyPoints: [],
+                entities: [],
+                topics: [],
+                suggestedQuestions: [],
+                suggestedTags: ["FINANCE", "Brand new"],
+              })
+            : JSON.stringify({ summary: "s", entities: [] }),
+          stopReason: "end_turn",
+        }),
+      };
+      const results = new PgDocumentResults(fx.app, fx.fields);
+      const effect = summarizeEffect({
+        guard: { begin: async () => {} },
+        parsed: {
+          put: async () => {},
+          take: async () => PARSED,
+          has: async () => true,
+          drop: async () => {},
+        },
+        chunks: {
+          replace: async () => 0,
+          count: async () => 1,
+          read: async () => [],
+          sectionsOf: async () => [],
+        },
+        results,
+        entities: { replaceForDocument: async () => 0, sharedWith: async () => [] },
+        llm,
+        tags,
+        summaryMaxChars: 1_000,
+        sleep: async () => {},
+      });
+      expect(await effect.execute(ref, {} as never)).toMatchObject({ outcome: "done" });
+      expect(await results.hasSummary(ref)).toBe(true);
+      expect((await tags.detail(ref, ref.documentId))?.suggestedTags).toEqual([
+        "Finance",
+        "Brand new",
+      ]);
+      const raw = (
+        await fx.db.owner.query("SELECT to_jsonb(s) AS r FROM document_tag_suggestions s")
+      ).rows;
+      expect(JSON.stringify(raw)).not.toContain("Brand new");
+    });
+  },
+);
 ```
 
 Run: `pnpm --filter @docmind/server exec vitest run app/flows/ingest-document/summarize app/flows/ingest-document/steps/summarize.test.ts app/flows/ingest-document/flowHash.test.ts`
@@ -2717,7 +2998,7 @@ git commit -m "feat(tags): ingest asks for suggested tags and stores them before
 - Create: `apps/server/app/flows/suggest-tags/flow.ts`, `prompts.ts`, `step.ts`, `start.ts`
 - Test: `apps/server/app/flows/suggest-tags/start.test.ts`, `step.pg.test.ts`, `flow.pg.test.ts`
 - Create: `apps/server/app/tags/suggestRoutes.ts`, test `apps/server/app/tags/suggestRoutes.pg.test.ts`
-- Modify: `apps/server/app/tags/routes.ts` (export `answering` and `idOf`), `apps/server/app/security.ts`, `apps/server/app/security.test.ts`, `apps/server/app/config.ts`, `apps/server/app/loom.gen.ts` (regenerated), `apps/server/app/compose.ts`, `apps/server/app/bootIngest.ts`, `apps/server/app/documents/testHarness.ts`
+- Modify: `apps/server/app/flows/chat-title/step.ts` (export its `defaultSleep`, which this step reuses), `apps/server/app/erasure/wire.ts`, `apps/server/app/erasure/wire.test.ts` (settle and cancel the starts), `apps/server/app/security.ts`, `apps/server/app/security.test.ts`, `apps/server/app/config.ts`, `apps/server/app/loom.gen.ts` (regenerated), `apps/server/app/compose.ts`, `apps/server/app/bootIngest.ts`, `apps/server/app/documents/testHarness.ts`
 - Modify: `packages/contracts/src/documents.ts` (`DocumentProgressEvent.tags`), `packages/contracts/src/documents.test.ts`
 
 **Interfaces:**
@@ -2725,8 +3006,9 @@ git commit -m "feat(tags): ingest asks for suggested tags and stores them before
 - Produces:
   - `SUGGEST_TAGS_FLOW_ID = "suggest-tags"`; `SuggestTagsInput` (`{tenantId, userId, documentId}`, strict); `SuggestTagsOutput` (`{outcome: "suggested" | "empty" | "failed"}`); `suggestTagsFlow: RegisteredFlow` (version 1.0.0, one step `suggest-tags`)
   - `interface SuggestTagsDeps { pool: Pool; fields: FieldCrypto; tags: Pick<TagService, "suggestionContext" | "putSuggestions">; bus: ProgressBus; llm?: LlmProvider; sleep?: (ms: number, signal?: AbortSignal) => Promise<void> }`; `suggestTagsEffect(deps): Effect<SuggestTagsInput, SuggestTagsOutput>`
-  - `type SuggestTagsStart = { kind: "started"; run: number } | { kind: "running" } | { kind: "disabled" }`; `interface SuggestTagsStarter { start(ref: SuggestTagsInput): Promise<SuggestTagsStart>; idle(): Promise<void> }`; `loomSuggestTagsStarter(runtime, o?: { enabled?: () => boolean }): SuggestTagsStarter`; `suggestTagsExecutionId(userId, documentId, run): UserExecutionId` (`u_<user>:suggest-tags-<doc>-r<n>`)
-  - `suggestRoutes(deps: { pool: Pool; authenticator: Authenticator; tags: TagService; starter: Pick<SuggestTagsStarter, "start">; limiter: { tryAcquire(userId: string): boolean } }): Record<string, Handler>`
+  - `type SuggestTagsStart = { kind: "started"; run: number } | { kind: "running" } | { kind: "disabled" }`; `interface SuggestTagsStarter { start(ref: SuggestTagsInput): Promise<SuggestTagsStart>; settle(identity: Identity, documentId: string): Promise<void>; cancel(identity: Identity, documentId: string, reason: string): Promise<void>; idle(): Promise<void> }` (`settle` and `cancel` are for erasure); `loomSuggestTagsStarter(runtime: Pick<WorkflowRuntime, "start" | "cancel">, o?: { enabled?: () => boolean }): SuggestTagsStarter`; `suggestTagsExecutionId(userId, documentId, run): UserExecutionId` (`u_<user>:suggest-tags-<doc>-r<n>`)
+  - `suggestRoutes(deps: { pool: Pool; authenticator: Authenticator; tags: TagService; starter: Pick<SuggestTagsStarter, "start">; limiter: { tryAcquire(userId: string): boolean } }): Record<string, Handler>` (it reuses `authed`, `idOf`, `notFound` and `answering` from `tags/routes.ts`, Task 3)
+  - `ErasureParts.suggestTags?: Pick<SuggestTagsStarter, "cancel" | "idle" | "settle">`
   - `DocumentProgressEvent.tags?: "suggested" | "failed"`; `FlowDeps.suggestTags?: SuggestTagsDeps`; `BuiltServer.suggestTags: SuggestTagsStarter`
 
 - [ ] **Step 1: The progress event carries `tags`, test first**
@@ -2863,19 +3145,15 @@ Create `apps/server/app/flows/suggest-tags/step.pg.test.ts`:
 ```ts
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
-import {
-  LlmOutputError,
-  LlmRefusalError,
-  LlmUnavailableError,
-} from "@docmind/llm-anthropic";
+import { LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TagKeys } from "../../crypto/tagKeys";
 import { PG_URL } from "../../db/testSupport";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { TagService } from "../../tags/service";
 import { type PgFixture, startPgFixture } from "../ingest-document/pgFixture";
 import { PgDocumentResults } from "../ingest-document/pgResults";
-import { TagService } from "../../tags/service";
 import { suggestTagsEffect } from "./step";
 
 const SUMMARY = {
@@ -2897,7 +3175,13 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
   });
   afterAll(async () => void (await fx?.close()));
 
-  async function setup(o: { summary?: boolean; reply?: (n: number) => string | Error } = {}) {
+  async function setup(
+    o: {
+      summary?: boolean;
+      reply?: (n: number) => string | Error;
+      tags?: Pick<TagService, "suggestionContext" | "putSuggestions">;
+    } = {},
+  ) {
     const ref = await fx.doc(randomUUID().replaceAll("-", "").padEnd(64, "0"));
     if (o.summary !== false) await results.putSummary(ref, SUMMARY);
     const requests: LlmRequest[] = [];
@@ -2908,7 +3192,9 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
     const llm: LlmProvider = {
       complete: async (r) => {
         requests.push(r);
-        const out = (o.reply ?? (() => JSON.stringify({ suggestedTags: ["Finance", "New idea"] })))(requests.length);
+        const out = (o.reply ?? (() => JSON.stringify({ suggestedTags: ["Finance", "New idea"] })))(
+          requests.length,
+        );
         if (out instanceof Error) throw out;
         return { content: out, stopReason: "end_turn" };
       },
@@ -2916,7 +3202,7 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
     const effect = suggestTagsEffect({
       pool: fx.app,
       fields: fx.fields,
-      tags,
+      tags: o.tags ?? tags,
       bus,
       llm,
       sleep: async (ms) => void sleeps.push(ms),
@@ -2934,7 +3220,10 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
     expect(sent).toContain("Revenue grew");
     expect(sent).not.toContain("Quarterly report"); // the document's title: not read
     expect(sent).toContain('[\\"finance\\"]'); // the user's existing tag, quoted
-    expect((await tags.detail(s.ref, s.ref.documentId))?.suggestedTags).toEqual(["finance", "New idea"]);
+    expect((await tags.detail(s.ref, s.ref.documentId))?.suggestedTags).toEqual([
+      "finance",
+      "New idea",
+    ]);
     expect(s.events).toEqual([
       { documentId: s.ref.documentId, status: "ready", step: "finalize", tags: "suggested" },
     ]);
@@ -2969,7 +3258,9 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
     expect(s.requests).toHaveLength(3);
     expect(s.sleeps).toEqual([2_000, 4_000]);
     expect(s.events.map((e) => e.tags)).toEqual(["failed"]);
-    const garbled = await setup({ reply: (n) => (n < 3 ? "not json" : JSON.stringify({ suggestedTags: ["ok"] })) });
+    const garbled = await setup({
+      reply: (n) => (n < 3 ? "not json" : JSON.stringify({ suggestedTags: ["ok"] })),
+    });
     expect(await garbled.run()).toEqual({ outcome: "suggested" });
     expect(garbled.requests).toHaveLength(3);
   });
@@ -2981,15 +3272,37 @@ describe.skipIf(!PG_URL)("the suggest-tags step (needs DOCMIND_TEST_PG_URL)", ()
     expect(s.events.map((e) => e.tags)).toEqual(["failed"]);
   });
 
-  it("is quiet for a document that is gone, and never puts a tag or summary text in the answer", async () => {
+  it("is quiet for a document that is gone", async () => {
     const gone = await setup();
     await fx.db.owner.query("DELETE FROM documents WHERE id = $1", [gone.ref.documentId]);
     expect(await gone.run()).toEqual({ outcome: "failed" });
     expect(gone.events).toEqual([]);
     expect(gone.requests).toHaveLength(0);
-    const ok = await setup({ reply: () => new LlmOutputError() });
-    const out = await ok.run();
-    expect(JSON.stringify(out)).not.toContain("New idea");
+  });
+
+  it("puts no tag or summary text in the output, the event or the log when storing fails (preflight F6)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const s = await setup({
+        tags: {
+          suggestionContext: (ref) => tags.suggestionContext(ref),
+          // The model answered "New idea", and the store fails with a message that holds it: nothing may carry it on.
+          putSuggestions: async () => {
+            throw new Error("storage failed for New idea");
+          },
+        },
+      });
+      const out = await s.run();
+      expect(out).toEqual({ outcome: "failed" });
+      expect(s.requests).toHaveLength(1);
+      expect(s.events.map((e) => e.tags)).toEqual(["failed"]);
+      expect(logged).toHaveBeenCalled(); // the failure is logged by class, so the check below can fail
+      const seen = JSON.stringify([out, s.events, logged.mock.calls]);
+      for (const text of ["New idea", "storage failed", "Quarterly summary tldr"])
+        expect(seen).not.toContain(text);
+    } finally {
+      logged.mockRestore();
+    }
   });
 });
 ```
@@ -2998,6 +3311,8 @@ Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run ap
 Expected: FAIL (`./step` does not exist).
 
 - [ ] **Step 4: The step**
+
+In `apps/server/app/flows/chat-title/step.ts` change `const defaultSleep =` to `export const defaultSleep =` (the same abortable wait; the step below imports it, so there is no third copy of it; `ingest-document/stepEffect.ts` keeps its own, which rejects with its own abort error).
 
 Create `apps/server/app/flows/suggest-tags/step.ts`:
 
@@ -3014,12 +3329,13 @@ import { tainted } from "@loom/classify";
 import type { Effect } from "@loom/effect-runtime";
 import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
 import type { Pool } from "pg";
-import { FieldKeyStoreError, type FieldCrypto } from "../../crypto/fields";
+import { type FieldCrypto, FieldKeyStoreError } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
 import type { ProgressBus } from "../../documents/progress";
 import { getDocument, summaryBind } from "../../documents/repo";
 import type { TagService } from "../../tags/service";
 import { normaliseSuggestions } from "../../tags/suggestions";
+import { defaultSleep } from "../chat-title/step";
 import { isAbort, isDocumentGone } from "../ingest-document/errors";
 import { jsonAnswer } from "../ingest-document/llmJson";
 import { SUGGEST_TAGS_RETRY, type SuggestTagsInput, type SuggestTagsOutput } from "./flow";
@@ -3039,20 +3355,6 @@ export interface SuggestTagsDeps {
 const FAILED: SuggestTagsOutput = { outcome: "failed" };
 const cls = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
-const defaultSleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 /**
  * The one step of `suggest-tags` (spec section 4, on demand). It reads the document's stored summary (tldr, topics, key points)
  * and the owner's tag names, makes one model call with the same lenient answer and normalisation as ingest, replaces the
@@ -3060,7 +3362,9 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
  * problem ends the run `failed` (with the `failed` event, so the page can offer a retry), never an exception; only an abort
  * and a key-store outage are rethrown. The output is one word: no tag name reaches the event log.
  */
-export function suggestTagsEffect(deps: SuggestTagsDeps): Effect<SuggestTagsInput, SuggestTagsOutput> {
+export function suggestTagsEffect(
+  deps: SuggestTagsDeps,
+): Effect<SuggestTagsInput, SuggestTagsOutput> {
   const sleep = deps.sleep ?? defaultSleep;
   return {
     kind: "tool",
@@ -3157,7 +3461,9 @@ import { executionIdFor } from "../../subject";
 import { loomSuggestTagsStarter, suggestTagsExecutionId } from "./start";
 
 const ref = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
-const never = { waitForCompletion: () => new Promise<void>(() => {}) } as unknown as ExecutionHandle;
+const never = {
+  waitForCompletion: () => new Promise<void>(() => {}),
+} as unknown as ExecutionHandle;
 
 describe("suggestTagsExecutionId", () => {
   it("is suggest-tags-<doc>-r<n> under the user's prefix", () => {
@@ -3192,13 +3498,20 @@ describe("loomSuggestTagsStarter", () => {
 
   it("lets a finished run be followed by another", async () => {
     let done: () => void = () => {};
-    const handle = { waitForCompletion: () => new Promise<void>((res) => { done = res; }) } as unknown as ExecutionHandle;
+    const handle = {
+      waitForCompletion: () =>
+        new Promise<void>((res) => {
+          done = res;
+        }),
+    } as unknown as ExecutionHandle;
     const starter = loomSuggestTagsStarter({ start: vi.fn(async () => handle) } as never);
     const r = ref();
     expect(await starter.start(r)).toEqual({ kind: "started", run: 1 });
     expect(await starter.start(r)).toEqual({ kind: "running" });
     done();
-    await vi.waitFor(async () => expect(await starter.start(r)).toEqual({ kind: "started", run: 2 }));
+    await vi.waitFor(async () =>
+      expect(await starter.start(r)).toEqual({ kind: "started", run: 2 }),
+    );
   });
 
   it("answers disabled without starting anything while the role is off", async () => {
@@ -3215,18 +3528,76 @@ describe("loomSuggestTagsStarter", () => {
     await starter.idle();
   });
 });
+
+describe("settle and cancel (erasure)", () => {
+  it("settle waits for the document's pending start and for no other document's", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const start = vi.fn(async () => {
+      await gate;
+      return never;
+    });
+    const starter = loomSuggestTagsStarter({ start, cancel: vi.fn() } as never);
+    const r = ref();
+    void starter.start(r);
+    let settled = false;
+    const waiting = starter.settle(r, r.documentId).then(() => {
+      settled = true;
+    });
+    const other = ref();
+    await starter.settle(other, other.documentId); // another document: nothing to wait for
+    expect(settled).toBe(false);
+    release();
+    await waiting;
+    expect(settled).toBe(true);
+  });
+
+  it("cancel stops every run number this process took and ignores one Loom does not hold", async () => {
+    const r = ref();
+    const first = suggestTagsExecutionId(r.userId, r.documentId, 1);
+    const cancel = vi.fn(async (id: string, _reason: string) => {
+      if (id === first) throw new Error(`No execution found for id: ${id}`);
+      return true;
+    });
+    const finished = { waitForCompletion: () => Promise.resolve() } as unknown as ExecutionHandle;
+    const starter = loomSuggestTagsStarter({ start: vi.fn(async () => finished), cancel } as never);
+    expect(await starter.start(r)).toEqual({ kind: "started", run: 1 });
+    await vi.waitFor(async () =>
+      expect(await starter.start(r)).toEqual({ kind: "started", run: 2 }),
+    );
+    await starter.cancel(r, r.documentId, "erased");
+    expect(cancel.mock.calls.map((c) => c[0])).toEqual([
+      first,
+      suggestTagsExecutionId(r.userId, r.documentId, 2),
+    ]);
+    expect(cancel.mock.calls.map((c) => c[1])).toEqual(["erased", "erased"]);
+  });
+
+  it("cancel rethrows any other failure, so the erasure step is retried", async () => {
+    const r = ref();
+    const cancel = vi.fn(async () => {
+      throw new RangeError("db down");
+    });
+    const starter = loomSuggestTagsStarter({ start: vi.fn(async () => never), cancel } as never);
+    await starter.start(r);
+    await expect(starter.cancel(r, r.documentId, "erased")).rejects.toThrow(RangeError);
+  });
+});
 ```
 
 Run: `pnpm --filter @docmind/server exec vitest run app/flows/suggest-tags/start.test.ts` Expected: FAIL. Create `apps/server/app/flows/suggest-tags/start.ts`:
 
 ```ts
+import type { Identity } from "@docmind/auth";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
 import { type UserExecutionId, executionIdFor } from "../../subject";
-import { rerunTracker } from "../rerunTracker";
+import { MAX_RERUNS, rerunTracker } from "../rerunTracker";
 import { SuggestTagsInput, suggestTagsFlow } from "./flow";
 
 export type SuggestTagsStart =
@@ -3241,25 +3612,39 @@ export interface SuggestTagsStarter {
    * malformed ref (synchronously) or a Loom failure other than an id already taken.
    */
   start(ref: SuggestTagsInput): Promise<SuggestTagsStart>;
-  /** Resolves when every pending start has settled (shutdown). */
+  /** Erasure: resolves when the document's pending starts have settled, so a cancel never runs before a start lands. */
+  settle(identity: Pick<Identity, "userId">, documentId: string): Promise<void>;
+  /**
+   * Erasure: cancels every run number this process took for the document (unknown ones are fine). `reason` lands in the
+   * log in the clear: a fixed word, never content. Runs are not recovery-owned, so none survives a restart to cancel.
+   */
+  cancel(identity: Identity, documentId: string, reason: string): Promise<void>;
+  /** Resolves when every pending start has settled (shutdown, and before an erasure's shred). */
   idle(): Promise<void>;
 }
 
 /** `suggest-tags-<doc>-r<n>`: the name holds ids and a number, never content. */
-export function suggestTagsExecutionId(userId: string, documentId: string, run: number): UserExecutionId {
+export function suggestTagsExecutionId(
+  userId: string,
+  documentId: string,
+  run: number,
+): UserExecutionId {
   return executionIdFor(userId, `suggest-tags-${documentId.toLowerCase()}-r${run}`);
 }
 
+const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.toLowerCase()}`;
+
 export function loomSuggestTagsStarter(
-  runtime: Pick<WorkflowRuntime, "start">,
+  runtime: Pick<WorkflowRuntime, "start" | "cancel">,
   o: { enabled?: () => boolean } = {},
 ): SuggestTagsStarter {
   const tracker = rerunTracker();
   const pending = new Set<Promise<unknown>>();
+  const byDocument = new Map<string, Set<Promise<unknown>>>();
   return {
     start(ref) {
       const input = SuggestTagsInput.parse(ref);
-      const key = `${input.userId}:${input.documentId}`;
+      const key = keyOf(input.userId, input.documentId);
       const work = tracker.exclusive(key, async (): Promise<SuggestTagsStart> => {
         if (o.enabled && !o.enabled()) return { kind: "disabled" };
         if (tracker.running(key)) return { kind: "running" };
@@ -3283,9 +3668,39 @@ export function loomSuggestTagsStarter(
         () => undefined,
         () => undefined,
       );
+      const set = byDocument.get(key) ?? new Set<Promise<unknown>>();
+      byDocument.set(key, set);
       pending.add(mark);
-      void mark.finally(() => pending.delete(mark));
+      set.add(mark);
+      void mark.finally(() => {
+        pending.delete(mark);
+        set.delete(mark);
+        if (set.size === 0 && byDocument.get(key) === set) byDocument.delete(key);
+      });
       return work;
+    },
+    async settle(identity, documentId) {
+      while (true) {
+        const runs = byDocument.get(keyOf(identity.userId, documentId));
+        if (!runs || runs.size === 0) return;
+        await Promise.all([...runs]);
+      }
+    },
+    async cancel(identity, documentId, reason) {
+      const principal = { tenant: identity.tenantId, actor: identity.userId };
+      const top = Math.min(tracker.last(keyOf(identity.userId, documentId)), MAX_RERUNS);
+      for (let n = 1; n <= top; n++) {
+        const executionId = suggestTagsExecutionId(identity.userId, documentId, n);
+        try {
+          await runtime.cancel(executionId, reason, { principal });
+        } catch (err) {
+          // Loom throws a plain Error (no class) for an execution that never existed; match its exact message for this id only.
+          if (
+            !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
+          )
+            throw err;
+        }
+      }
     },
     async idle() {
       while (pending.size > 0) await Promise.all([...pending]);
@@ -3294,7 +3709,7 @@ export function loomSuggestTagsStarter(
 }
 ```
 
-Run the starter tests: PASS. (`SuggestTagsInput.parse` throws synchronously, which the `rejects a malformed ref` test relies on: `start` is not `async`.)
+Run the starter tests: PASS (including the settle and cancel cases, which Step 9a wires into erasure). (`SuggestTagsInput.parse` throws synchronously, which the `rejects a malformed ref` test relies on: `start` is not `async`.)
 
 - [ ] **Step 6: Wire the flow: security, config, gen**
 
@@ -3360,7 +3775,10 @@ describe.skipIf(!PG_URL)("suggest-tags through Loom (needs DOCMIND_TEST_PG_URL)"
       complete: async () => {
         calls++;
         await gate;
-        return { content: JSON.stringify({ suggestedTags: ["Zebra-Secret-Tag"] }), stopReason: "end_turn" };
+        return {
+          content: JSON.stringify({ suggestedTags: ["Zebra-Secret-Tag"] }),
+          stopReason: "end_turn",
+        };
       },
     };
     const log = new InMemoryAsyncEventStore();
@@ -3375,7 +3793,12 @@ describe.skipIf(!PG_URL)("suggest-tags through Loom (needs DOCMIND_TEST_PG_URL)"
       await vi.waitFor(() => expect(events).toHaveLength(1));
       expect(calls).toBe(1);
       expect((await tags.detail(ref, ref.documentId))?.suggestedTags).toEqual(["Zebra-Secret-Tag"]);
-      expect(events[0]).toEqual({ documentId: ref.documentId, status: "ready", step: "finalize", tags: "suggested" });
+      expect(events[0]).toEqual({
+        documentId: ref.documentId,
+        status: "ready",
+        step: "finalize",
+        tags: "suggested",
+      });
       const id = `u_${ref.userId}:suggest-tags-${ref.documentId}-r1`;
       await vi.waitFor(async () =>
         expect(JSON.stringify(await log.read(id))).toContain("EXECUTION_COMPLETED"),
@@ -3395,8 +3818,6 @@ Expected: FAIL (`suggestTags` is not a `FlowDeps` key) until Step 6 is done; aft
 
 - [ ] **Step 8: The routes, test first**
 
-In `apps/server/app/tags/routes.ts` change `const idOf` to `export const idOf` and `async function answering` to `export async function answering`, and `const notFound` to `export const notFound`.
-
 In `apps/server/app/documents/testHarness.ts`: add to the `startDocumentServer` `overrides` type `/** Test seam: the suggest-tags starter and limiter the refresh route uses (default: the role is off). */ suggest?: { starter: Pick<SuggestTagsStarter, "start">; limiter: { tryAcquire(userId: string): boolean } };`; import `suggestRoutes` and `type SuggestTagsStarter`; and in `createHttpServer({ … })` add after the `tagRoutes` line:
 
 ```ts
@@ -3412,12 +3833,19 @@ In `apps/server/app/documents/testHarness.ts`: add to the `startDocumentServer` 
 Create `apps/server/app/tags/suggestRoutes.pg.test.ts`:
 
 ```ts
-import { randomUUID } from "node:crypto";
 import { DocumentTagsResponse, SuggestTagsResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
-import { ALICE, BOB, type DocumentHarness, seedDoc, startDocumentServer } from "../documents/testHarness";
+import {
+  ALICE,
+  BOB,
+  type DocumentHarness,
+  callApi,
+  errorCode as code,
+  seedNext,
+  startDocumentServer,
+} from "../documents/testHarness";
 import { PgDocumentResults } from "../flows/ingest-document/pgResults";
 import type { SuggestTagsStart } from "../flows/suggest-tags/start";
 
@@ -3425,7 +3853,6 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
   const state = { answer: { kind: "started", run: 1 } as SuggestTagsStart, allow: true };
   const start = vi.fn(async () => state.answer);
   let h: DocumentHarness;
-  let n = 0;
   beforeAll(async () => {
     h = await startDocumentServer({
       suggest: { starter: { start }, limiter: { tryAcquire: () => state.allow } },
@@ -3439,15 +3866,9 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
     await h.owner.query("DELETE FROM tags");
     await h.owner.query("DELETE FROM documents");
   });
-  const post = (user: string, path: string, body?: unknown) =>
-    fetch(`${h.base}${path}`, {
-      method: "POST",
-      headers: { "x-test-user": user, ...(body !== undefined && { "content-type": "application/json" }) },
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-    });
-  const code = async (res: Response) => ((await res.json()) as { error?: { code?: string } }).error?.code;
+  const post = (user: string, path: string, body?: unknown) => callApi(h, user, "POST", path, body);
   const seed = async (who = ALICE, summary = true) => {
-    const id = await seedDoc(h.owner, h.app, new FieldCrypto(h.keys), who, (++n).toString(16).padStart(64, "0"), 0);
+    const id = await seedNext(h, who);
     if (summary)
       await new PgDocumentResults(h.app, new FieldCrypto(h.keys)).putSummary(
         { ...who, documentId: id },
@@ -3459,15 +3880,23 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
   it("accept creates or reuses the tag, links it and removes it from the suggestions", async () => {
     const d = await seed();
     await h.tags.putSuggestions({ ...ALICE, documentId: d }, ["Finance", "Legal"]);
-    const res = await post("alice", `/api/documents/${d}/tag-suggestions/accept`, { name: "finance" });
+    const res = await post("alice", `/api/documents/${d}/tag-suggestions/accept`, {
+      name: "finance",
+    });
     const body = DocumentTagsResponse.parse(await res.json());
-    expect([res.status, body.tags.map((t) => t.name), body.suggestedTags]).toEqual([200, ["finance"], ["Legal"]]);
+    expect([res.status, body.tags.map((t) => t.name), body.suggestedTags]).toEqual([
+      200,
+      ["finance"],
+      ["Legal"],
+    ]);
   });
 
   it("dismiss removes the name and leaves the tags alone", async () => {
     const d = await seed();
     await h.tags.putSuggestions({ ...ALICE, documentId: d }, ["Finance", "Legal"]);
-    const res = await post("alice", `/api/documents/${d}/tag-suggestions/dismiss`, { name: "LEGAL" });
+    const res = await post("alice", `/api/documents/${d}/tag-suggestions/dismiss`, {
+      name: "LEGAL",
+    });
     const body = DocumentTagsResponse.parse(await res.json());
     expect([body.tags, body.suggestedTags]).toEqual([[], ["Finance"]]);
   });
@@ -3476,9 +3905,17 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
     const mine = await seed();
     const theirs = await seed(BOB);
     for (const action of ["accept", "dismiss"]) {
-      expect((await post("alice", `/api/documents/${theirs}/tag-suggestions/${action}`, { name: "x" })).status).toBe(404);
-      expect((await post("alice", `/api/documents/nope/tag-suggestions/${action}`, { name: "x" })).status).toBe(404);
-      const bad = await post("alice", `/api/documents/${mine}/tag-suggestions/${action}`, { name: "" });
+      expect(
+        (await post("alice", `/api/documents/${theirs}/tag-suggestions/${action}`, { name: "x" }))
+          .status,
+      ).toBe(404);
+      expect(
+        (await post("alice", `/api/documents/nope/tag-suggestions/${action}`, { name: "x" }))
+          .status,
+      ).toBe(404);
+      const bad = await post("alice", `/api/documents/${mine}/tag-suggestions/${action}`, {
+        name: "",
+      });
       expect([bad.status, await code(bad)]).toEqual([400, "invalid_request"]);
     }
   });
@@ -3486,15 +3923,24 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
   it("accept answers 409 tag_limit when the document holds 20 tags", async () => {
     const d = await seed();
     for (let i = 0; i < 20; i++) await h.tags.addToDocument(ALICE, d, `t${i}`);
-    const res = await post("alice", `/api/documents/${d}/tag-suggestions/accept`, { name: "one more" });
+    const res = await post("alice", `/api/documents/${d}/tag-suggestions/accept`, {
+      name: "one more",
+    });
     expect([res.status, await code(res)]).toEqual([409, "tag_limit"]);
   });
 
   it("refresh starts the flow for the caller's document and answers 202", async () => {
     const d = await seed();
     const res = await post("alice", `/api/documents/${d}/tag-suggestions/refresh`);
-    expect([res.status, SuggestTagsResponse.parse(await res.json())]).toEqual([202, { started: true }]);
-    expect(start).toHaveBeenCalledWith({ tenantId: ALICE.tenantId, userId: ALICE.userId, documentId: d });
+    expect([res.status, SuggestTagsResponse.parse(await res.json())]).toEqual([
+      202,
+      { started: true },
+    ]);
+    expect(start).toHaveBeenCalledWith({
+      tenantId: ALICE.tenantId,
+      userId: ALICE.userId,
+      documentId: d,
+    });
   });
 
   it("refresh answers 404 (not yours, malformed), 409 no_summary, 409 suggest_running, 409 suggest_unavailable and 429", async () => {
@@ -3513,24 +3959,32 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
     expect([off.status, await code(off)]).toEqual([409, "suggest_unavailable"]);
     state.allow = false;
     const limited = await post("alice", `/api/documents/${d}/tag-suggestions/refresh`);
-    expect([limited.status, limited.headers.get("retry-after"), await code(limited)]).toEqual([429, "60", "too_many_requests"]);
+    expect([limited.status, limited.headers.get("retry-after"), await code(limited)]).toEqual([
+      429,
+      "60",
+      "too_many_requests",
+    ]);
   });
 });
 ```
 
-(`randomUUID` import is unused: delete it if lint flags it.) Run: `pnpm --filter @docmind/server exec vitest run app/tags/suggestRoutes.pg.test.ts` Expected: FAIL (`./suggestRoutes` does not exist). Create `apps/server/app/tags/suggestRoutes.ts`:
+Run: `pnpm --filter @docmind/server exec vitest run app/tags/suggestRoutes.pg.test.ts` Expected: FAIL (`./suggestRoutes` does not exist). Create `apps/server/app/tags/suggestRoutes.ts`:
 
 ```ts
 import type { Authenticator } from "@docmind/auth";
-import { type DocumentTagsResponse, TagNameRequest, type SuggestTagsResponse } from "@docmind/contracts";
+import {
+  type DocumentTagsResponse,
+  type SuggestTagsResponse,
+  TagNameRequest,
+} from "@docmind/contracts";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
 import { getDocument } from "../documents/repo";
 import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
 import { readJson } from "../http/body";
-import { type AuthedHandler, requireAuth } from "../http/requireAuth";
+import type { AuthedHandler } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
-import { answering, idOf, notFound } from "./routes";
+import { authed, idOf, notFound } from "./routes";
 import type { TagService } from "./service";
 
 export interface SuggestRoutesDeps {
@@ -3544,11 +3998,7 @@ export interface SuggestRoutesDeps {
 
 /** Accept, dismiss and refresh (spec section 5). A foreign, unknown or malformed document id all answer the same 404. */
 export function suggestRoutes(deps: SuggestRoutesDeps): Record<string, Handler> {
-  const auth = (handler: AuthedHandler): Handler =>
-    requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
-      res.setHeader("cache-control", "no-store");
-      await answering(res, async () => void (await handler(req, res, identity, ctx)));
-    });
+  const auth = authed(deps.authenticator);
   const choose =
     (op: "accept" | "dismiss"): AuthedHandler =>
     async (req, res, identity, ctx) => {
@@ -3566,12 +4016,19 @@ export function suggestRoutes(deps: SuggestRoutesDeps): Record<string, Handler> 
     "POST /api/documents/:id/tag-suggestions/refresh": auth(async (_req, res, identity, ctx) => {
       const id = idOf(ctx.params.id);
       const row = id
-        ? await withTenant(deps.pool, identity.tenantId, (tx) => getDocument(tx, identity.userId, id))
+        ? await withTenant(deps.pool, identity.tenantId, (tx) =>
+            getDocument(tx, identity.userId, id),
+          )
         : undefined;
       if (!row) return notFound(res, "document");
       // The button is disabled for this case; the server says so too, before it spends a model call.
       if (row.summary_enc == null)
-        return sendError(res, 409, "no_summary", "this document has no summary to suggest tags from");
+        return sendError(
+          res,
+          409,
+          "no_summary",
+          "this document has no summary to suggest tags from",
+        );
       if (!deps.limiter.tryAcquire(identity.userId)) {
         res.setHeader("retry-after", "60");
         return sendError(res, 429, "too_many_requests", "too many requests; try again in a minute");
@@ -3618,9 +4075,61 @@ in the routes, after `...tagRoutes({ authenticator, tags }),` add `...suggestRou
 
 `apps/server/app/bootIngest.ts`: destructure `suggestTags` from `built` next to `titles` and `turns` (lines ~106 and `BootIngestParts`' `built` type follows `buildServer`'s return), and in `startsIdle` add `await suggestTags?.idle();` after `await turns?.idle();`. A test that builds `parts()` without it keeps passing (optional chaining).
 
+- [ ] **Step 9a: Erasure settles and cancels the suggest-tags starts (preflight F8), test first**
+
+`erasure/wire.ts` drains and cancels the ingest, visualize and title starts before the key is shredded. A suggest-tags start fired just before an erasure could otherwise create an execution (and its log) after `eraseSubject`. Add this case to `apps/server/app/erasure/wire.test.ts`, inside `describe("erasureDeps", …)` (it uses the file's `parts()` and `who`):
+
+```ts
+  it("settles and cancels the document's suggest-tags runs with its other starts, and awaits the starter with the titles", async () => {
+    const calls: string[] = [];
+    const { parts: p } = parts({
+      suggestTags: {
+        settle: async (_who, doc) => void calls.push(`suggest.settle:${doc}`),
+        cancel: async (_who, doc, reason) => void calls.push(`suggest.cancel:${doc}:${reason}`),
+        idle: async () => void calls.push("suggest.idle"),
+      },
+    });
+    const deps = erasureDeps(p);
+    await deps.settleStart(who, "d");
+    await deps.cancelVisualize(who, "d", 3);
+    await deps.settleTitles();
+    expect(calls).toEqual(["suggest.settle:d", "suggest.cancel:d:erased", "suggest.idle"]);
+  });
+```
+
+Run: `pnpm --filter @docmind/server exec vitest run app/erasure/wire.test.ts` Expected: FAIL (`suggestTags` is not a part). In `apps/server/app/erasure/wire.ts`: add `import type { SuggestTagsStarter } from "../flows/suggest-tags/start";` (with the other flow imports); add to `ErasureParts`, after `visuals`: `/** The on-demand tag suggestion starter: its pending starts are settled and its runs cancelled like the other flows'. */ suggestTags?: Pick<SuggestTagsStarter, "cancel" | "idle" | "settle">;`; and change three members of the object `erasureDeps` returns:
+
+```ts
+    settleStart: (identity, documentId) =>
+      drainWithin(
+        Promise.all([
+          p.starts.settle(identity, documentId),
+          p.visuals.settle(identity, documentId),
+          p.suggestTags?.settle(identity, documentId),
+        ]).then(() => undefined),
+        SETTLE_MS,
+      ),
+    settleTitles: async () => {
+      await p.titles?.idle();
+      await p.visuals.idle(); // a fired visualize start has landed (and is cancelled by cancelVisualize) before the shred
+      await p.suggestTags?.idle(); // likewise a fired suggest-tags start
+    },
+```
+
+and
+
+```ts
+    cancelVisualize: async (identity, documentId, generation) => {
+      await p.visuals.cancel(identity, documentId, generation, ERASED);
+      await p.suggestTags?.cancel(identity, documentId, ERASED); // the document's on-demand tag runs stop at the same point
+    },
+```
+
+In `apps/server/app/compose.ts`, in the `erasureDeps({ … })` call (around line 440) add `suggestTags,` after `visuals,` (the starter is built earlier in this step). Run the wire tests and `pnpm --filter @docmind/server exec vitest run app/erasure/eraser.test.ts app/erasure/wiring.pg.test.ts` with the Postgres env: PASS (the eraser's own tests build `ErasureDeps` directly, and `suggestTags` is optional in the parts).
+
 - [ ] **Step 10: Run everything**
 
-Run: `set -a; . ./.env; set +a; pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm --filter @docmind/server exec vitest run app/flows/suggest-tags app/tags app/security.test.ts app/bootIngest.test.ts app/config.test.ts app/documents && pnpm --filter @docmind/contracts exec vitest run`
+Run: `set -a; . ./.env; set +a; pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm --filter @docmind/server exec vitest run app/flows/suggest-tags app/tags app/erasure/wire.test.ts app/security.test.ts app/bootIngest.test.ts app/config.test.ts app/documents && pnpm --filter @docmind/contracts exec vitest run`
 Expected: PASS; the pg files ran. `app/executionIds.test.ts` (the ratchet that every start passes an `executionIdFor` id) passes: the starter uses `suggestTagsExecutionId`.
 
 - [ ] **Step 11: Commit**
@@ -3637,19 +4146,31 @@ git commit -m "feat(tags): on-demand suggest-tags flow, accept, dismiss and refr
 **Files:**
 - Modify (server half, the `library` view's `documents` provider): `packages/experiences/src/invoker.ts`, `views.ts`, `reshapers.ts`, `providers.ts`; tests `hydrate.test.ts`, `reshapers.test.ts`, `visuals.test.ts` (the pin list), and any other test naming `documents.list@1` or `document.get@1`
 - Modify: `apps/server/app/ui/readers.ts` (`documents` takes `tags` and `match`); test `apps/server/app/ui/tagFilter.pg.test.ts`
-- Modify (web): `apps/web/src/router.ts`, `router.test.ts`, `api/client.ts`, `api/client.test.ts`, `components/dm-documents-page.ts`, `components/dm-documents-page.test.ts`, `components/index.ts` (import the new elements if it lists them), `testing/fakeServer.ts`
+- Modify (web): `apps/web/src/router.ts`, `router.test.ts`, `api/client.ts`, `api/client.test.ts`, `components/dm-documents-page.ts`, `components/dm-documents-page.test.ts`, `components/index.ts` (import the new elements if it lists them), `testing/fakeServer.ts`, `testing/fakeServer.test.ts` (the tag routes, moved here from the detail task)
+- Modify: `apps/server/app/ui/ui.pg.test.ts` (its `readers.documents` calls take `tags` and `match`)
+- Create: `apps/web/src/testing/tags.ts` (helpers shared by the tag component tests and the page test)
 - Create: `apps/web/src/components/dm-tag-bar.ts`, `dm-tag-bar.test.ts`, `dm-tag-manage.ts`, `dm-tag-manage.test.ts`
 
 **Interfaces:**
 - Consumes: `TagIdList`, `TagMatch`, `TagSummary`, `DocumentTag`, `ListTagsResponse`, `TagResponse`, `DocumentTagsResponse` (Task 1); `DocumentDto.tags` (Task 3); the tag routes (Tasks 3 and 5); `listDocuments(tx, owner, { tenantId, filter })` (Task 3); `ServicesController`, `confirmDialog`, `ApiError`, `unnamedControls` (`testing/dom.ts`).
 - Produces:
-  - `UiReaders.documents(a: { limit: number; status: ...; tags: string[]; match: "any" | "all" })`; the `documents` provider's `overridable` is `["status", "tags", "match"]` (`tags` a comma-separated id string on the wire, validated by `TagIdList`); `PINS["documents.list"]` and `PINS["document.get"]` are `@2`; the library table's columns are `Name, Tags, Type, Size, Status, Added`
+  - `UiReaders.documents(a: { limit: number; status: ...; tags: string[]; match: "any" | "all" })`; the `documents` provider's `overridable` is `["status", "tags", "match"]` (`tags` a comma-separated id string on the wire, validated by `TagIdList`); `PINS["documents.list"]` and `PINS["document.get"]` are `@2`; the library table's columns are `Name, Tags, Type, Size, Status, Added`, and the Tags cell of a row is the loom-ui token cell `{ tokens: [{ id: <tag id>, label: <tag name> }] }`
   - `Route` for the library: `{ name: "documents"; tags?: string[]; match?: "all" }` (`match` omitted means Any); `hrefOf` writes `/documents?tags=<id>,<id>&match=all`
   - `Api`: `listTags(): Promise<ListTagsResponse>`, `createTag(name): Promise<TagResponse>`, `renameTag(id, name): Promise<DocumentTag>`, `deleteTag(id): Promise<void>`, `addDocumentTag(id, name): Promise<DocumentTagsResponse>`, `removeDocumentTag(id, tagId): Promise<DocumentTagsResponse>`, `acceptTagSuggestion(id, name): Promise<DocumentTagsResponse>`, `dismissTagSuggestion(id, name): Promise<DocumentTagsResponse>`, `refreshTagSuggestions(id): Promise<void>`
   - `<dm-tag-bar>`: properties `tags: TagSummary[]`, `selected: string[]`, `match: "any" | "all"`, `count: number | null`, `managing: boolean`; events `tag-selection` (`detail: { tags: string[]; match: "any" | "all" }`) and `manage-toggle`
   - `<dm-tag-manage>`: property `tags: TagSummary[]`; event `tags-changed`
+  - `<dm-documents-page>` answers the table's `TABLE_TOKEN` action (`payload: { rowKey, tokenId }`, from `@loom-ui/core/browser`) by navigating to `{ name: "documents", tags: [tokenId] }` when the served table holds that token in that row (the selection is replaced, not added to); it is not an `intentOf` intent, because it only navigates
+  - `apps/web/src/testing/tags.ts`: `tag(n, name, documents)`, `root(el)`, `q(el, selector)`, `all(el, selector)`
 
-**Scope note (spec section 6, D8):** the library table is a loom-ui `Table`, whose cells are plain strings, so a row cannot hold clickable chips. This task puts each row's tag names in a **Tags** column and filters through the tag bar. "Click a chip in a row to filter by that tag" needs a loom-ui change (request it from the peer session `loom-ba`, then pin); it is the one spec item this plan does not deliver, and a follow-up.
+- [ ] **Step 0: Gate: the linked loom-ui has token cells (preflight F1)**
+
+The row chips of spec section 6 are a loom-ui **token cell**, delivered by loom-ui PR #131 (pin `fc34435285e3411b720107f06990d5f0d76a67c2`). The contract this task uses, read from `packages/core/src/tableRows.ts` and `index.ts`/`browser.ts` at that SHA:
+- a `TableCell` may be `{ tokens: { id: string; label: string }[] }` (types `TableToken`, `TableTokenCell`); at most `MAX_CELL_TOKENS` = 20 tokens (over the cap the whole value is refused, never truncated); a token id matches `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` and is unique within the cell (a tag uuid fits); a label is 1 to `MAX_TOKEN_LABEL` = 80 characters of plain text; any other key is refused; problems surface through `tableRowProblems` at `["rows", r, c]`; `rowKeys` stay optional;
+- each chip renders as `<button type="button" class="chip" data-token=<id>>` (disabled when the table has no `onAction`), and `tableCellText(cell)` gives the labels joined with `", "`;
+- pressing a chip calls `onAction` with `{ type: "TABLE_TOKEN", widgetId, payload }` (constant `TABLE_TOKEN`), `payload: { rowKey, tokenId }` for a table with `rowKeys` (the library table has them), `{ rowIndex, tokenId }` otherwise.
+
+Run: `grep -n "TABLE_TOKEN\|MAX_CELL_TOKENS" ../loom-ui/packages/core/src/tableRows.ts && git -C ../loom-ui merge-base --is-ancestor fc34435285e3411b720107f06990d5f0d76a67c2 HEAD && echo pinned`
+Expected: lines naming `TABLE_TOKEN` and `MAX_CELL_TOKENS`, then `pinned`. If it fails, STOP and report it: do **not** fall back to a text column (there is no fallback path in this plan). CI's loom-ui pin is moved to that SHA separately; `ci.yml` is not part of this plan.
 
 - [ ] **Step 1: The provider takes `tags` and `match`, test first**
 
@@ -3657,8 +4178,10 @@ In `packages/experiences/src/hydrate.test.ts` change the expectations that name 
 
 ```ts
   it("a tags and match parameter override only the documents step, and reach the reader as ids", async () => {
-    const a = id(1);
-    const b = id(2);
+    // Ids with hex letters: an upper-cased digit-only id is unchanged, and the case folding would go untested.
+    const a = "0a000000-0000-4000-8000-00000000000a";
+    const b = "0b000000-0000-4000-8000-00000000000b";
+    expect(b.toUpperCase()).not.toBe(b);
     const r = readers();
     await views().hydrate(
       "library",
@@ -3699,13 +4222,13 @@ In `packages/experiences/src/invoker.ts`: import `TagIdList, TagMatch` from `@do
     .strict(),
 ```
 
-In `views.ts`, the `documents` provider: `overridable: ["status", "tags", "match"],`. In `providers.ts`: `"documents.list": "docmind:documents.list@2",` and `"document.get": "docmind:document.get@2",` (their raw output now carries `tags`). Update every test that names those pins (`grep -rn "@1" packages/experiences apps | grep -i "documents.list\|document.get"`, e.g. `visuals.test.ts:540`). In `reshapers.ts` replace the `library-table` reshaper's `columns` and `rows`:
+In `views.ts`, the `documents` provider: `overridable: ["status", "tags", "match"],`. In `providers.ts`: `"documents.list": "docmind:documents.list@2",` and `"document.get": "docmind:document.get@2",` (their raw output now carries `tags`). Update every test that names those pins (`grep -rn "@1" packages/experiences apps | grep -i "documents.list\|document.get"`, e.g. `visuals.test.ts:540`). In `reshapers.ts` replace the `library-table` reshaper's `columns` and `rows` (the Tags cell is a loom-ui token cell, one token per tag; its rules hold by construction: a document has at most 20 tags, the cell cap, a tag id is a uuid and a name is 1 to 40 characters):
 
 ```ts
     columns: ["Name", "Tags", "Type", "Size", "Status", "Added"],
     rows: raw.items.map((d) => [
       d.title,
-      d.tags.map((t) => t.name).join(", "),
+      { tokens: d.tags.map((t) => ({ id: t.id, label: t.name })) },
       typeOf(d.mime),
       formatBytes(d.sizeBytes),
       STATUS_TEXT[d.status],
@@ -3713,7 +4236,7 @@ In `views.ts`, the `documents` provider: `overridable: ["status", "tags", "match
     ]),
 ```
 
-and extend `reshapers.test.ts`'s library-table case: the columns are `["Name", "Tags", "Type", "Size", "Status", "Added"]` and a document with tags `[{id, name: "Finance"}, {id, name: "Q3"}]` shows `"Finance, Q3"` in column 1 (and `""` with none). Run the experiences suite: PASS.
+and extend `reshapers.test.ts`'s library-table case: the columns are `["Name", "Tags", "Type", "Size", "Status", "Added"]` and column 1 is a token cell: a document with tags `[{ id: a, name: "Finance" }, { id: b, name: "Q3" }]` gives `{ tokens: [{ id: a, label: "Finance" }, { id: b, label: "Q3" }] }` (and `{ tokens: [] }` with none). In the same case assert that loom-ui accepts the whole value: `expect(tableRowProblems({ rows: out.rows, rowKeys: out.rowKeys, rowActions: out.rowActions })).toEqual([])` (`import { tableRowProblems } from "@loom-ui/core"`, as the other experiences tests import loom-ui). Run the experiences suite: PASS.
 
 - [ ] **Step 2: The reader filters, test first**
 
@@ -3723,7 +4246,12 @@ Create `apps/server/app/ui/tagFilter.pg.test.ts`:
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
-import { ALICE, type DocumentHarness, seedDoc, startDocumentServer } from "../documents/testHarness";
+import {
+  ALICE,
+  type DocumentHarness,
+  seedDoc,
+  startDocumentServer,
+} from "../documents/testHarness";
 import { readersFor } from "./readers";
 
 describe.skipIf(!PG_URL)("the library reader with a tag filter (needs DOCMIND_TEST_PG_URL)", () => {
@@ -3740,28 +4268,62 @@ describe.skipIf(!PG_URL)("the library reader with a tag filter (needs DOCMIND_TE
     const fields = new FieldCrypto(h.keys);
     docs = [];
     for (let i = 0; i < 4; i++)
-      docs.push(await seedDoc(h.owner, h.app, fields, ALICE, (i + 1).toString(16).padStart(64, "0"), (i + 1) * 10));
-    tag = { a: (await h.tags.create(ALICE, "a")).tag.id, b: (await h.tags.create(ALICE, "b")).tag.id };
+      docs.push(
+        await seedDoc(
+          h.owner,
+          h.app,
+          fields,
+          ALICE,
+          (i + 1).toString(16).padStart(64, "0"),
+          (i + 1) * 10,
+        ),
+      );
+    tag = {
+      a: (await h.tags.create(ALICE, "a")).tag.id,
+      b: (await h.tags.create(ALICE, "b")).tag.id,
+    };
     await h.tags.setForDocument(ALICE, docs[0] as string, [tag.a]);
     await h.tags.setForDocument(ALICE, docs[1] as string, [tag.a, tag.b]);
     await h.tags.setForDocument(ALICE, docs[2] as string, [tag.b]);
   });
   const readers = () =>
-    readersFor({ pool: h.app, fields: new FieldCrypto(h.keys), status: h.status, tags: h.tags } as never, ALICE);
-  const ids = async (a: { tags: string[]; match: "any" | "all"; status?: "all" | "processing" | "ready" | "failed" }) =>
-    (await readers().documents({ limit: 100, status: a.status ?? "all", tags: a.tags, match: a.match })).items.map((d) => d.id);
+    readersFor(
+      { pool: h.app, fields: new FieldCrypto(h.keys), status: h.status, tags: h.tags } as never,
+      ALICE,
+    );
+  const ids = async (a: {
+    tags: string[];
+    match: "any" | "all";
+    status?: "all" | "processing" | "ready" | "failed";
+  }) =>
+    (
+      await readers().documents({
+        limit: 100,
+        status: a.status ?? "all",
+        tags: a.tags,
+        match: a.match,
+      })
+    ).items.map((d) => d.id);
 
   it("filters in SQL by any or all, newest first, and carries each row's tags", async () => {
     expect(await ids({ tags: [tag.a, tag.b], match: "any" })).toEqual([docs[0], docs[1], docs[2]]);
     expect(await ids({ tags: [tag.a, tag.b], match: "all" })).toEqual([docs[1]]);
     expect(await ids({ tags: [], match: "all" })).toEqual(docs);
-    const page = await readers().documents({ limit: 100, status: "all", tags: [tag.a], match: "any" });
+    const page = await readers().documents({
+      limit: 100,
+      status: "all",
+      tags: [tag.a],
+      match: "any",
+    });
     expect(page.items.map((d) => d.tags.map((t) => t.name))).toEqual([["a"], ["a", "b"]]);
   });
 
   it("combines with the status filter and the limit (truncated says there were more matches)", async () => {
     expect(await ids({ tags: [tag.a], match: "any", status: "failed" })).toEqual([]);
-    expect(await ids({ tags: [tag.a], match: "any", status: "processing" })).toEqual([docs[0], docs[1]]); // seeded documents are queued
+    expect(await ids({ tags: [tag.a], match: "any", status: "processing" })).toEqual([
+      docs[0],
+      docs[1],
+    ]); // seeded documents are queued
     const one = await readers().documents({ limit: 1, status: "all", tags: [tag.a], match: "any" });
     expect([one.items.length, one.truncated]).toEqual([1, true]);
   });
@@ -3781,6 +4343,8 @@ Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run ap
 ```
 
 Run the test, `pnpm --filter @docmind/server exec vitest run app/ui` and `pnpm typecheck`: PASS (the fake readers in other tests that implement `documents` accept the wider argument; fix any whose type annotates the parameter).
+
+In `apps/server/app/ui/ui.pg.test.ts` (the documents-reader test near line 245) the two calls become `readers.documents({ limit: 200, status: "processing", tags: [], match: "any" })` and `readers.documents({ limit: 1, status: "all", tags: [], match: "any" })` (both arguments are required now; the `readersFor` deps got `tags` in Task 3).
 
 - [ ] **Step 3: URL state in the router, test first**
 
@@ -3951,30 +4515,56 @@ Run the client tests: PASS. (`http.request("DELETE", …)` with no `schema` answ
 
 - [ ] **Step 5: `<dm-tag-bar>`, test first**
 
-Create `apps/web/src/components/dm-tag-bar.test.ts`:
+Create `apps/web/src/testing/tags.ts` (shared by `dm-tag-bar.test.ts`, `dm-tag-manage.test.ts`, `dm-doc-tags.test.ts` and `dm-documents-page.test.ts`; no test file keeps its own copy):
 
 ```ts
 import type { TagSummary } from "@docmind/contracts";
-import { describe, expect, it } from "vitest";
-import { unnamedControls } from "../testing/dom";
-import "./dm-tag-bar";
 
-const tag = (n: number, name: string, documents: number): TagSummary => ({
+/** A tag as the server lists it; the id is a valid uuid made from `n`. */
+export const tag = (n: number, name: string, documents: number): TagSummary => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
   name,
   documents,
 });
+/** The shadow root of a mounted element. */
+export const root = (el: Element) => el.shadowRoot as ShadowRoot;
+/** The first match inside an element's shadow root. */
+export const q = <T extends Element>(el: Element, selector: string) =>
+  root(el).querySelector(selector) as T;
+/** Every match inside an element's shadow root. */
+export const all = <T extends Element>(el: Element, selector: string) =>
+  [...root(el).querySelectorAll(selector)] as T[];
+```
+
+Create `apps/web/src/components/dm-tag-bar.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { unnamedControls } from "../testing/dom";
+import { root, tag } from "../testing/tags";
+import "./dm-tag-bar";
+
 const TAGS = [tag(1, "Finance", 3), tag(2, "Legal", 1), tag(3, "Q3", 0)];
 
 async function mount(props: Record<string, unknown> = {}) {
-  const el = document.createElement("dm-tag-bar") as HTMLElement & { updateComplete: Promise<unknown> };
-  Object.assign(el, { tags: TAGS, selected: [], match: "any", count: null, managing: false, ...props });
+  const el = document.createElement("dm-tag-bar") as HTMLElement & {
+    updateComplete: Promise<unknown>;
+  };
+  Object.assign(el, {
+    tags: TAGS,
+    selected: [],
+    match: "any",
+    count: null,
+    managing: false,
+    ...props,
+  });
   document.body.append(el);
   await el.updateComplete;
   return el;
 }
-const root = (el: Element) => el.shadowRoot as ShadowRoot;
-const chips = (el: Element) => [...root(el).querySelectorAll<HTMLButtonElement>("button[data-tag]")];
+const chips = (el: Element) => [
+  ...root(el).querySelectorAll<HTMLButtonElement>("button[data-tag]"),
+];
 const listen = (el: Element, name: string) => {
   const seen: unknown[] = [];
   el.addEventListener(name, (e) => seen.push((e as CustomEvent).detail));
@@ -3984,8 +4574,16 @@ const listen = (el: Element, name: string) => {
 describe("dm-tag-bar", () => {
   it("draws one toggle chip per tag with its count, and says which are pressed", async () => {
     const el = await mount({ selected: [TAGS[1]?.id] });
-    expect(chips(el).map((b) => b.textContent?.replace(/\s+/g, " ").trim())).toEqual(["Finance 3", "Legal 1", "Q3 0"]);
-    expect(chips(el).map((b) => b.getAttribute("aria-pressed"))).toEqual(["false", "true", "false"]);
+    expect(chips(el).map((b) => b.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Finance 3",
+      "Legal 1",
+      "Q3 0",
+    ]);
+    expect(chips(el).map((b) => b.getAttribute("aria-pressed"))).toEqual([
+      "false",
+      "true",
+      "false",
+    ]);
   });
 
   it("toggling a chip reports the new selection with the current mode", async () => {
@@ -4003,13 +4601,18 @@ describe("dm-tag-bar", () => {
     const one = await mount({ selected: [TAGS[0]?.id] });
     const group = root(one).querySelector("[role=radiogroup]");
     expect(group?.getAttribute("aria-label")).toBe("Match");
-    const radios = (el: Element) => [...root(el).querySelectorAll<HTMLInputElement>("input[type=radio]")];
+    const radios = (el: Element) => [
+      ...root(el).querySelectorAll<HTMLInputElement>("input[type=radio]"),
+    ];
     expect(radios(one).map((r) => [r.value, r.disabled, r.checked])).toEqual([
       ["any", true, true],
       ["all", true, false],
     ]);
     const two = await mount({ selected: [TAGS[0]?.id, TAGS[1]?.id], match: "all" });
-    expect(radios(two).map((r) => [r.disabled, r.checked])).toEqual([[false, false], [false, true]]);
+    expect(radios(two).map((r) => [r.disabled, r.checked])).toEqual([
+      [false, false],
+      [false, true],
+    ]);
     const seen = listen(two, "tag-selection");
     radios(two)[0]?.click();
     expect(seen).toEqual([{ tags: [TAGS[0]?.id, TAGS[1]?.id], match: "any" }]);
@@ -4052,7 +4655,9 @@ describe("dm-tag-bar", () => {
   });
 
   it("has no control without an accessible name", async () => {
-    expect(unnamedControls(await mount({ selected: [TAGS[0]?.id, TAGS[1]?.id], managing: true }))).toEqual([]);
+    expect(
+      unnamedControls(await mount({ selected: [TAGS[0]?.id, TAGS[1]?.id], managing: true })),
+    ).toEqual([]);
   });
 });
 ```
@@ -4146,7 +4751,8 @@ export class DmTagBar extends LitElement {
         </div>
         <div class="mode" role="radiogroup" aria-label="Match">
           ${(["any", "all"] as const).map(
-            (m) => html`<label><input type="radio" name="match" value=${m} .checked=${this.match === m} ?disabled=${this.selected.length < 2} @change=${() => this.emit(this.selected, m)} /><span>${m === "any" ? "Any" : "All"}</span></label>`,
+            (m) =>
+              html`<label><input type="radio" name="match" value=${m} .checked=${this.match === m} ?disabled=${this.selected.length < 2} @change=${() => this.emit(this.selected, m)} /><span>${m === "any" ? "Any" : "All"}</span></label>`,
           )}
         </div>
         <button type="button" class="btn ghost" data-clear ?disabled=${this.selected.length === 0} @click=${() => this.emit([], "any")}>Clear</button>
@@ -4165,19 +4771,14 @@ Run the bar tests: PASS. (The test's `Clear` expects `match: "any"`: Clear reset
 Create `apps/web/src/components/dm-tag-manage.test.ts`:
 
 ```ts
-import type { TagSummary } from "@docmind/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/http";
 import { createServices } from "../services";
 import { unnamedControls } from "../testing/dom";
 import { mountWith } from "../testing/mount";
+import { q, root, tag } from "../testing/tags";
 import "./dm-tag-manage";
 
-const tag = (n: number, name: string, documents: number): TagSummary => ({
-  id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
-  name,
-  documents,
-});
 type El = HTMLElement & { updateComplete: Promise<unknown> };
 
 async function setup(tags = [tag(1, "Finance", 3), tag(2, "Legal", 1), tag(3, "Unused", 0)]) {
@@ -4191,17 +4792,15 @@ async function setup(tags = [tag(1, "Finance", 3), tag(2, "Legal", 1), tag(3, "U
   el.addEventListener("tags-changed", () => changed.push(1));
   return { el, api, changed };
 }
-const root = (el: Element) => el.shadowRoot as ShadowRoot;
-const q = <T extends Element>(el: Element, sel: string) => root(el).querySelector(sel) as T;
 
 describe("dm-tag-manage", () => {
   it("lists every tag with its document count and a named Rename and Delete", async () => {
     const t = await setup();
-    expect([...root(t.el).querySelectorAll("li")].map((li) => li.textContent?.replace(/\s+/g, " ").trim().split(" Rename")[0])).toEqual([
-      "Finance 3 documents",
-      "Legal 1 document",
-      "Unused 0 documents",
-    ]);
+    expect(
+      [...root(t.el).querySelectorAll("li")].map(
+        (li) => li.textContent?.replace(/\s+/g, " ").trim().split(" Rename")[0],
+      ),
+    ).toEqual(["Finance 3 documents", "Legal 1 document", "Unused 0 documents"]);
     expect(unnamedControls(t.el)).toEqual([]);
     expect(q<HTMLButtonElement>(t.el, "button[aria-label='Rename Finance']")).not.toBeNull();
     expect(q<HTMLButtonElement>(t.el, "button[aria-label='Delete Finance']")).not.toBeNull();
@@ -4224,7 +4823,9 @@ describe("dm-tag-manage", () => {
     const t = await setup();
     q<HTMLButtonElement>(t.el, "button[aria-label='Rename Legal']").click();
     await t.el.updateComplete;
-    q<HTMLInputElement>(t.el, "input[aria-label='New name for Legal']").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    q<HTMLInputElement>(t.el, "input[aria-label='New name for Legal']").dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape" }),
+    );
     await t.el.updateComplete;
     expect(q(t.el, "input")).toBeNull();
     expect(t.api.renameTag).not.toHaveBeenCalled();
@@ -4239,7 +4840,11 @@ describe("dm-tag-manage", () => {
     input.value = "Finance";
     input.dispatchEvent(new Event("input"));
     q<HTMLButtonElement>(t.el, "button[data-save]").click();
-    await vi.waitFor(() => expect(q(t.el, "[role=alert]")?.textContent).toContain("A tag with that name already exists."));
+    await vi.waitFor(() =>
+      expect(q(t.el, "[role=alert]")?.textContent).toContain(
+        "A tag with that name already exists.",
+      ),
+    );
     expect(q(t.el, "input")).not.toBeNull();
     expect(t.changed).toHaveLength(0);
   });
@@ -4250,7 +4855,9 @@ describe("dm-tag-manage", () => {
     await vi.waitFor(() => expect(document.querySelector("dm-dialog")).not.toBeNull());
     expect(document.querySelector("dm-dialog")?.textContent).toContain("Finance");
     expect(document.querySelector("dm-dialog")?.textContent).toContain("3 documents");
-    [...document.querySelectorAll("dm-dialog button")].find((b) => b.textContent === "Delete")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    [...document.querySelectorAll("dm-dialog button")]
+      .find((b) => b.textContent === "Delete")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(t.api.deleteTag).toHaveBeenCalledWith(tag(1, "", 0).id));
     await vi.waitFor(() => expect(t.changed).toHaveLength(1));
   });
@@ -4260,7 +4867,9 @@ describe("dm-tag-manage", () => {
     q<HTMLButtonElement>(t.el, "button[aria-label='Delete Unused']").click();
     await vi.waitFor(() => expect(document.querySelector("dm-dialog")).not.toBeNull());
     expect(document.querySelector("dm-dialog")?.textContent).toContain("no document");
-    [...document.querySelectorAll("dm-dialog button")].find((b) => b.textContent === "Cancel")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    [...document.querySelectorAll("dm-dialog button")]
+      .find((b) => b.textContent === "Cancel")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(document.querySelector("dm-dialog")).toBeNull());
     expect(t.api.deleteTag).not.toHaveBeenCalled();
   });
@@ -4368,7 +4977,8 @@ export class DmTagManage extends LitElement {
       t.documents === 0
         ? `"${t.name}" is used by no document. Deleting it cannot change any document.`
         : `"${t.name}" is used by ${used(t.documents)}. Deleting it removes it from them; the documents are kept.`;
-    if (!(await confirmDialog("Delete this tag?", body, "Delete", true, this.leaving.signal))) return;
+    if (!(await confirmDialog("Delete this tag?", body, "Delete", true, this.leaving.signal)))
+      return;
     this.error = null;
     try {
       await api.deleteTag(t.id);
@@ -4387,9 +4997,15 @@ export class DmTagManage extends LitElement {
       <ul>
         ${this.tags.map((t) =>
           this.editing === t.id
-            ? html`<li><input aria-label=${`New name for ${t.name}`} maxlength="40" .value=${this.draft} @input=${(e: Event) => { this.draft = (e.target as HTMLInputElement).value; }} @keydown=${(e: KeyboardEvent) => this.onKey(e, t)} />
+            ? html`<li><input aria-label=${`New name for ${t.name}`} maxlength="40" .value=${this.draft} @input=${(
+                e: Event,
+              ) => {
+                this.draft = (e.target as HTMLInputElement).value;
+              }} @keydown=${(e: KeyboardEvent) => this.onKey(e, t)} />
                 <button type="button" class="btn primary" data-save ?disabled=${this.busy} @click=${() => void this.save(t)}>Save</button>
-                <button type="button" class="btn ghost" data-cancel @click=${() => { this.editing = null; }}>Cancel</button></li>`
+                <button type="button" class="btn ghost" data-cancel @click=${() => {
+                  this.editing = null;
+                }}>Cancel</button></li>`
             : html`<li><span class="name">${t.name}</span> <span class="n">${used(t.documents)}</span>
                 <button type="button" class="btn ghost" aria-label=${`Rename ${t.name}`} @click=${() => this.edit(t)}>Rename</button>
                 <button type="button" class="btn ghost" aria-label=${`Delete ${t.name}`} @click=${() => void this.remove(t)}>Delete</button></li>`,
@@ -4405,286 +5021,7 @@ Run the manage tests: PASS. (The confirmation body quotes the tag name inside `d
 
 - [ ] **Step 7: The page, test first**
 
-Edit `apps/web/src/components/dm-documents-page.test.ts`:
-- add imports `import type { TagSummary } from "@docmind/contracts";` and `import { unnamedControls } from "../testing/dom";`
-- add `tags: [],` to the `doc()` fixture (after `summary: null,`)
-- change `setup(items: DocumentDto[])` to `setup(items: DocumentDto[], tagList: TagSummary[] = [])` and its fake reader to honour the filter:
-
-```ts
-    documents: async ({ status, tags, match }) => ({
-      items: live.items.filter(
-        (d) =>
-          (status === "all" ||
-            (status === "processing"
-              ? ["uploaded", "parsing", "embedding"].includes(d.status)
-              : d.status === status)) &&
-          (tags.length === 0 ||
-            (match === "all"
-              ? tags.every((t) => d.tags.some((x) => x.id === t))
-              : tags.some((t) => d.tags.some((x) => x.id === t)))),
-      ),
-      truncated: false,
-    }),
-```
-
-- add to the `api` object in `setup`: `listTags: vi.fn(async () => ({ tags: live.tagList })),` (declare `const live = { items, tagList };`), and reset the address first: `window.history.replaceState(null, "", location.pathname === "/documents" ? location.pathname + location.search : "/documents");` becomes a parameter: `setup(items, tagList = [], url = "/documents")` calling `window.history.replaceState(null, "", url)` before `createServices(…)` so the router starts there.
-
-Append:
-
-```ts
-const tg = (n: number, name: string, documents: number): TagSummary => ({ id: id(900 + n), name, documents });
-const withTags = (d: DocumentDto, ...t: TagSummary[]): DocumentDto => ({ ...d, tags: t.map(({ id: i, name }) => ({ id: i, name })) });
-const bar = (p: Element) => p.shadowRoot?.querySelector("dm-tag-bar") as HTMLElement | null;
-const chip = (p: Element, t: TagSummary) =>
-  bar(p)?.shadowRoot?.querySelector(`button[data-tag='${t.id}']`) as HTMLButtonElement;
-const tableText = (p: Element) => table(p)?.shadowRoot?.textContent ?? "";
-
-describe("dm-documents-page tag filter", () => {
-  const fin = tg(1, "Finance", 2);
-  const leg = tg(2, "Legal", 1);
-  const items = () => [
-    withTags(doc(1), fin),
-    withTags(doc(2), fin, leg),
-    doc(3),
-  ];
-
-  it("draws the tag bar with the user's tags and a Tags column in the table", async () => {
-    const t = await setup(items(), [fin, leg]);
-    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Finance, Legal"));
-    expect(chip(t.page, fin).getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("does not show the bar for a library that has no tags yet", async () => {
-    const t = await setup([doc(1)], []);
-    await vi.waitFor(() => expect(view(t.page).getAttribute("name")).toBe("library"));
-    expect(bar(t.page)).toBeNull();
-  });
-
-  it("pressing a chip filters the table, writes ?tags= to the address and announces the count", async () => {
-    const t = await setup(items(), [fin, leg]);
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
-    chip(t.page, leg).click();
-    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
-    expect(tableText(t.page)).toContain("Title 2");
-    expect(tableText(t.page)).not.toContain("Title 3");
-    expect(window.location.search).toBe(`?tags=${leg.id}`);
-    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("true");
-    await vi.waitFor(() =>
-      expect(bar(t.page)?.shadowRoot?.querySelector("[role=status]")?.textContent?.trim()).toBe("1 document matches"),
-    );
-  });
-
-  it("Any and All: two tags, then All keeps only the document with both, and match=all is in the address", async () => {
-    const t = await setup(items(), [fin, leg]);
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
-    chip(t.page, fin).click();
-    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
-    chip(t.page, leg).click();
-    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}`)); // Any: omitted
-    expect(tableText(t.page)).toContain("Title 1");
-    const all = bar(t.page)?.shadowRoot?.querySelector<HTMLInputElement>("input[value=all]") as HTMLInputElement;
-    await vi.waitFor(() => expect(all.disabled).toBe(false));
-    all.click();
-    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
-    expect(tableText(t.page)).toContain("Title 2");
-    expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}&match=all`);
-  });
-
-  it("starts from the address (a bookmark) and follows back and forward", async () => {
-    const t = await setup(items(), [fin, leg], `/documents?tags=${leg.id}`);
-    await vi.waitFor(() => expect(chip(t.page, leg)?.getAttribute("aria-pressed")).toBe("true"));
-    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
-    window.history.replaceState(null, "", "/documents");
-    window.dispatchEvent(new PopStateEvent("popstate"));
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
-    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("Clear removes the filter and the address", async () => {
-    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
-    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
-    (bar(t.page)?.shadowRoot?.querySelector("[data-clear]") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
-    expect(window.location.search).toBe("");
-  });
-
-  it("says no document matches, with Clear, when the filter finds nothing", async () => {
-    const lonely = tg(3, "Lonely", 0);
-    const t = await setup(items(), [fin, leg, lonely]);
-    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
-    chip(t.page, lonely).click();
-    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("[data-no-match]")?.textContent).toContain("No documents match these tags"));
-    (t.page.shadowRoot?.querySelector("[data-clear-filter]") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("[data-no-match]")).toBeNull());
-    expect(view(t.page).getAttribute("name")).toBe("library"); // never the empty-library view
-  });
-
-  it("drops a tag from the address once the server no longer has it", async () => {
-    const ghost = tg(9, "Gone", 0);
-    const t = await setup(items(), [fin, leg], `/documents?tags=${ghost.id},${fin.id}`);
-    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id}`));
-    expect(t.services.router.get()).toEqual({ name: "documents", tags: [fin.id] });
-  });
-
-  it("opens Manage tags, and refreshes the bar after a rename", async () => {
-    const t = await setup(items(), [fin, leg]);
-    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
-    (bar(t.page)?.shadowRoot?.querySelector("[data-manage]") as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("dm-tag-manage")).not.toBeNull());
-    t.page.shadowRoot?.querySelector("dm-tag-manage")?.dispatchEvent(new CustomEvent("tags-changed", { bubbles: true, composed: true }));
-    await vi.waitFor(() => expect(t.api.listTags).toHaveBeenCalledTimes(2));
-  });
-
-  it("leaves no control without an accessible name", async () => {
-    const t = await setup(items(), [fin, leg]);
-    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
-    expect(unnamedControls(bar(t.page) as Element)).toEqual([]);
-  });
-});
-```
-
-(`t.services` and `t.api` are returned by `setup`; extend its return with `services` and `api` if missing — they are in the current `return { page, services, api, live, sse, ui }`.)
-
-Run: `pnpm --filter @docmind/web exec vitest run src/components/dm-documents-page.test.ts` Expected: FAIL. Now edit `apps/web/src/components/dm-documents-page.ts`:
-
-- imports: `import type { TagSummary } from "@docmind/contracts";` (next to the existing contracts import), `import "./dm-tag-bar"; import "./dm-tag-manage"; import type { TagSelectionDetail } from "./dm-tag-bar";`
-- `static properties = { empty: { state: true }, tags: { state: true }, managing: { state: true }, count: { state: true } };` with `declare tags: TagSummary[]; declare managing: boolean; declare count: number | null;` and in the constructor `this.tags = []; this.managing = false; this.count = null;`
-- `private readonly ctx = new ServicesController(this, (s) => [s.uploads, s.router]);` (the page re-renders when the address changes)
-- in `start()`, after `services.uploads.startEvents(…)`: `void this.loadTags();`
-- in `refresh()`, as its first line: `void this.loadTags(); // the counts on the chips change with uploads and deletes`
-- add these members:
-
-```ts
-  private paramsKey = "";
-  private libraryParams: Record<string, string | number> = { tags: "", match: "any" };
-
-  /** What the address says is selected: ids and the mode. */
-  private selection(): { tags: string[]; match: "any" | "all" } {
-    const r = this.ctx.services?.router.get();
-    return r?.name === "documents"
-      ? { tags: r.tags ?? [], match: r.match ?? "any" }
-      : { tags: [], match: "any" };
-  }
-  /** One params object per selection, so a re-render never re-sends the parameters (the view applies it when the object changes). */
-  private paramsFor(sel: { tags: string[]; match: string }): Record<string, string | number> {
-    const key = `${sel.tags.join(",")}|${sel.match}`;
-    if (key !== this.paramsKey) {
-      this.paramsKey = key;
-      this.libraryParams = { tags: sel.tags.join(","), match: sel.match };
-    }
-    return this.libraryParams;
-  }
-  private async loadTags(): Promise<void> {
-    const api = this.ctx.services?.api;
-    if (!api) return;
-    const epoch = this.epoch;
-    try {
-      const { tags } = await api.listTags();
-      if (epoch !== this.epoch) return;
-      this.tags = tags;
-      this.pruneSelection();
-    } catch {
-      // The bar keeps what it had; the table still works without it.
-    }
-  }
-  /** A tag the server no longer has leaves the address (replacing the entry, not adding one). */
-  private pruneSelection(): void {
-    const router = this.ctx.services?.router;
-    const sel = this.selection();
-    const known = new Set(this.tags.map((t) => t.id));
-    const kept = sel.tags.filter((id) => known.has(id));
-    if (!router || kept.length === sel.tags.length) return;
-    router.navigate(
-      {
-        name: "documents",
-        ...(kept.length > 0 && { tags: kept, ...(sel.match === "all" && { match: "all" as const }) }),
-      },
-      { replace: true },
-    );
-  }
-  private onSelect = (e: Event) => {
-    const { tags, match } = (e as CustomEvent<TagSelectionDetail>).detail;
-    this.ctx.services?.router.navigate({
-      name: "documents",
-      ...(tags.length > 0 && { tags, ...(match === "all" && { match: "all" as const }) }),
-    });
-  };
-  private clear(): void {
-    this.ctx.services?.router.navigate({ name: "documents" });
-  }
-```
-
-- in `onReady`, replace the `check` function with:
-
-```ts
-    const check = () => {
-      const total = session.valueOf("doc-total") as { value?: number } | undefined;
-      if (session.statusOf("doc-total") === "ready" && total?.value === 0) this.empty = true;
-      const rows = session.valueOf("documents") as { rowKeys?: unknown } | undefined;
-      this.count =
-        session.statusOf("documents") === "ready" && Array.isArray(rows?.rowKeys)
-          ? rows.rowKeys.length
-          : null;
-    };
-```
-
-- replace `render()` with:
-
-```ts
-  render() {
-    const sel = this.selection();
-    const filtering = sel.tags.length > 0;
-    const showBar = !this.empty && (this.tags.length > 0 || filtering);
-    return html`
-      <header>
-        <h1>Documents</h1>
-        ${this.empty ? null : html`<dm-upload-zone variant="compact"></dm-upload-zone>`}
-      </header>
-      ${this.empty ? html`<dm-upload-zone variant="empty"></dm-upload-zone>` : null}
-      ${
-        showBar
-          ? html`<dm-tag-bar .tags=${this.tags} .selected=${sel.tags} .match=${sel.match} .count=${this.count} .managing=${this.managing} @tag-selection=${this.onSelect} @manage-toggle=${() => { this.managing = !this.managing; }}></dm-tag-bar>
-            ${this.managing ? html`<dm-tag-manage .tags=${this.tags} @tags-changed=${() => void this.loadTags()}></dm-tag-manage>` : null}`
-          : null
-      }
-      ${
-        !this.empty && filtering && this.count === 0
-          ? html`<p data-no-match role="status">No documents match these tags. <button class="btn ghost" data-clear-filter @click=${() => this.clear()}>Clear</button></p>`
-          : null
-      }
-      <dm-view name=${this.empty ? "library-empty" : "library"} .params=${this.empty ? undefined : this.paramsFor(sel)} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`;
-  }
-```
-
-Also give the fake server (`apps/web/src/testing/fakeServer.ts`, used by `acceptance.test.ts`) the tag routes it will need in Task 7: add after the `/api/documents` handling the routes from Task 7 Step 1 (they are written there, once). For this task only, make its `readers().documents` accept and ignore the new arguments: change `documents: async ({ limit, status }) =>` to filter by `tags`/`match` exactly as the page test's reader above.
-
-- [ ] **Step 8: Run everything**
-
-Run: `set -a; . ./.env; set +a; pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm --filter @docmind/web exec vitest run && pnpm --filter @docmind/experiences exec vitest run && pnpm --filter @docmind/server exec vitest run app/ui`
-Expected: PASS. If an existing documents-page test now fails because the table gained a column or `getDocument`/`listTags` is missing from a stub `api`, fix the stub (`listTags: async () => ({ tags: [] })`), not the component. Verify in a browser before the PR (the project's rule): `pnpm serve`, open `/documents`, create two tags from a document (Task 7), press chips, switch Any/All, use back and forward, rename and delete in Manage tags.
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add -A
-git commit -m "feat(tags): tag filter on the documents page (bar, Any/All, URL state, manage panel)"
-```
-
----
-
-## Task 7: The document detail page: the Tags row and the Suggested line
-
-**Files:**
-- Create: `apps/web/src/components/dm-doc-tags.ts`, `apps/web/src/components/dm-doc-tags.test.ts`
-- Modify: `apps/web/src/components/dm-doc-detail.ts`, `apps/web/src/components/dm-doc-detail.test.ts`
-- Modify: `apps/web/src/testing/fakeServer.ts`, `apps/web/src/testing/fakeServer.test.ts`
-
-**Interfaces:**
-- Consumes: the `Api` tag methods and `<dm-tag-*>` conventions (Task 6); `DocumentDto.tags` and `suggestedTags`; the `tags` progress event (Task 5); `ApiError`; `unnamedControls`.
-- Produces: `<dm-doc-tags>` with property `documentId: string`, a public `onEvent(kind: "suggested" | "failed" | "resync"): Promise<void>`, and the exported `TAG_SUGGEST_TIMEOUT_MS = 60_000`; instance seam `timeoutMs`.
-
-- [ ] **Step 1: The fake server serves the tag routes, test first**
+**Part A: the fake server serves the tag routes (moved here from the detail task, preflight F5).** The page calls `GET /api/tags` from now on, and `acceptance.test.ts` runs against this fake in Step 8; the routes are written here once and the detail task reuses them.
 
 Append to `apps/web/src/testing/fakeServer.test.ts` (it has the `post(s, path, body?, method?)` helper and `signedIn()` that returns a signed-in `FakeServer`; add `type DocumentDto` to its contracts import):
 
@@ -4804,6 +5141,352 @@ and, in the request handler right before the `/api/chats` GET (so the more speci
 
 and make `GET /api/documents/:id` (the `if (method === "GET") return json(200, doc);` line) return `json(200, { ...doc, suggestedTags: this.suggestions.get(doc.id) ?? [] })`. (`body` is the parsed JSON body the handler already has for the chat routes.) Run the fake-server tests: PASS.
 
+**Part B: the page.** Edit `apps/web/src/components/dm-documents-page.test.ts`:
+- add imports `import type { TagSummary } from "@docmind/contracts";`, `import { deepAll, unnamedControls } from "../testing/dom";` and `import { tag } from "../testing/tags";`
+- add `tags: [],` to the `doc()` fixture (after `summary: null,`)
+- change `setup(items: DocumentDto[])` to `setup(items: DocumentDto[], tagList: TagSummary[] = [])` and its fake reader to honour the filter:
+
+```ts
+    documents: async ({ status, tags, match }) => ({
+      items: live.items.filter(
+        (d) =>
+          (status === "all" ||
+            (status === "processing"
+              ? ["uploaded", "parsing", "embedding"].includes(d.status)
+              : d.status === status)) &&
+          (tags.length === 0 ||
+            (match === "all"
+              ? tags.every((t) => d.tags.some((x) => x.id === t))
+              : tags.some((t) => d.tags.some((x) => x.id === t)))),
+      ),
+      truncated: false,
+    }),
+```
+
+- add to the `api` object in `setup`: `listTags: vi.fn(async () => ({ tags: live.tagList })),` (declare `const live = { items, tagList };`), and give `setup` a third parameter, `url = "/documents"`: call `window.history.replaceState(null, "", url)` just before `createServices(…)`, so the router starts at that address and a test never inherits the previous test's. (Today's `setup()` does not touch the address.)
+
+Append:
+
+```ts
+const tg = (n: number, name: string, documents: number): TagSummary => tag(900 + n, name, documents);
+const withTags = (d: DocumentDto, ...t: TagSummary[]): DocumentDto => ({ ...d, tags: t.map(({ id: i, name }) => ({ id: i, name })) });
+const bar = (p: Element) => p.shadowRoot?.querySelector("dm-tag-bar") as HTMLElement | null;
+const chip = (p: Element, t: TagSummary) =>
+  bar(p)?.shadowRoot?.querySelector(`button[data-tag='${t.id}']`) as HTMLButtonElement;
+const tableText = (p: Element) => table(p)?.shadowRoot?.textContent ?? "";
+/** The chips of the Tags cells (loom-ui token buttons) in the served table, for one tag. */
+const rowChips = (p: Element, t: TagSummary) =>
+  deepAll(p, `button[data-token='${t.id}']`) as HTMLButtonElement[];
+
+describe("dm-documents-page tag filter", () => {
+  const fin = tg(1, "Finance", 2);
+  const leg = tg(2, "Legal", 1);
+  const items = () => [
+    withTags(doc(1), fin),
+    withTags(doc(2), fin, leg),
+    doc(3),
+  ];
+
+  it("draws the tag bar with the user's tags, and each row's tags as chips in the table", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    await vi.waitFor(() => expect(rowChips(t.page, fin)).toHaveLength(2)); // rows 1 and 2
+    expect(rowChips(t.page, leg)).toHaveLength(1); // row 2 only
+    expect(rowChips(t.page, leg)[0]?.textContent?.trim()).toBe("Legal");
+    expect(chip(t.page, fin).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("clicking a chip in a row filters the list to that tag alone and writes it to the address (spec section 6)", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(1));
+    rowChips(t.page, leg)[0]?.click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2"); // the only document with Legal
+    expect(tableText(t.page)).not.toContain("Title 3");
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a chip click replaces the selection: one tag alone, Any and All reset", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1")); // All: only document 2
+    await vi.waitFor(() => expect(rowChips(t.page, fin)).toHaveLength(1));
+    rowChips(t.page, fin)[0]?.click();
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 1")); // Finance alone: documents 1 and 2
+    expect(window.location.search).toBe(`?tags=${fin.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("refuses a chip action for a tag or a row the served table does not hold", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(1));
+    const act = (t.page as unknown as { act: (a: unknown) => Promise<unknown> }).act;
+    const forge = (rowKey: string, tokenId: string) =>
+      act.call(t.page, { type: "TABLE_TOKEN", widgetId: "w", payload: { rowKey, tokenId } });
+    expect(await forge(id(1), leg.id)).toEqual({ ok: false, reason: "refused" }); // row 1 has no Legal
+    expect(await forge(id(77), fin.id)).toEqual({ ok: false, reason: "refused" }); // not a served row
+    expect(await forge(id(2), "not-a-tag")).toEqual({ ok: false, reason: "refused" });
+    expect(window.location.search).toBe("");
+    expect(await forge(id(2), leg.id)).toEqual({ ok: true });
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+  });
+
+  it("does not show the bar for a library that has no tags yet", async () => {
+    const t = await setup([doc(1)], []);
+    await vi.waitFor(() => expect(view(t.page).getAttribute("name")).toBe("library"));
+    expect(bar(t.page)).toBeNull();
+  });
+
+  it("pressing a chip filters the table, writes ?tags= to the address and announces the count", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, leg).click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2");
+    expect(tableText(t.page)).not.toContain("Title 3");
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("true");
+    await vi.waitFor(() =>
+      expect(bar(t.page)?.shadowRoot?.querySelector("[role=status]")?.textContent?.trim()).toBe("1 document matches"),
+    );
+  });
+
+  it("Any and All: two tags, then All keeps only the document with both, and match=all is in the address", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, fin).click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    chip(t.page, leg).click();
+    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}`)); // Any: omitted
+    expect(tableText(t.page)).toContain("Title 1");
+    const all = bar(t.page)?.shadowRoot?.querySelector<HTMLInputElement>("input[value=all]") as HTMLInputElement;
+    await vi.waitFor(() => expect(all.disabled).toBe(false));
+    all.click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2");
+    expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}&match=all`);
+  });
+
+  it("starts from the address (a bookmark) and follows back and forward", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${leg.id}`);
+    await vi.waitFor(() => expect(chip(t.page, leg)?.getAttribute("aria-pressed")).toBe("true"));
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    window.history.replaceState(null, "", "/documents");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("Clear removes the filter and the address", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    (bar(t.page)?.shadowRoot?.querySelector("[data-clear]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    expect(window.location.search).toBe("");
+  });
+
+  it("says no document matches, with Clear, when the filter finds nothing", async () => {
+    const lonely = tg(3, "Lonely", 0);
+    const t = await setup(items(), [fin, leg, lonely]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, lonely).click();
+    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("[data-no-match]")?.textContent).toContain("No documents match these tags"));
+    (t.page.shadowRoot?.querySelector("[data-clear-filter]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("[data-no-match]")).toBeNull());
+    expect(view(t.page).getAttribute("name")).toBe("library"); // never the empty-library view
+  });
+
+  it("drops a tag from the address once the server no longer has it", async () => {
+    const ghost = tg(9, "Gone", 0);
+    const t = await setup(items(), [fin, leg], `/documents?tags=${ghost.id},${fin.id}`);
+    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id}`));
+    expect(t.services.router.get()).toEqual({ name: "documents", tags: [fin.id] });
+  });
+
+  it("opens Manage tags, and refreshes the bar after a rename", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    (bar(t.page)?.shadowRoot?.querySelector("[data-manage]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("dm-tag-manage")).not.toBeNull());
+    t.page.shadowRoot?.querySelector("dm-tag-manage")?.dispatchEvent(new CustomEvent("tags-changed", { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(t.api.listTags).toHaveBeenCalledTimes(2));
+  });
+
+  it("leaves no control without an accessible name", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    expect(unnamedControls(bar(t.page) as Element)).toEqual([]);
+  });
+});
+```
+
+(`t.services` and `t.api` are returned by `setup`; extend its return with `services` and `api` if missing — they are in the current `return { page, services, api, live, sse, ui }`.)
+
+Run: `pnpm --filter @docmind/web exec vitest run src/components/dm-documents-page.test.ts` Expected: FAIL. Now edit `apps/web/src/components/dm-documents-page.ts`:
+
+- imports: `import type { TagSummary } from "@docmind/contracts";` (next to the existing contracts import), `import { TABLE_TOKEN } from "@loom-ui/core/browser";` (the browser entry: the main entry of `@loom-ui/core` is Node-only), `import "./dm-tag-bar"; import "./dm-tag-manage"; import type { TagSelectionDetail } from "./dm-tag-bar";`, and add `type ActionAnswer` to the existing import from `"../ui/session"`; a module constant `/** The Tags column of the library table (see the reshaper). */ const TAGS_COLUMN = 1;`
+- `static properties = { empty: { state: true }, tags: { state: true }, managing: { state: true }, count: { state: true } };` with `declare tags: TagSummary[]; declare managing: boolean; declare count: number | null;` and in the constructor `this.tags = []; this.managing = false; this.count = null;`
+- `private readonly ctx = new ServicesController(this, (s) => [s.uploads, s.router]);` (the page re-renders when the address changes)
+- in `start()`, after `services.uploads.startEvents(…)`: `void this.loadTags();`
+- in `refresh()`, as its first line: `void this.loadTags(); // the counts on the chips change with uploads and deletes`
+- add these members:
+
+```ts
+  private paramsKey = "";
+  private libraryParams: Record<string, string | number> = { tags: "", match: "any" };
+
+  /** What the address says is selected: ids and the mode. */
+  private selection(): { tags: string[]; match: "any" | "all" } {
+    const r = this.ctx.services?.router.get();
+    return r?.name === "documents"
+      ? { tags: r.tags ?? [], match: r.match ?? "any" }
+      : { tags: [], match: "any" };
+  }
+  /** One params object per selection, so a re-render never re-sends the parameters (the view applies it when the object changes). */
+  private paramsFor(sel: { tags: string[]; match: string }): Record<string, string | number> {
+    const key = `${sel.tags.join(",")}|${sel.match}`;
+    if (key !== this.paramsKey) {
+      this.paramsKey = key;
+      this.libraryParams = { tags: sel.tags.join(","), match: sel.match };
+    }
+    return this.libraryParams;
+  }
+  private async loadTags(): Promise<void> {
+    const api = this.ctx.services?.api;
+    if (!api) return;
+    const epoch = this.epoch;
+    try {
+      const { tags } = await api.listTags();
+      if (epoch !== this.epoch) return;
+      this.tags = tags;
+      this.pruneSelection();
+    } catch {
+      // The bar keeps what it had; the table still works without it.
+    }
+  }
+  /** A tag the server no longer has leaves the address (replacing the entry, not adding one). */
+  private pruneSelection(): void {
+    const router = this.ctx.services?.router;
+    const sel = this.selection();
+    const known = new Set(this.tags.map((t) => t.id));
+    const kept = sel.tags.filter((id) => known.has(id));
+    if (!router || kept.length === sel.tags.length) return;
+    router.navigate(
+      {
+        name: "documents",
+        ...(kept.length > 0 && { tags: kept, ...(sel.match === "all" && { match: "all" as const }) }),
+      },
+      { replace: true },
+    );
+  }
+  private onSelect = (e: Event) => {
+    const { tags, match } = (e as CustomEvent<TagSelectionDetail>).detail;
+    this.ctx.services?.router.navigate({
+      name: "documents",
+      ...(tags.length > 0 && { tags, ...(match === "all" && { match: "all" as const }) }),
+    });
+  };
+  private clear(): void {
+    this.ctx.services?.router.navigate({ name: "documents" });
+  }
+  /**
+   * A tag chip in a row (`TABLE_TOKEN`, `payload: { rowKey, tokenId }`): filter the list to that tag alone. The selection is
+   * replaced (Any and All reset: one tag has no mode). What the surface holds is what the server served in the table's value,
+   * read now, never the action's own claim: the row key must be one of `rowKeys`, and the tag a token of that row's Tags cell.
+   */
+  private onTagChip(session: ViewSession, payload: Record<string, unknown>): ActionAnswer {
+    const table = session.valueOf("documents") as { rowKeys?: unknown; rows?: unknown } | undefined;
+    const { rowKey, tokenId } = payload;
+    const at = Array.isArray(table?.rowKeys) ? table.rowKeys.indexOf(rowKey) : -1;
+    const row = at >= 0 && Array.isArray(table?.rows) ? table.rows[at] : undefined;
+    const cell = Array.isArray(row) ? (row[TAGS_COLUMN] as { tokens?: unknown } | undefined) : undefined;
+    const tokens = Array.isArray(cell?.tokens) ? (cell.tokens as { id?: unknown }[]) : [];
+    if (typeof tokenId !== "string" || !tokens.some((t) => t?.id === tokenId))
+      return { ok: false, reason: "refused" };
+    this.ctx.services?.router.navigate({ name: "documents", tags: [tokenId] });
+    return { ok: true };
+  }
+```
+
+- in `act` (the existing handler), right after its `if (!session || !services) { … return { ok: false }; }` check and before `const keys = …`, add: `if (a.type === TABLE_TOKEN) return this.onTagChip(session, a.payload); // a chip navigates; it is not an intent (intentOf has no case for it)`.
+
+- in `onReady`, replace the `check` function with:
+
+```ts
+    const check = () => {
+      const total = session.valueOf("doc-total") as { value?: number } | undefined;
+      if (session.statusOf("doc-total") === "ready" && total?.value === 0) this.empty = true;
+      const rows = session.valueOf("documents") as { rowKeys?: unknown } | undefined;
+      this.count =
+        session.statusOf("documents") === "ready" && Array.isArray(rows?.rowKeys)
+          ? rows.rowKeys.length
+          : null;
+    };
+```
+
+- replace `render()` with:
+
+```ts
+  render() {
+    const sel = this.selection();
+    const filtering = sel.tags.length > 0;
+    const showBar = !this.empty && (this.tags.length > 0 || filtering);
+    return html`
+      <header>
+        <h1>Documents</h1>
+        ${this.empty ? null : html`<dm-upload-zone variant="compact"></dm-upload-zone>`}
+      </header>
+      ${this.empty ? html`<dm-upload-zone variant="empty"></dm-upload-zone>` : null}
+      ${
+        showBar
+          ? html`<dm-tag-bar .tags=${this.tags} .selected=${sel.tags} .match=${sel.match} .count=${this.count} .managing=${this.managing} @tag-selection=${this.onSelect} @manage-toggle=${() => { this.managing = !this.managing; }}></dm-tag-bar>
+            ${this.managing ? html`<dm-tag-manage .tags=${this.tags} @tags-changed=${() => void this.loadTags()}></dm-tag-manage>` : null}`
+          : null
+      }
+      ${
+        !this.empty && filtering && this.count === 0
+          ? html`<p data-no-match role="status">No documents match these tags. <button class="btn ghost" data-clear-filter @click=${() => this.clear()}>Clear</button></p>`
+          : null
+      }
+      <dm-view name=${this.empty ? "library-empty" : "library"} .params=${this.empty ? undefined : this.paramsFor(sel)} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`;
+  }
+```
+
+The fake server (`apps/web/src/testing/fakeServer.ts`, used by `acceptance.test.ts`) got its tag routes in Part A. Its `readers().documents` must honour the new arguments too: change `documents: async ({ limit, status }) =>` to filter by `tags` and `match` exactly as the page test's reader above does.
+
+- [ ] **Step 8: Run everything**
+
+Run: `set -a; . ./.env; set +a; pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm --filter @docmind/web exec vitest run && pnpm --filter @docmind/experiences exec vitest run && pnpm --filter @docmind/server exec vitest run app/ui`
+Expected: PASS. If an existing documents-page test now fails because the table gained a column (a chip cell: its text is the tag names without separators, `tableCellText` joins them with ", ") or `getDocument`/`listTags` is missing from a stub `api`, fix the stub (`listTags: async () => ({ tags: [] })`), not the component. Verify in a browser before the PR (the project's rule): `pnpm serve`, open `/documents`, create two tags from a document (Task 7), press chips, switch Any/All, use back and forward, rename and delete in Manage tags.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add -A
+git commit -m "feat(tags): tag filter on the documents page (bar, Any/All, URL state, manage panel)"
+```
+
+---
+
+## Task 7: The document detail page: the Tags row and the Suggested line
+
+**Files:**
+- Create: `apps/web/src/components/dm-doc-tags.ts`, `apps/web/src/components/dm-doc-tags.test.ts`
+- Modify: `apps/web/src/components/dm-doc-detail.ts`, `apps/web/src/components/dm-doc-detail.test.ts`
+- (The fake server's tag routes, `testing/fakeServer.ts` and its test, are Task 6 Step 7, Part A.)
+
+**Interfaces:**
+- Consumes: the `Api` tag methods and `<dm-tag-*>` conventions (Task 6); `DocumentDto.tags` and `suggestedTags`; the `tags` progress event (Task 5); `ApiError`; `unnamedControls`.
+- Produces: `<dm-doc-tags>` with property `documentId: string`, a public `onEvent(kind: "suggested" | "failed" | "resync"): Promise<void>`, and the exported `TAG_SUGGEST_TIMEOUT_MS = 60_000`; instance seam `timeoutMs`.
+
+- [ ] **Step 1: The fake server's tag routes (moved to Task 6 Step 7)**
+
+The fake server's tag routes and their test are written in Task 6 Step 7, Part A, where the page first needs them (the page calls `GET /api/tags`, and `acceptance.test.ts` runs against this fake in Task 6). Nothing to write here: confirm they are in place.
+
+Run: `pnpm --filter @docmind/web exec vitest run src/testing/fakeServer.test.ts`
+Expected: PASS.
+
 - [ ] **Step 2: `<dm-doc-tags>`, test first**
 
 Create `apps/web/src/components/dm-doc-tags.test.ts`:
@@ -4815,25 +5498,50 @@ import { ApiError } from "../api/http";
 import { createServices } from "../services";
 import { unnamedControls } from "../testing/dom";
 import { mountWith } from "../testing/mount";
+import { all, q, root } from "../testing/tags";
 import "./dm-doc-tags";
 
 const DOC = "00000000-0000-4000-8000-000000000001";
-const t = (n: number, name: string): DocumentTag => ({ id: `00000000-0000-4000-8000-${String(900 + n).padStart(12, "0")}`, name });
+const t = (n: number, name: string): DocumentTag => ({
+  id: `00000000-0000-4000-8000-${String(900 + n).padStart(12, "0")}`,
+  name,
+});
 const dto = (tags: DocumentTag[], suggestedTags: string[], summary = true): DocumentDto =>
   ({
-    id: DOC, title: "x", filename: "x", mime: "text/plain", sizeBytes: 1, status: "ready", error: null, stats: null,
-    summary: summary ? { tldr: "t", keyPoints: [], entities: [], topics: [], suggestedQuestions: [] } : null,
-    tags, suggestedTags, createdAt: "2026-11-10T10:00:00.000Z", updatedAt: "2026-11-10T10:00:00.000Z",
+    id: DOC,
+    title: "x",
+    filename: "x",
+    mime: "text/plain",
+    sizeBytes: 1,
+    status: "ready",
+    error: null,
+    stats: null,
+    summary: summary
+      ? { tldr: "t", keyPoints: [], entities: [], topics: [], suggestedQuestions: [] }
+      : null,
+    tags,
+    suggestedTags,
+    createdAt: "2026-11-10T10:00:00.000Z",
+    updatedAt: "2026-11-10T10:00:00.000Z",
   }) as DocumentDto;
 
-type El = HTMLElement & { updateComplete: Promise<unknown>; onEvent(k: "suggested" | "failed" | "resync"): Promise<void>; timeoutMs: number };
+type El = HTMLElement & {
+  updateComplete: Promise<unknown>;
+  onEvent(k: "suggested" | "failed" | "resync"): Promise<void>;
+  timeoutMs: number;
+};
 
 async function setup(initial: DocumentDto) {
   const state = { doc: initial };
-  const respond = async (): Promise<DocumentTagsResponse> => ({ tags: state.doc.tags, suggestedTags: state.doc.suggestedTags ?? [] });
+  const respond = async (): Promise<DocumentTagsResponse> => ({
+    tags: state.doc.tags,
+    suggestedTags: state.doc.suggestedTags ?? [],
+  });
   const api = {
     getDocument: vi.fn(async () => state.doc),
-    listTags: vi.fn(async () => ({ tags: [t(1, "Finance"), t(2, "Legal"), t(3, "Spare")].map((x) => ({ ...x, documents: 1 })) })),
+    listTags: vi.fn(async () => ({
+      tags: [t(1, "Finance"), t(2, "Legal"), t(3, "Spare")].map((x) => ({ ...x, documents: 1 })),
+    })),
     addDocumentTag: vi.fn(async (_id: string, name: string) => {
       state.doc = { ...state.doc, tags: [...state.doc.tags, { id: t(50, name).id, name }] };
       return respond();
@@ -4843,11 +5551,18 @@ async function setup(initial: DocumentDto) {
       return respond();
     }),
     acceptTagSuggestion: vi.fn(async (_id: string, name: string) => {
-      state.doc = { ...state.doc, tags: [...state.doc.tags, { id: t(60, name).id, name }], suggestedTags: (state.doc.suggestedTags ?? []).filter((n) => n !== name) };
+      state.doc = {
+        ...state.doc,
+        tags: [...state.doc.tags, { id: t(60, name).id, name }],
+        suggestedTags: (state.doc.suggestedTags ?? []).filter((n) => n !== name),
+      };
       return respond();
     }),
     dismissTagSuggestion: vi.fn(async (_id: string, name: string) => {
-      state.doc = { ...state.doc, suggestedTags: (state.doc.suggestedTags ?? []).filter((n) => n !== name) };
+      state.doc = {
+        ...state.doc,
+        suggestedTags: (state.doc.suggestedTags ?? []).filter((n) => n !== name),
+      };
       return respond();
     }),
     refreshTagSuggestions: vi.fn(async () => {}),
@@ -4858,9 +5573,6 @@ async function setup(initial: DocumentDto) {
   await el.updateComplete;
   return { el, api, state };
 }
-const root = (el: Element) => el.shadowRoot as ShadowRoot;
-const q = <T extends Element>(el: Element, s: string) => root(el).querySelector(s) as T;
-const all = <T extends Element>(el: Element, s: string) => [...root(el).querySelectorAll(s)] as T[];
 const settle = async (el: El) => {
   await Promise.resolve();
   await el.updateComplete;
@@ -4869,7 +5581,12 @@ const settle = async (el: El) => {
 describe("dm-doc-tags", () => {
   it("draws the document's tags as chips with a named remove button, and removes one", async () => {
     const s = await setup(dto([t(1, "Finance"), t(2, "Legal")], []));
-    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual(["Finance", "Legal"]));
+    await vi.waitFor(() =>
+      expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual([
+        "Finance",
+        "Legal",
+      ]),
+    );
     expect(q(s.el, "[role=group][aria-label=Tags]")).not.toBeNull();
     q<HTMLButtonElement>(s.el, "button[aria-label='Remove tag Finance']").click();
     await vi.waitFor(() => expect(s.api.removeDocumentTag).toHaveBeenCalledWith(DOC, t(1, "").id));
@@ -4887,7 +5604,11 @@ describe("dm-doc-tags", () => {
     input.dispatchEvent(new Event("input"));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await vi.waitFor(() => expect(s.api.addDocumentTag).toHaveBeenCalledWith(DOC, "Q3 plan"));
-    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual(["Q3 plan"]));
+    await vi.waitFor(() =>
+      expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual([
+        "Q3 plan",
+      ]),
+    );
     expect(q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']").value).toBe("");
   });
 
@@ -4898,7 +5619,9 @@ describe("dm-doc-tags", () => {
     input.value = "one more";
     input.dispatchEvent(new Event("input"));
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
-    await vi.waitFor(() => expect(q(s.el, "[role=alert]")?.textContent).toContain("at most 20 tags"));
+    await vi.waitFor(() =>
+      expect(q(s.el, "[role=alert]")?.textContent).toContain("at most 20 tags"),
+    );
   });
 
   it("offers the user's other tags as autocomplete, loaded once, without the ones the document has", async () => {
@@ -4908,7 +5631,10 @@ describe("dm-doc-tags", () => {
     input.dispatchEvent(new Event("focus"));
     await vi.waitFor(() => expect(s.api.listTags).toHaveBeenCalledTimes(1));
     await s.el.updateComplete;
-    expect(all<HTMLOptionElement>(s.el, "datalist option").map((o) => o.value)).toEqual(["Legal", "Spare"]);
+    expect(all<HTMLOptionElement>(s.el, "datalist option").map((o) => o.value)).toEqual([
+      "Legal",
+      "Spare",
+    ]);
     expect(input.getAttribute("list")).toBe(q(s.el, "datalist").id);
   });
 
@@ -4918,7 +5644,11 @@ describe("dm-doc-tags", () => {
     expect(q(s.el, "[role=group][aria-label='Suggested tags']")).not.toBeNull();
     q<HTMLButtonElement>(s.el, "button[aria-label='Accept suggested tag Legal']").click();
     await vi.waitFor(() => expect(s.api.acceptTagSuggestion).toHaveBeenCalledWith(DOC, "Legal"));
-    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual(["Legal"]));
+    await vi.waitFor(() =>
+      expect(all(s.el, "[data-tags] .chip").map((c) => c.firstChild?.textContent?.trim())).toEqual([
+        "Legal",
+      ]),
+    );
     q<HTMLButtonElement>(s.el, "button[aria-label='Dismiss suggested tag Misc']").click();
     await vi.waitFor(() => expect(s.api.dismissTagSuggestion).toHaveBeenCalledWith(DOC, "Misc"));
     await vi.waitFor(() => expect(all(s.el, "[data-suggested] .chip")).toHaveLength(0));
@@ -4939,7 +5669,11 @@ describe("dm-doc-tags", () => {
     await vi.waitFor(() => expect(s.api.refreshTagSuggestions).toHaveBeenCalledWith(DOC));
     await settle(s.el);
     const busy = q<HTMLButtonElement>(s.el, "[data-suggest]");
-    expect([busy.disabled, busy.getAttribute("aria-busy"), busy.textContent?.trim()]).toEqual([true, "true", "Suggesting…"]);
+    expect([busy.disabled, busy.getAttribute("aria-busy"), busy.textContent?.trim()]).toEqual([
+      true,
+      "true",
+      "Suggesting…",
+    ]);
     s.state.doc = dto([], ["Fresh"]);
     await s.el.onEvent("suggested");
     await settle(s.el);
@@ -4971,7 +5705,9 @@ describe("dm-doc-tags", () => {
     await settle(s.el);
     s.api.refreshTagSuggestions.mockRejectedValueOnce(new ApiError(429, "too_many_requests"));
     q<HTMLButtonElement>(s.el, "[data-suggest]").click();
-    await vi.waitFor(() => expect(q(s.el, "[data-suggest-note]")?.textContent).toContain("Too many"));
+    await vi.waitFor(() =>
+      expect(q(s.el, "[data-suggest-note]")?.textContent).toContain("Too many"),
+    );
     expect(q<HTMLButtonElement>(s.el, "[data-suggest]").disabled).toBe(false);
   });
 
@@ -5002,6 +5738,8 @@ Run: `pnpm --filter @docmind/web exec vitest run src/components/dm-doc-tags.test
 ```ts
 import type { DocumentTag, DocumentTagsResponse, TagSummary } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
+import { ifDefined } from "lit/directives/if-defined.js";
+import type { Api } from "../api/client";
 import { ApiError } from "../api/http";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
@@ -5134,10 +5872,12 @@ export class DmDocTags extends LitElement {
     await this.reload();
   }
 
-  private async act(work: (id: string) => Promise<DocumentTagsResponse>): Promise<void> {
+  private async act(work: (api: Api, id: string) => Promise<DocumentTagsResponse>): Promise<void> {
+    const api = this.ctx.services?.api;
+    if (!api) return;
     const id = this.documentId;
     try {
-      const r = await work(id);
+      const r = await work(api, id);
       if (id === this.documentId) this.take(r);
     } catch (err) {
       this.note =
@@ -5148,10 +5888,9 @@ export class DmDocTags extends LitElement {
   }
   private add(): void {
     const name = this.draft.trim();
-    const api = this.ctx.services?.api;
-    if (name === "" || !api) return;
+    if (name === "") return;
     this.draft = "";
-    void this.act((id) => api.addDocumentTag(id, name));
+    void this.act((api, id) => api.addDocumentTag(id, name));
   }
   private async loadAll(): Promise<void> {
     const api = this.ctx.services?.api;
@@ -5192,18 +5931,25 @@ export class DmDocTags extends LitElement {
     return html`
       <div class="row" role="group" aria-label="Tags" data-tags>
         <span class="label">Tags</span>
-        ${this.tags.map((t) => html`<span class="chip">${t.name}<button type="button" aria-label=${`Remove tag ${t.name}`} @click=${() => void this.act((id) => this.ctx.services!.api.removeDocumentTag(id, t.id))}>×</button></span>`)}
+        ${this.tags.map((t) => html`<span class="chip">${t.name}<button type="button" aria-label=${`Remove tag ${t.name}`} @click=${() => void this.act((api, id) => api.removeDocumentTag(id, t.id))}>×</button></span>`)}
         <input aria-label="Add a tag" list="doc-tag-options" autocomplete="off" maxlength="40" .value=${this.draft}
           @focus=${() => void this.loadAll()}
-          @input=${(e: Event) => { this.draft = (e.target as HTMLInputElement).value; }}
-          @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); this.add(); } }} />
+          @input=${(e: Event) => {
+            this.draft = (e.target as HTMLInputElement).value;
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              this.add();
+            }
+          }} />
         <datalist id="doc-tag-options">${options.map((t) => html`<option value=${t.name}></option>`)}</datalist>
       </div>
       ${this.note ? html`<p role="alert" data-note>${this.note}</p>` : null}
       <div class="row" role="group" aria-label="Suggested tags" data-suggested-row>
         <span class="label">Suggested</span>
-        <span class="row" data-suggested>${this.suggested.map((name) => html`<span class="chip suggested">${name}<button type="button" aria-label=${`Accept suggested tag ${name}`} @click=${() => void this.act((id) => this.ctx.services!.api.acceptTagSuggestion(id, name))}>✓</button><button type="button" aria-label=${`Dismiss suggested tag ${name}`} @click=${() => void this.act((id) => this.ctx.services!.api.dismissTagSuggestion(id, name))}>×</button></span>`)}</span>
-        <button type="button" class="btn secondary" data-suggest ?disabled=${this.suggesting || !this.hasSummary} aria-busy=${this.suggesting ? "true" : "false"} aria-describedby=${this.hasSummary ? "" : reasonId} @click=${() => this.suggest()}>${this.suggesting ? "Suggesting…" : "Suggest tags"}</button>
+        <span class="row" data-suggested>${this.suggested.map((name) => html`<span class="chip suggested">${name}<button type="button" aria-label=${`Accept suggested tag ${name}`} @click=${() => void this.act((api, id) => api.acceptTagSuggestion(id, name))}>✓</button><button type="button" aria-label=${`Dismiss suggested tag ${name}`} @click=${() => void this.act((api, id) => api.dismissTagSuggestion(id, name))}>×</button></span>`)}</span>
+        <button type="button" class="btn secondary" data-suggest ?disabled=${this.suggesting || !this.hasSummary} aria-busy=${this.suggesting ? "true" : "false"} aria-describedby=${ifDefined(this.hasSummary ? undefined : reasonId)} @click=${() => this.suggest()}>${this.suggesting ? "Suggesting…" : "Suggest tags"}</button>
         ${this.hasSummary ? null : html`<span class="muted" id=${reasonId} data-reason>Available once the document has a summary.</span>`}
         ${this.suggestNote ? html`<span data-suggest-note role="status">${this.suggestNote}</span>` : null}
       </div>
@@ -5276,11 +6022,12 @@ git commit -m "feat(tags): tags row and suggested tags on the document page"
 
 **Files:**
 - Modify: `apps/server/app/documents/testHarness.ts` (the real `suggest-tags` flow behind the refresh route)
+- Modify: `apps/server/app/erasure/e2eSupport.ts` (the erasure scan covers tag names and suggestions)
 - Test: `apps/server/app/documents/tags.e2e.pg.test.ts`
 - Modify: `docs/architecture.md`, `docs/codebase-guide.md`, `docs/operations/cloud-deploy.md`
 
 **Interfaces:**
-- Consumes: everything above. Test helpers: `startDocumentServer({ llm: true })`, `uploadAndAwaitTerminal`, `getDoc`, `h.fake.reply`, `h.fake.requests`, `h.fake.holdNext()`, `h.eventStore`, `ingestExecutionId` (`documents/ingest.ts`), `suggestTagsExecutionId` (Task 5).
+- Consumes: everything above. Test helpers: `startDocumentServer({ llm: true })`, `callApi`, `uploadAndAwaitTerminal`, `getDoc`, `h.fake.reply`, `h.fake.requests`, `h.fake.holdNext()`, `h.eventStore`, `ingestExecutionId` (`documents/ingest.ts`), `suggestTagsExecutionId` (Task 5).
 - Produces: nothing later tasks use.
 
 - [ ] **Step 1: Run the real flow behind the harness's refresh route**
@@ -5299,11 +6046,18 @@ Create `apps/server/app/documents/tags.e2e.pg.test.ts`:
 
 ```ts
 import { DocumentTagsResponse, ListDocumentsResponse, TagResponse } from "@docmind/contracts";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { suggestTagsExecutionId } from "../flows/suggest-tags/start";
 import { ingestExecutionId } from "./ingest";
-import { ALICE, type DocumentHarness, getDoc, startDocumentServer, uploadAndAwaitTerminal } from "./testHarness";
+import {
+  ALICE,
+  type DocumentHarness,
+  callApi,
+  getDoc,
+  startDocumentServer,
+  uploadAndAwaitTerminal,
+} from "./testHarness";
 
 const WAIT = 60_000;
 const md = (word: string) =>
@@ -5312,7 +6066,11 @@ const TLDR = "Reduce answer: the programme is on track";
 
 describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
-  const state = { ingestTags: ["Finance", "Q3 plan", "Kestrel", "Fourth new one"] as unknown, suggestTags: ["Legal", "Q3 plan"] as unknown };
+  const DEFAULTS = {
+    ingestTags: ["Finance", "Q3 plan", "Kestrel", "Fourth new one"] as unknown,
+    suggestTags: ["Legal", "Q3 plan"] as unknown,
+  };
+  const state = { ...DEFAULTS };
   beforeAll(async () => {
     h = await startDocumentServer({ llm: true });
     h.fake.reply((body) => {
@@ -5328,22 +6086,28 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
             suggestedTags: state.ingestTags,
           }),
         };
-      if (system.startsWith("You suggest tags")) return { text: JSON.stringify({ suggestedTags: state.suggestTags }) };
+      if (system.startsWith("You suggest tags"))
+        return { text: JSON.stringify({ suggestedTags: state.suggestTags }) };
       return { text: JSON.stringify({ summary: "part", entities: [] }) };
     });
   }, WAIT);
   afterAll(async () => void (await h?.close()));
+  // Each test starts from the same model answers and no tags, so none depends on what an earlier one left (preflight F13).
+  beforeEach(async () => {
+    Object.assign(state, DEFAULTS);
+    await h.owner.query("DELETE FROM tags");
+  });
 
   const call = (method: string, path: string, body?: unknown) =>
-    fetch(`${h.base}${path}`, {
-      method,
-      headers: { "x-test-user": "alice", ...(body !== undefined && { "content-type": "application/json" }) },
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-    });
+    callApi(h, "alice", method, path, body);
   const list = async (qs: string) =>
-    ListDocumentsResponse.parse(await (await call("GET", `/api/documents?${qs}`)).json()).items.map((d) => d.id);
+    ListDocumentsResponse.parse(await (await call("GET", `/api/documents?${qs}`)).json()).items.map(
+      (d) => d.id,
+    );
   const tagIdOf = async (name: string) =>
-    ((await (await call("GET", "/api/tags")).json()) as { tags: { id: string; name: string }[] }).tags.find((t) => t.name === name)?.id as string;
+    (
+      (await (await call("GET", "/api/tags")).json()) as { tags: { id: string; name: string }[] }
+    ).tags.find((t) => t.name === name)?.id as string;
 
   it(
     "upload, suggestions appear without being applied, accept one; the log holds no tag name; existing tags steer the next prompt",
@@ -5353,21 +6117,32 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       expect(doc.tags).toEqual([]); // never applied automatically
       expect(doc.suggestedTags).toEqual(["Finance", "Q3 plan", "Kestrel"]); // at most 3 new names
       const accepted = DocumentTagsResponse.parse(
-        await (await call("POST", `/api/documents/${id}/tag-suggestions/accept`, { name: "q3 PLAN" })).json(),
+        await (
+          await call("POST", `/api/documents/${id}/tag-suggestions/accept`, { name: "q3 PLAN" })
+        ).json(),
       );
-      expect([accepted.tags.map((t) => t.name), accepted.suggestedTags]).toEqual([["q3 PLAN"], ["Finance", "Kestrel"]]);
+      expect([accepted.tags.map((t) => t.name), accepted.suggestedTags]).toEqual([
+        ["q3 PLAN"],
+        ["Finance", "Kestrel"],
+      ]);
       const dismissed = DocumentTagsResponse.parse(
-        await (await call("POST", `/api/documents/${id}/tag-suggestions/dismiss`, { name: "Kestrel" })).json(),
+        await (
+          await call("POST", `/api/documents/${id}/tag-suggestions/dismiss`, { name: "Kestrel" })
+        ).json(),
       );
       expect(dismissed.suggestedTags).toEqual(["Finance"]);
 
       const log = JSON.stringify(await h.eventStore.read(ingestExecutionId(ALICE.userId, id, 1)));
-      for (const name of ["Finance", "Q3 plan", "q3 PLAN", "Kestrel", "Fourth new one"]) expect(log).not.toContain(name);
+      for (const name of ["Finance", "Q3 plan", "q3 PLAN", "Kestrel", "Fourth new one"])
+        expect(log).not.toContain(name);
 
       // The user's tag names go to the configured provider in the next summary prompt, and the model maps onto them.
       state.ingestTags = ["Q3 PLAN", "brand new"];
       const second = await uploadAndAwaitTerminal(h, "alice", "b.md", md("Osprey"), "ready");
-      const reduce = h.fake.requests.filter((r) => JSON.stringify(r).includes("suggestedTags") && JSON.stringify(r).includes("already uses"));
+      const reduce = h.fake.requests.filter(
+        (r) =>
+          JSON.stringify(r).includes("suggestedTags") && JSON.stringify(r).includes("already uses"),
+      );
       expect(JSON.stringify(reduce.at(-1))).toContain('[\\"q3 PLAN\\"]');
       expect((await getDoc(h, "alice", second)).suggestedTags).toEqual(["q3 PLAN", "brand new"]); // the existing tag keeps its display name
     },
@@ -5383,8 +6158,13 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
         await uploadAndAwaitTerminal(h, "alice", "x2.md", md("Bravo"), "ready"),
         await uploadAndAwaitTerminal(h, "alice", "x3.md", md("Charlie"), "ready"),
       ];
-      const add = (doc: string, name: string) => call("POST", `/api/documents/${doc}/tags`, { name });
-      for (const [doc, names] of [[ids[0], ["red"]], [ids[1], ["red", "blue"]], [ids[2], ["blue"]]] as const)
+      const add = (doc: string, name: string) =>
+        call("POST", `/api/documents/${doc}/tags`, { name });
+      for (const [doc, names] of [
+        [ids[0], ["red"]],
+        [ids[1], ["red", "blue"]],
+        [ids[2], ["blue"]],
+      ] as const)
         for (const n of names) await add(doc as string, n);
       const red = await tagIdOf("red");
       const blue = await tagIdOf("blue");
@@ -5396,7 +6176,10 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       const paged: string[] = [];
       let cursor: string | null = null;
       do {
-        const res: Response = await call("GET", `/api/documents?tags=${red},${blue}&limit=1${cursor ? `&cursor=${cursor}` : ""}`);
+        const res: Response = await call(
+          "GET",
+          `/api/documents?tags=${red},${blue}&limit=1${cursor ? `&cursor=${cursor}` : ""}`,
+        );
         const page = ListDocumentsResponse.parse(await res.json());
         paged.push(...page.items.map((d) => d.id));
         cursor = page.nextCursor;
@@ -5410,7 +6193,9 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
     "renames a tag (rows follow) and deletes one (the documents stay, the links go)",
     async () => {
       const id = await uploadAndAwaitTerminal(h, "alice", "r.md", md("Delta"), "ready");
-      const tag = TagResponse.parse(await (await call("POST", "/api/tags", { name: "temp-name" })).json()).tag;
+      const tag = TagResponse.parse(
+        await (await call("POST", "/api/tags", { name: "temp-name" })).json(),
+      ).tag;
       await call("PUT", `/api/documents/${id}/tags`, { tagIds: [tag.id] });
       expect((await call("PATCH", `/api/tags/${tag.id}`, { name: "final-name" })).status).toBe(200);
       expect((await getDoc(h, "alice", id)).tags.map((t) => t.name)).toEqual(["final-name"]);
@@ -5431,15 +6216,22 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       const first = await call("POST", `/api/documents/${id}/tag-suggestions/refresh`);
       expect(first.status).toBe(202);
       const second = await call("POST", `/api/documents/${id}/tag-suggestions/refresh`);
-      expect([second.status, ((await second.json()) as { error: { code: string } }).error.code]).toEqual([409, "suggest_running"]);
+      expect([
+        second.status,
+        ((await second.json()) as { error: { code: string } }).error.code,
+      ]).toEqual([409, "suggest_running"]);
       gate.release();
       await expectSuggestions(id, ["Legal", "Q3 plan"]);
-      const calls = h.fake.requests.slice(before).filter((r) => JSON.stringify(r).includes("You suggest tags"));
+      const calls = h.fake.requests
+        .slice(before)
+        .filter((r) => JSON.stringify(r).includes("You suggest tags"));
       expect(calls).toHaveLength(1);
       const sent = JSON.stringify(calls[0]);
       expect(sent).toContain(TLDR); // the stored summary
       expect(sent).not.toContain("Paragraph 0."); // never a passage
-      const log = JSON.stringify(await h.eventStore.read(suggestTagsExecutionId(ALICE.userId, id, 1)));
+      const log = JSON.stringify(
+        await h.eventStore.read(suggestTagsExecutionId(ALICE.userId, id, 1)),
+      );
       for (const name of ["Legal", "Q3 plan"]) expect(log).not.toContain(name);
       expect(log).toContain('"outcome":"suggested"');
     },
@@ -5447,14 +6239,59 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
   );
 
   async function expectSuggestions(id: string, want: string[]) {
-    const { vi } = await import("vitest");
-    await vi.waitFor(async () => expect((await getDoc(h, "alice", id)).suggestedTags).toEqual(want), { timeout: WAIT });
+    await vi.waitFor(
+      async () => expect((await getDoc(h, "alice", id)).suggestedTags).toEqual(want),
+      { timeout: WAIT },
+    );
   }
 });
 ```
 
 Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/documents/tags.e2e.pg.test.ts`
 Expected: PASS and not skipped. Adjustments that are the test's own detail, not the contract: the exact `h.fake.requests` shape (`FakeRequest` has the parsed body; `JSON.stringify` of it is what the other e2e tests search), `holdNext()`'s return (as in `retry.e2e.pg.test.ts`: the gate's `release()`), and the fake's reply routing by `system` prefix (`You combine`, `You suggest tags`). If `uploadAndAwaitTerminal` returns before suggestions are stored, they are written before the summary, which `ready` follows, so they are present.
+
+- [ ] **Step 2a: The erasure end-to-end scan covers tag names and suggestions (preflight F16)**
+
+The only erasure test so far is `DELETE FROM users` in `service.pg.test.ts`. The real pipeline is `erasure/erasure.e2e.pg.test.ts`, whose `seedUser` (in `erasure/e2eSupport.ts`) writes strings only that user wrote ("sentinels") and whose `assertErased` scans every column of every table for them. Make it seed a tag and a suggestion. In `apps/server/app/erasure/e2eSupport.ts`:
+
+- in `seedUser`, extend the sentinel tuple: `const [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest] = [` … with two more entries ``` `sentinel-tag-${tag()}`, `sentinel-suggest-${tag()}`, ``` (the module's `tag()` is its random hex helper; both needles are at least 8 characters);
+- right after `expect(seen.at(-1)?.status).toBe("ready");` add:
+
+```ts
+  // A tag the user named and a suggestion the model made: both sealed under the user's key. The sentinels prove that the
+  // pipeline leaves neither name anywhere, and the row counts prove the scan has something to find the absence of.
+  const added = await st.chatReq(who.cookie, "POST", `/api/documents/${documentId}/tags`, {
+    name: inTag,
+  });
+  expect(added.status).toBe(200);
+  const ref = { tenantId: who.tenantId, userId: who.userId, documentId };
+  expect(await st.composed.tags.putSuggestions(ref, [inSuggest])).toBe(true);
+  for (const table of ["tags", "document_tags", "document_tag_suggestions"]) {
+    const rows = await st.db.owner.query(
+      `SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`,
+      [who.userId],
+    );
+    expect(rows.rows[0].n).toBe(1);
+  }
+```
+
+- in the returned object: `sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest],` (they join every scan, `needlesOf`, the log checks and `logs.assertClean`, which already take `sentinels`);
+- in `assertErased`, in the list `["public.users", "public.read_model_state", "loom.events", "loom.fences"]` of tables the scan must have read, add `"public.tags"` and `"public.document_tag_suggestions"`, and after step 1's `expect(unexpected(hits, who)).toEqual([]);` add:
+
+```ts
+  // 1b. The tag tables hold nothing of the user: their rows cascade from the user row, and the names were sealed under the
+  //     destroyed key (the scan above found neither sentinel in any column).
+  for (const table of ["tags", "document_tags", "document_tag_suggestions"]) {
+    const left = await db.owner.query(
+      `SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`,
+      [user.userId],
+    );
+    expect(left.rows[0].n).toBe(0);
+  }
+```
+
+Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/erasure/erasure.e2e.pg.test.ts app/erasure/erasure.after.e2e.pg.test.ts app/erasure/erasure.resume.e2e.pg.test.ts`
+Expected: PASS and not skipped. (If another e2e file asserts the exact number of sentinels or tables, update that assertion: the three files above are the ones that call `seedUser` and `assertErased`.)
 
 - [ ] **Step 3: Update the documents**
 
@@ -5474,12 +6311,12 @@ A user groups documents with their own tags (no hierarchy, no colours) and filte
 - **Storage.** `tags` holds a sealed name (`tag:<id>:name`) and `name_bind`, an HMAC-SHA256 of the normalised name (NFKC, trim, one inner space, case-fold) under a key derived from the owner's data key with its own HKDF info (`crypto/tagKeys.ts`, the `EntityKeys` pattern), unique per owner. `document_tags` links a document and a tag through composite foreign keys on `(tenant_id, owner_id, id)`, so both always share the owner; `document_tag_suggestions` holds one sealed list of up to 5 names per document. All three cascade with the document, the tag and the user (migration 0036; the same tenant-isolation policy as `documents`, and the owner is named in every query), so erasure needs no step of its own and crypto-shredding also covers the names. Limits: 20 tags per document, 200 per user, 10 per filter.
 - **Suggestions (never applied automatically).** The ingest `summarize` step reads the owner's tag names (decrypted in memory, at most 200, most used first), puts them in the reduce prompt as a quoted JSON list with one line asking for `suggestedTags` (up to 5, reusing existing names, at most 3 new), parses the field leniently (missing or malformed is `[]`), runs `normaliseSuggestions` (clip to 40 characters, map onto an existing tag by normalised form, dedupe, drop tags the document already has) and stores the result before the summary. A suggestion problem never fails ingest; a key-store outage still fails the step. An existing document gets the on-demand `suggest-tags` flow (`flows/suggest-tags/`, one step, `u_<user>:suggest-tags-<doc>-r<n>`, one run at a time per document through `rerunTracker`, at most 10 presses per user per minute): it reads only the stored summary and the tag names, makes one model call with the same answer and normalisation, replaces the row and emits a `tags` document event. It is not recovery-owned: an interrupted run is pressed again, and the page's busy state ends after 60 seconds.
 - **The ingest flow identity is unchanged.** Loom's flow hash covers the step list, ids, tool ids, timeouts, retry policies, the deadline and the version, and nothing inside a step, so a prompt change in `summarize` leaves `ingest-document` at 3.0.0 with the same hash (`flowHash.test.ts` pins it); no legacy definition is needed.
-- **Listing.** `GET /api/documents?tags=<id>,<id>&match=any|all` filters in SQL before the cursor cut, with explicit owner and tenant predicates (`any` an `EXISTS`, `all` the documents holding every id), and the cursor carries a fingerprint of the filter, so a cursor reused under another filter answers 400. The library page is a hydrated view: its `documents` provider takes the same `tags` and `match` as parameters, and its table has a Tags column.
+- **Listing.** `GET /api/documents?tags=<id>,<id>&match=any|all` filters in SQL before the cursor cut, with explicit owner and tenant predicates (`any` an `EXISTS`, `all` the documents holding every id), and the cursor carries a fingerprint of the filter, so a cursor reused under another filter answers 400. The library page is a hydrated view: its `documents` provider takes the same `tags` and `match` as parameters, and each row's Tags cell is a loom-ui token cell, so a chip in a row filters the list to that tag alone.
 - **Privacy.** Names and suggestions are sealed and never appear in logs, the event log, lineage or error messages. The user's tag names reach their configured model provider inside the summary and suggestion prompts, the same boundary as the document text.
 ```
 
-- §10, after the sentence `The user's visuals lineage needs no step of its own: …` add a paragraph: `Tags, their links and the sealed suggestions need no step of their own either: the foreign keys cascade from the user row in \`rows\`, and the names are sealed under the key \`shred\` destroys. A \`suggest-tags\` execution still running is harmless: its write finds no document, and its sealing key is gone.`
-- §13 Known limits: add `- A row of the library table shows tag names as text: loom-ui's \`Table\` has no clickable cells, so filtering by a row's tag is done in the tag bar.` and `- After 999 "Suggest tags" presses for one document the button answers busy (the run number is the execution id's suffix).`
+- §10, after the sentence `The user's visuals lineage needs no step of its own: …` add a paragraph: `Tags, their links and the sealed suggestions need no step of their own either: the foreign keys cascade from the user row in \`rows\`, and the names are sealed under the key \`shred\` destroys. Erasure settles and cancels a user's on-demand \`suggest-tags\` starts like the other flows' starts (\`erasure/wire.ts\`), and a run that still got through would find no document and no sealing key.`
+- §13 Known limits: add `- After 999 "Suggest tags" presses for one document the button answers busy (the run number is the execution id's suffix).`
 
 `docs/codebase-guide.md` line 77: `0001–0035` becomes `0001–0036`, and the same row's list gains `tags`. Add a row to the table that lists server folders if one exists for `flows/chat-title` (search `grep -n "chat-title" docs/codebase-guide.md`) naming `flows/suggest-tags` and `tags/`.
 
@@ -5492,7 +6329,7 @@ A user groups documents with their own tags (no hierarchy, no colours) and filte
 - [ ] **Step 4: Full verification**
 
 Run, from the worktree root: `set -a; . ./.env; set +a; pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm build && pnpm test`
-Expected: all PASS, and in the vitest summaries the new pg files ran (`service.pg.test.ts`, `routes.pg.test.ts`, `suggestRoutes.pg.test.ts`, `tags.list.pg.test.ts`, `tags.explain.pg.test.ts`, `tagFilter.pg.test.ts`, `summarize.tags.pg.test.ts`, `suggest-tags/step.pg.test.ts`, `suggest-tags/flow.pg.test.ts`, `tags.e2e.pg.test.ts`). Then the browser check the project requires before a PR: `pnpm serve`, sign in, upload two documents with a model configured, accept a suggestion, filter with Any and All, watch the address, back and forward, rename and delete in Manage tags, press Suggest tags on an older document (the busy state ends), and tab through the page with the keyboard.
+Expected: all PASS, and in the vitest summaries the new pg files ran (`service.pg.test.ts`, `routes.pg.test.ts`, `suggestRoutes.pg.test.ts`, `tags.list.pg.test.ts`, `tags.explain.pg.test.ts`, `tagFilter.pg.test.ts`, `summarize.tags.pg.test.ts`, `suggest-tags/step.pg.test.ts`, `suggest-tags/flow.pg.test.ts`, `tags.e2e.pg.test.ts`, `erasure/erasure.e2e.pg.test.ts`). Then the browser check the project requires before a PR: `pnpm serve`, sign in, upload two documents with a model configured, accept a suggestion, filter with Any and All, watch the address, back and forward, rename and delete in Manage tags, press Suggest tags on an older document (the busy state ends), and tab through the page with the keyboard.
 
 - [ ] **Step 5: Commit**
 
@@ -5524,18 +6361,19 @@ git commit -m "docs(tags): architecture, codebase guide and rollout note; end-to
 | 5 every route and its statuses; rows and detail gain `tags` and `suggestedTags` | 3 and 5 |
 | 5 listing filter syntax, both SQL forms, cursor filter validity, explicit owner and tenant predicates, zero tags unfiltered | 3 (D7: `all` is the set-based form of the spec's count) |
 | 6 documents page: bar, chips with count and `aria-pressed`, Any/All radio group enabled from 2, Clear, URL state, empty message, polite count, Manage tags with rename and confirmed delete | 6 |
-| 6 row chips that filter by one tag | **Not delivered**: loom-ui `Table` cells are strings (D8); a Tags text column instead |
+| 6 row chips that filter by one tag | 6 (D8: loom-ui token cell, pin `fc34435`; the page answers `TABLE_TOKEN`; the web test clicks a chip in a row) |
 | 6 detail: Tags row with × and autocomplete, Enter adds, Suggested line with ✓ and ×, Suggest tags with a busy state | 7 |
 | 7 privacy and cost | 4 (no name in logs or step input), 5 and 8 (log checks), D2 |
-| 8 testing list | unit (1), Postgres (2, 3 including EXPLAIN on 6,600 documents), routes (3, 5), flow (4, 5), e2e (8), web (6, 7) |
+| 8 testing list | unit (1), Postgres (2, 3 including a 6,600-document seed with an index-use check and an equality check against a brute-force read), routes (3, 5), flow (4, 5), e2e (8), erasure scan (8 Step 2a), erasure wiring (5 Step 9a), web (6, 7) |
+| 8 erasure | 2 (cascade and shred), 5 Step 9a (starts settled and cancelled), 8 Step 2a (the real pipeline: tag and suggestion needles absent) |
 | 9 out of scope | not built |
 
 **Placeholder scan:** no "TBD", "TODO" or "similar to Task N"; every step carries its code or exact edit. The places that depend on code not read while planning say how to settle them: a test fixture list for `tags: []` (found by `typecheck:tests`), the fake Anthropic's `requests` shape (copied from the existing e2e tests), the generator output for `loom.gen.ts`.
 
-**Type consistency:** `TagService` method names and the `DocumentTagsView` shape (`{tags, suggestedTags}`) are the ones used in Tasks 3, 4, 5, 6, 7; `ExistingTag` (`{id, name, linked}`) is the type of `suggestionContext` and the argument of `normaliseSuggestions`; `SuggestTagsStart` kinds `started | running | disabled` map to the route's 202, 409 `suggest_running`, 409 `suggest_unavailable`; the `tags: "suggested" | "failed"` event field is the one the step publishes, the contract validates and `dm-doc-detail` forwards; `Route.documents.match` is `"all"` only, and `selection()` turns the omitted value into `"any"`; `listDocumentsQuery(ownerId, { cursor, limit, tenantId, filter })` is called by the route, the reader and the EXPLAIN test with the same shape; `DocumentDto.tags` is required and `suggestedTags` optional everywhere.
+**Type consistency:** `TagService` method names and the `DocumentTagsView` shape (`{tags, suggestedTags}`) are the ones used in Tasks 3, 4, 5, 6, 7; `ExistingTag` (`{id, name, linked}`) is the type of `suggestionContext` and the argument of `normaliseSuggestions`; `SuggestTagsStart` kinds `started | running | disabled` map to the route's 202, 409 `suggest_running`, 409 `suggest_unavailable`; the `tags: "suggested" | "failed"` event field is the one the step publishes, the contract validates and `dm-doc-detail` forwards; `Route.documents.match` is `"all"` only, and `selection()` turns the omitted value into `"any"`; `listDocumentsQuery(ownerId, { cursor, limit, tenantId, filter })` is called by the route, the reader, `pgDocumentReads` and the EXPLAIN test with the same shape (`tenantId` required); `SuggestTagsStarter` has `start`, `settle`, `cancel` and `idle`, and `ErasureParts.suggestTags` picks the last three; `authed`, `idOf`, `notFound` and `answering` are exported once from `tags/routes.ts`; the library table's Tags cell is `{ tokens: [{ id, label }] }` and its action is `TABLE_TOKEN` with `{ rowKey, tokenId }`; `DocumentDto.tags` is required and `suggestedTags` optional everywhere.
 
 **Spec points that could not be planned cleanly:**
-1. Row chips (above): needs a loom-ui change; a Tags column and the tag bar deliver the filtering.
+1. Row chips needed a loom-ui change (requested from `loom-ba`); it landed as PR #131 and Task 6 gates on it at the pin `fc34435`, with no text-column fallback.
 2. The spec says owner-scoped RLS "with the same policies as `documents`": `documents` has tenant isolation only (there is no per-owner database setting), so the tables carry that policy and every query names the owner (D3).
 3. The spec's `all` form is a correlated count; the plan uses the equivalent set-based form so the planner can start from the tag index (D7), guarded by the EXPLAIN test.
 4. The spec names `entityNameBind` as the lookup pattern; in the code it is only the seal bind, and the lookup key is `EntityKeys.nameKey` (D2).
