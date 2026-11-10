@@ -3,14 +3,13 @@ import { ConversationNotFoundError } from "@loom/conversation";
 import type { KeyStore } from "@loom/plugin-crypto";
 import { InboxClosedError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { principalOf } from "../chats/access";
-import { chatConversationId } from "../chats/ids";
 import type { ChatWiring } from "../chats/wiring";
 import type { IngestPort } from "../documents/ingest";
 import type { StartScheduler } from "../documents/startScheduler";
 import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
 import type { VisualsStarter } from "../flows/visualize-document/start";
+import { type OpaqueIds, legacyIds } from "../opaqueIds";
 import { drainWithin } from "../shutdown";
-import { executionIdFor } from "../subject";
 import type { ErasureDeps } from "./eraser";
 import type { ErasureStore } from "./types";
 
@@ -22,7 +21,7 @@ const SETTLE_MS = 5_000;
 export interface ErasureParts {
   app: {
     eraseSubject(
-      userId: string,
+      subjectId: string,
       tenantId: undefined,
       options: { parked: "shred" },
     ): Promise<{ outcome: "erased" | "parked" | "unknown" }>;
@@ -30,7 +29,9 @@ export interface ErasureParts {
   runtime: Pick<WorkflowRuntime, "cancel">;
   keys: Pick<KeyStore, "destroy"> & { wasDestroyed?(subjectId: string): Promise<boolean> };
   store: ErasureDeps["store"];
-  sql: Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs">;
+  sql: Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf">;
+  /** The id key cache: erasure reads an existing user's key (never mints one) to name their new-format runs, and evicts it when a subject key is destroyed. Absent: old-format ids only. */
+  ids?: Pick<OpaqueIds, "load" | "cached" | "forgetSubject">;
   starts: Pick<StartScheduler, "settle">;
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
@@ -42,8 +43,8 @@ export interface ErasureParts {
     stops: Pick<ChatWiring["stops"], "stop">;
     conversations: Pick<ChatWiring["conversations"], "close">;
   };
-  status: { forgetUser(userId: string): Promise<unknown> };
-  activity: { forgetUser(userId: string): Promise<unknown> };
+  status: { forgetUser(userId: string, handle?: string | null): Promise<unknown> };
+  activity: { forgetUser(userId: string, handle?: string | null): Promise<unknown> };
   closeStreams(userId: string): void;
   sleep?: ErasureDeps["sleep"];
 }
@@ -61,6 +62,9 @@ export function requireKeyDestroyedProof(keys: { wasDestroyed?: unknown }): void
 /** The production ports of the `Eraser`. */
 export function erasureDeps(p: ErasureParts): ErasureDeps {
   requireKeyDestroyedProof(p.keys);
+  /** The user's id builders when the user has a handle and a live key; undefined otherwise (a destroyed key means no new-format run can still be running). */
+  const userIdsOf = async (identity: Identity) =>
+    p.ids && (await p.ids.load(identity)) ? p.ids.cached(identity.userId) : undefined;
   return {
     store: p.store,
     ...p.sql,
@@ -87,31 +91,47 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
     },
     async stopChat(identity: Identity, chatId: string) {
       if (!p.chat) return;
-      const conversationId = chatConversationId(identity.userId, chatId);
-      p.chat.stops.stop(conversationId); // aborts a running turn at its next checkpoint
-      try {
-        await p.chat.conversations.close(conversationId, { principal: principalOf(identity) });
-      } catch (err) {
-        // Never started, or closed already: nothing to wind down.
-        if (!(err instanceof ConversationNotFoundError || err instanceof InboxClosedError))
-          throw err;
+      const user = await userIdsOf(identity);
+      // A conversation of either format may be live: stop and close both (a never-started one is "not found", as before).
+      const conversationIds = [
+        legacyIds.conversation(identity.userId, chatId),
+        ...(user ? [user.conversation(chatId)] : []),
+      ];
+      for (const conversationId of conversationIds) {
+        p.chat.stops.stop(conversationId); // aborts a running turn at its next checkpoint
+        try {
+          await p.chat.conversations.close(conversationId, { principal: principalOf(identity) });
+        } catch (err) {
+          // Never started, or closed already: nothing to wind down.
+          if (!(err instanceof ConversationNotFoundError || err instanceof InboxClosedError))
+            throw err;
+        }
       }
     },
     async cancelTitle(identity, chatId) {
-      const executionId = executionIdFor(identity.userId, `chat-title-${chatId}`);
-      try {
-        await p.runtime.cancel(executionId, ERASED, { principal: principalOf(identity) });
-      } catch (err) {
-        if (!isNoExecution(err, executionId)) throw err;
+      const user = await userIdsOf(identity);
+      const executionIds = [
+        legacyIds.chatTitle(identity.userId, chatId),
+        ...(user ? [user.chatTitle(chatId)] : []),
+      ];
+      for (const executionId of executionIds) {
+        try {
+          await p.runtime.cancel(executionId, ERASED, { principal: principalOf(identity) });
+        } catch (err) {
+          if (!isNoExecution(err, executionId)) throw err;
+        }
       }
     },
-    eraseSubject: (userId) => p.app.eraseSubject(userId, undefined, { parked: "shred" }),
+    eraseSubject: (subjectId) => p.app.eraseSubject(subjectId, undefined, { parked: "shred" }),
     keys: {
-      destroy: (subjectId) => p.keys.destroy(subjectId),
+      destroy: async (subjectId) => {
+        await p.keys.destroy(subjectId);
+        p.ids?.forgetSubject(subjectId); // the cached id key came from this key: it must not outlive it
+      },
       wasDestroyed: async (subjectId) => (await p.keys.wasDestroyed?.(subjectId)) === true,
     },
-    forgetStatus: (userId) => p.status.forgetUser(userId),
-    forgetActivity: (userId) => p.activity.forgetUser(userId),
+    forgetStatus: (userId, handle) => p.status.forgetUser(userId, handle),
+    forgetActivity: (userId, handle) => p.activity.forgetUser(userId, handle),
     ...(p.sleep && { sleep: p.sleep }),
   };
 }

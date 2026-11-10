@@ -314,4 +314,128 @@ describe.skipIf(!PG_URL)("the Postgres steps of the eraser (needs DOCMIND_TEST_P
       quiet.mockRestore();
     }
   });
+
+  it("rows: also deletes the user's timers and leases under the h_<handle> prefix, reads the handle before the row goes, and leaves another user's", async () => {
+    const { tenantId, users } = await tenantWith("handle@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = "a".repeat(26);
+    const theirs = "e".repeat(26);
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const own = [`h_${mine}:ingest-${"a".repeat(52)}.2`, `h_${mine}.c-${"q".repeat(52)}`];
+    const other = `h_${theirs}:ingest-${"a".repeat(52)}.2`;
+    for (const id of [...own, other]) {
+      await durable.pool.query("INSERT INTO loom.timers (execution_id, wake_at) VALUES ($1, 1)", [
+        id,
+      ]);
+      await durable.pool.query(
+        "INSERT INTO loom.leases (execution_id, owner, expires_at) VALUES ($1, 'x', 1)",
+        [id],
+      );
+    }
+    expect(await sql.handleOf?.(request(tenantId, u.userId))).toBe(mine);
+
+    await sql.rows(request(tenantId, u.userId));
+    await sql.rows(request(tenantId, u.userId)); // idempotent
+
+    for (const id of own) {
+      expect(
+        await count("SELECT count(*)::int AS n FROM loom.timers WHERE execution_id = $1", [id]),
+      ).toBe(0);
+      expect(
+        await count("SELECT count(*)::int AS n FROM loom.leases WHERE execution_id = $1", [id]),
+      ).toBe(0);
+    }
+    expect(
+      await count("SELECT count(*)::int AS n FROM loom.timers WHERE execution_id = $1", [other]),
+    ).toBe(1);
+    expect(
+      await count("SELECT count(*)::int AS n FROM loom.leases WHERE execution_id = $1", [other]),
+    ).toBe(1);
+    expect(await sql.handleOf?.(request(tenantId, u.userId))).toBeNull(); // the row is gone: nothing left to read it from
+  });
+
+  it("rows: scrubs scope and app_key from the erased read-model rows under h_<handle> (so no row links the handle to a uuid), and only those", async () => {
+    const { tenantId, users } = await tenantWith("scrub@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = "i".repeat(26);
+    const theirs = "m".repeat(26);
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const doc = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const chat = "3a4b5c6d-7e8f-4a9b-8c1d-2e3f4a5b6c7d";
+    const tomb = (
+      model: string,
+      executionId: string,
+      scope: string | null,
+      appKey: string | null,
+      erased = true,
+    ) =>
+      db.owner.query(
+        "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ($1, $2, $3, $4, 0, $5, $6)",
+        [model, executionId, appKey, scope, erased ? null : "{}", erased],
+      );
+    const mineIngest = `h_${mine}:ingest-${"a".repeat(52)}.2`;
+    const mineChat = `h_${mine}.c-${"a".repeat(52)}`;
+    const theirsIngest = `h_${theirs}:ingest-${"a".repeat(52)}.2`;
+    const legacy = `u_${u.userId}:ingest-${doc}.2`;
+    await tomb("ingest-status", mineIngest, u.userId, doc);
+    await tomb("chat-activity", mineChat, u.userId, chat);
+    await tomb("ingest-status", theirsIngest, u.userId, doc); // another handle's row: not this erasure's to touch
+    await tomb("ingest-status", legacy, u.userId, doc); // old format: the documented residual, left as it is
+    const row = async (model: string, id: string) =>
+      (
+        await db.owner.query(
+          "SELECT execution_id, scope, app_key, erased FROM read_model_state WHERE model_id = $1 AND execution_id = $2",
+          [model, id],
+        )
+      ).rows[0];
+    // The control: before the step the row names the handle, the user and the document at once (the link to remove).
+    expect(await row("ingest-status", mineIngest)).toMatchObject({ scope: u.userId, app_key: doc });
+
+    await sql.rows(request(tenantId, u.userId));
+    await sql.rows(request(tenantId, u.userId)); // idempotent: the second run has no handle and nothing to scrub
+
+    expect(await row("ingest-status", mineIngest)).toEqual({
+      execution_id: mineIngest,
+      scope: null,
+      app_key: null,
+      erased: true,
+    });
+    expect(await row("chat-activity", mineChat)).toMatchObject({
+      scope: null,
+      app_key: null,
+      erased: true,
+    });
+    expect(await row("ingest-status", theirsIngest)).toMatchObject({
+      scope: u.userId,
+      app_key: doc,
+    });
+    expect(await row("ingest-status", legacy)).toMatchObject({ scope: u.userId, app_key: doc });
+  });
+
+  it("rows: a live (not erased) read-model row is never blanked by the scrub", async () => {
+    const { tenantId, users } = await tenantWith("live@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = "q".repeat(26);
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const id = `h_${mine}:ingest-${"q".repeat(52)}.2`;
+    await db.owner.query(
+      "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ('ingest-status', $1, $2, $3, 0, '{}', false)",
+      [id, "0f8fad5b-d9cb-469f-a165-70867728950e", u.userId],
+    );
+    await sql.rows(request(tenantId, u.userId));
+    const { rows } = await db.owner.query(
+      "SELECT scope FROM read_model_state WHERE execution_id = $1",
+      [id],
+    );
+    expect(rows[0].scope).toBe(u.userId); // the readModels step purges live rows; the scrub only finishes tombstones
+  });
 });

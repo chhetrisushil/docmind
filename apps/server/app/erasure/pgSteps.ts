@@ -1,7 +1,10 @@
 import { eraseUserBlobs } from "@docmind/blob-store";
 import type { Pool } from "pg";
+import { CHAT_ACTIVITY_MODEL } from "../chats/sessions";
 import { pgSessionLock } from "../db/sessionLock";
 import { withTenant } from "../db/tenant";
+import { handleListerPrefixes, userPrefixes } from "../opaqueIds";
+import { INGEST_STATUS_MODEL } from "../status/model";
 import type { ErasureDeps } from "./eraser";
 import type { ErasureRequest } from "./types";
 
@@ -35,10 +38,20 @@ export function pgErasureLock(pool: Pool): ErasureDeps["lock"] {
 
 export function pgErasureSql(
   o: PgErasureOptions,
-): Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs"> {
+): Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf"> {
   const { app, loom } = o;
+  /** The user's `users.id_handle`, read under the tenant while the row exists; null when there is none (or no row). */
+  const handleOf = (req: ErasureRequest): Promise<string | null> =>
+    withTenant(app, req.tenantId, async (tx) => {
+      const { rows } = await tx.query<{ id_handle: string | null }>(
+        "SELECT id_handle FROM users WHERE id = $1 AND tenant_id = $2",
+        [req.userId, req.tenantId],
+      );
+      return rows[0]?.id_handle ?? null;
+    });
   return {
     lock: pgErasureLock(o.locks),
+    handleOf,
 
     async work(req) {
       return withTenant(app, req.tenantId, async (tx) => {
@@ -62,16 +75,32 @@ export function pgErasureSql(
     async rows(req: ErasureRequest) {
       // The throttle counters are not touched here: they are keyed by a hash of the email, which the request
       // transaction already replaced, so the route clears them (Task 170a).
-      // 1. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities, visual facts),
-      //    tags (with their links and suggestions) and chats (turn items, reasoning texts).
+      // 1. Loom retires the timers of terminal executions but has no prefix API: remove what is left, under both prefixes
+      //    (`u_<uuid>` for runs before the deploy, `h_<handle>` after). This runs BEFORE the user row goes, because the handle that
+      //    names the second prefix is on that row; a retry after the row is gone has no handle, and nothing left to find.
+      const handle = await handleOf(req);
+      for (const prefix of userPrefixes(req.userId, handle)) {
+        await loom.query("DELETE FROM loom.timers WHERE starts_with(execution_id, $1)", [prefix]);
+        await loom.query("DELETE FROM loom.leases WHERE starts_with(execution_id, $1)", [prefix]);
+      }
+      // 1b. The read-model tombstones under `h_<handle>` (left by the `readModels` step: `state` NULL, `erased`) still carry `scope` (the user
+      //     UUID) and `app_key` (the document or chat UUID) beside the handle: that row would link them for good. Scrub both while the handle
+      //     can still be read (it goes with the user row below). The loom role has UPDATE on the table and a FOR ALL policy (migration 0012);
+      //     only erased rows are touched, and a NULL scope is what the fold writes for a neutral row. Idempotent: a retry re-runs it.
+      if (handle !== null) {
+        const mine = handleListerPrefixes(handle);
+        await loom.query(
+          `UPDATE public.read_model_state SET scope = NULL, app_key = NULL
+            WHERE model_id = ANY($1::text[]) AND erased
+              AND (execution_id = $2 OR EXISTS (SELECT 1 FROM unnest($3::text[]) AS p WHERE starts_with(execution_id, p)))`,
+          [[INGEST_STATUS_MODEL, CHAT_ACTIVITY_MODEL], mine.exact, mine.starts],
+        );
+      }
+      // 2. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities, visual facts),
+      //    tags (with their links and suggestions) and chats (turn items, reasoning texts). The handle goes with it.
       await withTenant(app, req.tenantId, (tx) =>
         tx.query("DELETE FROM users WHERE id = $1 AND tenant_id = $2", [req.userId, req.tenantId]),
       );
-      // 2. Loom retires the timers of terminal executions but has no prefix API: remove what is left.
-      //    An execution id of the user always starts with `u_<uuid>` (subject.ts).
-      const prefix = `u_${req.userId}`;
-      await loom.query("DELETE FROM loom.timers WHERE starts_with(execution_id, $1)", [prefix]);
-      await loom.query("DELETE FROM loom.leases WHERE starts_with(execution_id, $1)", [prefix]);
       // 3. The personal tenant goes with its last user (D6). A tenant with other users stays.
       await app.query("SELECT public.docmind_delete_empty_tenant($1)", [req.tenantId]);
     },

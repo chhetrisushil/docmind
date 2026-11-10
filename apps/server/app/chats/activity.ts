@@ -159,13 +159,14 @@ export class ChatActivity {
 
   /** Wait for every fold scheduled so far. */
   /** User erasure: tombstones every chat-activity row of the user, the neutral rows of their ingest and title executions included. */
-  forgetUser(userId: string): Promise<number> {
+  forgetUser(userId: string, handle?: string | null): Promise<number> {
     return forgetUserRows(
       this.service,
       CHAT_ACTIVITY_MODEL,
       userId,
       this.o.userExecutions,
       this.o.source,
+      handle,
     );
   }
 

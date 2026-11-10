@@ -2,6 +2,8 @@ import { ConversationNotFoundError } from "@loom/conversation";
 import { InboxClosedError } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../chats/ids";
+import { legacyIds } from "../opaqueIds";
+import { testOpaqueIds } from "../opaqueIds/testing";
 import { executionIdFor } from "../subject";
 import { erasureDeps, requireKeyDestroyedProof } from "./wire";
 
@@ -181,5 +183,54 @@ describe("erasureDeps", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("cancels the chat title under both formats and stops both conversations when the user has a handle", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { calls, parts: p } = parts({ ids: t.ids });
+    const deps = erasureDeps(p);
+    await deps.cancelTitle(who, CHAT);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        `cancel:${legacyIds.chatTitle(USER, CHAT)}`,
+        `cancel:${user.chatTitle(CHAT)}`,
+      ]),
+    );
+    await deps.stopChat(who, CHAT);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        `stop:${legacyIds.conversation(USER, CHAT)}`,
+        `stop:${user.conversation(CHAT)}`,
+      ]),
+    );
+  });
+
+  it("a user with no handle cancels the old formats only, and a destroyed key reads as no new-format runs", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const none = parts({ ids: t.ids });
+    await erasureDeps(none.parts).cancelTitle(who, CHAT);
+    expect(none.calls.filter((c) => c.startsWith("cancel:"))).toEqual([
+      `cancel:${legacyIds.chatTitle(USER, CHAT)}`,
+    ]);
+    await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    await t.keys.destroy(USER);
+    t.ids.forgetSubject(USER);
+    const gone = parts({ ids: t.ids });
+    await expect(erasureDeps(gone.parts).cancelTitle(who, CHAT)).resolves.toBeUndefined();
+    expect(gone.calls.filter((c) => c.startsWith("cancel:"))).toEqual([
+      `cancel:${legacyIds.chatTitle(USER, CHAT)}`,
+    ]);
+  });
+
+  it("forgets the cached id key of every subject whose key it destroys", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({ ids: t.ids });
+    await erasureDeps(p).keys.destroy(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeUndefined();
   });
 });

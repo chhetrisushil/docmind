@@ -1,5 +1,7 @@
 import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { describe, expect, it } from "vitest";
+import { legacyIds, opaqueIds } from "./opaqueIds";
+import { testOpaqueIds } from "./opaqueIds/testing";
 import { executionIdFor, subjectOfExecution } from "./subject";
 
 const USER = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
@@ -129,5 +131,57 @@ describe("erasure subject of a visuals lineage line", () => {
     expect(
       subjectOfExecution({ executionId: `${prefix}turnvisuals-${USER.toUpperCase()}-${chat}-6` }),
     ).toBe("");
+  });
+});
+
+describe("erasure subject of a new-format id", () => {
+  const T = "00000000-0000-0000-0000-0000000000aa";
+  const DOC = "d4d4d4d4-d4d4-4d4d-8d4d-d4d4d4d4d4d4";
+  const CHAT = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
+  const P = "__loom_ui_lineage__:";
+
+  it("is h_<handle> for every shape, with no key and no cache, and the user for the old shapes beside them", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, T);
+    const u = await t.ids.ensureUser({ tenantId: T, userId: USER });
+    const subject = `h_${u.handle}`;
+    expect(opaqueIds.current()).toBeUndefined(); // nothing installed: a cold process
+    for (const executionId of [
+      u.ingest(DOC, 2),
+      `${u.ingest(DOC, 2)}::step#0`,
+      u.visualize(DOC, 3, 2),
+      u.suggestTags(DOC, 4),
+      u.turnVisualize(CHAT, 9),
+      u.chatTitle(CHAT),
+      u.conversation(CHAT),
+      `${u.conversation(CHAT)}~3`,
+      `${P}${u.documentLineage(DOC)}`,
+      `${P}${u.turnLineage(CHAT, 5)}`,
+    ])
+      expect(subjectOfExecution({ executionId })).toBe(subject);
+    expect(subjectOfExecution({ executionId: legacyIds.ingest(USER, DOC, 2) })).toBe(USER);
+    expect(subjectOfExecution({ executionId: `${P}${legacyIds.documentLineage(USER, DOC)}` })).toBe(
+      USER,
+    );
+  });
+
+  it("does not map a lookalike to a handle, and answers no subject for a bad lineage id", () => {
+    const H = "a".repeat(26);
+    const T52 = "q".repeat(52);
+    for (const executionId of [
+      `h_${H}x:ingest`,
+      `h_${H.slice(1)}:ingest`,
+      `h_${H.toUpperCase()}:x`,
+      `h_${H}-c-x`,
+      `H_${H}:x`,
+    ])
+      expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);
+    for (const id of [
+      `visuals-${H}`,
+      `visuals-${H}-${T52}x`,
+      `visuals-${H.toUpperCase()}-${T52}`,
+      `turnvisuals-${H}-${T52}`,
+    ])
+      expect(subjectOfExecution({ executionId: `${P}${id}` })).toBe("");
   });
 });

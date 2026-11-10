@@ -619,4 +619,52 @@ describe("Eraser", () => {
   it("names a parked shred", () => {
     expect(new ErasureParkedError().name).toBe("ErasureParkedError");
   });
+
+  it("erases the h_<handle> subject first, then the user, and destroys the handle's key before the row goes", async () => {
+    const { deps, calls } = fakeDeps([request()]);
+    const subjects: string[] = [];
+    deps.handleOf = async () => "a".repeat(26);
+    deps.eraseSubject = async (subject) => {
+      subjects.push(subject);
+      return { outcome: "erased" };
+    };
+    const destroyed: string[] = [];
+    deps.keys = {
+      destroy: async (subject) => void destroyed.push(subject),
+      wasDestroyed: async () => true,
+    };
+    const forgot: unknown[] = [];
+    deps.forgetStatus = async (u, h) => void forgot.push([u, h]);
+    await new Eraser(deps).run(USER);
+    expect(subjects).toEqual([`h_${"a".repeat(26)}`, USER]);
+    expect(destroyed).toEqual([`h_${"a".repeat(26)}`, USER]); // the handle's key in `rows`, the user's in `key`
+    expect(destroyed[0]).toBe(`h_${"a".repeat(26)}`);
+    expect(forgot).toEqual([[USER, "a".repeat(26)]]);
+    expect(calls).toContain("rows");
+  });
+
+  it("a parked h_ subject stops the work again, never touches the user's subject meanwhile, and retries from the same subject", async () => {
+    const { deps } = fakeDeps([request()]);
+    const asked: string[] = [];
+    const answers: ("parked" | "erased")[] = ["parked", "erased", "erased"];
+    deps.handleOf = async () => "a".repeat(26);
+    deps.eraseSubject = async (subject) => {
+      asked.push(subject);
+      return { outcome: answers.shift() ?? "erased" };
+    };
+    await new Eraser(deps).run(USER);
+    const handle = `h_${"a".repeat(26)}`;
+    expect(asked).toEqual([handle, handle, USER]);
+  });
+
+  it("without a handle only the user's subject is erased", async () => {
+    const { deps } = fakeDeps([request()]);
+    const subjects: string[] = [];
+    deps.eraseSubject = async (subject) => {
+      subjects.push(subject);
+      return { outcome: "erased" };
+    };
+    await new Eraser(deps).run(USER);
+    expect(subjects).toEqual([USER]);
+  });
 });

@@ -77,3 +77,10 @@ export const opaqueIds = {
     return (await installed.ensureHandle(handle)) !== null;
   },
 };
+export {
+  USER_ID_PREFIXES,
+  handleListerPrefixes,
+  isOwnedBy,
+  listerPrefixes,
+  userPrefixes,
+} from "./prefixes";

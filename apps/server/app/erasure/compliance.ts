@@ -2,6 +2,7 @@ import type { Shredder, SubjectIndex } from "@loom/compliance";
 import type { EventEnvelope } from "@loom/core";
 import type { EventStore } from "@loom/event-runtime";
 import { type KeyStore, type ShredOptions, shredSubject } from "@loom/plugin-crypto";
+import { USER_ID_PREFIXES } from "../opaqueIds";
 import { subjectOfExecution } from "../subject";
 
 /** What erasure needs from the storage layer: the key store, and the raw (unwrapped) event and snapshot stores. */
@@ -61,20 +62,20 @@ export function complianceConfig({ keys, raw }: ErasureWiring) {
 }
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-/** A user or execution id: any UUID, or a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`). */
-const HAS_ID = new RegExp(`${UUID.source}|\\bu_[0-9A-Za-z_-]{6,}`, "i");
+/** A user or execution id: any UUID, a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`) or an `h_…` id (`h_<handle>` and its `:` and `.c-` forms). */
+const HAS_ID = new RegExp(`${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}`, "i");
 const ID = "<id>";
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
 /**
  * Replaces every id in a Loom notice and keeps the rest, so an operator still reads what happened
- * (`execution "<id>": REFUSED ... key-unavailable ...`): a whole `u_…` execution id (with its `:name`, `.c-<uuid>` or `.n`
+ * (`execution "<id>": REFUSED ... key-unavailable ...`): a whole `u_…` or `h_…` execution id (with its `:name`, `.c-<uuid>` or `.n`
  * suffix), the quoted execution id after the word `execution`, any bare UUID, and any email-shaped string (`<email>`).
  */
 export function redactIds(message: string): string {
   return message
     .replace(/(\bexecution\s+)"[^"]*"/gi, `$1"${ID}"`)
-    .replace(/\bu_[0-9A-Za-z_-]{6,}[^\s"',;)\]]*/g, ID)
+    .replace(/\b[uh]_[0-9A-Za-z_-]{6,}[^\s"',;)\]]*/g, ID)
     .replace(new RegExp(UUID.source, "gi"), ID)
     .replace(EMAIL, "<email>");
 }
@@ -89,8 +90,6 @@ export const warningFor = (message: string): string => {
   return HAS_ID.test(out) ? "warning" : out;
 };
 
-/** User-owned execution ids all start with this; the log lists ids in code-point order, so they are one contiguous run. */
-const USER_PREFIX = "u_";
 export const HYDRATE_PAGE = 500;
 
 const bootstrapOf = (executionId: string): EventEnvelope => ({
@@ -106,8 +105,8 @@ const bootstrapOf = (executionId: string): EventEnvelope => ({
 /**
  * Rebuilds Loom's subject index after a restart (it is fed live by `onEvent` only, so a fresh process
  * has none of the executions it did not start, and `eraseSubject` would answer `unknown` and shred
- * nothing: finding E4). Lists the `u_…` executions, one page at a time, and hands the index a synthetic
- * bootstrap event for each. The resolver reads the id alone, so no event is read and nothing is
+ * nothing: finding E4). Lists the `u_…` executions and then the `h_…` executions, one page at a time, and hands the index a synthetic
+ * bootstrap event for each. The resolver reads the id alone (no key, no cache: an `h_<H>` id's subject is `h_<H>`), so no event is read and nothing is
  * decrypted; a log whose first events were compacted away hydrates the same. Safe to call again and
  * alongside the live feed. Returns how many user executions it attributed.
  */
@@ -119,16 +118,23 @@ export async function hydrateSubjectIndex(
   if (raw.listExecutionsPage === undefined)
     throw new TypeError("hydrateSubjectIndex: the event store cannot list executions");
   let attributed = 0;
-  let cursor: string = USER_PREFIX; // the cursor is strictly-after: every `u_…` id sorts after `u_`
-  for (;;) {
-    const page = await raw.listExecutionsPage({ cursor, limit: pageSize });
-    for (const executionId of page.executionIds) {
-      if (!executionId.startsWith(USER_PREFIX)) return attributed; // past the user range
-      if (userSubjectOf({ executionId }) === undefined) continue; // `u_` but not a user execution id
-      index.handleEvent(bootstrapOf(executionId));
-      attributed += 1;
+  for (const prefix of USER_ID_PREFIXES) {
+    let cursor: string = prefix; // the cursor is strictly-after: every id of the run sorts after the bare prefix
+    for (;;) {
+      const page = await raw.listExecutionsPage({ cursor, limit: pageSize });
+      let pastRun = false;
+      for (const executionId of page.executionIds) {
+        if (!executionId.startsWith(prefix)) {
+          pastRun = true; // past this prefix's range
+          break;
+        }
+        if (userSubjectOf({ executionId }) === undefined) continue; // the prefix, but not a user execution id
+        index.handleEvent(bootstrapOf(executionId));
+        attributed += 1;
+      }
+      if (pastRun || page.nextCursor === undefined) break;
+      cursor = page.nextCursor;
     }
-    if (page.nextCursor === undefined) return attributed;
-    cursor = page.nextCursor;
   }
+  return attributed;
 }
