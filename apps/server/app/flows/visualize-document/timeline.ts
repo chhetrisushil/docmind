@@ -31,9 +31,11 @@ export interface TimelineDraft {
   chunkIds: string[];
 }
 
-/** The raw events of the answer's `timeline` field: its `events` list when it is one, at most 200 items; else none. */
-export const rawEventsOf = (field: unknown): unknown[] =>
-  isRecord(field) && Array.isArray(field.events) ? field.events.slice(0, MAX_RAW_ITEMS) : [];
+/** The raw events of the answer's `timeline` field: its `events` list, or the field itself when it is a bare list; at most 200 items; else none. */
+export const rawEventsOf = (field: unknown): unknown[] => {
+  const list = Array.isArray(field) ? field : isRecord(field) ? field.events : undefined;
+  return Array.isArray(list) ? list.slice(0, MAX_RAW_ITEMS) : [];
+};
 
 /**
  * The timeline of a document from the model's raw events, or null (no timeline). Every bad item is dropped on its own:

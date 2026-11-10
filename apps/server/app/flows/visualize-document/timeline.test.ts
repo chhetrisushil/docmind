@@ -186,8 +186,11 @@ describe("buildTimeline", () => {
 describe("rawEventsOf", () => {
   it("reads the events list of a timeline field, and nothing from anything else", () => {
     expect(rawEventsOf({ events: [1, 2] })).toEqual([1, 2]);
-    for (const v of [undefined, null, "x", [], { events: "x" }, { events: null }, {}])
+    for (const v of [undefined, null, "x", { events: "x" }, { events: null }, {}])
       expect(rawEventsOf(v)).toEqual([]);
+  });
+  it("reads a bare list as the events", () => {
+    expect(rawEventsOf([1, 2])).toEqual([1, 2]);
   });
   it("hands over at most 200 items", () => {
     expect(rawEventsOf({ events: Array.from({ length: 500 }, (_, i) => i) })).toHaveLength(200);

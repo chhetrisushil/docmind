@@ -14,10 +14,10 @@ const aggregatesAsk = (
   "when" is the date exactly as the document writes it. "date" is that same date as YYYY, YYYY-Qn, YYYY-MM or YYYY-MM-DD, at the precision the document gives (a quarter is YYYY-Q1 to YYYY-Q4).
   Never infer, compute or complete a date. Leave out an event whose date is relative ("last year", "next month", "recently") or missing.
   "label" is a short description of the event, at most 80 characters.
-- "relations": {"links":[{"from","rel","to","chunkIds":[...]}]}, how the parties the document names relate to each other, at most ${links}.
-  "from" and "to" are parties exactly as the document names them. "rel" is a short verb phrase of at most 40 characters ("acquired", "leads", "reports to").
+- "relations": {"links":[{"from","rel","to","chunkIds":[...]}]}, the relationships between the people, organisations, projects, products and places the document names, each as subject → short verb phrase → object, at most ${links}.
+  "from" and "to" are those names exactly as the document writes them. "rel" is a short verb phrase of at most 40 characters ("acquired", "leads", "reports to").
 Cite at most 2 passage ids in "chunkIds" for each event and each link.
-Copy dates, names and phrases as the document states them. Leave "timeline" out when fewer than 3 events qualify and "relations" out when fewer than 3 links qualify.`;
+Copy dates, names and phrases as the document states them.`;
 /** The most events and links one document may keep (the normalisers' caps); a window is asked for its share of them. */
 export const ASKED_EVENTS = 40;
 export const ASKED_LINKS = 30;

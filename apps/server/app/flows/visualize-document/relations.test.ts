@@ -150,8 +150,11 @@ describe("buildRelations", () => {
 describe("rawLinksOf", () => {
   it("reads the links list of a relations field, and nothing from anything else", () => {
     expect(rawLinksOf({ links: [1, 2] })).toEqual([1, 2]);
-    for (const v of [undefined, null, "x", [], { links: "x" }, {}])
-      expect(rawLinksOf(v)).toEqual([]);
+    for (const v of [undefined, null, "x", { links: "x" }, {}]) expect(rawLinksOf(v)).toEqual([]);
+  });
+  it("reads a bare list as the links", () => {
+    expect(rawLinksOf([1, 2])).toEqual([1, 2]);
+    expect(rawLinksOf(Array.from({ length: 500 }, (_, i) => i))).toHaveLength(200);
   });
   it("hands over at most 200 items", () => {
     expect(rawLinksOf({ links: Array.from({ length: 500 }, (_, i) => i) })).toHaveLength(200);

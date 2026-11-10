@@ -32,9 +32,11 @@ export interface RelationsDraft {
   chunkIds: string[];
 }
 
-/** The raw links of the answer's `relations` field: its `links` list when it is one, at most 200 items; else none. */
-export const rawLinksOf = (field: unknown): unknown[] =>
-  isRecord(field) && Array.isArray(field.links) ? field.links.slice(0, MAX_RAW_ITEMS) : [];
+/** The raw links of the answer's `relations` field: its `links` list, or the field itself when it is a bare list; at most 200 items; else none. */
+export const rawLinksOf = (field: unknown): unknown[] => {
+  const list = Array.isArray(field) ? field : isRecord(field) ? field.links : undefined;
+  return Array.isArray(list) ? list.slice(0, MAX_RAW_ITEMS) : [];
+};
 
 /**
  * The relationships of a document from the model's raw links, or null (no relations). Every bad item is dropped on its
