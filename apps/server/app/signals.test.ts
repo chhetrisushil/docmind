@@ -7,13 +7,22 @@ function gate() {
 }
 
 describe("createStopGate", () => {
-  it("exits non-zero at once on a signal during setup, with a fixed log line", () => {
-    const { deps, gate: g } = gate();
-    g.onSignal();
-    expect(deps.exit).toHaveBeenCalledWith(1);
-    expect(deps.log).toHaveBeenCalledWith("docmind server stopped during startup");
-    expect(deps.forceExitAfter).not.toHaveBeenCalled();
-  });
+  // The container smoke test (infra/smoke-image.sh) accepts 0 or 143 for a stop during boot: exit 1 means a failed
+  // boot, and a SIGTERM that lands after the handlers are registered but during setup must not read as one.
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)(
+    "exits at once on a %s during setup with the signal's status (%i), never 1, with a fixed log line",
+    (signal, code) => {
+      const { deps, gate: g } = gate();
+      g.onSignal(signal);
+      expect(deps.exit).toHaveBeenCalledTimes(1);
+      expect(deps.exit).toHaveBeenCalledWith(code);
+      expect(deps.log).toHaveBeenCalledWith("docmind server stopped during startup");
+      expect(deps.forceExitAfter).not.toHaveBeenCalled();
+    },
+  );
 
   it("defers the ordered stop to the end of the boot, arming the deadline from the signal", () => {
     const { deps, gate: g } = gate();
