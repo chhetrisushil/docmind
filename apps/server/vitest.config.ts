@@ -9,6 +9,7 @@ export default defineConfig({
     // tests load it from source.
     // The vector-pg kit and the package entry must share one module graph, or VectorDimensionError
     // would be two classes (the CommonJS build and the source), so the entry loads from source too.
+    // @docmind/contracts and @docmind/experiences load from source too, so a suite never reads a stale dist.
     alias: [
       {
         find: "@docmind/auth/testing",
@@ -25,6 +26,14 @@ export default defineConfig({
       {
         find: /^@docmind\/vector-pg$/,
         replacement: resolve(__dirname, "../../packages/vector-pg/src/index.ts"),
+      },
+      {
+        find: /^@docmind\/contracts$/,
+        replacement: resolve(__dirname, "../../packages/contracts/src/index.ts"),
+      },
+      {
+        find: /^@docmind\/experiences$/,
+        replacement: resolve(__dirname, "../../packages/experiences/src/index.ts"),
       },
     ],
   },

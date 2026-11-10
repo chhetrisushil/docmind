@@ -1,12 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-// @docmind/contracts is CommonJS; the browser takes its TypeScript source instead.
+// @docmind/contracts and @docmind/experiences are CommonJS builds; tests take their TypeScript source instead.
 const contracts = fileURLToPath(new URL("../../packages/contracts/src/index.ts", import.meta.url));
+const experiences = fileURLToPath(
+  new URL("../../packages/experiences/src/index.ts", import.meta.url),
+);
 
 export default defineConfig({
   resolve: {
-    alias: { "@docmind/contracts": contracts },
+    alias: { "@docmind/contracts": contracts, "@docmind/experiences": experiences },
     // loom-ui's elements and ours must share one Lit.
     dedupe: ["lit"],
   },
