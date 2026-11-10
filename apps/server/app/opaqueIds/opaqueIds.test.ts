@@ -468,11 +468,7 @@ describe("review fixes", () => {
   });
 
   it("forget during an in-flight ensureHandle: nothing is cached afterwards (1)", async () => {
-    const warm = await userIds();
     const keys = new GatedKeyStore();
-    await keys.getOrCreate(U);
-    const dek = (await keys.get(U)) as Buffer;
-    expect(dek).not.toBeNull();
     const t = testOpaqueIds();
     t.store.add(U, T);
     const first = new OpaqueIds(keys, t.store);
@@ -489,7 +485,6 @@ describe("review fixes", () => {
     expect(await pending).toBeNull();
     expect(cold.cached(U)).toBeUndefined();
     expect(cold.knows(minted.handle)).toBe(false);
-    expect(warm.ids).toBeDefined();
   });
 
   it("a key-store outage is FieldKeyStoreError with no user text, never a fallback (2)", async () => {
@@ -559,7 +554,7 @@ describe("review fixes", () => {
     await expect(other.ids.warm()).rejects.toBeInstanceOf(HandleStoreError);
   });
 
-  it("ensureHandle checks the shape first and remembers misses until an insert (5)", async () => {
+  it("ensureHandle checks the shape first and remembers an absent handle (5)", async () => {
     const t = testOpaqueIds();
     t.store.add(U, T);
     let lookups = 0;
@@ -575,11 +570,78 @@ describe("review fixes", () => {
     expect(await t.ids.ensureHandle(absent)).toBeNull();
     expect(await t.ids.ensureHandle(absent)).toBeNull();
     expect(lookups).toBe(1);
-    // minting the handle clears its miss
-    const minted = await t.ids.ensureUser({ tenantId: T, userId: U });
-    t.ids.forget(U);
-    expect(await t.ids.ensureHandle("a".repeat(26))).toBeNull();
-    expect((await t.ids.ensureHandle(minted.handle))?.handle).toBe(minted.handle);
+  });
+
+  it("minting a user clears the recorded miss of their handle (5)", async () => {
+    const keys = new InMemoryKeyStore();
+    const other = new OpaqueIds(keys, testOpaqueIds().store);
+    const handle = (await other.ensureUser({ tenantId: T, userId: U })).handle;
+    const t = testOpaqueIds();
+    const ids = new OpaqueIds(keys, t.store);
+    t.store.add(U, T);
+    expect(await ids.ensureHandle(handle)).toBeNull(); // recorded as a miss
+    await ids.ensureUser({ tenantId: T, userId: U }); // claims the handle: clears the miss
+    ids.forget(U);
+    expect((await ids.ensureHandle(handle))?.handle).toBe(handle);
+  });
+
+  it("a handle whose user has no key is recorded as a miss: later calls skip the store and the key store (5)", async () => {
+    const keys = new GatedKeyStore();
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const handle = (await new OpaqueIds(keys, t.store).ensureUser({ tenantId: T, userId: U }))
+      .handle;
+    await keys.destroy(U);
+    let lookups = 0;
+    let reads = 0;
+    const userOf = t.store.userOf.bind(t.store);
+    t.store.userOf = async (h) => {
+      lookups += 1;
+      return userOf(h);
+    };
+    const get = keys.get.bind(keys);
+    keys.get = async (s) => {
+      reads += 1;
+      return get(s);
+    };
+    const cold = new OpaqueIds(keys, t.store);
+    expect(await cold.ensureHandle(handle)).toBeNull();
+    expect(await cold.ensureHandle(handle)).toBeNull();
+    expect([lookups, reads]).toEqual([1, 1]);
+  });
+
+  it("forgetSubject of an h_ subject guards an in-flight ensureHandle that has not cached yet (2)", async () => {
+    const keys = new GatedKeyStore();
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const minted = await new OpaqueIds(keys, t.store).ensureUser({ tenantId: T, userId: U });
+    const cold = new OpaqueIds(keys, t.store);
+    let open: () => void = () => {};
+    keys.gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const pending = cold.ensureHandle(minted.handle);
+    await new Promise((r) => setTimeout(r, 5));
+    cold.forgetSubject(`h_${minted.handle}`);
+    open();
+    expect(await pending).toBeNull();
+    expect(cold.cached(U)).toBeUndefined();
+    expect(cold.knows(minted.handle)).toBe(false);
+  });
+
+  it("forget keeps no per-user state once nothing is in flight (3)", async () => {
+    const { ids } = await userIds();
+    for (let i = 0; i < 50; i++)
+      ids.forget(`00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    ids.forgetSubject(`h_${"a".repeat(26)}`);
+    expect((ids as unknown as { fetches: Map<string, unknown> }).fetches.size).toBe(0);
+  });
+
+  it("a user id stays strict, a document or chat id is lower-cased (4)", () => {
+    const hexUser = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    expect(() => legacyIds.ingest(hexUser.toUpperCase(), D, 2)).toThrow(RangeError);
+    expect(() => legacyIds.conversation(hexUser.toUpperCase(), C)).toThrow(RangeError);
+    expect(legacyIds.ingest(U, D.toUpperCase(), 2)).toBe(legacyIds.ingest(U, D, 2));
   });
 
   it("handleOf and handleOfId strip the lineage stream prefix like subjectOf (6)", async () => {
@@ -594,8 +656,6 @@ describe("review fixes", () => {
     const { userIds: u } = await userIds();
     expect(u.ingest(D.toUpperCase(), 2)).toBe(u.ingest(D, 2));
     expect(u.chatTitle(C.toUpperCase())).toBe(u.chatTitle(C));
-    expect(legacyIds.suggestTags(U.toUpperCase(), D.toUpperCase(), 1)).toBe(
-      legacyIds.suggestTags(U, D, 1),
-    );
+    expect(legacyIds.suggestTags(U, D.toUpperCase(), 1)).toBe(legacyIds.suggestTags(U, D, 1));
   });
 });
