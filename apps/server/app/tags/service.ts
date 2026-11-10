@@ -3,6 +3,7 @@ import {
   type DocumentTag,
   MAX_TAGS_PER_DOCUMENT,
   MAX_TAGS_PER_USER,
+  MAX_TAG_SUGGESTIONS,
   cleanTagName,
   normaliseTagName,
 } from "@docmind/contracts";
@@ -131,6 +132,7 @@ export class TagService {
     };
   }
 
+  // Deliberate: one undecryptable row fails the whole read (as a document title does), so corruption is loud, never a silent gap.
   private async open(o: TagOwner, rows: readonly NameRow[]): Promise<DocumentTag[]> {
     const cipher = this.fields.forUser(o.userId);
     const named = await Promise.all(
@@ -200,6 +202,7 @@ export class TagService {
 
   async remove(o: TagOwner, id: string): Promise<boolean> {
     return withTenant(this.pool, o.tenantId, async (tx) => {
+      await lockOwner(tx, o); // serialised with the writers: a link in flight sees the tag gone (never a raw 23503)
       const r = await tx.query(
         "DELETE FROM tags WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
         [id, o.userId, o.tenantId],
@@ -241,14 +244,14 @@ export class TagService {
   private async readSuggestions(
     o: TagOwner,
     documentId: string,
-  ): Promise<{ names: string[]; stamp: string | null } | null> {
+  ): Promise<{ names: string[]; raw: unknown } | null> {
     const row = await withTenant(
       this.pool,
       o.tenantId,
       async (tx) =>
         (
-          await tx.query<{ names_enc: unknown; stamp: string | null }>(
-            `SELECT s.names_enc, s.updated_at::text AS stamp
+          await tx.query<{ names_enc: unknown }>(
+            `SELECT s.names_enc
                FROM documents d
                LEFT JOIN document_tag_suggestions s
                  ON s.document_id = d.id AND s.owner_id = d.owner_id AND s.tenant_id = d.tenant_id
@@ -258,13 +261,14 @@ export class TagService {
         ).rows[0],
     );
     if (!row) return null;
-    if (row.names_enc == null) return { names: [], stamp: null };
+    if (row.names_enc == null) return { names: [], raw: null };
     const opened = await this.fields
       .forUser(o.userId)
       .open(suggestionsBind(documentId), row.names_enc);
-    return { names: parseSuggestedTags(opened), stamp: row.stamp };
+    return { names: parseSuggestedTags(opened), raw: row.names_enc };
   }
 
+  // Two reads, not one snapshot: a racing accept may briefly show a name as both tag and suggestion; the linked filter hides it.
   /** The document's tags and its open suggestions (those not already linked); null when it is not the owner's. */
   async detail(o: TagOwner, documentId: string): Promise<DocumentTagsView | null> {
     const stored = await this.readSuggestions(o, documentId);
@@ -284,53 +288,69 @@ export class TagService {
   ): Promise<DocumentTagsView | null> {
     const ids = [...new Set(tagIds.map((t) => t.toLowerCase()))];
     if (ids.length > MAX_TAGS_PER_DOCUMENT) throw new TagLimitError("document");
-    const found = await withTenant(this.pool, o.tenantId, async (tx) => {
-      await lockOwner(tx, o);
-      if (!(await lockDocument(tx, o, documentId))) return false;
-      const owned = await tx.query<{ n: number }>(
-        "SELECT count(*)::int AS n FROM tags WHERE owner_id = $1 AND tenant_id = $2 AND id = ANY($3::uuid[])",
-        [o.userId, o.tenantId, ids],
-      );
-      if ((owned.rows[0] as { n: number }).n !== ids.length) throw new UnknownTagError();
-      await tx.query(
-        "DELETE FROM document_tags WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3",
-        [documentId, o.userId, o.tenantId],
-      );
-      await tx.query(
-        `INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id)
+    const found = await this.guardFk(() =>
+      withTenant(this.pool, o.tenantId, async (tx) => {
+        await lockOwner(tx, o);
+        if (!(await lockDocument(tx, o, documentId))) return false;
+        const owned = await tx.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM tags WHERE owner_id = $1 AND tenant_id = $2 AND id = ANY($3::uuid[])",
+          [o.userId, o.tenantId, ids],
+        );
+        if ((owned.rows[0] as { n: number }).n !== ids.length) throw new UnknownTagError();
+        await tx.query(
+          "DELETE FROM document_tags WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3",
+          [documentId, o.userId, o.tenantId],
+        );
+        await tx.query(
+          `INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id)
          SELECT $1, t, $2, $3 FROM unnest($4::uuid[]) AS t`,
-        [documentId, o.tenantId, o.userId, ids],
-      );
-      return true;
-    });
+          [documentId, o.tenantId, o.userId, ids],
+        );
+        return true;
+      }),
+    );
     return found ? this.detail(o, documentId) : null;
   }
 
   /** Links the tag named `raw`, creating it if the owner has none. False when the document is not the owner's. */
   private async link(o: TagOwner, documentId: string, raw: string): Promise<boolean> {
     const p = await this.prepare(o, raw);
-    return withTenant(this.pool, o.tenantId, async (tx) => {
-      await lockOwner(tx, o);
-      if (!(await lockDocument(tx, o, documentId))) return false;
-      const { id } = await upsertTag(tx, o, p);
-      const has = await tx.query(
-        "SELECT 1 FROM document_tags WHERE document_id = $1 AND tag_id = $2 AND owner_id = $3 AND tenant_id = $4",
-        [documentId, id, o.userId, o.tenantId],
-      );
-      if (has.rowCount === 0) {
-        const n = await tx.query<{ n: number }>(
-          "SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3",
-          [documentId, o.userId, o.tenantId],
+    return this.guardFk(() =>
+      withTenant(this.pool, o.tenantId, async (tx) => {
+        await lockOwner(tx, o);
+        if (!(await lockDocument(tx, o, documentId))) return false;
+        const { id } = await upsertTag(tx, o, p);
+        const has = await tx.query(
+          "SELECT 1 FROM document_tags WHERE document_id = $1 AND tag_id = $2 AND owner_id = $3 AND tenant_id = $4",
+          [documentId, id, o.userId, o.tenantId],
         );
-        if ((n.rows[0] as { n: number }).n >= MAX_TAGS_PER_DOCUMENT)
-          throw new TagLimitError("document");
-        await tx.query(
-          "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) VALUES ($1, $2, $3, $4)",
-          [documentId, id, o.tenantId, o.userId],
-        );
-      }
-      return true;
-    });
+        if (has.rowCount === 0) {
+          const n = await tx.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3",
+            [documentId, o.userId, o.tenantId],
+          );
+          if ((n.rows[0] as { n: number }).n >= MAX_TAGS_PER_DOCUMENT)
+            throw new TagLimitError("document");
+          await tx.query(
+            "INSERT INTO document_tags (document_id, tag_id, tenant_id, owner_id) VALUES ($1, $2, $3, $4)",
+            [documentId, id, o.tenantId, o.userId],
+          );
+        }
+        return true;
+      }),
+    );
+  }
+
+  /** A foreign-key failure means a tag (or the document) was deleted under us: answer it as a domain result, never a raw pg error. */
+  private async guardFk(run: () => Promise<boolean>): Promise<boolean> {
+    try {
+      return await run();
+    } catch (err) {
+      const e = err as { code?: unknown; constraint?: unknown };
+      if (e.code !== "23503") throw err;
+      if (e.constraint === "document_tags_tag_fkey") throw new UnknownTagError();
+      return false; // the document went away
+    }
   }
 
   async addToDocument(
@@ -394,10 +414,21 @@ export class TagService {
     ref: TagOwner & { documentId: string },
     names: readonly string[],
   ): Promise<boolean> {
+    // The storage boundary keeps the spec's "up to 5 cleaned names" whatever the caller passes.
+    const seen = new Set<string>();
+    const kept: string[] = [];
+    for (const raw of names) {
+      const name = cleanTagName(raw);
+      const key = name === null ? null : normaliseTagName(name);
+      if (name === null || key === null || seen.has(key)) continue;
+      seen.add(key);
+      kept.push(name);
+      if (kept.length === MAX_TAG_SUGGESTIONS) break;
+    }
     const sealed =
-      names.length === 0
+      kept.length === 0
         ? null
-        : await this.fields.forUser(ref.userId).seal(suggestionsBind(ref.documentId), [...names]);
+        : await this.fields.forUser(ref.userId).seal(suggestionsBind(ref.documentId), kept);
     return withTenant(this.pool, ref.tenantId, async (tx) => {
       if (sealed === null) {
         const exists = await lockDocumentRead(tx, ref);
@@ -407,8 +438,10 @@ export class TagService {
         );
         return exists;
       }
-      // The SELECT names owner and tenant, and the composite foreign key ties the row to that document, so the conflict
-      // target (the document's own row) can only ever be the owner's.
+      // Locked first, so a concurrent delete of the document waits and then cascades this row (no raw 23503). The SELECT
+      // names owner and tenant, and the composite foreign key ties the row to that document, so the conflict target (the
+      // document's own row) can only ever be the owner's.
+      if (!(await lockDocument(tx, ref, ref.documentId))) return false;
       const r = await tx.query(
         `INSERT INTO document_tag_suggestions (document_id, tenant_id, owner_id, names_enc)
          SELECT d.id, d.tenant_id, d.owner_id, $4::jsonb
@@ -420,13 +453,13 @@ export class TagService {
     });
   }
 
-  /** Removes one name from the suggestions with a compare-and-set on the row's timestamp (no key call under a lock); gives up after 3 lost races. */
+  /** Removes one name from the suggestions with a compare-and-set on the stored envelope (it carries a fresh nonce per seal, so it is a true version; no key call under a lock). Throws after 5 lost races rather than answer success with the name still suggested. */
   private async removeSuggestion(o: TagOwner, documentId: string, raw: string): Promise<void> {
     const norm = normaliseTagName(raw);
     if (norm === null) return;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 5; attempt++) {
       const cur = await this.readSuggestions(o, documentId);
-      if (!cur || cur.stamp === null) return;
+      if (!cur || cur.raw === null) return;
       const kept = cur.names.filter((n) => normaliseTagName(n) !== norm);
       if (kept.length === cur.names.length) return;
       const sealed =
@@ -438,18 +471,19 @@ export class TagService {
           sealed === null
             ? await tx.query(
                 `DELETE FROM document_tag_suggestions
-                  WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3 AND updated_at::text = $4`,
-                [documentId, o.userId, o.tenantId, cur.stamp],
+                  WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3 AND names_enc = $4::jsonb`,
+                [documentId, o.userId, o.tenantId, JSON.stringify(cur.raw)],
               )
             : await tx.query(
                 `UPDATE document_tag_suggestions SET names_enc = $5::jsonb, updated_at = now()
-                  WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3 AND updated_at::text = $4`,
-                [documentId, o.userId, o.tenantId, cur.stamp, JSON.stringify(sealed)],
+                  WHERE document_id = $1 AND owner_id = $2 AND tenant_id = $3 AND names_enc = $4::jsonb`,
+                [documentId, o.userId, o.tenantId, JSON.stringify(cur.raw), JSON.stringify(sealed)],
               );
         return r.rowCount === 1;
       });
       if (done) return;
     }
+    throw new Error("tag suggestion update contended");
   }
 
   async accept(o: TagOwner, documentId: string, raw: string): Promise<DocumentTagsView | null> {
