@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { TurnSettledEvent } from "@loom/conversation";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../../chats/ids";
+import { OpaqueIds, opaqueIds } from "../../opaqueIds";
+import { testOpaqueIds } from "../../opaqueIds/testing";
 import type { TurnRead } from "./readTurn";
 import { type TriggerDeps, turnToVisualize } from "./trigger";
 
@@ -79,6 +81,41 @@ describe("turnToVisualize", () => {
     expect(await turnToVisualize(event(), deps({ backlog: () => 19 }))).not.toBeNull();
     const d = deps({ backlog: () => 20 });
     expect(await turnToVisualize(event(), d)).toBeNull();
+    expect(d.tenantOf).not.toHaveBeenCalled();
+  });
+});
+
+describe("turnToVisualize with a new-format conversation", () => {
+  afterEach(() => opaqueIds.install(undefined));
+
+  it("fills the key cache for the conversation's user before it reads the chat", async () => {
+    const t = testOpaqueIds();
+    t.store.add(user, tenant);
+    const u = await t.ids.ensureUser({ tenantId: tenant, userId: user });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // cold
+    const conversationId = u.conversation(chat);
+    const d = deps();
+    expect(
+      await turnToVisualize(event({ conversationId, executionId: conversationId }), d),
+    ).toEqual({
+      tenantId: tenant,
+      userId: user,
+      chatId: chat,
+      ord: 4,
+    });
+    expect(d.tenantOf).toHaveBeenCalledWith(user, chat);
+  });
+
+  it("answers null for a conversation whose user is unknown (erased), and never reads a chat for it", async () => {
+    const t = testOpaqueIds();
+    t.store.add(user, tenant);
+    const u = await t.ids.ensureUser({ tenantId: tenant, userId: user });
+    opaqueIds.install(testOpaqueIds().ids); // a store that has never heard of this handle
+    const conversationId = u.conversation(chat);
+    const d = deps();
+    expect(
+      await turnToVisualize(event({ conversationId, executionId: conversationId }), d),
+    ).toBeNull();
     expect(d.tenantOf).not.toHaveBeenCalled();
   });
 });

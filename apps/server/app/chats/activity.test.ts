@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { EventEnvelope } from "@loom/core";
 import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { OpaqueIds, opaqueIds } from "../opaqueIds";
+import { testOpaqueIds } from "../opaqueIds/testing";
 import { MemoryLog, evt } from "../status/testing";
 import { flowSteps, statusSensitive } from "../status/wire";
 import {
@@ -321,4 +323,23 @@ describe("ChatActivity", () => {
       expect(rows.map((r) => r.state)).toEqual([{ n: 1, o: 1, at: TS + 0.5 }]);
     },
   );
+});
+
+describe("ChatActivity with new-format conversation ids", () => {
+  afterEach(() => opaqueIds.install(undefined));
+
+  it("folds a conversation on a cold cache once the user's key is cached, under the chat id and its owner", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: U });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // cold
+    const conv = user.conversation(C);
+    const s = await setup();
+    s.feed(evt(conv, 0, "EXECUTION_STARTED", { input: {} }), record(conv, 1, 1, "user"));
+    await s.activity.close();
+    const rows = await s.rows();
+    expect(rows.map((r) => r.executionId)).toEqual([conv]);
+    expect(rows[0]?.state.n).toBeGreaterThan(0);
+    expect(s.errors).toEqual([]);
+  });
 });

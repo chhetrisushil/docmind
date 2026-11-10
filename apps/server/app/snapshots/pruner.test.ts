@@ -146,6 +146,51 @@ describe("sweepChatSnapshots", () => {
   });
 });
 
+/** A log that lists a sorted array with Loom's real cursor semantics (strictly after the cursor, code-point order), as `compliance.test.ts` `listOnly` does. */
+const sortedLog = (ids: string[]) => {
+  const sorted = [...ids].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+  return vi.fn(async ({ cursor, limit }: { cursor?: string; limit?: number }) => {
+    const after = cursor === undefined ? sorted : sorted.filter((id) => id > cursor);
+    const executionIds = after.slice(0, limit ?? 1000);
+    return {
+      executionIds,
+      ...(after.length > executionIds.length && {
+        nextCursor: executionIds[executionIds.length - 1] as string,
+      }),
+    };
+  });
+};
+
+describe("sweepChatSnapshots over both id formats", () => {
+  it("walks the u_ range and then the h_ range of a real sorted log, and prunes the conversations of both (every generation) and nothing else", async () => {
+    const H = "a".repeat(26);
+    const T52 = "q".repeat(52);
+    const conversation = `h_${H}.c-${T52}`;
+    const generation = `${conversation}~2`;
+    const ingest = `h_${H}:ingest-${T52}.2`;
+    const listExecutionsPage = sortedLog([
+      "aa-before-both-ranges", // sorts before h_: the h_ seek must skip it
+      ingest,
+      generation,
+      conversation,
+      INGEST,
+      CHAT_GEN2,
+      CHAT,
+      "zz-after-both-ranges", // sorts after u_: the walk must stop here, not read on
+    ]);
+    const { d } = deps([[]], { listExecutionsPage });
+    const report = await sweepChatSnapshots(d);
+    expect(listExecutionsPage.mock.calls.map(([o]) => o.cursor)).toEqual(["u_", "h_"]);
+    expect(vi.mocked(d.prune).mock.calls.map((c) => c[0])).toEqual([
+      CHAT,
+      CHAT_GEN2,
+      conversation,
+      generation,
+    ]);
+    expect(report.executions).toBe(4);
+  });
+});
+
 describe("startSnapshotPruner", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

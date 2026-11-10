@@ -1,12 +1,11 @@
 import { isChatExecution } from "../chats/activity";
 import type { SessionLock } from "../db/sessionLock";
+import { USER_ID_PREFIXES } from "../opaqueIds";
 import { StartupConfigError } from "../startupError";
 
 export const DEFAULT_SNAPSHOT_PRUNE_INTERVAL_MS = 3_600_000;
 const MIN_INTERVAL_MS = 60_000;
 const MAX_INTERVAL_MS = 7 * 24 * 3_600_000;
-/** User-owned execution ids all start with this; the log pages ids in code-point order, so they are one run. */
-const USER_PREFIX = "u_";
 const PAGE = 500;
 
 /**
@@ -57,7 +56,7 @@ export interface SweepReport {
 const className = (err: unknown) => (err instanceof Error ? err.constructor.name : typeof err);
 
 /**
- * One sweep: under the lock, page the `u_` executions and prune each chat conversation, one at a time. A failure
+ * One sweep: under the lock, page the `u_` executions and then the `h_` executions and prune each chat conversation (of either format), one at a time. A failure
  * on one execution is counted by error class (the caller logs one line per sweep); the sweep carries on. A failed listing ends the sweep (rethrown).
  */
 export async function sweepChatSnapshots(
@@ -76,28 +75,32 @@ export async function sweepChatSnapshots(
   const release = await deps.lock();
   if (release === null) return { ...report, skipped: true };
   try {
-    let cursor = USER_PREFIX; // strictly-after: every `u_…` id sorts after `u_`
-    for (;;) {
-      const page = await deps.listExecutionsPage({ cursor, limit: pageSize });
-      for (const executionId of page.executionIds) {
-        if (!executionId.startsWith(USER_PREFIX)) return report; // past the user range
-        if (!isChatExecution(executionId)) continue;
-        if (signal?.aborted || release.lost?.aborted) {
-          report.stopped = true;
-          return report;
+    // The two id formats are two runs of the log (`u_<uuid>` before the deploy, `h_<handle>` after); the log pages ids in code-point order.
+    for (const prefix of USER_ID_PREFIXES) {
+      let cursor: string = prefix; // strictly-after: every id of the run sorts after the bare prefix
+      scan: for (;;) {
+        const page = await deps.listExecutionsPage({ cursor, limit: pageSize });
+        for (const executionId of page.executionIds) {
+          if (!executionId.startsWith(prefix)) break scan; // past this prefix's range
+          if (!isChatExecution(executionId)) continue;
+          if (signal?.aborted || release.lost?.aborted) {
+            report.stopped = true;
+            return report;
+          }
+          report.executions += 1;
+          try {
+            report.deleted += await deps.prune(executionId);
+          } catch (err) {
+            report.failed += 1;
+            const cls = className(err);
+            report.failedByClass[cls] = (report.failedByClass[cls] ?? 0) + 1;
+          }
         }
-        report.executions += 1;
-        try {
-          report.deleted += await deps.prune(executionId);
-        } catch (err) {
-          report.failed += 1;
-          const cls = className(err);
-          report.failedByClass[cls] = (report.failedByClass[cls] ?? 0) + 1;
-        }
+        if (page.nextCursor === undefined) break;
+        cursor = page.nextCursor;
       }
-      if (page.nextCursor === undefined) return report;
-      cursor = page.nextCursor;
     }
+    return report;
   } finally {
     await release();
   }

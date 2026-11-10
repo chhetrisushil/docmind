@@ -138,6 +138,15 @@ describe("recoveryOwns", () => {
     expect(recoveryOwns(`u_${u}:suggest-tags-${c}-r1`)).toBe(true);
     expect(recoveryOwns(`u_${u}:suggest-tags-${c}`)).toBe(false);
     expect(recoveryOwns(`u_${u}:something-else`)).toBe(false);
+    const handle = "a".repeat(26);
+    const token = "q".repeat(52);
+    expect(recoveryOwns(`h_${handle}:ingest-${token}.2`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}:visualize-${token}.2-r1`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}:visualize-turn-${token}-6-r2`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}:suggest-tags-${token}-r1`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}:chat-title-${token}`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}.c-${token}~2`)).toBe(true);
+    expect(recoveryOwns(`h_${handle}:something-else`)).toBe(false);
   });
 });
 

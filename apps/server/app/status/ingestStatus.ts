@@ -7,8 +7,9 @@ import {
   type SensitiveMap,
   foldedStates,
 } from "@loom/plugin-read-model";
-import { ingestExecutionId } from "../documents/ingest";
 import type { ProgressBus } from "../documents/progress";
+import { legacyIds, opaqueIds } from "../opaqueIds";
+import { ensureGate } from "./ensureGate";
 import { type UserExecutionLister, forgetUserRows } from "./forgetUser";
 import {
   INGEST_STATUS_MODEL,
@@ -44,6 +45,8 @@ export interface IngestStatusOptions {
    */
   onReady?(ref: { tenantId: string; userId: string; documentId: string }, generation: number): void;
   onError?(err: unknown): void;
+  /** The pause between `ensure` attempts (default: a real sleep, 250 ms doubling over 4 attempts). A test passes a no-op so a down key store does not make it wait 1.75 s. */
+  ensureSleep?: (ms: number) => Promise<void>;
 }
 
 // Class name only: the message of a database or fold error could carry anything.
@@ -65,9 +68,11 @@ export class IngestStatus implements DocumentStatusReads {
   private readonly service: ReadModelService;
   private readonly report: (err: unknown) => void;
   private publishing: Promise<void> = Promise.resolve();
+  private readonly gate: ReturnType<typeof ensureGate>;
 
   constructor(private readonly o: IngestStatusOptions) {
     this.report = o.onError ?? logClass;
+    this.gate = ensureGate((err) => this.report(err), o.ensureSleep);
     this.service = new ReadModelService(o.writer, {
       liveSource: o.source,
       sensitive: o.sensitive,
@@ -95,6 +100,11 @@ export class IngestStatus implements DocumentStatusReads {
    */
   onEvent = (event: EventEnvelope): void => {
     if (!isIngestExecution(event.executionId)) return; // chat and title executions are not this model's
+    // A new-format id hides its user and document in its tokens: the gate fills the key cache for a cold user first, and keeps log order.
+    this.gate(opaqueIds.handleOf(event.executionId), () => this.fold(event));
+  };
+
+  private fold(event: EventEnvelope): void {
     this.service.handleEvent(event);
     const derived = progressOf(event);
     if (derived === null) return;
@@ -105,7 +115,7 @@ export class IngestStatus implements DocumentStatusReads {
         if (derived.progress.status === "ready") return this.ready(event.executionId);
       })
       .catch((err) => this.report(err));
-  };
+  }
 
   /** The ready hook: the start input holds the tenant (the execution id and the event hold none). Never throws. */
   private async ready(executionId: string): Promise<void> {
@@ -113,11 +123,14 @@ export class IngestStatus implements DocumentStatusReads {
     const generation = generationOf(executionId);
     if (!onReady || generation === undefined) return;
     try {
+      const handle = opaqueIds.handleOf(executionId);
+      if (handle !== null) await opaqueIds.ensure(handle); // a cold cache must not make a ready document vanish
       const [first] = await this.o.source.readFrom(executionId, 0);
       const input = (first?.payload as { input?: Record<string, unknown> } | undefined)?.input;
       const tenantId = input?.tenantId;
       const userId = ingestScopeOf(executionId);
       const documentId = ingestKeyOf(executionId);
+      // Only an erased user's id stays unresolved after `ensure` (an outage threw above, into the catch): nothing to start for them.
       if (typeof tenantId !== "string" || userId === undefined || documentId === undefined) return;
       onReady({ tenantId, userId, documentId }, generation);
     } catch (err) {
@@ -136,6 +149,7 @@ export class IngestStatus implements DocumentStatusReads {
   ): Promise<Map<string, StatusView>> {
     const views = new Map<string, StatusView>();
     if (documents.length === 0) return views;
+    await opaqueIds.loadUser(identity); // the scope check below needs this user's key for a new-format row (no minting)
     // Stored keys are lowercase (routes lowercase ids too); answer under the caller's spelling.
     const wanted = new Map<string, { caller: string; generation: number }[]>();
     for (const d of documents) {
@@ -169,10 +183,17 @@ export class IngestStatus implements DocumentStatusReads {
     documentId: string,
     generation: number,
   ): Promise<StatusView> {
-    // The writer refreshes (read-repair by execution id: a document with no row has no key to find); the reader reads.
+    // The writer refreshes (read-repair by execution id: a document with no row has no key to find); the reader reads. The row may
+    // be under either id format (a run from before the deploy, or one after), so both candidates are refreshed.
+    await opaqueIds.loadUser(identity);
+    const id = documentId.toLowerCase();
+    const user = opaqueIds.current()?.cached(identity.userId);
     await this.service.refresh(
       INGEST_STATUS_MODEL,
-      [ingestExecutionId(identity.userId, documentId, generation)],
+      [
+        legacyIds.ingest(identity.userId, id, generation),
+        ...(user ? [user.ingest(id, generation)] : []),
+      ],
       [this.o.source],
     );
     return (
@@ -187,6 +208,7 @@ export class IngestStatus implements DocumentStatusReads {
    * A tombstone keeps the sequence, execution id and scope (ids, not state) and nulls the state.
    */
   async forgetDocument(identity: Identity, documentId: string): Promise<void> {
+    await opaqueIds.loadUser(identity);
     const reader = this.o.readerFor(identity);
     if (reader.getFoldedByKey === undefined)
       throw new TypeError("the status reader store has no folded-state support");
@@ -225,11 +247,13 @@ export class IngestStatus implements DocumentStatusReads {
 
   /** Wait for every fold scheduled so far, leaving the model open (a backfill waits for the rows of the executions it started). */
   async drain(): Promise<void> {
+    await this.gate.idle();
     await this.service.drain();
   }
 
   /** Wait for every fold scheduled so far (shutdown, tests). Callers close the event feed first: events fed afterwards are not awaited. */
   async close(): Promise<void> {
+    await this.gate.idle();
     await this.publishing;
     await this.service.drain();
   }

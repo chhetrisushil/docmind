@@ -6,8 +6,10 @@ import {
   type ReadModelStore,
   type SensitiveMap,
 } from "@loom/plugin-read-model";
+import { opaqueIds } from "../opaqueIds";
+import { ensureGate } from "../status/ensureGate";
 import { type UserExecutionLister, forgetUserRows } from "../status/forgetUser";
-import { chatIdOfConversation } from "./ids";
+import { chatIdOfConversation, isChatConversation } from "./ids";
 import { CHAT_ACTIVITY_MODEL } from "./sessions";
 
 export { CHAT_ACTIVITY_MODEL };
@@ -44,8 +46,8 @@ export const chatKeyOf = (executionId: string): string | undefined =>
   chatIdOfConversation(executionId)?.chatId;
 export const chatScopeOf = (executionId: string): string | undefined =>
   chatIdOfConversation(executionId)?.userId;
-export const isChatExecution = (executionId: string): boolean =>
-  chatIdOfConversation(executionId) !== null;
+/** A chat conversation of either format, from its shape alone (no key). */
+export const isChatExecution = (executionId: string): boolean => isChatConversation(executionId);
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -123,6 +125,8 @@ export interface ChatActivityOptions {
   /** User erasure's narrow read of the user's remaining rows (Task 167). Absent: `forgetUser` purges by scope only. */
   userExecutions?: UserExecutionLister;
   onError?(err: unknown): void;
+  /** The pause between `ensure` attempts (default: a real sleep, 250 ms doubling over 4 attempts). A test passes a no-op so a down key store does not make it wait 1.75 s. */
+  ensureSleep?: (ms: number) => Promise<void>;
 }
 
 const logClass = (err: unknown) =>
@@ -131,9 +135,11 @@ const logClass = (err: unknown) =>
 export class ChatActivity {
   private readonly service: ReadModelService;
   private readonly report: (err: unknown) => void;
+  private readonly gate: ReturnType<typeof ensureGate>;
 
   constructor(private readonly o: ChatActivityOptions) {
     this.report = o.onError ?? logClass;
+    this.gate = ensureGate((err) => this.report(err), o.ensureSleep);
     this.service = new ReadModelService(o.writer, {
       liveSource: o.source,
       sensitive: o.sensitive,
@@ -153,11 +159,11 @@ export class ChatActivity {
 
   /** `observability.onEvent` fan-out sink: synchronous, never throws. Only chat conversations are folded. */
   onEvent = (event: EventEnvelope): void => {
-    if (chatIdOfConversation(event.executionId) === null) return;
-    this.service.handleEvent(event);
+    if (!isChatConversation(event.executionId)) return;
+    // A new-format id hides its user and chat in its tokens: the gate fills the key cache for a cold user first, and keeps log order.
+    this.gate(opaqueIds.handleOf(event.executionId), () => this.service.handleEvent(event));
   };
 
-  /** Wait for every fold scheduled so far. */
   /** User erasure: tombstones every chat-activity row of the user, the neutral rows of their ingest and title executions included. */
   forgetUser(userId: string, handle?: string | null): Promise<number> {
     return forgetUserRows(
@@ -170,12 +176,15 @@ export class ChatActivity {
     );
   }
 
+  /** Wait for every fold scheduled so far (the gate's queued folds first). */
   async drain(): Promise<void> {
+    await this.gate.idle();
     await this.service.drain();
   }
 
   /** Callers detach the event feed first: events fed afterwards are not awaited. */
   async close(): Promise<void> {
+    await this.gate.idle();
     await this.service.drain();
   }
 }

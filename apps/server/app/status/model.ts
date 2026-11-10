@@ -1,6 +1,7 @@
 import type { DocumentProgressEvent, DocumentStatus, IngestStep } from "@docmind/contracts";
 import { type EventEnvelope, projection$ } from "@loom/core";
 import { FAILURE_CODES, type FailureCode } from "../flows/ingest-document/errors";
+import { opaqueIds } from "../opaqueIds";
 
 export const INGEST_STATUS_MODEL = "ingest-status";
 
@@ -34,50 +35,58 @@ export const STATUS_MESSAGES: Record<StatusCode, string> = {
   internal: "Processing failed. Try again.",
 };
 
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-// Exactly `executionIdFor(user, "ingest-<doc>")` plus an optional positive `.<generation>` (no leading zero).
-const INGEST_EXECUTION = new RegExp(`^u_(${UUID}):ingest-(${UUID})(?:\\.([1-9][0-9]{0,8}))?$`);
-
-// Exactly `executionIdFor(user, "visualize-<doc>")` plus an optional positive `.<generation>` and an optional `-r<n>`
-// (an on-demand re-run, n from 1 to 999): the visuals flow of one ingest generation.
-const VISUALIZE_EXECUTION = new RegExp(
-  `^u_(${UUID}):visualize-(${UUID})(?:\\.([1-9][0-9]{0,8}))?(?:-r([1-9][0-9]{0,2}))?$`,
-);
-/** A visualize-document execution. Never an ingest one: its events must not move a document's ingest status. */
+/**
+ * An ingest or visualize execution of either id format. `isIngestExecution`, `isVisualizeExecution` and the generation read only what an id shows in
+ * the clear, so they never miss on a cold key cache (the fold classifies every execution it sees). The user and the document of a NEW-format id are
+ * sealed in its tokens: `ingestKeyOf`, `ingestScopeOf` and `parseVisualizeExecution` answer `undefined` or null for one whose user is not cached, so a caller
+ * that can see one awaits `opaqueIds.ensure(handle)` first (`status/ensureGate.ts`; the ready hook; the run recorder).
+ */
 export const isVisualizeExecution = (executionId: string): boolean =>
-  VISUALIZE_EXECUTION.test(executionId);
+  opaqueIds.family(executionId) === "visualize";
 
-/** The parts of a visualize execution id (`rerun` is 0 for the automatic run, n for `-r<n>`); null for an id that is not one. */
+/** The parts of a visualize execution id (`rerun` is 0 for the automatic run, n for `-r<n>`); null for an id that is not one, or whose user is not cached. */
 export const parseVisualizeExecution = (
   executionId: string,
 ): { userId: string; documentId: string; generation: number; rerun: number } | null => {
-  const m = VISUALIZE_EXECUTION.exec(executionId);
-  return m
+  const p = opaqueIds.parse(executionId);
+  return p?.family === "visualize"
     ? {
-        userId: m[1] as string,
-        documentId: m[2] as string,
-        generation: Number(m[3] ?? 1),
-        rerun: Number(m[4] ?? 0),
+        userId: p.userId,
+        documentId: p.documentId as string,
+        generation: p.generation as number,
+        rerun: p.rerun as number,
       }
     : null;
 };
 
-/** The ingest generation a visualize execution ran for (no suffix is 1); `undefined` for an id that is not one. */
-export const visualizeGenerationOf = (executionId: string): number | undefined => {
-  const match = VISUALIZE_EXECUTION.exec(executionId);
-  return match ? Number(match[3] ?? 1) : undefined;
+/** The ingest generation and run number of a visualize execution, from the id alone (no key); null for an id that is not one. */
+export const visualizeRunOf = (
+  executionId: string,
+): { generation: number; rerun: number } | null => {
+  const c = opaqueIds.clear(executionId);
+  return c?.family === "visualize"
+    ? { generation: c.generation as number, rerun: c.rerun as number }
+    : null;
 };
 
-export const ingestKeyOf = (executionId: string): string | undefined =>
-  INGEST_EXECUTION.exec(executionId)?.[2];
-export const ingestScopeOf = (executionId: string): string | undefined =>
-  INGEST_EXECUTION.exec(executionId)?.[1];
+/** The ingest generation a visualize execution ran for (no suffix is 1); `undefined` for an id that is not one. No key needed. */
+export const visualizeGenerationOf = (executionId: string): number | undefined =>
+  visualizeRunOf(executionId)?.generation;
+
+export const ingestKeyOf = (executionId: string): string | undefined => {
+  const p = opaqueIds.parse(executionId);
+  return p?.family === "ingest" ? p.documentId : undefined;
+};
+export const ingestScopeOf = (executionId: string): string | undefined => {
+  const p = opaqueIds.parse(executionId);
+  return p?.family === "ingest" ? p.userId : undefined;
+};
 export const isIngestExecution = (executionId: string): boolean =>
-  INGEST_EXECUTION.test(executionId);
-/** No suffix is generation 1; `undefined` for an id that is not an ingest execution. */
+  opaqueIds.family(executionId) === "ingest";
+/** No suffix is generation 1; `undefined` for an id that is not an ingest execution. No key needed. */
 export const generationOf = (executionId: string): number | undefined => {
-  const match = INGEST_EXECUTION.exec(executionId);
-  return match ? Number(match[3] ?? 1) : undefined;
+  const c = opaqueIds.clear(executionId);
+  return c?.family === "ingest" ? c.generation : undefined;
 };
 
 const STEP_OF_ID = new Map<string, IngestStep>(
