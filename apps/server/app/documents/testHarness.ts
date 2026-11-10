@@ -15,7 +15,7 @@ import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
-import type { ExecutionHandle } from "@loom/workflow-runtime";
+import type { ExecutionHandle, WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { expect } from "vitest";
 import { buildApp } from "../config";
@@ -30,7 +30,7 @@ import {
   createIngestWiring,
 } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
-import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
+import { type SuggestTagsStarter, loomSuggestTagsStarter } from "../flows/suggest-tags/start";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import {
@@ -213,6 +213,7 @@ function makeIngest(
   blobs: DocumentRoutesDeps["blobs"],
   wiring: IngestWiring,
   vectors: ChunkVectorStore,
+  tags: TagService,
 ): {
   port: IngestPort;
   probe: IngestProbe;
@@ -221,6 +222,7 @@ function makeIngest(
   bus: InMemoryProgressBus;
   /** The (unsealed, in-memory) event log of every ingest execution. */
   eventStore: InMemoryAsyncEventStore;
+  runtime: WorkflowRuntime;
   close(): Promise<void>;
 } {
   const eventStore = new InMemoryAsyncEventStore();
@@ -233,6 +235,13 @@ function makeIngest(
   const real = pgIngestDeps({ pool: app, fields, keys, blobs, wiring, vectors });
   const loom = buildApp({ kind: "custom", eventStore }, undefined, {
     onEvent: (e) => status.onEvent(e),
+    suggestTags: {
+      pool: app,
+      fields,
+      tags,
+      bus,
+      ...(wiring.llm.summary && { llm: wiring.llm.summary }),
+    },
     ingest: {
       ...real,
       guard: {
@@ -306,6 +315,7 @@ function makeIngest(
     statusStore,
     bus,
     eventStore,
+    runtime: loom.runtime,
     close: async () => {
       probe.release();
       probe.releaseStart();
@@ -425,6 +435,7 @@ export async function startDocumentServer(
       (id) => effectiveBlobs(id),
       wiring,
       twinOverPgChunks(app, wiring),
+      tags,
     );
     const inFlight = new InFlight();
     await ingest.status.boot();
@@ -459,9 +470,11 @@ export async function startDocumentServer(
         pool: app,
         authenticator: testAuthenticator,
         tags: wrapped.tags,
-        starter: overrides.suggest?.starter ?? {
-          start: async () => ({ kind: "disabled" as const }),
-        },
+        starter:
+          overrides.suggest?.starter ??
+          loomSuggestTagsStarter(ingest.runtime, {
+            enabled: () => wiring.llm.summary !== undefined,
+          }),
         limiter: overrides.suggest?.limiter ?? { tryAcquire: () => true },
       }),
       ...uiRoutes({

@@ -29,6 +29,7 @@ not from a run against that platform. The image itself is built and smoke-tested
   without 1.1.0 registered cannot resume any visualize execution that started on it (`FlowCodeMismatchError`), and the
   previous `visual_facts` reader rejects the outline and entity-map rows (ordinals 16 and 17), so chat visuals and the
   document load step fail for every document that has one. Roll forward. Migration 0035 itself is safe under old code.
+- **The tags release (migration 0036, flow `suggest-tags` 1.0.0) can be rolled back.** Migration 0036 is additive (three new tables and one extra unique constraint on `documents`), so older code ignores it. `ingest-document` stays at 3.0.0 with an unchanged flow hash (the summarize prompt is not part of it; `apps/server/app/flows/ingest-document/flowHash.test.ts` pins it), so executions in flight resume on either build. A build without `suggest-tags` registered cannot resume a `suggest-tags` execution that was in flight (`FlowCodeMismatchError`); nothing recovers those anyway (they are not recovery-owned), the document page's busy state ends by itself after 60 seconds, and pressing the button again after the roll forward starts a fresh run. Tags already made stay in the database, and the older build neither shows nor uses them.
 - **The first boot of that release rebuilds the ingest-status and chat-activity read models** (the sensitive-map
   digest changed). It runs once, automatically; expect a slower first start on a large log.
 - **Never scale to zero.** Recovery, sweeps and parked chat turns run outside requests.
