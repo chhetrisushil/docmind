@@ -9,6 +9,7 @@ import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "
 import { legacyIds } from "../opaqueIds";
 import { type DurableStorage, createDurableStorage } from "../storage";
 import { hydrateSubjectIndex } from "./compliance";
+import { testControlKeys } from "./testing";
 
 const executionIdFor = legacyIds.named;
 
@@ -64,7 +65,7 @@ describe.skipIf(!PG_URL)("erasure wiring over durable storage (needs DOCMIND_TES
 
   it("answers unknown from an empty index and shreds nothing; once hydrated it erases, and only that user", async () => {
     const app = buildApp(stores.storage, stores.crypto, {
-      erasure: { keys, raw: stores.raw },
+      erasure: { keys, raw: stores.raw, controlStreamKeys: testControlKeys() },
     });
     try {
       const index = app.subjectIndex;
@@ -93,7 +94,9 @@ describe.skipIf(!PG_URL)("erasure wiring over durable storage (needs DOCMIND_TES
   });
 
   it("is idempotent: erasing the same user again changes nothing and does not throw", async () => {
-    const app = buildApp(stores.storage, stores.crypto, { erasure: { keys, raw: stores.raw } });
+    const app = buildApp(stores.storage, stores.crypto, {
+      erasure: { keys, raw: stores.raw, controlStreamKeys: testControlKeys() },
+    });
     try {
       const index = app.subjectIndex;
       if (!index) throw new Error("the app has no subject index");

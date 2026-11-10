@@ -1,4 +1,4 @@
-import { createSecretKey, randomBytes } from "node:crypto";
+import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
@@ -9,7 +9,7 @@ import { SummaryChoiceEventStore } from "./chats/summaryChoice";
 import { buildApp, visualizeFlows } from "./config";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
-import { noSnapshots } from "./erasure/testing";
+import { noSnapshots, testControlKeys } from "./erasure/testing";
 import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { openDurableStorage } from "./storage";
 
@@ -44,6 +44,7 @@ describe("buildApp compliance", () => {
       erasure: {
         keys: new InMemoryKeyStore(),
         raw: { eventStore: new InMemoryAsyncEventStore(), snapshotStore: noSnapshots },
+        controlStreamKeys: testControlKeys(),
       },
     });
     expect(app.subjectIndex).toBeDefined();
@@ -55,11 +56,53 @@ describe("buildApp compliance", () => {
   });
 });
 
+describe("buildApp control stream", () => {
+  it("a parked erasure recorded by Loom names the subject by a keyed subjectRef, never by id", async () => {
+    const store = new InMemoryAsyncEventStore();
+    const app = buildApp({ kind: "custom", eventStore: store }, undefined, {
+      erasure: {
+        keys: new InMemoryKeyStore(),
+        raw: { eventStore: store, snapshotStore: noSnapshots },
+        controlStreamKeys: testControlKeys(),
+      },
+    });
+    try {
+      const user = randomUUID();
+      const executionId = `u_${user}:ingest-1`;
+      // A running execution of the user: the shred parks behind it.
+      const started = {
+        id: "e0",
+        workflowId: "wf",
+        executionId,
+        eventType: "EXECUTION_STARTED",
+        sequence: 0,
+        timestamp: 1,
+        payload: {},
+      };
+      await store.append(started as never);
+      app.subjectIndex?.handleEvent(started as never);
+      const r = await app.eraseSubject(user, undefined, { parked: "shred", record: true });
+      expect(r.outcome).toBe("parked");
+      const rows = await store.read("__loom_erasure__");
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(JSON.stringify(row)).not.toContain(user);
+        const payload = row.payload as Record<string, unknown>;
+        expect(payload.subjectId).toBeUndefined();
+        expect(payload.subjectRef).toMatch(/^hmac-sha256:[0-9a-f]{64}$/);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe("buildApp autostart with erasure", () => {
   const chat = () => ({ flows: [], effects: {}, timers: new InMemoryTimerStore() });
   const erasure = () => ({
     keys: new InMemoryKeyStore(),
     raw: { eventStore: new InMemoryAsyncEventStore(), snapshotStore: noSnapshots },
+    controlStreamKeys: testControlKeys(),
   });
 
   it("does not start the timers at composition: `bootIngest` fills the subject index first, then `app.start()`", async () => {
@@ -98,7 +141,9 @@ describe("buildApp onWarn with erasure", () => {
     };
     const keys = new InMemoryKeyStore();
     const raw = { eventStore: new InMemoryAsyncEventStore(), snapshotStore: noSnapshots };
-    const app = buildApp({ kind: "custom", eventStore }, undefined, { erasure: { keys, raw } });
+    const app = buildApp({ kind: "custom", eventStore }, undefined, {
+      erasure: { keys, raw, controlStreamKeys: testControlKeys() },
+    });
     await vi.waitFor(() =>
       expect(warn).toHaveBeenCalledWith("[loom]", expect.stringContaining("ShredIncompleteError")),
     );
