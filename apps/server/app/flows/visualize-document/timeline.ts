@@ -1,12 +1,19 @@
 import { type DatePrecision, parseEventDate } from "./dates";
-import { MAX_RAW_ITEMS, cleanText, earliestPassage, isRecord, nameKey } from "./structureText";
+import {
+  MAX_RAW_ITEMS,
+  MAX_STRUCTURE_LABEL,
+  cleanText,
+  earliestPassage,
+  isRecord,
+  nameKey,
+} from "./structureText";
 
 export { MAX_RAW_ITEMS };
 export const MAX_EVENTS = 40;
 export const MIN_EVENTS = 3;
 /** `when` is the date as the document wrote it. */
 export const MAX_WHEN = 40;
-export const MAX_EVENT_LABEL = 80;
+export const MAX_EVENT_LABEL = MAX_STRUCTURE_LABEL;
 
 export interface TimelineEvent {
   /** The ISO first day of the event's period. */

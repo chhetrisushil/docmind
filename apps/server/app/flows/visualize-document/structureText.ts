@@ -22,8 +22,8 @@ export const isRecord = (v: unknown): v is Record<string, unknown> =>
 export const cleanText = (raw: string, max: number): string =>
   clipText(
     raw
-      .replace(/[\p{Cc}\u2028\u2029]/gu, " ")
-      .replace(/\p{Cf}/gu, "")
+      .replace(/[\p{Cc}\u2028\u2029]|\p{Surrogate}/gu, " ")
+      .replace(/\p{Cf}|[\u115f\u1160\u3164\uffa0\u2800]/gu, "")
       .replace(/\s+/g, " ")
       .trim(),
     max,

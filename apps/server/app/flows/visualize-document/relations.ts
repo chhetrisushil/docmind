@@ -1,9 +1,16 @@
-import { MAX_RAW_ITEMS, cleanText, earliestPassage, isRecord, nameKey } from "./structureText";
+import {
+  MAX_RAW_ITEMS,
+  MAX_STRUCTURE_LABEL,
+  cleanText,
+  earliestPassage,
+  isRecord,
+  nameKey,
+} from "./structureText";
 
 export const MAX_LINKS = 30;
 export const MIN_LINKS = 3;
 /** The longest party name; at most 30 links name at most 60 parties. */
-export const MAX_PARTY = 80;
+export const MAX_PARTY = MAX_STRUCTURE_LABEL;
 export const MAX_REL = 40;
 /** At most 30 links name at most 2 parties each; the stored schema (`facts.ts`) imports this, never repeats it. */
 export const MAX_ENTITIES = MAX_LINKS * 2;
