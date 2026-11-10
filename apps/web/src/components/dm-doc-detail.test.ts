@@ -111,6 +111,9 @@ function setup(
     deleteDocument: vi.fn(async () => {}),
     retryDocument: vi.fn(async () => ({})),
     retryDocumentVisuals: vi.fn(async () => {}),
+    getDocument: vi.fn(async () => ({ ...(live.doc ?? mine), suggestedTags: [] })),
+    listTags: vi.fn(async () => ({ tags: [] })),
+    refreshTagSuggestions: vi.fn(async () => {}),
   };
   const sse: {
     onFrame?: (f: { event: string; data: string; id: undefined }) => void;
@@ -769,5 +772,48 @@ describe("dm-doc-detail: the Related documents Open action", () => {
     expect(await act(action(id(7), "open", "v-fact"))).toEqual({ ok: false, reason: "refused" });
     expect(await act(action(id(7), "open", "unknown"))).toEqual({ ok: false, reason: "refused" });
     expect(t.services.router.route).toEqual({ name: "document", id: id(1) });
+  });
+});
+
+describe("dm-doc-detail tags", () => {
+  it("shows the Tags row once the document is served, and not for a missing one", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("dm-doc-tags")).not.toBeNull());
+    expect(
+      (page.shadowRoot?.querySelector("dm-doc-tags") as unknown as { documentId: string })
+        .documentId,
+    ).toBe(id(1));
+    const gone = setup({ name: "document", id: id(9) }, null);
+    const missing = await gone.mount();
+    await vi.waitFor(() =>
+      expect(missing.shadowRoot?.querySelector("[data-not-found]")).not.toBeNull(),
+    );
+    expect(missing.shadowRoot?.querySelector("dm-doc-tags")).toBeNull();
+  });
+
+  it("reloads the tags on this document's tags event, and ignores another document's", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(t.api.getDocument).toHaveBeenCalledTimes(1));
+    t.progress(id(2), "ready", { tags: "suggested" });
+    await Promise.resolve();
+    expect(t.api.getDocument).toHaveBeenCalledTimes(1);
+    t.progress(id(1), "ready", { tags: "suggested" });
+    await vi.waitFor(() => expect(t.api.getDocument).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("dm-doc-tags")).not.toBeNull());
+  });
+
+  it("keeps the same Tags row element through a tags event's refresh", async () => {
+    const t = setup({ name: "document", id: id(1) });
+    const page = await t.mount();
+    await vi.waitFor(() => expect(page.shadowRoot?.querySelector("dm-doc-tags")).not.toBeNull());
+    const row = page.shadowRoot?.querySelector("dm-doc-tags");
+    t.progress(id(1), "ready", { tags: "suggested" });
+    await vi.waitFor(() => expect(t.api.getDocument).toHaveBeenCalledTimes(2));
+    for (let i = 0; i < 5; i++) {
+      await Promise.resolve();
+      expect(page.shadowRoot?.querySelector("dm-doc-tags")).toBe(row);
+    }
   });
 });

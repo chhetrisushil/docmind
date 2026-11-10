@@ -12,6 +12,8 @@ import { performIntent } from "../surface/perform";
 import type { ActionHandler, ViewSession } from "../ui/session";
 import { confirmDialog } from "./confirm";
 import "./dm-icon";
+import "./dm-doc-tags";
+import type { DmDocTags } from "./dm-doc-tags";
 import "./dm-view";
 
 type Params = Record<string, string | number>;
@@ -109,6 +111,11 @@ export class DmDocDetail extends LitElement {
   }
   private onProgress(e: DocumentProgressEvent | "resync"): void {
     if (e !== "resync" && e.documentId !== this.route?.id) return;
+    // The tag suggestions of this document changed (or a resync may have missed that): its Tags row reads again.
+    if (e === "resync" || e.tags !== undefined)
+      void this.renderRoot
+        .querySelector<DmDocTags>("dm-doc-tags")
+        ?.onEvent(e === "resync" ? "resync" : (e.tags as "suggested" | "failed"));
     // The visuals were committed: the document's experience itself changed, so fetch it again (not just its data).
     // A resync may have missed a visuals event, so it reloads too.
     if (e === "resync" || e.visuals === "ready" || e.visuals === "failed") {
@@ -387,7 +394,10 @@ export class DmDocDetail extends LitElement {
           ? html`<div data-not-found><h1>Document not found.</h1><p class="muted">It may have been deleted, or the read failed.</p><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
           : this.broken
             ? html`<div data-load-failed><h1>Couldn't load this document.</h1><button class="btn secondary" data-try-again @click=${() => this.tryAgain()}>Try again</button><a href="/documents">Back to documents</a></div>`
-            : html`${this.visualsBanner()}<dm-view .document=${route.id} .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
+            : html`${this.visualsBanner()}${
+                // Once served, the row stays through a refresh (a tags event re-reads the view): its busy state and draft must survive.
+                this.everServed ? html`<dm-doc-tags .documentId=${route.id}></dm-doc-tags>` : null
+              }<dm-view .document=${route.id} .params=${this.params} .onAct=${this.act} @view-ready=${this.onReady}></dm-view>`
       }`;
   }
 }
