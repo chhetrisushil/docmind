@@ -26,8 +26,9 @@ export interface SuggestTagsStarter {
   /** Erasure: resolves when the document's pending starts have settled, so a cancel never runs before a start lands. */
   settle(identity: Pick<Identity, "userId">, documentId: string): Promise<void>;
   /**
-   * Erasure: cancels every run number this process took for the document (unknown ones are fine). `reason` lands in the
-   * log in the clear: a fixed word, never content. Runs are not recovery-owned, so none survives a restart to cancel.
+   * Erasure: cancels the document's durable runs, walking r1, r2, … in Loom until one does not exist (past this process's
+   * own counter), so it also finds runs started before a restart. `reason` lands in the log in the clear: a fixed word,
+   * never content. Runs are recovery-owned, so one this walk misses is still re-driven or given up at boot.
    */
   cancel(identity: Identity, documentId: string, reason: string): Promise<void>;
   /** Resolves when every pending start has settled (shutdown, and before an erasure's shred). */
