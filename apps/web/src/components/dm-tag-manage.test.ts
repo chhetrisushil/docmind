@@ -88,6 +88,26 @@ describe("dm-tag-manage", () => {
     expect(t.changed).toHaveLength(0);
   });
 
+  it.each(["cancel", "escape"])(
+    "clears a rename error when the edit is left with %s",
+    async (how) => {
+      const t = await setup();
+      t.api.renameTag.mockRejectedValueOnce(new ApiError(409, "tag_exists"));
+      q<HTMLButtonElement>(t.el, "button[aria-label='Rename Legal']").click();
+      await t.el.updateComplete;
+      const input = q<HTMLInputElement>(t.el, "input[aria-label='New name for Legal']");
+      input.value = "Finance";
+      input.dispatchEvent(new Event("input"));
+      q<HTMLButtonElement>(t.el, "button[data-save]").click();
+      await vi.waitFor(() => expect(q(t.el, "[role=alert]")).not.toBeNull());
+      if (how === "cancel") q<HTMLButtonElement>(t.el, "button[data-cancel]").click();
+      else input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      await t.el.updateComplete;
+      expect(q(t.el, "input")).toBeNull();
+      expect(q(t.el, "[role=alert]")).toBeNull();
+    },
+  );
+
   it("asks before deleting, naming how many documents use the tag, and deletes on yes", async () => {
     const t = await setup();
     q<HTMLButtonElement>(t.el, "button[aria-label='Delete Finance']").click();
