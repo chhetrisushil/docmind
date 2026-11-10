@@ -406,6 +406,9 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
       await st.until(events, id, (s) => s === "ready");
       const [told] = await st.until(events, id, () => true);
       expect(told).toMatchObject({ status: "ready", step: "finalize", visuals: "failed" });
+      // The page was just told "failed": the detail must already agree (not `running` from the in-flight tracker).
+      const justTold = UiViewResponse.parse(await (await detail(st, ada.cookie, id)).json());
+      expect(justTold.visuals).toEqual({ state: "failed" });
 
       expect(await visualizeEnd(st, ada.userId, id)).toEqual({
         outcome: "failed",

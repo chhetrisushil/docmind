@@ -433,6 +433,7 @@ export function buildServer(options: ComposeOptions) {
     runs: visualRuns,
     bus: options.ingest.bus,
     legacyRuns,
+    onEnded: (executionId) => visuals.ended(executionId),
   });
   feed.sinks = [status.onEvent, activity.onEvent, visualRecorder.onEvent];
   const ingest = options.wrapIngest
