@@ -12,8 +12,12 @@ const U = UUID_PATTERN;
 // (`a e i m q u y 4`); a 52-character token holds 256 bits, so its last carries 4 zero bits (`a q`). The strict decoder already
 // refuses any other spelling of a token; the shapes below refuse it everywhere else (the parse regexes and the column CHECK).
 const H = "[a-z2-7]{25}[aeimquy4]";
+/** The shape of a handle, for a check before any lookup. */
+export const HANDLE_RE = new RegExp(`^${H}$`);
 const T = `[a-z2-7]{${TOKEN_LENGTH - 1}}[aq]`;
 const GEN = "[1-9][0-9]{0,8}";
+// A new-format ingest or visualize generation suffix is `.2` and up: generation 1 has no suffix, so `.1` would be a second spelling.
+const GEN_NEW = "(?:[2-9]|[1-9][0-9]{1,8})";
 const RERUN = "[1-9][0-9]{0,2}";
 const MAX_GENERATION = 999_999_999;
 const MAX_RERUN = 999;
@@ -139,7 +143,7 @@ interface OpaqueRule {
 const OPAQUE: readonly OpaqueRule[] = [
   {
     family: "ingest",
-    re: new RegExp(`^h_(${H}):ingest-(${T})(?:\\.(${GEN}))?$`),
+    re: new RegExp(`^h_(${H}):ingest-(${T})(?:\\.(${GEN_NEW}))?$`),
     read: (m) => ({
       handle: m[1] as string,
       documentToken: m[2] as string,
@@ -148,7 +152,7 @@ const OPAQUE: readonly OpaqueRule[] = [
   },
   {
     family: "visualize",
-    re: new RegExp(`^h_(${H}):visualize-(${T})(?:\\.(${GEN}))?(?:-r(${RERUN}))?$`),
+    re: new RegExp(`^h_(${H}):visualize-(${T})(?:\\.(${GEN_NEW}))?(?:-r(${RERUN}))?$`),
     read: (m) => ({
       handle: m[1] as string,
       documentToken: m[2] as string,
@@ -291,8 +295,10 @@ export const handleOfSubject = (subject: string): string | null =>
   new RegExp(`^h_(${H})$`).exec(subject)?.[1] ?? null;
 
 const checkUuid = (what: string, id: string): string => {
-  if (!CANONICAL.test(id)) throw new RangeError(`${what} must be a canonical lower-case uuid`);
-  return id;
+  // The old builders lower-cased a document or chat id; so do these (a mixed-case UUID is the same UUID).
+  const lower = id.toLowerCase();
+  if (!CANONICAL.test(lower)) throw new RangeError(`${what} must be a canonical lower-case uuid`);
+  return lower;
 };
 const checkGeneration = (g: number): number => {
   if (!Number.isSafeInteger(g) || g < 1 || g > MAX_GENERATION)
@@ -401,4 +407,11 @@ export class UserIds {
   turnLineage(chatId: string, ord: number): string {
     return `turnvisuals-${this.handle}-${this.chat(chatId)}-${checkOrd(ord)}`;
   }
+}
+
+/** The handle of a new-format execution, conversation or lineage id (with or without Loom's lineage stream prefix), or null. */
+export function handleOfAnyId(id: string): string | null {
+  const bare = id.startsWith(LINEAGE_STREAM_PREFIX) ? id.slice(LINEAGE_STREAM_PREFIX.length) : id;
+  const shape = shapeOfExecution(bare) ?? shapeOfLineage(bare);
+  return shape?.format === "opaque" ? shape.shape.handle : null;
 }

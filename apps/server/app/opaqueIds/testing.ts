@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { UserIds, legacyIds } from "./ids";
 import type { HandleStore } from "./opaqueIds";
-import { OpaqueIds } from "./opaqueIds";
+import { HandleMismatchError, OpaqueIds } from "./opaqueIds";
 import { deriveIdKey, handleOfKey } from "./siv";
 
 /** An in-memory `HandleStore` with the unique-handle rule of `users.id_handle`. For unit tests; the Postgres one is `PgHandleStore`. */
@@ -22,7 +22,7 @@ export class MemoryHandleStore implements HandleStore {
   async claim(who: { userId: string; tenantId: string }, handle: string) {
     const row = this.rows.get(who.userId) ?? { tenantId: who.tenantId, handle: null };
     for (const [id, other] of this.rows) {
-      if (id !== who.userId && other.handle === handle) throw new Error("duplicate id_handle");
+      if (id !== who.userId && other.handle === handle) throw new HandleMismatchError();
     }
     row.handle ??= handle;
     this.rows.set(who.userId, row);
