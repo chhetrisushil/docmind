@@ -18,7 +18,7 @@ Every existing name in this plan was verified against the code at `main` ae6e52a
 |---|---|---|
 | F1 | **Flow hash (D7) is unaffected.** Loom's `flowContentHash` (`packages/core/src/flowHash.ts`, identical at 4af27eaa and at Loom HEAD) covers only the flow id and version, the deadline and each step's `id`, tool id, timeout and retry. It reads nothing inside a step: not a prompt, not an output schema. Changing the extract step's prompt and output therefore leaves the `visualize-document` 1.1.0 hash at `sha256:d3bfb104f3d015ab8165a9784f5f958bd46a347f3a2fb66f4d0d7be6c4e25f9e` (computed with the real `flowContentHash` on `main`; the same method reproduces the already-pinned 1.0.0 hash `sha256:d8491324...`). No flow version bump, no new legacy definition. | Task 4 step 1 (pin test, new `flowHash.test.ts`, modelled on `ingest-document/flowHash.test.ts`) |
 | F2 | **The v4 catalogue id does NOT trigger a re-plan.** The boot stale pass (`pgStaleFormatDocuments`, migrations 0030/0032) compares `visual_runs.format` with `factFormatFingerprint()`, which is built from the three tool pins and `STRUCTURE_FORMAT` only; the catalogue id is not in it. Stored plans carry no catalogue id (compile checks node types against the catalogue it is given), and v3's eight entries are the first eight of v4 byte for byte (guarded by a sha256 of `VISUALS_CATALOG.entries.slice(0, 8)` = `26bc046f4768d49e9cc97ed29a5689e0d8857f229e7e5e810e22b072eea065aa`, computed on `main`). The id and the new entries do change a NEW planner decision's keyed id (loom-ui keys a decision on catalogue content, intent and capabilities), which only affects runs started after the deploy. A run in flight at the deploy replays its recorded decision or, if it had not decided yet, decides once under v4. | Task 3 (v4 guard, hydrate test), Task 6 steps 1 and 2 (e2e stamp and stale list, rollout test: a sweep starts only the stale document) |
-| F3 | **Spec gap, D5.** The spec says an existing document "gets them when the user presses re-run (one extraction call each)". In the code a re-run (`-r<n>`) never extracts when the document has stored extracted facts, and also skips extraction after a `done` run (`extract.ts`, the `rerun > 0` branch; docs/architecture.md "Retry"). Pressing re-run on an existing document would therefore never produce a timeline. The plan closes this narrowly: the route's re-run (and no boot pass) notes its execution id in an in-process `reextract` set, and the extract step extracts again for a noted re-run only when the document has no timeline and no relations fact yet. Any other re-run is unchanged. **The controller should confirm this reading of D5** (the alternative is to drop "press re-run" from D5 and give existing documents the diagrams only through re-ingest). | Task 5 |
+| F3 | **Spec gap, D5 (ruled by the user: re-extract once).** The spec said an existing document "gets them when the user presses re-run", but in the code a re-run (`-r<n>`) never extracts when the document has stored extracted facts, and skips extraction after a `done` run (`extract.ts`, the `rerun > 0` branch; docs/architecture.md "Retry"). Ruling: mark each document's extraction with a format, `docmind.extract@2`; a re-run the USER asks for (never a boot pass) extracts again only when the stored marker is missing or not the current one, and the extraction stamps it, so that costs one extraction call per document, once; every later re-run is a cheap re-plan. **Where the marker lives:** a nullable `documents.visual_extract_format` column added by migration 0037, set by `PgVisualFacts.replace` in the same transaction as the facts. Why there: it is per document, plain (a token, no content, so no sealing), and atomic with the extraction it describes; `visual_facts` cannot hold it (a document whose extraction found nothing has no rows); `visual_runs` cannot (one row per generation whose newest run replaces the last, stamped only by the lossy event feed after the fact, and it already carries the unrelated fact-format stamp that must not move). NULL on every existing document means "extracted before c2" with no backfill. Chat never writes or reads it (its extraction path has no store write, and a test guards the source). | Tasks 2 and 5 |
 | F4 | The extraction prompt, `askForFacts` and `ExtractAnswer` are shared with the chat turn (`visualize-turn/steps.ts`). Chat must not pay for a longer prompt or answer, and its request must stay byte-identical. The document path gets its own `EXTRACT_DOCUMENT_SYSTEM`, `DocumentAnswer` and `askForExtraction`; `askForFacts` and `EXTRACT_SYSTEM` are untouched. | Task 4 |
 | F5 | `VISUALS_MAX_TOKENS` is 8192 (`ingest-document/limits.ts`). A longer answer (up to 40 events and 30 links with citations, beside up to 16 facts) can exceed it, and a truncated answer is `LlmOutputError`, which would fail the whole extraction and so cost the existing facts. The cap moves to 16 000 (the `VISION_MAX_TOKENS` precedent), and the prompt asks for at most 2 cited passages per item. | Task 4 steps 3 and 5 |
 | F6 | `ExtractResult.count` is what the flow reads as "extracted facts" (a plan failure with none is `empty`, not `failed`). Aggregates are counted apart (`aggregates`, present only when above 0) so a timeline-only document is treated like a structure-only one, and the skip-extraction re-plan reports them so the load step still runs. | Task 4 steps 4 and 5 |
@@ -46,7 +46,7 @@ Every task's requirements include these (values copied from the spec):
 - D2: Two aggregate facts at reserved ordinals, outside the 16-fact chart pool: `timeline` at 18, `relations` at 19.
 - D3: Dates are kept at day, month, quarter or year precision and shown as written. Relative or undated phrases are dropped.
 - D4: Relationships get their own Diagram entry. c1's entity map is unchanged.
-- D5: **Rollout is on demand only.** New uploads and re-ingests get the new facts automatically. Existing documents get them when the user presses re-run (one extraction call each). The boot re-plan is not triggered, so the fact-format fingerprint is unchanged.
+- D5: **Rollout is on demand only, and re-extracts once.** New uploads and re-ingests get the new facts automatically and stamp the document with the extraction format (`docmind.extract@2`). An existing document is stamped nothing (NULL) until it is extracted again. A re-run the user asks for re-extracts only when the stored stamp is missing or is not the current one: one extraction call per document, once. After that, re-runs are cheap re-plans as today. The boot re-plan is not triggered and a boot pass never extracts, so the fact-format fingerprint is unchanged.
 - D6: Migration 0037 widens the ordinal CHECK to 0..19 and extends the kind/ordinal rule.
 - D7: The visualize-document flow version is unchanged: only the extract step's prompt and output change. This is verified against Loom's flow hash and pinned by a test.
 - The `EXTRACT_SYSTEM` answer gains two optional top-level fields next to `facts`: `timeline: {"events":[{"when","date","label","chunkIds"}]}`, at most 40 events (`when` is the date as written; `date` is `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`); `relations: {"links":[{"from","rel","to","chunkIds"}]}`, at most 30 links (`from` and `to` are entities as written; `rel` is a short verb phrase).
@@ -66,9 +66,9 @@ Every task's requirements include these (values copied from the spec):
 - Reshapers return values that pass loom-ui's `diagramProblems`. `fitsShape` and `entryFitsOrdinal`: each entry reads only its own ordinal (18 and 19), and misfits are dropped at plan time. The planner sample holds content-free placeholders.
 - The document catalogue becomes `docmind.visuals.v4`. `FACT_VISUALS_CATALOG` (chat) stays byte-identical, and its sha256 guard stands (`e9096cf41a01d1b87ef45b3eba3744600ae81e36d78fff476f6117f1455af080` in `packages/experiences/src/visuals.test.ts`).
 - `VISUALS_INTENT` gains: use a timeline when the document narrates dated events, and a relationships diagram when it states how parties relate. Leave them out for a few scattered dates or links.
-- Rollout (D5): `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything. Existing plans stay valid, because v3's entries are a subset of v4's. The plan verifies that a stored plan from v3 still hydrates under v4.
+- Rollout (D5): `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything. Existing plans stay valid, because v3's entries are a subset of v4's. The plan verifies that a stored plan from v3 still hydrates under v4. Re-extract once: the route's re-run (never a boot pass) is marked as asked by the user; the extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2); the extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
 - Privacy: event labels, written dates, entity names and relation phrases are sealed per user. They never appear in logs, the event log, lineage or error text. The planner sees capability descriptions and counts only. Erasure shreds them. The erasure plaintext scan gains timeline and relation needles.
-- Cost: no extra call (the extraction answer is longer); no boot spending; one extraction call per document the user re-runs.
+- Cost: no extra call (the extraction answer is longer); no boot spending; one extraction call per document, the first time the user re-runs it after c2.
 - Out of scope: an automatic backfill of existing documents; timelines or relationships in chat answers; cross-document timelines or relationship graphs; merging relationship nodes with the `entities` table, or with c1's entity map; editing extracted events or links.
 - Verification commands (run from the worktree root `/Users/such/workspace/docmind/.worktrees/structure-c2`): `pnpm typecheck`, `pnpm typecheck:tests`, `pnpm lint`, `pnpm build`, and the suites named in each task. Postgres suites need `set -a; . ./.env; set +a` first (it sets `DOCMIND_TEST_PG_URL`); **a skipped pg test is not a pass**: check the vitest summary shows the pg tests ran, not "skipped". The worktree has no `node_modules` of its own: run `pnpm install --frozen-lockfile` once at the root before the first command. The snippets in this plan are not pre-wrapped to biome's line width: run `pnpm exec biome check --write <the files you changed>` before each commit (and before `pnpm lint`), and keep the code's meaning exactly as written.
 
@@ -97,7 +97,7 @@ Each is repeated as a "Plan decision:" next to the step that applies it.
 - **Plan decision: timeline axis.** `timeFormat` is `{ granularity: "day" }` with no `timeZone` (loom-ui reads every granularity coarser than `datetime` in UTC and draws a date-only tick as the written date in every viewer zone), and node `at` is always an ISO date (`YYYY-MM-DD`), so `Date.parse` accepts it (`diagramProblems`: "a timeline node needs `at`" and "`at` must be a date").
 - **Plan decision: planner sample (placeholders).** Timeline: `{ kind: "timeline", events: <count>, nodes: [{ label: "Event", at: "2000-01-01" }, { label: "Event", at: "2000-06-01" }] }`. Relations: `{ kind: "relations", parties: <count>, links: <count>, nodes: [{ label: "Party", group: "party" }, { label: "Party", group: "party" }], edges: [{ from: "n0", to: "n1", label: "relation" }] }`. Descriptions state counts only. No document text, no real date.
 - **Plan decision: migration 0037 replaces all three CHECKs** (`visual_facts_kind_check`, `visual_facts_ordinal_check`, `visual_facts_kind_ordinal_check`, names kept), because the third is `(kind IN ('outline','cooccurrence')) = (ordinal >= 16)` in 0035 and would refuse `timeline` at 18 as an "extracted" row and let `outline` sit at 17. The new rule pins each kind to its own ordinal. Every existing row satisfies it (the c1 step writes outline at 16 and cooccurrence at 17 only, and `StoredEntry` is tightened the same way in Task 2). 0035 and 0026 are never edited.
-- **Plan decision: on-demand extraction (F3).** `VisualsStarterOptions.reextract` and `ExtractDeps.reextract` are one shared `Set<string>` created in `compose.ts` beside `afterDone`. Only `starter.rerun` (the route) notes an id; `rerunWith` called by a boot pass does not. The extract step reads and removes its note, and for a noted re-run it extracts when `aggregateCount(ref) === 0` (a document with a timeline or relations is re-planned, not re-extracted, so a second press costs only a planner call). A flat document with none is extracted again on every press (one call, rate-limited to 10 a minute per user by the route). Accepted: the note is in-process, so a run recovered after a crash re-plans only.
+- **Plan decision: re-extract once (F3, the user's ruling).** The marker is `documents.visual_extract_format` (nullable `text`, at most 64 characters), `EXTRACT_FORMAT = "docmind.extract@2"` in `facts.ts`. `PgVisualFacts.replace` (extraction only: `replaceStructure` and chat never touch it) sets it under the document lock in the same transaction as the facts, also for an empty or refused extraction (the extraction ran under the c2 prompt), and `extractFormat(ref)` reads it. `VisualsStarterOptions.reextract` and `ExtractDeps.reextract` are one shared `Set<string>` created in `compose.ts` beside `afterDone`; only `starter.rerun` (the route) notes an id, `rerunWith` called by a boot pass does not. The extract step consumes its note and, for a noted re-run, extracts when `extractFormat(ref) !== EXTRACT_FORMAT` (missing or older: the rule is inequality, so a later bump of the token re-extracts once more). A noted re-run of a stamped document, and any un-noted re-run, keep today's rules. Accepted: the note is in-process, so a run recovered after a crash re-plans only (and the next press extracts). A re-ingest keeps the old stamp until its own first extraction restamps it, which always happens (the automatic run extracts).
 
 ## File Structure
 
@@ -963,7 +963,7 @@ git commit -m "feat(visuals): c2 date, text and aggregate normalisers (timeline 
 ### Task 2: Aggregate fact kinds, migration 0037 and the ownership of ordinals
 
 **Files:**
-- Create: `infra/migrations/0037_visual_facts_aggregate_kinds.sql`
+- Create: `infra/migrations/0037_visual_facts_aggregate_kinds.sql` (the three CHECKs and the `documents.visual_extract_format` column)
 - Modify: `apps/server/app/flows/visualize-document/facts.ts`
 - Modify: `apps/server/app/flows/visualize-document/pgFacts.ts`
 - Modify: `apps/server/app/flows/visualize-document/testing.ts` (the `aggregateFacts` fixture)
@@ -974,10 +974,10 @@ git commit -m "feat(visuals): c2 date, text and aggregate normalisers (timeline 
 **Interfaces:**
 - Consumes: `TimelineDraft`, `RelationsDraft`, `DATE_PRECISIONS`, `isStoredAt`, `nameKey` (Task 1).
 - Produces (Tasks 3 to 6 rely on these exact names):
-  - `facts.ts`: `STRUCTURE_ORDINAL_BASE = 16` (existing), `AGGREGATE_ORDINAL_BASE = 18`, `TIMELINE_ORDINAL = 18`, `RELATIONS_ORDINAL = 19`, `MAX_STORED_FACTS = MAX_FACTS + 4` (20); `type AggregateFact = (TimelineDraft | RelationsDraft) & { ordinal: number }`; `type ExtractionWrite = Fact | AggregateFact`; `type AnyFact = Fact | StructureFact | AggregateFact`; `isAggregateFact(f: { kind: string }): f is AggregateFact`; `DocumentAnswer` (zod: `{ facts: DraftFact[] (max 32), timeline?: unknown, relations?: unknown }`, strict); `StoredEntry` now also parses `timeline` at ordinal 18 and `relations` at ordinal 19 (each kind at its own ordinal, outline only at 16 and cooccurrence only at 17); `StoredFact` is unchanged (extracted kinds, 0..15).
-  - `pgFacts.ts`: `VisualFactStore.replace(ref: VisualizeRef, facts: readonly ExtractionWrite[], signal?: AbortSignal, generation?: number): Promise<number>` (owns 0..15 and 18..19), `replaceStructure` (owns 16..17, unchanged signature), `list` (extracted only, `ordinal < 16`, unchanged), `listAll` (everything), and new `aggregateCount(ref: VisualizeRef): Promise<number>` (rows at ordinal >= 18, owner-scoped, nothing decrypted).
+  - `facts.ts`: `STRUCTURE_ORDINAL_BASE = 16` (existing), `AGGREGATE_ORDINAL_BASE = 18`, `TIMELINE_ORDINAL = 18`, `RELATIONS_ORDINAL = 19`, `MAX_STORED_FACTS = MAX_FACTS + 4` (20), `EXTRACT_FORMAT = "docmind.extract@2"`; `type AggregateFact = (TimelineDraft | RelationsDraft) & { ordinal: number }`; `type ExtractionWrite = Fact | AggregateFact`; `type AnyFact = Fact | StructureFact | AggregateFact`; `isAggregateFact(f: { kind: string }): f is AggregateFact`; `DocumentAnswer` (zod: `{ facts: DraftFact[] (max 32), timeline?: unknown, relations?: unknown }`, strict); `StoredEntry` now also parses `timeline` at ordinal 18 and `relations` at ordinal 19 (each kind at its own ordinal, outline only at 16 and cooccurrence only at 17); `StoredFact` is unchanged (extracted kinds, 0..15).
+  - `pgFacts.ts`: `VisualFactStore.replace(ref: VisualizeRef, facts: readonly ExtractionWrite[], signal?: AbortSignal, generation?: number): Promise<number>` (owns 0..15 and 18..19), `replaceStructure` (owns 16..17, unchanged signature), `list` (extracted only, `ordinal < 16`, unchanged), `listAll` (everything), new `aggregateCount(ref: VisualizeRef): Promise<number>` (rows at ordinal >= 18, owner-scoped, nothing decrypted), and new `extractFormat(ref: VisualizeRef): Promise<string | null>` (the document's `visual_extract_format`, NULL when never stamped); `replace` also stamps `documents.visual_extract_format = EXTRACT_FORMAT` in its transaction (nothing else does).
   - `testing.ts`: `aggregateFacts(chunk: string): { timeline: AggregateFact; relations: AggregateFact }`, a valid 3-event timeline (ordinal 18) and 3-link, 3-party relations fact (ordinal 19), every text starting `Zebra-`.
-  - Migration `0037`: constraints `visual_facts_kind_check`, `visual_facts_ordinal_check` (0..19) and `visual_facts_kind_ordinal_check` replaced under the same names.
+  - Migration `0037`: constraints `visual_facts_kind_check`, `visual_facts_ordinal_check` (0..19) and `visual_facts_kind_ordinal_check` replaced under the same names; `documents.visual_extract_format text NULL`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1169,7 +1169,7 @@ describe("LoadOutput.facts holds every row a document can have", () => {
 
 In `apps/server/app/flows/visualize-document/pgFacts.pg.test.ts`:
 
-1. Add `import { aggregateFacts } from "./testing";` and extend the `./facts` import with `type ExtractionWrite`.
+1. Add `import { aggregateFacts } from "./testing";` and extend the `./facts` import with `EXTRACT_FORMAT` and `type ExtractionWrite`.
 2. Edit the existing 0035 test: change `await expect(insert("diagram", 3)).rejects.toThrow(/visual_facts_kind_check/);` to `await expect(insert("diagram", 3)).rejects.toThrow(/visual_facts_kind_(ordinal_)?check/);` (0037's rule also names a kind it does not know, and Postgres reports one failing constraint). Edit the existing "refuses a fact outside the writer's ordinal range" test: its first expectation becomes `await expect(store.replace(ref, [fig(16, chunk)])).rejects.toThrow(/extraction writes ordinals/);`.
 3. Append inside the `describe.skipIf(!PG_URL)` block:
 
@@ -1329,6 +1329,44 @@ In `apps/server/app/flows/visualize-document/pgFacts.pg.test.ts`:
     await expect(store.replace(ref, [], undefined, 4)).rejects.toBeInstanceOf(DocumentGoneError);
     expect(await store.aggregateCount(ref)).toBe(1);
   });
+
+  it("the extraction write stamps the document with the extraction format in its own transaction; nothing else does", async () => {
+    const ref = await fx.doc("c8".repeat(32));
+    const other = await fx.doc("c9".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    expect(await store.extractFormat(ref)).toBeNull(); // a document extracted before c2: never stamped
+    await store.replaceStructure(ref, [outlineFact(chunk)]);
+    expect(await store.extractFormat(ref)).toBeNull(); // the structure writer never stamps
+    await store.replace(ref, [fig(0, chunk)]);
+    expect(await store.extractFormat(ref)).toBe(EXTRACT_FORMAT);
+    expect(EXTRACT_FORMAT).toBe("docmind.extract@2");
+    expect(await store.extractFormat(other)).toBeNull(); // another document is untouched
+    // an extraction that found nothing, or was refused, is still an extraction under this format
+    await fx.db.owner.query("UPDATE documents SET visual_extract_format = NULL WHERE id = $1", [ref.documentId]);
+    await store.replace(ref, []);
+    expect(await store.extractFormat(ref)).toBe(EXTRACT_FORMAT);
+    // an older stamp is replaced by the current one
+    await fx.db.owner.query("UPDATE documents SET visual_extract_format = 'docmind.extract@1' WHERE id = $1", [ref.documentId]);
+    expect(await store.extractFormat(ref)).toBe("docmind.extract@1");
+    await store.replace(ref, [fig(0, chunk)]);
+    expect(await store.extractFormat(ref)).toBe(EXTRACT_FORMAT);
+  });
+
+  it("a refused or superseded extraction write does not stamp, and the stamp is owner-scoped and bounded", async () => {
+    const ref = await fx.doc("ca".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    await expect(store.replace(ref, [fig(17, chunk)])).rejects.toThrow(/extraction writes ordinals/);
+    expect(await store.extractFormat(ref)).toBeNull();
+    await fx.db.owner.query("UPDATE documents SET ingest_generation = 5 WHERE id = $1", [ref.documentId]);
+    await expect(store.replace(ref, [fig(0, chunk)], undefined, 4)).rejects.toBeInstanceOf(DocumentGoneError);
+    expect(await store.extractFormat(ref)).toBeNull(); // the stale writer's transaction rolled back, stamp included
+    await expect(store.extractFormat({ ...ref, userId: U1B })).rejects.toBeInstanceOf(DocumentGoneError);
+    await expect(
+      fx.db.owner.query("UPDATE documents SET visual_extract_format = $2 WHERE id = $1", [ref.documentId, "x".repeat(65)]),
+    ).rejects.toThrow(/check/i);
+  });
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1366,6 +1404,8 @@ export const TIMELINE_ORDINAL = 18;
 export const RELATIONS_ORDINAL = 19;
 /** The most rows one document holds: the extracted facts, the outline, the entity map, the timeline and the relations. */
 export const MAX_STORED_FACTS = MAX_FACTS + 4;
+/** The format of the extraction that made a document's facts (its prompt and answer): `PgVisualFacts.replace` stamps it on the document, and a user's re-run extracts again when the stamp is missing or different. Bump it when the extraction's prompt or answer changes in a way existing documents should be re-extracted for. */
+export const EXTRACT_FORMAT = "docmind.extract@2";
 ```
 
 3b. After the `EntityMap` schema (the `const EntityMap = z.object({ ... }).strict();` block that ends just before `export const DraftFact`), insert:
@@ -1541,6 +1581,12 @@ Create `infra/migrations/0037_visual_facts_aggregate_kinds.sql`:
 -- `(kind IN ('outline','cooccurrence')) = (ordinal >= 16)`, which would refuse a timeline as an "extracted" row and let an
 -- outline sit at 17. Every existing row satisfies the new rule: the structure step writes outline at 16 and cooccurrence at
 -- 17 only, and the extracted kinds are below 16. No data changes; UNIQUE (tenant_id, document_id, ordinal) is untouched.
+--
+-- It also adds the extraction format stamp (spec D5, re-extract once): `documents.visual_extract_format`, the format of the
+-- extraction that made the document's facts, set by the extraction write in the same transaction as the facts. NULL on every
+-- existing document means "extracted before c2" (no backfill). A plain token, no content, so it is not sealed.
+ALTER TABLE documents ADD COLUMN visual_extract_format text
+  CHECK (visual_extract_format IS NULL OR length(visual_extract_format) <= 64);
 ALTER TABLE visual_facts DROP CONSTRAINT visual_facts_kind_ordinal_check;
 ALTER TABLE visual_facts DROP CONSTRAINT visual_facts_kind_check;
 ALTER TABLE visual_facts DROP CONSTRAINT visual_facts_ordinal_check;
@@ -1573,6 +1619,7 @@ import {
   AGGREGATE_ORDINAL_BASE,
   type AnyFact,
   ENTITY_MAP_ORDINAL,
+  EXTRACT_FORMAT,
   type ExtractionWrite,
   type Fact,
   OUTLINE_ORDINAL,
@@ -1612,6 +1659,8 @@ export interface VisualFactStore {
   listAll(ref: VisualizeRef): Promise<AnyFact[]>;
   /** How many aggregate rows (timeline, relations) the document has. Counts rows only: nothing is opened. Throws DocumentGoneError if the user does not own it. */
   aggregateCount(ref: VisualizeRef): Promise<number>;
+  /** The format of the extraction that last wrote this document's facts (`EXTRACT_FORMAT`), or null when it was extracted before the stamp existed. Throws DocumentGoneError if the user does not own it. */
+  extractFormat(ref: VisualizeRef): Promise<string | null>;
 }
 
 const factBind = (id: string) => `visualfact:${id}:fact`;
@@ -1717,6 +1766,12 @@ export class PgVisualFacts implements VisualFactStore {
           [r.id, ref.tenantId, ref.userId, ref.documentId, r.kind, r.ordinal, r.sealed, r.chunkIds],
         );
       }
+      // Only the extraction write stamps: the stamp says which extraction made these facts (spec D5), in the same transaction.
+      if (owner === "extraction")
+        await tx.query(
+          "UPDATE documents SET visual_extract_format = $4 WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+          [ref.documentId, ref.userId, ref.tenantId, EXTRACT_FORMAT],
+        );
       if (signal?.aborted) throw new ParseAbortedError();
     });
     return rows.length;
@@ -1741,6 +1796,17 @@ export class PgVisualFacts implements VisualFactStore {
       );
     });
     return res.rows[0]?.n ?? 0;
+  }
+
+  async extractFormat(ref: VisualizeRef): Promise<string | null> {
+    const res = await withTenant(this.pool, ref.tenantId, async (tx) => {
+      await lockDocument(tx, ref);
+      return tx.query<{ format: string | null }>(
+        "SELECT visual_extract_format AS format FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3",
+        [ref.documentId, ref.userId, ref.tenantId],
+      );
+    });
+    return res.rows[0]?.format ?? null;
   }
 
   private async read(
@@ -1775,7 +1841,7 @@ Expected: PASS, and the summary lists the pg tests as passed (not skipped). The 
 
 - [ ] **Step 8: Make the fake stores compile (a new method on the interface)**
 
-`VisualizeDeps.facts` is a full `VisualFactStore`, so every fake that builds it needs `aggregateCount`, and a fake whose `replace` now receives `ExtractionWrite[]` needs a wider `held`. Run `pnpm typecheck:tests`: it names each place. The expected three:
+`VisualizeDeps.facts` is a full `VisualFactStore`, so every fake that builds it needs `aggregateCount` and `extractFormat`, and a fake whose `replace` now receives `ExtractionWrite[]` needs a wider `held`. Run `pnpm typecheck:tests`: it names each place. The expected three:
 
 - `apps/server/app/flows/visualize-document/flow.test.ts`: change the import `import type { Fact, StructureFact } from "./facts";` to `import { AGGREGATE_ORDINAL_BASE, type ExtractionWrite, type Fact, STRUCTURE_ORDINAL_BASE, type StructureFact } from "./facts";`; in `stack` change `let held: Fact[] = [];` to `let held: ExtractionWrite[] = [];`; replace the `list` and `listAll` entries of the `facts` fake with
 
@@ -1786,9 +1852,10 @@ Expected: PASS, and the summary lists the pg tests as passed (not skipped). The 
         return [...held, ...structured].sort((a, b) => a.ordinal - b.ordinal);
       },
       aggregateCount: async () => held.filter((f) => f.ordinal >= AGGREGATE_ORDINAL_BASE).length,
+      extractFormat: async () => (stamped ? EXTRACT_FORMAT : null),
 ```
 
-and change `hold: (facts: Fact[]) => {` to `hold: (facts: ExtractionWrite[]) => {`. (Keep `Fact` imported: other lines of the file use it.)
+(and declare `let stamped = false;` beside `held`, set `stamped = true;` as the first line after the `replaceError` check inside the `replace` fake; add `EXTRACT_FORMAT` to the `./facts` import), and change `hold: (facts: Fact[]) => {` to `hold: (facts: ExtractionWrite[]) => {`. (Keep `Fact` imported: other lines of the file use it.)
 
 - `apps/server/app/flows/visualize-document/recovery.test.ts`: import `AGGREGATE_ORDINAL_BASE`, `type ExtractionWrite`, `STRUCTURE_ORDINAL_BASE` from `./facts` beside `Fact`; `let held: Fact[] = [];` becomes `let held: ExtractionWrite[] = [];`; the fake's `list`/`listAll` become
 
@@ -1796,9 +1863,10 @@ and change `hold: (facts: Fact[]) => {` to `hold: (facts: ExtractionWrite[]) => 
         list: async () => held.filter((f) => f.ordinal < STRUCTURE_ORDINAL_BASE) as Fact[],
         listAll: async () => held,
         aggregateCount: async () => held.filter((f) => f.ordinal >= AGGREGATE_ORDINAL_BASE).length,
+        extractFormat: async () => null,
 ```
 
-- `apps/server/app/flows/visualize-document/rollout.pg.test.ts`: the same three changes (`let held: ExtractionWrite[]`, the `list` filter, and `aggregateCount` beside `listAll: async () => [...held, ...structured]`).
+- `apps/server/app/flows/visualize-document/rollout.pg.test.ts`: the same changes (`let held: ExtractionWrite[]`, the `list` filter, and `aggregateCount` and `extractFormat: async () => null` beside `listAll: async () => [...held, ...structured]`).
 
 Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: clean. Then run `pnpm --filter @docmind/server exec vitest run app/flows/visualize-document` (with the pg env set) and confirm everything passes: the only behavioural change so far is the stricter `StoredEntry` and the wider ranges.
@@ -3429,9 +3497,9 @@ git commit -m "feat(visuals): c2 extraction returns a timeline and relations; fl
 
 ---
 
-### Task 5: Existing documents get the diagrams when the user presses re-run (spec D5, finding F3)
+### Task 5: Re-extract once: a user's re-run extracts a pre-c2 document (spec D5, finding F3)
 
-Without this task a re-run would never produce a timeline: the extract step re-plans over stored facts and never extracts on a `-r<n>` run that has any (or whose previous run was `done`). This task adds the narrowest change that makes the spec's "press re-run, one extraction call each" true, and nothing a boot pass can trigger. **If the controller reads D5 differently, drop this task: Tasks 1 to 4 and 6 stand without it** (a new upload or re-ingest still gets both diagrams).
+Without this task a re-run would never produce a timeline: the extract step re-plans over stored facts and never extracts on a `-r<n>` run that has any (or whose previous run was `done`). The user ruled: mark each extraction with its format (`docmind.extract@2`, stored on `documents.visual_extract_format`, Task 2) and let a re-run the USER asks for extract again only when the stored marker is missing or not current. That is one extraction call per document, once (the extraction stamps it); every later re-run is a cheap re-plan; a boot pass never extracts; chat's extraction never touches the marker.
 
 **Files:**
 - Modify: `apps/server/app/flows/visualize-document/extract.ts`
@@ -3441,25 +3509,37 @@ Without this task a re-run would never produce a timeline: the extract step re-p
 - Test: `apps/server/app/flows/visualize-document/extract.test.ts`, `start.test.ts`
 
 **Interfaces:**
-- Consumes: `ExtractDeps`, `aggregateCount` (Tasks 2 and 4).
+- Consumes: `ExtractDeps` (Task 4); `EXTRACT_FORMAT`, `VisualFactStore.extractFormat` and the stamping `replace` (Task 2).
 - Produces: `ExtractDeps.reextract?: Set<string>`, `VisualizeDeps.reextract?: Set<string>`, `VisualsStarterOptions.reextract?: Set<string>` (one shared set, created in `compose.ts`); `VisualsStarter.rerun` (the route's call) notes the execution id it starts; `rerunWith(ref, generation, assumeDone = false, byUser = false)` is internal and the boot passes never pass `byUser`.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `apps/server/app/flows/visualize-document/extract.test.ts` append this top-level block (it reuses the module-level `EVENTS`, `LINKS` and `answer` declared in Task 4 step 1):
+In `apps/server/app/flows/visualize-document/extract.test.ts`:
+
+1. Add `import { readFileSync } from "node:fs";` and extend the `./facts` import with `EXTRACT_FORMAT`.
+2. In `setup`'s `store` fake add a stamp that behaves like the real store (the extraction write stamps it): add the field and method, and make `replace` set it:
 
 ```ts
-describe("a re-run the user asked for (spec D5: an existing document gets its timeline and relations on re-run)", () => {
+    format: null as string | null,
+    extractFormat: async () => store.format,
+```
+
+and as the first line of `replace` (before `store.writes.push`): `store.format = EXTRACT_FORMAT;`.
+3. Append this top-level block (it reuses the module-level `EVENTS`, `LINKS`, `answer`, `GOOD`, `C0` of Task 4):
+
+```ts
+describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-c2 document", () => {
   const ctxOf = (s: ReturnType<typeof setup>, n = 1) =>
     ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
   const noteFor = (s: ReturnType<typeof setup>, n = 1) =>
     new Set([visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n)]);
   const existing = { ...GOOD, ordinal: 0 } as Fact; // an existing document: a chart fact and no timeline
 
-  it("extracts again over stored facts when the document has no timeline or relations yet, once, and consumes its note", async () => {
+  it("a re-run the user asked for extracts a document with no stamp, stamps it, and consumes its note", async () => {
     const { llm, requests } = scripted(() => answer());
     const s = setup({ llm });
-    s.store.held = [existing];
+    s.store.held = [existing]; // extracted before c2: format is null
+    expect(s.store.format).toBeNull();
     const reextract = noteFor(s);
     expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
       outcome: "done",
@@ -3469,44 +3549,67 @@ describe("a re-run the user asked for (spec D5: an existing document gets its ti
     });
     expect(requests).toHaveLength(1);
     expect(s.store.held.map((f) => f.ordinal)).toEqual([0, 18, 19]);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
     expect(reextract.size).toBe(0);
   });
 
-  it("extracts again for a zero-fact document whose last run was done", async () => {
-    const { llm, requests } = scripted(() => answer());
+  it("a second re-run does not extract, even for a document whose extraction found no timeline or relations", async () => {
+    const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] })); // the model finds no aggregates
     const s = setup({ llm });
-    const d = {
-      ...s.d,
-      reextract: noteFor(s),
-      runs: { last: async () => ({ run: 0, state: "done" as const, code: null }) },
-    };
-    expect(await extractEffect(d).execute(s.ref, ctxOf(s))).toMatchObject({
-      count: 1,
-      aggregates: 2,
-    });
+    s.store.held = [existing];
+    await extractEffect({ ...s.d, reextract: noteFor(s, 1) }).execute(s.ref, ctxOf(s, 1));
     expect(requests).toHaveLength(1);
-  });
-
-  it("re-plans only, with no model call, when the document already has a timeline or relations: a second press costs a planner call", async () => {
-    const { llm, requests } = scripted(() => answer());
-    const s = setup({ llm });
-    s.store.held = [existing, aggregateFacts(C0).timeline];
-    const reextract = noteFor(s);
-    expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0]); // stamped, with nothing aggregate to show for it
+    const second = noteFor(s, 2);
+    expect(await extractEffect({ ...s.d, reextract: second }).execute(s.ref, ctxOf(s, 2))).toEqual({
       outcome: "done",
       count: 1,
-      aggregates: 1,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(1); // no new extraction
+    expect(second.size).toBe(0);
+  });
+
+  it("the re-run of a document a c2 extraction stamped does not extract", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    s.store.format = EXTRACT_FORMAT;
+    expect(await extractEffect({ ...s.d, reextract: noteFor(s) }).execute(s.ref, ctxOf(s))).toEqual({
+      outcome: "done",
+      count: 1,
       model: "claude-test",
     });
     expect(requests).toEqual([]);
     expect(s.store.writes).toEqual([]);
-    expect(reextract.size).toBe(0); // the note is consumed either way
   });
 
-  it("a re-run the user did not ask for is unchanged: stored facts are re-planned and never extracted, and another execution's note is left alone", async () => {
+  it("an older stamp counts as pre-c2: the rule is inequality, so a later bump of the format re-extracts once more", async () => {
     const { llm, requests } = scripted(() => answer());
     const s = setup({ llm });
     s.store.held = [existing];
+    s.store.format = "docmind.extract@1";
+    await extractEffect({ ...s.d, reextract: noteFor(s) }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(1);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+  });
+
+  it("a zero-fact document whose last run was done is extracted by the user's re-run when it has no stamp, and not when stamped", async () => {
+    const done = { last: async () => ({ run: 0, state: "done" as const, code: null }) };
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    await extractEffect({ ...s.d, runs: done, reextract: noteFor(s) }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(1);
+    const t = setup({ llm });
+    t.store.format = EXTRACT_FORMAT;
+    await extractEffect({ ...t.d, runs: done, reextract: noteFor(t) }).execute(t.ref, ctxOf(t));
+    expect(requests).toHaveLength(1); // the stamped one re-planned
+  });
+
+  it("a boot pass never extracts: an un-noted re-run of a pre-c2 document re-plans over its stored facts, and another run's note is left alone", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing]; // no stamp: the user's press would extract
     const reextract = noteFor(s, 7); // a note for another run of this document
     expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s, 1))).toEqual({
       outcome: "done",
@@ -3514,7 +3617,24 @@ describe("a re-run the user asked for (spec D5: an existing document gets its ti
       model: "claude-test",
     });
     expect(requests).toEqual([]);
+    expect(s.store.format).toBeNull(); // nothing was extracted, so nothing was stamped
     expect(reextract.size).toBe(1);
+  });
+
+  it("the automatic run extracts as before and stamps the format (a new upload or re-ingest)", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    const ctx = { executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1) } as never;
+    await extractEffect(s.d).execute(s.ref, ctx);
+    expect(requests).toHaveLength(1);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+  });
+
+  it("chat's extraction code never writes or reads the stamp: its sources do not mention it", () => {
+    for (const file of ["../visualize-turn/steps.ts", "../visualize-turn/deps.ts", "../visualize-turn/pgTurnFacts.ts"]) {
+      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(source, file).not.toMatch(/extractFormat|EXTRACT_FORMAT|visual_extract_format|aggregateCount/);
+    }
   });
 });
 ```
@@ -3561,17 +3681,18 @@ In `apps/server/app/flows/visualize-document/start.test.ts`, inside `describe("r
 - [ ] **Step 2: Run to verify failure**
 
 Run: `pnpm --filter @docmind/server exec vitest run app/flows/visualize-document/extract.test.ts app/flows/visualize-document/start.test.ts`
-Expected: FAIL (the extract step ignores `reextract`; the starter has no such option).
+Expected: FAIL (the extract step ignores `reextract` and the stamp; the starter has no such option).
 
 - [ ] **Step 3: Implement the extract step's branch**
 
-In `apps/server/app/flows/visualize-document/extract.ts`, add to `ExtractDeps` after `afterDone`:
+In `apps/server/app/flows/visualize-document/extract.ts`: add `EXTRACT_FORMAT` to the `./facts` import; change `ExtractDeps.facts` to `Pick<VisualFactStore, "replace" | "list" | "aggregateCount" | "extractFormat">`; add to `ExtractDeps` after `afterDone`:
 
 ```ts
   /**
    * Execution ids of re-runs the USER asked for (the starter's `rerun`; a boot pass never notes one). A noted re-run extracts
-   * again when the document has no timeline or relations yet, so an existing document gets them (spec D5). In-process only:
-   * a run recovered after a crash has no note and re-plans over what is stored.
+   * again when the document's stored extraction predates this format (`extractFormat` is missing or not `EXTRACT_FORMAT`),
+   * which is how an existing document gets its timeline and relations once (spec D5). In-process only: a run recovered after a
+   * crash has no note and re-plans over what is stored.
    */
   reextract?: Set<string>;
 ```
@@ -3586,10 +3707,11 @@ and replace the `if (executionId !== undefined && id && rerun > 0) { ... }` bloc
         const stored = await deps.facts.list(ref);
         // A timeline or relations fact is a stored fact too: the model already answered for this document.
         const held = await deps.facts.aggregateCount(ref);
-        // The user's own re-run of a document that has no timeline or relations yet extracts once more (spec D5: how an
-        // existing document gets them). Every other re-run re-plans over what is stored, and so does a second press once the
-        // document has them (it costs a planner call, not an extraction).
-        if (!(asked && held === 0)) {
+        // The user's own re-run of a document whose extraction predates this format (no stamp, or an older one) extracts once
+        // more, and the extraction stamps it (spec D5: re-extract once). Every other re-run re-plans over what is stored,
+        // a boot pass's included; so does a second press, and the re-run of a document a c2 extraction stamped.
+        const predates = asked && (await deps.facts.extractFormat(ref)) !== EXTRACT_FORMAT;
+        if (!predates) {
           if (stored.length > 0 || held > 0)
             return { count: stored.length, ...(held > 0 && { aggregates: held }), model };
           // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
@@ -3600,6 +3722,8 @@ and replace the `if (executionId !== undefined && id && rerun > 0) { ... }` bloc
       }
 ```
 
+The stamp itself is written by `PgVisualFacts.replace` (Task 2), in the extraction's own transaction, so this step writes nothing extra. Chat's turn extraction (`visualize-turn`) calls `askForFacts` and its own store; it never reaches this branch or the stamp.
+
 - [ ] **Step 4: Implement the starter, the deps and the composition**
 
 In `apps/server/app/flows/visualize-document/start.ts`:
@@ -3609,7 +3733,7 @@ In `apps/server/app/flows/visualize-document/start.ts`:
 ```ts
   /**
    * Shared with the extract step (`ExtractDeps.reextract`): the execution ids of re-runs the USER asked for (`rerun`, the
-   * route's call), so the step extracts again when the document has no timeline or relations yet. A boot pass never notes
+   * route's call), so the step extracts again when the stored extraction predates `EXTRACT_FORMAT`. A boot pass never notes
    * one. Ids only; a lost note just means the run re-plans.
    */
   reextract?: Set<string>;
@@ -3643,7 +3767,7 @@ and, inside `tracker.probe(key, last?.run ?? 0, (n) => { ... })`, add after the 
     const { handle: _handle, ...answer } = await pend(ref, rerunWith(ref, generation, false, true));
 ```
 
-4e. In the `VisualsStarter` interface, extend the comment of `rerun`: after "The run re-plans over the stored facts and extracts only when there are none." add " The one exception is a re-run the user asked for (this method, not a boot pass): it extracts again when the document has no timeline or relations yet (spec D5)."
+4e. In the `VisualsStarter` interface, extend the comment of `rerun`: after "The run re-plans over the stored facts and extracts only when there are none." add " The one exception is a re-run the user asked for (this method, not a boot pass): it extracts again when the document's stored extraction predates the current format (spec D5, re-extract once)."
 
 In `apps/server/app/flows/visualize-document/deps.ts`, after `afterDone?: Set<string>;` in `VisualizeDeps` add:
 
@@ -3655,7 +3779,7 @@ In `apps/server/app/flows/visualize-document/deps.ts`, after `afterDone?: Set<st
 In `apps/server/app/compose.ts`: after `const afterDone = new Set<string>();` add
 
 ```ts
-  const reextract = new Set<string>(); // re-runs the user asked for: the extract step extracts again when there is no timeline or relations yet
+  const reextract = new Set<string>(); // re-runs the user asked for: the extract step extracts again when the stored extraction predates c2
 ```
 
 add `reextract,` after `afterDone,` in `visualize.deps` (the object that has `runs: visualRuns, afterDone,`), and add `reextract,` after `afterDone,` in the `loomVisualsStarter(app.runtime, visualize.flow, { ... })` options.
@@ -3672,7 +3796,7 @@ Expected: clean.
 
 ```bash
 git add apps/server/app/flows/visualize-document/extract.ts apps/server/app/flows/visualize-document/extract.test.ts apps/server/app/flows/visualize-document/start.ts apps/server/app/flows/visualize-document/start.test.ts apps/server/app/flows/visualize-document/deps.ts apps/server/app/compose.ts
-git commit -m "feat(visuals): a user's re-run extracts the timeline and relations for an existing document"
+git commit -m "feat(visuals): re-extract once, on a user's re-run of a pre-c2 document"
 ```
 
 ---
@@ -3898,11 +4022,11 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
     expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
   }, 120_000);
 
-  it("an existing document gets both diagrams when the user presses re-run, once: a second press re-plans without extracting", async () => {
+  it("re-extract once: a pre-c2 document gets both diagrams on the user's first re-run; a stamped document, and every later re-run, only re-plan", async () => {
     const st = await startIngestStack({ visuals: true });
     stacks.push(st);
-    // The model of before c2 (facts only), and a connections-only plan: the first run ends `done`, so a plain re-run would
-    // re-plan and never extract (the extract step's rule); only the user's press may extract again.
+    // The model of before c2 (facts only) and a connections-only plan: the first run ends `done`, so a plain re-run would
+    // re-plan and never extract (the extract step's rule); only the marker lets the user's press extract again.
     const state = { aggregates: false, extractions: 0, connections: true };
     stubNarrative(st.visualsClaude as FakeAnthropic, state);
     const ada = await st.signUpAndLogIn("ada@example.com");
@@ -3912,8 +4036,9 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
     const ref = { tenantId: ada.tenantId, userId: ada.userId, documentId: id };
     const facts = new PgVisualFacts(st.app, st.fields);
     expect(await facts.aggregateCount(ref)).toBe(0);
+    // A new upload stamps the extraction format.
+    expect(await facts.extractFormat(ref)).toBe("docmind.extract@2");
 
-    state.aggregates = true; // the model now answers with the new fields
     const press = async (rerun: number) => {
       const events = await st.events(ada.cookie);
       try {
@@ -3928,18 +4053,26 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
       }
       expect(await visualizeEnd(st, ada.userId, id, rerun)).toEqual({ outcome: "done" });
     };
-    await press(1);
-    expect(state.extractions).toBe(2); // the first press extracted once
+    state.aggregates = true; // the model now answers with the new fields
+    await press(1); // a document a c2 extraction stamped: a re-plan only
+    expect(state.extractions).toBe(1);
+    expect(await facts.aggregateCount(ref)).toBe(0);
+
+    // Make it a document extracted before c2: no stamp.
+    await st.db.owner.query("UPDATE documents SET visual_extract_format = NULL WHERE id = $1", [id]);
+    await press(2); // the first re-run of a pre-c2 document extracts, once
+    expect(state.extractions).toBe(2);
     expect((await facts.listAll(ref)).map((f) => [f.ordinal, f.kind])).toEqual([
       [18, "timeline"],
       [19, "relations"],
     ]);
+    expect(await facts.extractFormat(ref)).toBe("docmind.extract@2");
     expect(((await hydrate(st, ada.cookie, id, "fact-18")) as { state: string }).state).toBe("ready");
 
-    await press(2);
-    expect(state.extractions).toBe(2); // the second press only re-planned
-    expect(await facts.aggregateCount(ref)).toBe(2); // and kept them
-  }, 240_000);
+    await press(3); // every later re-run is a re-plan
+    expect(state.extractions).toBe(2);
+    expect(await facts.aggregateCount(ref)).toBe(2);
+  }, 300_000);
 - [ ] **Step 2: Write the rollout proof**
 
 In `apps/server/app/flows/visualize-document/rollout.pg.test.ts` add `vi` to the vitest import, and append inside the `describe.skipIf(!PG_URL)` block:
@@ -4098,13 +4231,13 @@ Expected: PASS, the summary showing the pg and e2e tests passed (not skipped). T
 - Insert this bullet immediately before the line that begins `- **Plan.** A loom-ui planner decides the nodes`:
 
 ```
-- **Timeline and relations.** The document extraction call (`askForExtraction`; chat keeps `askForFacts` and its own prompt, so a chat request is unchanged) also returns two optional top-level fields next to `facts`: `timeline` (at most 40 events: the date as written, the date as `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`, a label, the cited passages) and `relations` (at most 30 links: from, a short relation phrase, to, the cited passages). They are validated item by item on the server (`dates.ts`, `timeline.ts`, `relations.ts`): a date must be real at its precision (year 1000 to 9999), relative or undated phrases are dropped, text is stripped of control and invisible characters and clipped (label 80, relation 40, party 80, written date 40), every citation must be a passage of this document, events are deduped by date, precision and label and sorted by date then by the first cited passage, links are deduped by (from, relation, to) with self-links dropped, parties are deduped by normalised name, and fewer than 3 events or 3 links is none. A bad item never fails the run or costs another fact. The survivors are two sealed facts in `visual_facts`: the **timeline** at ordinal 18 and the **relations** at ordinal 19. Ordinal ownership: `PgVisualFacts.replace` (extraction) owns 0..15 and 18..19 together, so a new extraction with no timeline removes the old one, `replaceStructure` owns 16..17, and a re-plan that skips extraction never writes, so 18..19 survive it. Migration 0037 widens the `visual_facts` ordinal CHECK to 0..19 and pins every kind to its own ordinal (`visual_facts_kind_ordinal_check`: extracted kinds below 16, `outline` 16, `cooccurrence` 17, `timeline` 18, `relations` 19). `list` (chat, the extraction re-plan check) still returns ordinals below 16 only; `aggregateCount` counts the rows without opening them. The answer is longer, so `VISUALS_MAX_TOKENS` is 16 000. The extract step's prompt and output are not part of Loom's flow hash (which covers the flow id, version, steps, retry and timeout), so `visualize-document` stays 1.1.0 with an unchanged hash (`flowHash.test.ts` pins it). The reshapers (`structureShapes.ts`) turn the timeline into a loom-ui `Diagram` with the `timeline` layout (a node per event, `at` the ISO first day, the label prefixed with the written date unless the event is dated to the day, `timeFormat` date-only) and the relations into a `network` (a node per party, a directed edge per link labelled with the relation); both pass `diagramProblems`, and `refs` carry at most 16 cited passages. Rollout is on demand: a new upload or re-ingest gets them from its own extraction, and `factFormatFingerprint()` is unchanged, so the boot stale pass re-plans nothing. An existing document gets them when the user presses re-run: the route's re-run (never a boot pass) notes its execution id, and the extract step then extracts once more when the document has no timeline or relations yet.
+- **Timeline and relations.** The document extraction call (`askForExtraction`; chat keeps `askForFacts` and its own prompt, so a chat request is unchanged) also returns two optional top-level fields next to `facts`: `timeline` (at most 40 events: the date as written, the date as `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`, a label, the cited passages) and `relations` (at most 30 links: from, a short relation phrase, to, the cited passages). They are validated item by item on the server (`dates.ts`, `timeline.ts`, `relations.ts`): a date must be real at its precision (year 1000 to 9999), relative or undated phrases are dropped, text is stripped of control and invisible characters and clipped (label 80, relation 40, party 80, written date 40), every citation must be a passage of this document, events are deduped by date, precision and label and sorted by date then by the first cited passage, links are deduped by (from, relation, to) with self-links dropped, parties are deduped by normalised name, and fewer than 3 events or 3 links is none. A bad item never fails the run or costs another fact. The survivors are two sealed facts in `visual_facts`: the **timeline** at ordinal 18 and the **relations** at ordinal 19. Ordinal ownership: `PgVisualFacts.replace` (extraction) owns 0..15 and 18..19 together, so a new extraction with no timeline removes the old one, `replaceStructure` owns 16..17, and a re-plan that skips extraction never writes, so 18..19 survive it. Migration 0037 widens the `visual_facts` ordinal CHECK to 0..19 and pins every kind to its own ordinal (`visual_facts_kind_ordinal_check`: extracted kinds below 16, `outline` 16, `cooccurrence` 17, `timeline` 18, `relations` 19). `list` (chat, the extraction re-plan check) still returns ordinals below 16 only; `aggregateCount` counts the rows without opening them. The answer is longer, so `VISUALS_MAX_TOKENS` is 16 000. The extract step's prompt and output are not part of Loom's flow hash (which covers the flow id, version, steps, retry and timeout), so `visualize-document` stays 1.1.0 with an unchanged hash (`flowHash.test.ts` pins it). The reshapers (`structureShapes.ts`) turn the timeline into a loom-ui `Diagram` with the `timeline` layout (a node per event, `at` the ISO first day, the label prefixed with the written date unless the event is dated to the day, `timeFormat` date-only) and the relations into a `network` (a node per party, a directed edge per link labelled with the relation); both pass `diagramProblems`, and `refs` carry at most 16 cited passages. Rollout is on demand: a new upload or re-ingest gets them from its own extraction, and `factFormatFingerprint()` is unchanged, so the boot stale pass re-plans nothing. An existing document gets them when the user presses re-run, once: the route's re-run (never a boot pass) notes its execution id, and the extract step then extracts again only when the document's `documents.visual_extract_format` (added by migration 0037, set by the extraction write in its own transaction, NULL for a document extracted before c2) is missing or is not `docmind.extract@2`; the extraction stamps it, so every later re-run is a re-plan. Chat's turn extraction never writes or reads the stamp.
 ```
 
 - In the **Plan.** bullet, append at its end: ` The timeline and relations are offered the same way (counts only; the sample holds placeholder nodes and edges, with a neutral date for the timeline), and `VISUALS_INTENT` says to show a timeline when the document narrates dated events and a relationships diagram when it states how parties relate, and to leave them out for a few scattered dates or links.`
 - In the **Fact-format re-plan.** bullet, append: ` The timeline and relations release changes neither the fingerprint nor the flow hash, so it re-plans nothing at boot (`rollout.pg.test.ts` pins the fingerprint and that the stale pass and a boot sweep start nothing for a document stamped with it).`
 - In the **Connections.** bullet replace `(both loom-ui `Diagram`), is `docmind.visuals.v3`.` with `and `DocumentOutline`, `EntityMap`, `DocumentTimeline` (the `timeline` layout) and `Relationships` (the `network` layout), all loom-ui `Diagram`, is `docmind.visuals.v4`; its first eight entries are byte for byte v3's (a stored plan carries no catalogue id, so a v3 plan still hydrates under v4, and the catalogue id is not part of the fingerprint).` — and remove the now-duplicated words `and `DocumentOutline` and `EntityMap`` just before it, so the sentence reads: "the document catalogue, which adds the two connections types, `DocumentOutline`, `EntityMap`, `DocumentTimeline` (the `timeline` layout) and `Relationships` (the `network` layout), all loom-ui `Diagram`, is `docmind.visuals.v4`; ...".
-- In the **Retry.** bullet replace `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none; it also skips extraction` with `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none, except a re-run the user asked for (the route, not a boot pass), which also extracts when the document has no timeline or relations yet; a re-run also skips extraction`.
+- In the **Retry.** bullet replace `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none; it also skips extraction` with `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none, except a re-run the user asked for (the route, not a boot pass), which also extracts when the document's `visual_extract_format` is missing or older than `docmind.extract@2` (once: the extraction stamps it); a re-run also skips extraction`.
 
 6b. `docs/specs/2026-11-08-document-visuals-design.md`: append at the end of the file:
 
@@ -4122,7 +4255,8 @@ Expected: PASS, the summary showing the pg and e2e tests passed (not skipped). T
 - Rollout is on demand: `factFormatFingerprint()` and the `visualize-document` 1.1.0 flow hash (the extract step's prompt and
   output are not part of it) are both unchanged, so nothing re-plans at boot. A new upload or re-ingest gets both diagrams from
   its own extraction; an existing document gets them when the user presses re-run (the route's re-run extracts once more when
-  the document has no timeline or relations yet; a boot pass never does).
+  the document's `documents.visual_extract_format` is missing or older than `docmind.extract@2`, and the extraction stamps it, so
+  later re-runs only re-plan; a boot pass never extracts).
 - `VISUALS_MAX_TOKENS` is 16 000 for the longer answer. Do not roll back to the c1 build while any document has a timeline or
   relations row (`docs/operations/cloud-deploy.md`).
 - Not done in c2: an automatic backfill, timelines or relationships in chat, cross-document timelines or relationship graphs,
@@ -4175,7 +4309,7 @@ git commit -m "test(visuals): c2 end to end, rollout proof and erasure scan; doc
 | 2 D2 (aggregates at 18 and 19, outside the 16-fact pool) | Task 2 (ordinals, `StoredEntry`, pg tests); Plan decisions (ordinal ownership table) |
 | 2 D3 (precision, as written, relative phrases dropped) | Task 1 (`dates.ts`, `timeline.ts`); Task 3 (label shows `when`) |
 | 2 D4 (relationships get their own entry, c1's map unchanged) | Task 3 (`Relationships` entry; the map's tests untouched) |
-| 2 D5 (on demand, fingerprint unchanged) | Task 3 (fingerprint literal, v3 subset guard, v3 hydrate test), Task 5 (re-run extracts; F3), Task 6 (`rollout.pg.test.ts`, e2e stamp and stale pass, e2e re-run) |
+| 2 D5 (on demand, re-extract once, fingerprint unchanged) | Task 2 (the `documents.visual_extract_format` column and the stamping write, pg tests), Task 3 (fingerprint literal, v3 subset guard, v3 hydrate test), Task 5 (a user's re-run of a pre-c2 document extracts; a second re-run, a stamped document and a boot pass do not; chat never touches the stamp), Task 6 (`rollout.pg.test.ts`, e2e stamp and stale pass, e2e re-extract once) |
 | 2 D6 (migration 0037) | Task 2 steps 5 and 7 (`pgFacts.pg.test.ts`: `timeline@3` and `figure@18` refused) |
 | 2 D7 (flow version unchanged, hash pinned) | Task 4 step 1 (`flowHash.test.ts`) and finding F1 |
 | 3 extraction answer and prompt | Task 4 (prompt test asserts every instruction: never infer, relative, 40, 30, cite) |
@@ -4189,10 +4323,10 @@ git commit -m "test(visuals): c2 end to end, rollout proof and erasure scan; doc
 | 5 rollout: fingerprint unchanged, v3 plan hydrates under v4 | Task 3 (views test: v3 plan adopts and compiles), Task 6 (rollout pg test) |
 | 6 privacy: sealed, no plaintext in logs/event log, planner counts only | Task 2 (sealed), Task 3 (no text in capabilities), Task 4 (planner request has no text), Task 6 (e2e event-log scan, erasure) |
 | 6 erasure scan gains needles | Task 6 step 3 (`inEvent`, `inParty`, `visual_facts` scanned and emptied) |
-| 6 cost: no extra call, no boot spending, one call per re-run | Task 4 (one call), Task 6 (stale list empty, sweep starts nothing; re-run extracts once, second press does not) |
+| 6 cost: no extra call, no boot spending, one extraction per document once | Task 4 (one call), Task 6 (stale list empty, sweep starts nothing; the first re-run of a pre-c2 document extracts, later ones do not) |
 | 7 testing: unit, reshapers, Postgres, flow, chat, e2e, browser | Tasks 1 to 6 (the flow's "key-store outage is retried" is in Task 4; the browser check is Task 6 step 7) |
 | 8 out of scope | Not implemented: no backfill, no chat timelines, no cross-document graphs, no entity merge, no editing |
 
 **Placeholder scan:** no "TBD", "TODO", "similar to" or "add appropriate"; every code step carries its code. The only non-code step is the browser check (a manual verification with exact input and expected results), which the workflow requires.
 
-**Type consistency:** `TimelineDraft` and `RelationsDraft` (Task 1) match the zod `Timeline` and `Relations` (Task 2: `events` with `at/precision/when/label/chunkId`, `entities: string[]`, `links` with `from/to/rel/chunkId`), `AggregateFact`, `aggregateFacts` (Task 2) and `TimelineFact` and `RelationsFact` (Task 3) field for field; `TIMELINE_ORDINAL` 18 and `RELATIONS_ORDINAL` 19 are used by `extract.ts` (Task 4), the capability handles `fact-18` and `fact-19` (Tasks 3, 4, 6), the experiences `STRUCTURE_ORDINAL` map (Task 3, pinned equal by a `plan.test.ts` test) and the e2e hydrate handles (Task 6); `ExtractionWrite` is what `replace` takes (Task 2) and what `extract.ts` passes (Task 4); `aggregateCount` is declared in Task 2, used by `extract.ts` (Task 4 and 5) and the e2e (Task 6); `ExtractResult.aggregates` (Task 4) is read by `flow.ts` (Task 4); `reextract` is one name in `ExtractDeps`, `VisualizeDeps`, `VisualsStarterOptions` and `compose.ts` (Task 5); `timelineDiagram` and `relationshipsDiagram` (Task 3) are called only from `visuals.ts` `TO` families `visual-timeline` and `visual-relations`, registered at 18 and 19 only.
+**Type consistency:** `TimelineDraft` and `RelationsDraft` (Task 1) match the zod `Timeline` and `Relations` (Task 2: `events` with `at/precision/when/label/chunkId`, `entities: string[]`, `links` with `from/to/rel/chunkId`), `AggregateFact`, `aggregateFacts` (Task 2) and `TimelineFact` and `RelationsFact` (Task 3) field for field; `TIMELINE_ORDINAL` 18 and `RELATIONS_ORDINAL` 19 are used by `extract.ts` (Task 4), the capability handles `fact-18` and `fact-19` (Tasks 3, 4, 6), the experiences `STRUCTURE_ORDINAL` map (Task 3, pinned equal by a `plan.test.ts` test) and the e2e hydrate handles (Task 6); `ExtractionWrite` is what `replace` takes (Task 2) and what `extract.ts` passes (Task 4); `aggregateCount` and `extractFormat` are declared in Task 2 (with `EXTRACT_FORMAT`, which only `PgVisualFacts.replace` writes and only the extract step's re-run branch reads), used by `extract.ts` (Tasks 4 and 5) and the e2e (Task 6); `ExtractResult.aggregates` (Task 4) is read by `flow.ts` (Task 4); `reextract` is one name in `ExtractDeps`, `VisualizeDeps`, `VisualsStarterOptions` and `compose.ts` (Task 5); `timelineDiagram` and `relationshipsDiagram` (Task 3) are called only from `visuals.ts` `TO` families `visual-timeline` and `visual-relations`, registered at 18 and 19 only.

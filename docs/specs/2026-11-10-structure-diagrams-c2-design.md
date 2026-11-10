@@ -18,7 +18,7 @@ This is step (c), phase c2 of document visuals. Phase c1 (outline and entity map
 | D2 | Two aggregate facts at reserved ordinals, outside the 16-fact chart pool: `timeline` at 18, `relations` at 19. |
 | D3 | Dates are kept at day, month, quarter or year precision and shown as written. Relative or undated phrases are dropped. |
 | D4 | Relationships get their own Diagram entry. c1's entity map is unchanged. |
-| D5 | **Rollout is on demand only.** New uploads and re-ingests get the new facts automatically. Existing documents get them when the user presses re-run (one extraction call each). The boot re-plan is not triggered, so the fact-format fingerprint is unchanged. |
+| D5 | **Rollout is on demand only, and re-extracts once.** New uploads and re-ingests get the new facts automatically and stamp the document with the extraction format (`docmind.extract@2`). An existing document is stamped nothing (NULL) until it is extracted again. A re-run the user asks for re-extracts only when the stored stamp is missing or is not the current one: one extraction call per document, once. After that, re-runs are cheap re-plans as today. The boot re-plan is not triggered and a boot pass never extracts, so the fact-format fingerprint is unchanged. |
 | D6 | Migration 0037 widens the ordinal CHECK to 0..19 and extends the kind/ordinal rule. |
 | D7 | The visualize-document flow version is unchanged: only the extract step's prompt and output change. This is verified against Loom's flow hash and pinned by a test. |
 
@@ -76,6 +76,7 @@ The prompt tells the model:
   - A re-plan that skips extraction keeps 18..19, because they can't be re-derived without the model.
   - c1's structure write keeps owning 16..17.
 - Sealed per user, owner-scoped, and erased with the user.
+- **Extraction format stamp.** Migration 0037 also adds a nullable `documents.visual_extract_format` (a plain token, no content). The extraction write (`PgVisualFacts.replace`) sets it to `docmind.extract@2` in the same transaction as the facts, including an extraction that finds nothing or is refused. Chat's turn extraction never writes it and never reads it. NULL means the document was extracted before c2.
 
 ## 5. Catalogue, diagrams and planning
 
@@ -104,6 +105,7 @@ The prompt tells the model:
 - `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything.
 - Existing plans stay valid, because v3's entries are a subset of v4's.
 - The plan verifies that a stored plan from v3 still hydrates under v4.
+- **Re-extract once.** The route's re-run (never a boot pass) is marked as asked by the user. The extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2). The extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
 
 ## 6. Privacy and cost
 
@@ -113,7 +115,7 @@ The prompt tells the model:
 - Cost:
   - No extra call. The extraction answer is longer.
   - No boot spending.
-  - One extraction call per document the user re-runs.
+  - One extraction call per document, the first time the user re-runs it after c2.
 
 ## 7. Testing
 
@@ -143,6 +145,12 @@ The prompt tells the model:
   - a flat document gets neither;
   - no plaintext in the event log;
   - boot re-plans nothing.
+- **Re-extract once:**
+  - a re-run the user asks for on a document with no stamp extracts, and stamps it;
+  - a second re-run does not extract;
+  - the re-run of a document stamped by a c2 upload does not extract;
+  - a boot pass never extracts, stamped or not;
+  - chat's extraction never writes or reads the stamp.
 - **Browser:** both diagrams render, and a citation opens its passage.
 
 ## 8. Out of scope
