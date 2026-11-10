@@ -2,7 +2,13 @@ import type { Shredder, SubjectIndex } from "@loom/compliance";
 import type { EventEnvelope } from "@loom/core";
 import type { EventStore } from "@loom/event-runtime";
 import { type KeyStore, type ShredOptions, shredSubject } from "@loom/plugin-crypto";
-import { USER_ID_PREFIXES } from "../opaqueIds";
+import {
+  HANDLE_PATTERN,
+  LINEAGE_ID_PATTERN,
+  USER_ID_PREFIXES,
+  USER_ID_TOKEN_SOURCE,
+  UUID_ANY_PATTERN,
+} from "../opaqueIds";
 import { subjectOfExecution } from "../subject";
 
 /** What erasure needs from the storage layer: the key store, and the raw (unwrapped) event and snapshot stores. */
@@ -61,12 +67,11 @@ export function complianceConfig({ keys, raw }: ErasureWiring) {
   };
 }
 
-/** A new-format lineage line (`visuals-<handle>-<token>`, `turnvisuals-<handle>-<token>-<ord>`) and a bare 26-character handle. */
-const LINEAGE_ID = /\b(?:turn)?visuals-[a-z2-7]{26}-[a-z2-7]{52}/;
-const HANDLE = /\b[a-z2-7]{25}[aeimquy4]\b/;
-const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const LINEAGE_ID = LINEAGE_ID_PATTERN;
+const HANDLE = HANDLE_PATTERN;
+const UUID = UUID_ANY_PATTERN;
 /** A user or execution id: any UUID, a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`) or an `h_…` id (`h_<handle>` and its `:` and `.c-` forms). */
-const HAS_ID_CASE_INSENSITIVE = new RegExp(`${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}`, "i");
+const HAS_ID_CASE_INSENSITIVE = new RegExp(`${UUID.source}|${USER_ID_TOKEN_SOURCE}`, "i");
 /** Handles and lineage ids are lower-case base32 only: an upper-case token of the same length is not one. */
 const HAS_ID = (text: string): boolean =>
   HAS_ID_CASE_INSENSITIVE.test(text) || LINEAGE_ID.test(text) || HANDLE.test(text);
@@ -81,7 +86,7 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}
 export function redactIds(message: string): string {
   return message
     .replace(/(\bexecution\s+)"[^"]*"/gi, `$1"${ID}"`)
-    .replace(/\b[uh]_[0-9A-Za-z_-]{6,}[^\s"',;)\]]*/g, ID)
+    .replace(new RegExp(`${USER_ID_TOKEN_SOURCE}[^\\s"',;)\\]]*`, "g"), ID)
     .replace(new RegExp(`${LINEAGE_ID.source}[^\\s"',;)\\]]*`, "g"), ID)
     .replace(new RegExp(HANDLE.source, "g"), ID)
     .replace(new RegExp(UUID.source, "gi"), ID)

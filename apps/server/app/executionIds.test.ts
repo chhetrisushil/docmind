@@ -110,6 +110,7 @@ describe("execution ids", () => {
 });
 
 /**
+ * SCOPE: non-test TypeScript under apps/server/app and the SQL in infra/migrations numbered after 0038. apps/loadtest, scripts/ and packages/ are out of scope.
  * Where an id is built or parsed outside `opaqueIds` (R14, spec O5): every string, template, template part or regex literal that carries
  * an id's shape, and every import of Loom UI's lineage stream prefix. `virtual` adds in-memory files so the scan itself can be tested.
  */
@@ -118,7 +119,33 @@ const ID_SHAPES: readonly RegExp[] = [
   /:(?:ingest|visualize|suggest-tags|chat-title)-/, // a flow name after a user prefix
   /\.c-/, // a conversation id
   /^\^?(?:turn)?visuals-(?:\(|$)/, // a lineage line: the head of `visuals-${...}` or of a regex `^visuals-(...)`
+  /\\b\(\?:turn\)\?visuals-/, // a lineage regex headed by a word boundary: `\b(?:turn)?visuals-...`
+  /\[uh\]_/, // a user-prefix regex or template: `\b[uh]_...`
+  /\[a-z2-7\]\{(?:25|26|52)\}/, // a handle or lineage token character class
 ];
+
+/** Where the SQL scan looks: a SQL string that builds an id prefix or flow name by concatenation. */
+const SQL_ID_SHAPES: readonly RegExp[] = [
+  /'[uh]_'\s*\|\|/,
+  /\|\|\s*'[uh]_/,
+  /'(?:turn)?visuals-'\s*\|\|/,
+  /\|\|\s*':(?:ingest|visualize|suggest-tags|chat-title)-/,
+  /\|\|\s*'\.c-/,
+];
+const MIGRATIONS = resolve(ROOT, "..", "..", "infra", "migrations");
+/**
+ * Migrations 0001 to 0038 are applied and immutable, and they build old-format ids in SQL (0038 rewrote the stored ids once; the
+ * earlier ones are the old-format sweeps and views). The ratchet guards what is written after them: a new migration may not build an id.
+ */
+const MAY_BUILD_IDS_IN_SQL = (file: string): boolean => Number(file.slice(0, 4)) <= 38;
+const sqlIdShapesIn = (files: Map<string, string>): string[] =>
+  [...files].flatMap(([name, text]) =>
+    text
+      .split("\n")
+      .flatMap((line, i) =>
+        SQL_ID_SHAPES.some((shape) => shape.test(line)) ? [`${name}:${i + 1}`] : [],
+      ),
+  );
 
 function idShapesIn(files: string[], virtual = new Map<string, string>()): string[] {
   const hits = new Set<string>();
@@ -189,5 +216,30 @@ describe("no id is built or parsed outside opaqueIds", () => {
     );
     expect(real.length).toBeGreaterThan(100); // the scan reads the program, not an empty list
     expect(idShapesIn(real)).toEqual([]);
+  });
+});
+
+describe("no migration builds an id in SQL", () => {
+  it.each([
+    ["a user prefix", "SET id = 'u_' || owner_id;"],
+    ["a handle prefix", "SET id = 'h_' || handle;"],
+    ["a lineage prefix", "SET l = 'visuals-' || owner;"],
+    ["a flow name", "SET id = owner || ':ingest-' || doc;"],
+    ["a conversation separator", "SET id = owner || '.c-' || chat;"],
+  ])("flags %s (the scan is not blind)", (_name, line) => {
+    expect(sqlIdShapesIn(new Map([["x.sql", `-- c\n${line}`]]))).toEqual(["x.sql:2"]);
+  });
+
+  it("finds none in the real migrations beyond the one allow-listed", () => {
+    const files = readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql"));
+    expect(files.length).toBeGreaterThan(30);
+    expect(MAY_BUILD_IDS_IN_SQL("0038_opaque_ids.sql")).toBe(true);
+    expect(MAY_BUILD_IDS_IN_SQL("0039_next.sql")).toBe(false);
+    const real = new Map(
+      files
+        .filter((f) => !MAY_BUILD_IDS_IN_SQL(f))
+        .map((f) => [f, readFileSync(join(MIGRATIONS, f), "utf8")] as const),
+    );
+    expect(sqlIdShapesIn(real)).toEqual([]);
   });
 });

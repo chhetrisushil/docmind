@@ -78,6 +78,12 @@ export const opaqueIds = {
   },
 };
 export {
+  HANDLE_PATTERN,
+  LINEAGE_ID_PATTERN,
+  USER_ID_TOKEN_SOURCE,
+  UUID_ANY_PATTERN,
+} from "./redaction";
+export {
   USER_ID_PREFIXES,
   handleListerPrefixes,
   isOwnedBy,
