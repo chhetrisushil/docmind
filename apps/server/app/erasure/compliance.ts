@@ -61,9 +61,15 @@ export function complianceConfig({ keys, raw }: ErasureWiring) {
   };
 }
 
+/** A new-format lineage line (`visuals-<handle>-<token>`, `turnvisuals-<handle>-<token>-<ord>`) and a bare 26-character handle. */
+const LINEAGE_ID = /\b(?:turn)?visuals-[a-z2-7]{26}-[a-z2-7]{52}/;
+const HANDLE = /\b[a-z2-7]{25}[aeimquy4]\b/;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 /** A user or execution id: any UUID, a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`) or an `h_…` id (`h_<handle>` and its `:` and `.c-` forms). */
-const HAS_ID = new RegExp(`${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}`, "i");
+const HAS_ID = new RegExp(
+  `${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}|${LINEAGE_ID.source}|${HANDLE.source}`,
+  "i",
+);
 const ID = "<id>";
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
@@ -76,6 +82,8 @@ export function redactIds(message: string): string {
   return message
     .replace(/(\bexecution\s+)"[^"]*"/gi, `$1"${ID}"`)
     .replace(/\b[uh]_[0-9A-Za-z_-]{6,}[^\s"',;)\]]*/g, ID)
+    .replace(new RegExp(`${LINEAGE_ID.source}[^\\s"',;)\\]]*`, "g"), ID)
+    .replace(new RegExp(HANDLE.source, "g"), ID)
     .replace(new RegExp(UUID.source, "gi"), ID)
     .replace(EMAIL, "<email>");
 }

@@ -122,7 +122,12 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
         }
       }
     },
-    eraseSubject: (subjectId) => p.app.eraseSubject(subjectId, undefined, { parked: "shred" }),
+    eraseSubject: async (subjectId) => {
+      const result = await p.app.eraseSubject(subjectId, undefined, { parked: "shred" });
+      // Loom's shred destroyed this subject's key itself, not through `keys.destroy`: the cached id key must not outlive it.
+      if (result.outcome === "erased") p.ids?.forgetSubject(subjectId);
+      return result;
+    },
     keys: {
       destroy: async (subjectId) => {
         await p.keys.destroy(subjectId);

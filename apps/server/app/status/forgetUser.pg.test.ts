@@ -161,5 +161,60 @@ describe.skipIf(!PG_URL)(
       expect(await list("ingest-status", lookalike)).toEqual([]);
       expect(await list("ingest-status", ALICE2.userId)).toContain(live);
     });
+
+    it("tombstones the user's live h_<handle> rows in both models through the pg lister, only with the handle", async () => {
+      const H = `${"i".repeat(25)}e`;
+      const H2 = `${"m".repeat(25)}e`;
+      const t52 = "q".repeat(52);
+      const mineIngest = `h_${H}:ingest-${t52}.2`;
+      const mineChat = `h_${H}.c-${t52}`;
+      const theirs = `h_${H2}:ingest-${t52}.2`;
+      for (const [model, id] of [
+        ["ingest-status", mineIngest],
+        ["chat-activity", mineChat],
+        ["ingest-status", theirs],
+      ] as const)
+        await db.owner.query(
+          "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ($1, $2, NULL, NULL, 0, '{}', false)",
+          [model, id],
+        );
+      const list = pgUserExecutions(loom);
+      expect(await list("ingest-status", A)).not.toContain(mineIngest); // no handle: not looked for
+      expect(await list("ingest-status", A, H)).toEqual([mineIngest]);
+      expect(await list("chat-activity", A, H)).toEqual([mineChat]);
+      const log = new MemoryLog();
+      const make = () => ({
+        status: new IngestStatus({
+          writer: pgStatusWriter(loom),
+          readerFor: pgStatusReaderFor(app),
+          source: log,
+          sensitive: {},
+          bus: new InMemoryProgressBus(),
+          userExecutions: list,
+          onError: () => {},
+        }),
+        activity: new ChatActivity({
+          writer: pgStatusWriter(loom),
+          source: log,
+          sensitive: {},
+          userExecutions: list,
+          onError: () => {},
+        }),
+      });
+      const m = make();
+      await m.status.boot();
+      await m.activity.boot();
+      await m.status.forgetUser(A);
+      await m.activity.forgetUser(A);
+      const live = async (id: string) =>
+        (await db.owner.query("SELECT erased FROM read_model_state WHERE execution_id = $1", [id]))
+          .rows[0]?.erased;
+      expect(await live(mineIngest)).toBe(false); // without the handle the rows stay
+      await m.status.forgetUser(A, H);
+      await m.activity.forgetUser(A, H);
+      expect(await live(mineIngest)).toBe(true);
+      expect(await live(mineChat)).toBe(true);
+      expect(await live(theirs)).toBe(false);
+    });
   },
 );

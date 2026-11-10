@@ -222,3 +222,75 @@ describe("isUserExecution with a handle", () => {
     expect(isUserExecution(`u_${U}:ingest-x`, U, H)).toBe(true);
   });
 });
+
+describe("the handle reaches every hop of the forget", () => {
+  const H = `${"a".repeat(25)}e`;
+  const H2 = "e".repeat(26);
+  const idOf = (h: string, tail: string) => `h_${h}${tail}`;
+
+  it("forgetUserRows walks the log under both prefixes and hands the handle to the lister", async () => {
+    const log = new MemoryLog();
+    log.append(
+      ...ingestRun(`u_${A}:ingest-${docA}`, "ready"),
+      ...ingestRun(idOf(H, `:ingest-${"q".repeat(52)}.2`), "ready"),
+      ...ingestRun(idOf(H2, `:ingest-${"q".repeat(52)}.2`), "ready"),
+    );
+    const refreshed: string[] = [];
+    const handles: unknown[] = [];
+    await forgetUserRows(
+      {
+        refresh: async (_m, ids) => {
+          refreshed.push(...ids);
+          return 0;
+        },
+        purgeFolded: async () => 0,
+      },
+      "m",
+      A,
+      async (_m, _u, h) => {
+        handles.push(h);
+        return [];
+      },
+      log,
+      H,
+    );
+    expect(refreshed.sort()).toEqual(
+      [`u_${A}:ingest-${docA}`, idOf(H, `:ingest-${"q".repeat(52)}.2`)].sort(),
+    );
+    expect(handles).toEqual([H]);
+  });
+
+  it("IngestStatus.forgetUser and ChatActivity.forgetUser pass the handle to their lister", async () => {
+    const store = new InMemoryReadModelStore();
+    const log = new MemoryLog();
+    const seen: unknown[] = [];
+    const userExecutions: UserExecutionLister = async (m, _u, h) => {
+      seen.push([m, h]);
+      return [];
+    };
+    const status = new IngestStatus({
+      writer: store,
+      readerFor: () => store,
+      source: log,
+      sensitive: {},
+      bus: new InMemoryProgressBus(),
+      userExecutions,
+      onError: () => {},
+    });
+    const activity = new ChatActivity({
+      writer: store,
+      source: log,
+      sensitive: {},
+      userExecutions,
+      onError: () => {},
+    });
+    await status.boot();
+    await activity.boot();
+    await status.forgetUser(A, H);
+    await activity.forgetUser(A, H);
+    expect(seen).toEqual([
+      [INGEST_STATUS_MODEL, H],
+      [CHAT_ACTIVITY_MODEL, H],
+    ]);
+  });
+});

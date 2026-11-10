@@ -5,8 +5,13 @@ import { join } from "node:path";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ChatActivity } from "../chats/activity";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { InMemoryProgressBus } from "../documents/progress";
+import { IngestStatus } from "../status/ingestStatus";
+import { pgStatusReaderFor, pgStatusWriter, pgUserExecutions } from "../status/pgStores";
+import { MemoryLog } from "../status/testing";
 import { type DurableStorage, openDurableStorage } from "../storage";
 import { Eraser, type ErasureDeps, abortableSleep } from "./eraser";
 import { pgErasureLock, pgErasureSql } from "./pgSteps";
@@ -437,5 +442,97 @@ describe.skipIf(!PG_URL)("the Postgres steps of the eraser (needs DOCMIND_TEST_P
       [id],
     );
     expect(rows[0].scope).toBe(u.userId); // the readModels step purges live rows; the scrub only finishes tombstones
+  });
+
+  it("rows: timers and leases are deleted at the id boundaries only, so an id that merely extends the prefix stays", async () => {
+    const { tenantId, users } = await tenantWith("boundary@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = `${"u".repeat(25)}e`;
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const gone = [`h_${mine}`, `h_${mine}:x`, `h_${mine}.c-x`, `u_${u.userId}:x`];
+    const kept = [`h_${mine}zzz`, `h_${mine}-c-x`, `u_${u.userId}x:y`];
+    for (const id of [...gone, ...kept]) {
+      await durable.pool.query("INSERT INTO loom.timers (execution_id, wake_at) VALUES ($1, 1)", [
+        id,
+      ]);
+      await durable.pool.query(
+        "INSERT INTO loom.leases (execution_id, owner, expires_at) VALUES ($1, 'x', 1)",
+        [id],
+      );
+    }
+    await sql.rows(request(tenantId, u.userId));
+    for (const table of ["timers", "leases"]) {
+      for (const id of gone)
+        expect(
+          await count(`SELECT count(*)::int AS n FROM loom.${table} WHERE execution_id = $1`, [id]),
+        ).toBe(0);
+      for (const id of kept)
+        expect(
+          await count(`SELECT count(*)::int AS n FROM loom.${table} WHERE execution_id = $1`, [id]),
+        ).toBe(1);
+    }
+  });
+
+  it("the eraser tombstones a live h_ read-model row before the rows step scrubs it", async () => {
+    const { tenantId, users } = await tenantWith("prerows@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = `${"o".repeat(25)}e`;
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const id = `h_${mine}:ingest-${"q".repeat(52)}.2`;
+    await db.owner.query(
+      "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ('ingest-status', $1, $2, $3, 0, '{}', false)",
+      [id, "0f8fad5b-d9cb-469f-a165-70867728950e", u.userId],
+    );
+    const list = pgUserExecutions(durable.pool);
+    const log = new MemoryLog();
+    const status = new IngestStatus({
+      writer: pgStatusWriter(durable.pool),
+      readerFor: pgStatusReaderFor(app),
+      source: log,
+      sensitive: {},
+      bus: new InMemoryProgressBus(),
+      userExecutions: list,
+      onError: () => {},
+    });
+    const activity = new ChatActivity({
+      writer: pgStatusWriter(durable.pool),
+      source: log,
+      sensitive: {},
+      userExecutions: list,
+      onError: () => {},
+    });
+    await status.boot();
+    await activity.boot();
+    const store = new MemoryErasureStore();
+    await store.insert({ query: async () => undefined }, u.userId, tenantId, randomBytes(32));
+    for (const step of ["stop", "shred", "readModels"] as const) await store.mark(u.userId, step); // the row went live after readModels
+    const noop = async () => {};
+    const eraser = new Eraser({
+      store,
+      ...sql,
+      closeStreams: () => {},
+      settleStart: noop,
+      settleTitles: noop,
+      cancelIngest: noop,
+      cancelVisualize: noop,
+      stopChat: noop,
+      cancelTitle: noop,
+      eraseSubject: async () => ({ outcome: "unknown" }),
+      keys: { destroy: noop, wasDestroyed: async () => true },
+      forgetStatus: (userId, handle) => status.forgetUser(userId, handle),
+      forgetActivity: (userId, handle) => activity.forgetUser(userId, handle),
+    });
+    await eraser.run(u.userId);
+    const { rows } = await db.owner.query(
+      "SELECT scope, app_key, erased FROM read_model_state WHERE execution_id = $1",
+      [id],
+    );
+    expect(rows[0]).toEqual({ scope: null, app_key: null, erased: true });
   });
 });

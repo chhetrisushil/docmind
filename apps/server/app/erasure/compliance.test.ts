@@ -272,3 +272,23 @@ describe("redactIds h_", () => {
     expect(warningFor(`stuck h_${"i".repeat(26)}:x`)).not.toContain("i".repeat(26));
   });
 });
+
+describe("redactIds new-format lineage ids and bare handles", () => {
+  const H = `${"a".repeat(25)}e`;
+  const T52 = "q".repeat(52);
+  it("redacts visuals-<H>-<D> and turnvisuals-<H>-<C>-<ord> lineage ids and a bare handle", () => {
+    for (const id of [
+      `__loom_ui_lineage__:visuals-${H}-${T52}`,
+      `visuals-${H}-${T52}`,
+      `turnvisuals-${H}-${T52}-3`,
+    ]) {
+      const out = redactIds(`commit failed for ${id}: stuck`);
+      expect(out).not.toContain(H);
+      expect(out).not.toContain(T52);
+      expect(out).toContain("<id>");
+      expect(warningFor(`commit failed for ${id}`)).not.toContain(H);
+    }
+    expect(redactIds(`user handle ${H} unknown`)).toBe("user handle <id> unknown");
+    expect(warningFor(`user handle ${H} unknown`)).toBe("user handle <id> unknown");
+  });
+});
