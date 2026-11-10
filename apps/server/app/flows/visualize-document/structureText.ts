@@ -29,9 +29,8 @@ export const cleanText = (raw: string, max: number): string =>
     max,
   ).trimEnd();
 
-/** What two spellings of one name share: NFKC, lower case, one inner space. The dedupe key of events, links and parties. */
-export const nameKey = (raw: string): string =>
-  raw.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+/** The dedupe key of events, links and parties (defined in experiences, where the reshapers enforce it too). */
+export { nameKey } from "@docmind/experiences";
 
 /**
  * The passage of this document an item cites that comes first in the document, or null when none of its `ids` is one of the

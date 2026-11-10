@@ -28,6 +28,9 @@ export {
   factRefOfPin,
   fitsShape,
   mergedCatalog,
+  MAX_RELATION_ENTITIES,
+  MAX_RELATION_LINKS,
+  nameKey,
 } from "./visuals";
 export type {
   EntityMapFact,

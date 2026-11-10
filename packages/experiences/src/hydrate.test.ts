@@ -637,6 +637,116 @@ describe("the per-document detail", () => {
   });
 });
 
+describe("a plan stored under catalogue v3", () => {
+  const DOC = id(1);
+  const c = (n: number) => id(100 + n);
+  /** A provider exactly as a v3 plan's lineage persisted it (the planner's guessed document id; adoption re-points it). */
+  const stored = (ordinal: number, scriptRef: string) => ({
+    type: "remapProvider" as const,
+    handle: `fact-${ordinal}`,
+    spec: {
+      handle: `fact-${ordinal}`,
+      executionGraph: [
+        {
+          stepId: "read",
+          kind: "docmind",
+          toolName: "visual.facts",
+          toolVersion: "1.0.0",
+          toolSchemaHash: "docmind:visual.facts@1",
+          arguments: { id: "planner-guess" },
+          dependsOn: [],
+          idempotent: true,
+          overridable: [],
+        },
+      ],
+      reshaping: { engine: "Named", scriptRef },
+      outputShapeHash: "",
+      outputCheck: "contract",
+      cachePolicy: { ttlSeconds: 0, scope: "principal" },
+    },
+  });
+  const widget = (nodeId: string, order: string, type: string, ordinal: number) => [
+    {
+      type: "insertNode" as const,
+      parentId: "root",
+      node: {
+        id: nodeId,
+        order,
+        kind: "semantic",
+        type,
+        typeVersion: "1.0.0",
+        span: 6,
+        props: {},
+      },
+    },
+    { type: "bindProvider" as const, nodeId, handle: `fact-${ordinal}`, priority: "P0" },
+  ];
+  const V3_PLAN = [
+    stored(0, "visual-kpi-0"),
+    stored(16, "visual-outline-16"),
+    stored(17, "visual-entitymap-17"),
+    ...widget("revenue", "a", "KeyFigure", 0),
+    ...widget("outline", "b", "DocumentOutline", 16),
+    ...widget("map", "c", "EntityMap", 17),
+  ] as unknown as Operation[];
+  const facts: VisualFactRaw[] = [
+    { kind: "figure", label: "Revenue", value: 5, chunkIds: [c(1)], ordinal: 0 },
+    {
+      kind: "outline",
+      title: "Report",
+      nodes: [
+        { id: "o1", label: "A", level: 1, passageCount: 1, firstChunkId: c(1) },
+        { id: "o2", label: "B", level: 1, passageCount: 1, firstChunkId: c(2) },
+        { id: "o3", label: "C", level: 1, passageCount: 1, firstChunkId: c(3) },
+      ],
+      chunkIds: [c(1)],
+      ordinal: 16,
+    },
+    {
+      kind: "cooccurrence",
+      entities: [
+        { name: "Acme", entityKind: "organization", passages: 2 },
+        { name: "Cora", entityKind: "person", passages: 2 },
+      ],
+      edges: [{ a: 0, b: 1, weight: 2, firstChunkId: c(1) }],
+      chunkIds: [c(1)],
+      ordinal: 17,
+    },
+  ];
+
+  it("replays, adopts, compiles on both surfaces and hydrates every widget ready under catalogue v4", async () => {
+    const g = genesis({
+      experienceId: "docmind.visuals",
+      intent: { objective: "Visuals", source: "user" },
+      meta: { author: "planner", createdAt: "2026-11-08T00:00:00Z", sourceKind: "code" },
+    });
+    const replayed = replay(g, V3_PLAN);
+    if (!replayed.ok) throw new Error("the stored v3 plan does not replay");
+    const v = views();
+    const exp = v.documentExperience(DOC, replayed.value);
+    expect(exp).not.toBe(detailWithVisuals(null, DOC));
+    for (const surface of ["web", "terminal"] as const)
+      expect(v.documentPayload(DOC, replayed.value, surface).blueprint).toBeDefined();
+    const p = v.documentPayload(DOC, replayed.value, "web");
+    const r = readers({ visualFacts: vi.fn(async () => facts) });
+    const handles = ["fact-0", "fact-16", "fact-17"];
+    const out = await v.hydrateExperience(
+      exp,
+      handles.map((handle) => ({
+        experienceId: p.experienceId,
+        versionHash: p.versionHash,
+        handle,
+        params: {},
+      })),
+      r,
+      "user-1",
+      "document",
+    );
+    expect(out.map((o) => o.state)).toEqual(["ready", "ready", "ready"]);
+    expect(r.visualFacts).toHaveBeenCalledWith({ id: DOC });
+  });
+});
+
 describe("a turn's visuals", () => {
   const CHAT = id(40);
   const fact = (ordinal: number, value: number) => ({

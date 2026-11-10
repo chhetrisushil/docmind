@@ -1,4 +1,5 @@
 import { MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
+import { MAX_RELATION_ENTITIES, nameKey } from "./visuals";
 import type { EntityMapFact, OutlineFact, RelationsFact, TimelineFact } from "./visuals";
 
 export interface DiagramNode {
@@ -89,11 +90,13 @@ export function timelineDiagram(f: TimelineFact): DiagramShape | null {
 
 /**
  * The parties as a network (they are already one node per normalised name), a directed edge from to to per link labelled with
- * the relation: two relations between one pair are two edges. Null when loom-ui would refuse the value, a link names a party
+ * the relation: two relations between one pair are two edges. Null when loom-ui would refuse the value, more than 60 parties, two parties that are one name once normalised, a link names a party
  * that is not listed, or joins a party to itself.
  */
 export function relationshipsDiagram(f: RelationsFact): DiagramShape | null {
-  if (f.entities.length < 2 || f.links.length === 0) return null;
+  if (f.entities.length < 2 || f.entities.length > MAX_RELATION_ENTITIES || f.links.length === 0)
+    return null;
+  if (new Set(f.entities.map(nameKey)).size !== f.entities.length) return null;
   const nodes = f.entities.map((name, i) => ({
     id: `n${i}`,
     label: name,
