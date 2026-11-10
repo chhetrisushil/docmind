@@ -124,6 +124,11 @@ export interface StepOptions<E = never> {
    * an abort, a fatal error or a document-gone one.
    */
   exhausted?: (err: unknown) => E | undefined;
+  /**
+   * An error this flow ends as a recorded failure on the FIRST occurrence, never retried (like a permanent code).
+   * Returns the ended output, or undefined to let the retry policy decide. Never called for an abort or a document-gone one.
+   */
+  nonRetryable?: (err: unknown) => E | undefined;
 }
 
 /**
@@ -291,6 +296,10 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
           if (isDocumentGone(err)) return endedOutput({ outcome: "document_gone" });
           const code = permanentCode(err);
           if (code) return endedOutput({ outcome: "failed", code });
+          if (!isAbort(err)) {
+            const end = options.nonRetryable?.(err);
+            if (end) return endedOutput(end);
+          }
           // Progress-aware budget: a timeout after the work reported progress is not a failed attempt
           // (the committed units stay and the next attempt resumes), so the count restarts. Bound: each
           // progressing attempt commits at least one unit that the work will not redo, so a step of n units

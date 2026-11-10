@@ -530,6 +530,41 @@ describe.skipIf(!PG_URL)("PgVisualFacts (needs DOCMIND_TEST_PG_URL)", () => {
     }
   });
 
+  it("an unfenced write takes the documents row lock first, as a fenced one does (one lock order, no deadlock)", async () => {
+    const ref = await fx.doc("e7".repeat(32));
+    const chunk = await seedChunk(ref);
+    const store = new PgVisualFacts(fx.app, fx.fields);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let heldNow: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      heldNow = r;
+    });
+    const blocker = withTenant(fx.app, ref.tenantId, async (tx) => {
+      await tx.query("SELECT 1 FROM documents WHERE id = $1 FOR NO KEY UPDATE", [ref.documentId]);
+      heldNow();
+      await gate;
+    });
+    await held;
+    const write = store.replace(ref, [fig(0, chunk)]); // no generation
+    // The write waits at its documents lock, before it has deleted or inserted anything.
+    let waitingOn = "";
+    for (let i = 0; i < 40 && !waitingOn; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const { rows } = await fx.db.owner.query<{ query: string }>(
+        "SELECT query FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE 'SELECT ingest_generation%'",
+      );
+      waitingOn = rows[0]?.query ?? "";
+    }
+    expect(waitingOn).toContain("FOR NO KEY UPDATE");
+    release();
+    await blocker;
+    await write;
+    expect((await store.listAll(ref)).map((f) => f.ordinal)).toEqual([0]);
+  });
+
   it("an aborted extraction write rolls the facts and the stamp back together", async () => {
     const ref = await fx.doc("d2".repeat(32));
     const chunk = await seedChunk(ref);

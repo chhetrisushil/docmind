@@ -310,6 +310,8 @@ export function loomVisualsStarter(
         .catch(onError);
       return handle;
     } catch (err) {
+      // The start did not happen: this run's re-extract note (added before the start) must not outlive it.
+      if (rerun !== undefined) reextract?.delete(executionId);
       if (err instanceof ExecutionAlreadyExistsError) return null;
       throw err;
     }

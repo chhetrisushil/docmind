@@ -137,17 +137,18 @@ export class PgVisualFacts implements VisualFactStore {
     );
     await withTenant(this.pool, ref.tenantId, async (tx) => {
       await lockDocument(tx, ref);
-      if (generation !== undefined) {
-        // The step guard checked this at begin; a re-ingest can land after that. Under the document lock, a run of a
-        // superseded generation writes nothing (the same outcome as the guard: the document is gone for this run).
-        // FOR NO KEY UPDATE conflicts with a re-ingest's generation bump (lockDocument's KEY SHARE does not), so a bump in
-        // flight commits first and this read sees it. No deadlock: the bump locks only this one documents row.
-        const { rows } = await tx.query<{ ingest_generation: number }>(
-          "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3 FOR NO KEY UPDATE",
-          [ref.documentId, ref.userId, ref.tenantId],
-        );
-        if (Number(rows[0]?.ingest_generation) !== generation) throw new DocumentGoneError();
-      }
+      // Every write locks the documents row FIRST (FOR NO KEY UPDATE), fenced or not, so the lock order is documents then
+      // visual_facts for all writers (an unfenced and a fenced write of one document cannot deadlock). It conflicts with a
+      // re-ingest's generation bump (lockDocument's KEY SHARE does not), so a bump in flight commits first and this read
+      // sees it. No deadlock: the bump locks only this one documents row.
+      const { rows: held } = await tx.query<{ ingest_generation: number }>(
+        "SELECT ingest_generation FROM documents WHERE id = $1 AND owner_id = $2 AND tenant_id = $3 FOR NO KEY UPDATE",
+        [ref.documentId, ref.userId, ref.tenantId],
+      );
+      // The step guard checked the generation at begin; a re-ingest can land after that. Under the document lock, a run of a
+      // superseded generation writes nothing (the same outcome as the guard: the document is gone for this run).
+      if (generation !== undefined && Number(held[0]?.ingest_generation) !== generation)
+        throw new DocumentGoneError();
       await tx.query(
         `DELETE FROM visual_facts
           WHERE tenant_id = $1 AND owner_id = $2 AND document_id = $3 AND ${OWNED[owner]}`,

@@ -8,7 +8,6 @@ import {
   nameKey,
 } from "./structureText";
 
-export { MAX_RAW_ITEMS };
 export const MAX_EVENTS = 40;
 export const MIN_EVENTS = 3;
 /** `when` is the date as the document wrote it. */

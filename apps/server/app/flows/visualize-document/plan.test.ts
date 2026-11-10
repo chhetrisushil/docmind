@@ -1,15 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { VISUALS_CATALOG, shape, visualCapabilities } from "@docmind/experiences";
+import {
+  type TimelineFact,
+  VISUALS_CATALOG,
+  shape,
+  visualCapabilities,
+} from "@docmind/experiences";
 import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { ReferencePlanner, checkPlannerConformance } from "@loom-ui/planner";
 import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { DocumentGoneError } from "../ingest-document/errors";
+import { DATE_PRECISIONS, type DatePrecision } from "./dates";
 import {
   ENTITY_MAP_ORDINAL,
   type Fact,
@@ -460,6 +466,11 @@ describe("planning the timeline and relations", () => {
     expect(() => shape(`visual-timeline-${TIMELINE_ORDINAL}`, [timeline])).not.toThrow();
     expect(() => shape(`visual-relations-${RELATIONS_ORDINAL}`, [relations])).not.toThrow();
     expect(() => shape(`visual-timeline-${RELATIONS_ORDINAL}`, [timeline])).toThrow();
+  });
+
+  it("the experiences' event precisions are the server's date precisions", () => {
+    expectTypeOf<TimelineFact["events"][number]["precision"]>().toEqualTypeOf<DatePrecision>();
+    expect(DATE_PRECISIONS).toEqual(["day", "month", "quarter", "year"]);
   });
 
   it("tells the planner when to show a timeline and a relationships diagram, and when to leave them out", () => {

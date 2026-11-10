@@ -153,4 +153,41 @@ describe("lu-diagram draws the reshaped timeline and relationships (real reshape
     expect(texts(root, "svg .node text").sort()).toEqual(["Acme", "Beta Works", "Cora"]);
     expect(texts(root, "svg .edge text").sort()).toEqual(["acquired", "advises", "leads"]);
   });
+
+  it("markup in model text is drawn as text, never as elements (labels, written dates, parties, relations)", async () => {
+    const evil = '<img src=x onerror="window.__pwned=1"><b>x</b>';
+    const timeline = shape("visual-timeline-18", [
+      {
+        kind: "timeline",
+        ordinal: 18,
+        chunkIds: [cid(1)],
+        events: [
+          { at: "2024-03-01", precision: "month", when: evil, label: evil, chunkId: cid(1) },
+          { at: "2025-07-01", precision: "quarter", when: "Q3 2025", label: "B", chunkId: cid(1) },
+          { at: "2026-02-14", precision: "day", when: "d", label: "C", chunkId: cid(1) },
+        ],
+      },
+    ]);
+    let root = await mount(timeline);
+    expect(texts(root, "svg .node text").join("|")).toContain("<img src=x");
+    const relations = shape("visual-relations-19", [
+      {
+        kind: "relations",
+        ordinal: 19,
+        chunkIds: [cid(1)],
+        entities: [evil, "Beta", "Cora"],
+        links: [
+          { from: 0, to: 1, rel: evil, chunkId: cid(1) },
+          { from: 2, to: 0, rel: "leads", chunkId: cid(1) },
+          { from: 2, to: 1, rel: "advises", chunkId: cid(1) },
+        ],
+      },
+    ]);
+    root = await mount(relations);
+    expect(texts(root, "svg .node text").join("|")).toContain("<img src=x");
+    expect(texts(root, "svg .edge text").join("|")).toContain("<img src=x");
+    // nothing was parsed as markup, anywhere in the widget
+    expect(root.querySelector("img, b")).toBeNull();
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+  });
 });

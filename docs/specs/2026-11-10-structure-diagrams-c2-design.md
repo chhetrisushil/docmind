@@ -68,7 +68,9 @@ The prompt tells the model:
 **Extraction limits.** The answer is longer (up to 40 events and 30 links beside the facts), so the document extraction does not share the planner's limits. The `visuals` role has one provider for the planner and for chat's extraction (8192 answer tokens, the role's request timeout `DOCMIND_LLM_TIMEOUT_MS`, 60 s by default), and an answer of up to about 14 000 tokens can pass that timeout, which would end the step `visuals-model-unavailable` and cost the facts. So the document extraction runs on a second provider of the same role and model with its own limits:
 - a 16 000-token answer cap (`VISUALS_EXTRACT_MAX_TOKENS`, as vision's);
 - its own request timeout, `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS`: default 180 s (vision's), at most 600 s, configured like the other timeouts;
-- the planner and chat's extraction keep the shared provider and its limits, unchanged.
+- the planner and chat's extraction keep the shared provider and its limits, unchanged;
+- each window is asked for its share, `ceil(40 / windows)` events and `ceil(30 / windows)` links (at least 3); the server's caps stay as they are;
+- the 600 s step clock running out ends the step `visuals-model-unavailable` at once (no retry; the user can re-run), while a per-call `LlmUnavailableError` keeps its 6 attempts.
 
 ## 4. Storage
 
