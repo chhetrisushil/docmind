@@ -25,8 +25,8 @@ concurrency:
 env:
   # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
   # new commit, re-run the whole gate, then change this line.
-  # 4af27ea: turnSettledObserver (@loom/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
-  LOOM_REF: 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19
+  # 37fe337: eraseSubject record:false and a keyed erasure control stream (loom PR #778). Contains 4af27ea: turnSettledObserver (@loom/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
+  LOOM_REF: 37fe3373ba0ab47bf96b3d76117d2ac4d696bc2a
   # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
   # fc34435: token-list Table cells, chips that emit TABLE_TOKEN (loom-ui PR #131). Contains 3b4d046: widget hosts contain their sr-only and absolute descendants (loom-ui PR #130). Contains 9bcf82b: source references on data widgets (value-level refs, REF_OPEN; loom-ui PR #129). Contains 254d277 (Diagram, PR #128), 5ab86f8 (TimeFormat, PR #127), c107ede (date-only time ticks drawn as the written date in every viewer zone, PR #126), d036e84 (chatAccessories, loom-ui PR #125: host content drawn under a chat transcript entry) and 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
   # Bump deliberately, like LOOM_REF.

@@ -633,14 +633,12 @@ export function eventColumnProblems(e: {
   return bad;
 }
 
-/** Loom's plaintext control stream of parked shreds (never compacted, never cleared) and this user's rows in it. */
-export async function intentRows(st: IngestStack, userId: string): Promise<EventEnvelope[]> {
-  const events = await st.durable.raw.eventStore.read("__loom_erasure__");
-  return events.filter(
-    (e) =>
-      e.eventType === "ERASURE_PENDING" &&
-      (e.payload as { subjectId?: unknown } | null)?.subjectId === userId,
-  );
+/**
+ * Every row of Loom's plaintext erasure control stream (never compacted, never cleared). With the control-stream key (R14) a row that
+ * names a subject carries `subjectRef` and `keyId` and no subject id; no allowance of the scan lets a plain id sit in one.
+ */
+export async function controlRows(st: IngestStack): Promise<EventEnvelope[]> {
+  return st.durable.raw.eventStore.read("__loom_erasure__");
 }
 
 const ALLOWED: Allowed[] = [
@@ -685,18 +683,6 @@ const ALLOWED: Allowed[] = [
       payloadIsIdsOnly(row.payload, "", undefined, true) &&
       noContent(row, who),
   })),
-  {
-    table: "loom.events",
-    column: "payload",
-    reason:
-      "F26: Loom's `__loom_erasure__` control stream keeps ERASURE_PENDING { subjectId } of a parked shred",
-    ok: (row, who) =>
-      row.execution_id === "__loom_erasure__" &&
-      row.event_type === "ERASURE_PENDING" &&
-      (row.payload as { subjectId?: unknown } | null)?.subjectId === who.userId &&
-      payloadIsIdsOnly(row.payload, "", who.handle) &&
-      noContent(row, who),
-  },
   {
     table: "loom.fences",
     column: "execution_id",

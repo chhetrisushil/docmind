@@ -24,7 +24,7 @@ export interface ErasureParts {
     eraseSubject(
       subjectId: string,
       tenantId: undefined,
-      options: { parked: "shred" },
+      options: { parked: "shred"; record: false },
     ): Promise<{ outcome: "erased" | "parked" | "unknown" }>;
   };
   runtime: Pick<WorkflowRuntime, "cancel">;
@@ -128,7 +128,13 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
       const handle = handleOfSubject(subjectId);
       if (handle !== null) p.ids?.retireHandle(handle);
       try {
-        const result = await p.app.eraseSubject(subjectId, undefined, { parked: "shred" });
+        // `record: false`: a park appends nothing to Loom's plaintext, never-cleared `__loom_erasure__` stream (an `ERASURE_PENDING
+        // { subjectId }` for `h_<H>` and another for the user UUID would pair them for good). The Eraser owns the retry: it re-calls this
+        // until `erased`, with a durable request row of its own, so nothing relies on Loom completing a recorded park.
+        const result = await p.app.eraseSubject(subjectId, undefined, {
+          parked: "shred",
+          record: false,
+        });
         // Loom's shred destroyed this subject's key itself, not through `keys.destroy`: the cached id key must not outlive it.
         // `unknown` with the key already gone is a retry after a shred that committed and then threw: evict then too.
         if (

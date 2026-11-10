@@ -166,7 +166,10 @@ describe("erasureDeps", () => {
     const eraseSubject = vi.fn(async () => ({ outcome: "erased" as const }));
     const { parts: p } = parts({ app: { eraseSubject } });
     await erasureDeps(p).eraseSubject(USER);
-    expect(eraseSubject).toHaveBeenCalledWith(USER, undefined, { parked: "shred" });
+    expect(eraseSubject).toHaveBeenCalledWith(USER, undefined, {
+      parked: "shred",
+      record: false,
+    });
   });
 
   it("refuses, at wiring time, a key store that cannot prove a destruction", () => {

@@ -41,16 +41,26 @@ describe("the proof's allowlist of residue", () => {
           }),
           hit("loom.fences", "execution_id", { execution_id: own }),
           hit("loom.snapshots", "execution_id", { execution_id: own, state: envelope }),
-          hit("loom.events", "payload", {
-            execution_id: "__loom_erasure__",
-            event_type: "ERASURE_PENDING",
-            payload: { subjectId: who.userId },
-          }),
           hit("public.erasure_requests", "user_id", { user_id: who.userId, state: "done" }),
         ],
         who,
       ),
     ).toEqual([]);
+  });
+
+  it("rejects a plaintext subject id on Loom's erasure control stream (the control-stream key keeps it off)", () => {
+    expect(
+      unexpected(
+        [
+          hit("loom.events", "payload", {
+            execution_id: "__loom_erasure__",
+            event_type: "ERASURE_PENDING",
+            payload: { subjectId: who.userId },
+          }),
+        ],
+        who,
+      ),
+    ).toEqual(["loom.events.payload"]);
   });
 
   it("rejects a live read-model row, a key that still has material, and a plaintext checkpoint", () => {
