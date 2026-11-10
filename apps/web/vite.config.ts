@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-// @docmind/contracts and @docmind/experiences are CommonJS builds; tests take their TypeScript source instead.
+// @docmind/contracts and @docmind/experiences are CommonJS builds; the browser and tests take their TypeScript source instead.
 const contracts = fileURLToPath(new URL("../../packages/contracts/src/index.ts", import.meta.url));
 const experiences = fileURLToPath(
   new URL("../../packages/experiences/src/index.ts", import.meta.url),

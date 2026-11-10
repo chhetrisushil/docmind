@@ -1,7 +1,7 @@
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { EntityKeys } from "./entityKeys";
-import { FieldKeyUnavailableError } from "./fields";
+import { FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";
 import { TagKeys } from "./tagKeys";
 
 const U1 = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
@@ -37,5 +37,21 @@ describe("TagKeys", () => {
     await expect(new TagKeys(keys).forUser(U1).nameBind("x")).rejects.toBeInstanceOf(
       FieldKeyUnavailableError,
     );
+  });
+
+  it("maps a key-store outage to FieldKeyStoreError without passing its message on", async () => {
+    const down = {
+      getOrCreate: async (subject: string) => {
+        throw new Error(`boom ${subject} kek-secret`);
+      },
+    } as unknown as KeyStore;
+    const err = await new TagKeys(down)
+      .forUser(U1)
+      .nameBind("x")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FieldKeyStoreError);
+    expect(err).not.toBeInstanceOf(FieldKeyUnavailableError);
+    expect((err as Error).message).not.toContain("kek-secret");
+    expect((err as Error).message).not.toContain(U1);
   });
 });

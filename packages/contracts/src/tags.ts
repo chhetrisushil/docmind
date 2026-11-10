@@ -8,24 +8,36 @@ export const MAX_TAGS_PER_FILTER = 10;
 export const MAX_TAG_SUGGESTIONS = 5;
 export const MAX_NEW_TAG_SUGGESTIONS = 3;
 
-const CONTROL = /\p{Cc}/u;
+// Refused anywhere in a name: control characters, lone surrogates (they would share a bind with U+FFFD), zero-width,
+// bidi-control and line/paragraph-separator characters (invisible or reordering, so two names could look alike).
+// Checked on the raw string, before trim() can strip an edge one.
+const FORBIDDEN =
+  /\p{Cc}|\p{Cs}|[\u200B-\u200D]|\u2060|\uFEFF|[\u202A-\u202E]|[\u2066-\u2069]|\u2028|\u2029/u;
 
-/** The display name as typed, trimmed; null when it is empty, over 40 characters (code points) or holds a control character. */
+/** The display name as typed, trimmed; null when it is empty, over 40 characters (code points) or holds a forbidden character. */
 export function cleanTagName(raw: string): string | null {
+  if (FORBIDDEN.test(raw)) return null;
   const name = raw.trim();
   const length = [...name].length;
-  if (length < 1 || length > MAX_TAG_NAME_CHARS || CONTROL.test(name)) return null;
+  if (length < 1 || length > MAX_TAG_NAME_CHARS) return null;
   return name;
 }
 
 /**
  * What the keyed lookup hash is taken over: NFKC, trimmed, inner whitespace collapsed to one space, case-folded
- * (upper then lower case, so "ß" and "SS" meet). Null when `raw` is not a valid tag name. Never the display name.
+ * (upper then lower case, then ß to "ss": "ẞ" lower-cases to "ß" but "ß" upper-cases to "SS", so the explicit map is what
+ * makes "ẞ", "ß" and "ss" meet and the result idempotent). Null when `raw` is not a valid tag name. Never the display name.
  */
 export function normaliseTagName(raw: string): string | null {
   const name = cleanTagName(raw);
   if (name === null) return null;
-  const folded = name.normalize("NFKC").trim().replace(/\s+/gu, " ").toUpperCase().toLowerCase();
+  const folded = name
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toUpperCase()
+    .toLowerCase()
+    .replace(/ß/gu, "ss");
   return folded === "" ? null : folded;
 }
 

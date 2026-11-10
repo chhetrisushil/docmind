@@ -10,7 +10,8 @@ const TAG_INFO = "docmind-tag-v1";
  * under a key derived from the owner's data key with its own HKDF info string, so the database never compares plaintext and
  * the hash cannot be tested against guesses once the key is destroyed. Make one per request, like FieldCrypto.
  * Unlike entity names, a tag can be the user's first write, so the data key is created when it does not exist; only a
- * destroyed key reads as unavailable.
+ * destroyed key reads as unavailable. So `nameBind` mints a data key as a side effect, even for a read-only lookup; that is safe
+ * (a destroyed key is never re-minted) but prefer it on write paths.
  */
 export class TagKeys {
   constructor(private readonly keys: KeyStore) {}

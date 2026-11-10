@@ -19,12 +19,27 @@ describe("cleanTagName", () => {
     expect(cleanTagName("\u{1F600}".repeat(40))).toBe("\u{1F600}".repeat(40));
     expect(cleanTagName("x".repeat(40))).toBe("x".repeat(40));
   });
-  it.each(["", "   ", "x".repeat(41), "\u{1F600}".repeat(41), "a\nb", "a\tb", "a\u0000b"])(
-    "refuses %j",
-    (raw) => {
-      expect(cleanTagName(raw)).toBeNull();
-    },
-  );
+  it.each([
+    "",
+    "   ",
+    "x".repeat(41),
+    "\u{1F600}".repeat(41),
+    "a\nb",
+    "a\tb",
+    "a\u0000b",
+    "a\uD800b",
+    "a\uDBFFb",
+    "\u200B",
+    "a\u200Db",
+    "a\u2060b",
+    "\uFEFFa",
+    "abc\u202Edef",
+    "a\u2066b",
+    "a\u2028b",
+    "a\u2029b",
+  ])("refuses %j", (raw) => {
+    expect(cleanTagName(raw)).toBeNull();
+  });
 });
 
 describe("normaliseTagName", () => {
@@ -34,6 +49,16 @@ describe("normaliseTagName", () => {
     expect(normaliseTagName("Straße")).toBe(normaliseTagName("STRASSE"));
     expect(normaliseTagName("é")).toBe(normaliseTagName("é"));
     expect(normaliseTagName("A B")).toBe("a b");
+  });
+  it("folds fully: capital sharp S, ß and ss meet, and the fold is idempotent", () => {
+    const ss = normaliseTagName("STRASSE");
+    expect(normaliseTagName("STRA\u1E9EE")).toBe(ss);
+    expect(normaliseTagName("Straße")).toBe(ss);
+    expect(normaliseTagName(ss as string)).toBe(ss);
+  });
+  it("is null for lone surrogates, invisible, bidi and separator characters", () => {
+    for (const bad of ["a\uD800b", "\u200B", "a\u202Eb", "a\u2028b", "\uFEFFa"])
+      expect(normaliseTagName(bad)).toBeNull();
   });
   it("is null for a name that is not a valid tag name", () => {
     expect(normaliseTagName("")).toBeNull();
