@@ -20,8 +20,13 @@ const TLDR = "Reduce answer: the programme is on track";
 describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)", () => {
   let h: DocumentHarness;
   const DEFAULTS = {
-    ingestTags: ["Finance", "Q3 plan", "Kestrel", "Fourth new one"] as unknown,
-    suggestTags: ["Legal", "Q3 plan"] as unknown,
+    ingestTags: [
+      "Finance zqx-tag",
+      "Q3 plan zqx-tag",
+      "Kestrel zqx-tag",
+      "Fourth new one",
+    ] as unknown,
+    suggestTags: ["Legal zqx-tag", "Q3 plan zqx-tag"] as unknown,
   };
   const state = { ...DEFAULTS };
   beforeAll(async () => {
@@ -68,36 +73,51 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       const id = await uploadAndAwaitTerminal(h, "alice", "a.md", md("Kestrel"), "ready");
       const doc = await getDoc(h, "alice", id);
       expect(doc.tags).toEqual([]); // never applied automatically
-      expect(doc.suggestedTags).toEqual(["Finance", "Q3 plan", "Kestrel"]); // at most 3 new names
+      expect(doc.suggestedTags).toEqual(["Finance zqx-tag", "Q3 plan zqx-tag", "Kestrel zqx-tag"]); // at most 3 new names
       const accepted = DocumentTagsResponse.parse(
         await (
-          await call("POST", `/api/documents/${id}/tag-suggestions/accept`, { name: "q3 PLAN" })
+          await call("POST", `/api/documents/${id}/tag-suggestions/accept`, {
+            name: "q3 PLAN zqx-tag",
+          })
         ).json(),
       );
       expect([accepted.tags.map((t) => t.name), accepted.suggestedTags]).toEqual([
-        ["q3 PLAN"],
-        ["Finance", "Kestrel"],
+        ["q3 PLAN zqx-tag"],
+        ["Finance zqx-tag", "Kestrel zqx-tag"],
       ]);
       const dismissed = DocumentTagsResponse.parse(
         await (
-          await call("POST", `/api/documents/${id}/tag-suggestions/dismiss`, { name: "Kestrel" })
+          await call("POST", `/api/documents/${id}/tag-suggestions/dismiss`, {
+            name: "Kestrel zqx-tag",
+          })
         ).json(),
       );
-      expect(dismissed.suggestedTags).toEqual(["Finance"]);
+      expect(dismissed.suggestedTags).toEqual(["Finance zqx-tag"]);
 
-      const log = JSON.stringify(await h.eventStore.read(ingestExecutionId(ALICE.userId, id, 1)));
-      for (const name of ["Finance", "Q3 plan", "q3 PLAN", "Kestrel", "Fourth new one"])
+      const events = await h.eventStore.read(ingestExecutionId(ALICE.userId, id));
+      expect(events.length).toBeGreaterThan(2); // the scan reads a real log
+      const log = JSON.stringify(events);
+      for (const name of [
+        "Finance zqx-tag",
+        "Q3 plan zqx-tag",
+        "q3 PLAN zqx-tag",
+        "Kestrel zqx-tag",
+        "Fourth new one",
+      ])
         expect(log).not.toContain(name);
 
       // The user's tag names go to the configured provider in the next summary prompt, and the model maps onto them.
-      state.ingestTags = ["Q3 PLAN", "brand new"];
+      state.ingestTags = ["Q3 PLAN zqx-tag", "brand new"];
       const second = await uploadAndAwaitTerminal(h, "alice", "b.md", md("Osprey"), "ready");
       const reduce = h.fake.requests.filter(
         (r) =>
           JSON.stringify(r).includes("suggestedTags") && JSON.stringify(r).includes("already uses"),
       );
-      expect(JSON.stringify(reduce.at(-1))).toContain('[\\"q3 PLAN\\"]');
-      expect((await getDoc(h, "alice", second)).suggestedTags).toEqual(["q3 PLAN", "brand new"]); // the existing tag keeps its display name
+      expect(JSON.stringify(reduce.at(-1))).toContain('[\\"q3 PLAN zqx-tag\\"]');
+      expect((await getDoc(h, "alice", second)).suggestedTags).toEqual([
+        "q3 PLAN zqx-tag",
+        "brand new",
+      ]); // the existing tag keeps its display name
     },
     WAIT,
   );
@@ -105,7 +125,6 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
   it(
     "filters across three documents with Any and with All, paged without a gap",
     async () => {
-      await h.owner.query("DELETE FROM tags");
       const ids = [
         await uploadAndAwaitTerminal(h, "alice", "x1.md", md("Alpha"), "ready"),
         await uploadAndAwaitTerminal(h, "alice", "x2.md", md("Bravo"), "ready"),
@@ -174,7 +193,7 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
         ((await second.json()) as { error: { code: string } }).error.code,
       ]).toEqual([409, "suggest_running"]);
       gate.release();
-      await expectSuggestions(id, ["Legal", "Q3 plan"]);
+      await expectSuggestions(id, ["Legal zqx-tag", "Q3 plan zqx-tag"]);
       const calls = h.fake.requests
         .slice(before)
         .filter((r) => JSON.stringify(r).includes("You suggest tags"));
@@ -185,7 +204,7 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       const log = JSON.stringify(
         await h.eventStore.read(suggestTagsExecutionId(ALICE.userId, id, 1)),
       );
-      for (const name of ["Legal", "Q3 plan"]) expect(log).not.toContain(name);
+      for (const name of ["Legal zqx-tag", "Q3 plan zqx-tag"]) expect(log).not.toContain(name);
       expect(log).toContain('"outcome":"suggested"');
     },
     WAIT,
