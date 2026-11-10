@@ -303,7 +303,8 @@ visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no
 - Two derived fact kinds, `outline` and `cooccurrence`, are written by the `visualize-structure` step (after extract; also on a
   re-plan that skips extraction) with `PgVisualFacts.replaceStructure`, on reserved ordinals 16 and 17 of `visual_facts`
   (extraction keeps 16 facts at 0..15). Each store writer owns its own ordinal range. Migration 0035 relaxes the `kind`
-  and `ordinal` CHECKs of 0026 (`kind` also allows `outline` and `cooccurrence`; `ordinal` 0..17); the sealed fact's `kind` decides.
+  and `ordinal` CHECKs of 0026 (`kind` also allows `outline` and `cooccurrence`; `ordinal` 0..17) and adds a third,
+  `visual_facts_kind_ordinal_check`, tying each kind to its ordinal band (extracted kinds below 16, `outline` and `cooccurrence` at 16 and up); the sealed fact's `kind` decides.
 - `DocumentOutline` (Diagram, tree) and `EntityMap` (Diagram, network) are in the document catalogue `docmind.visuals.v3`;
   the chat catalogue `FACT_VISUALS_CATALOG` is byte-identical (sha256 guard). Their reshapers (`structureShapes.ts`) pass
   loom-ui's `diagramProblems`, and `fitsShape` drops a misfit before commit. `VISUAL_SHAPES` serves them only at ordinals 16
@@ -311,5 +312,6 @@ visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no
 - The planner sees counts and neutral placeholders only for a structure capability (never a heading or a name). `factFormatFingerprint()` ends `+docmind.structure@1`, which makes
   the boot stale pass re-plan each visualized document once.
 - The flow is `visualize-document` 1.1.0; the `legacy` 1.0.0 definition stays registered before it so runs in flight at deploy finish on
-  1.0.0 (no structure facts until the next re-plan). Do not roll back past this release (see `docs/operations/cloud-deploy.md`).
+  1.0.0 without structure facts. The recorder does not stamp such a run with the current fact format, so the next boot's
+  stale-format pass re-plans that document once and derives them. Do not roll back past this release (see `docs/operations/cloud-deploy.md`).
 - Not done in c1: timeline and relationships (c2), diagrams in chat, cross-document structure.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { clipText } from "../../http/clip";
 import {
   type HeadingRow,
   MAX_OUTLINE_NODES,
@@ -6,7 +7,7 @@ import {
   buildOutline,
   outlineTitle,
 } from "./outline";
-import { clipLabel, clipText } from "./structureText";
+import { clipLabel } from "./structureText";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 

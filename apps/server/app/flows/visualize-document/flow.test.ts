@@ -14,6 +14,7 @@ import { isIngestExecution, isVisualizeExecution } from "../../status/model";
 import { foldIngestStatus } from "../../status/model";
 import { subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
+import { PermanentIngestError } from "../ingest-document/errors";
 import { LLM_RETRY, STEP_RETRY } from "../ingest-document/stepEffect";
 import type { VisualizeDeps } from "./deps";
 import type { Fact, StructureFact } from "./facts";
@@ -98,6 +99,10 @@ function stack(
     provider?: ReturnType<typeof scripted>;
     executionId?: string;
     structure?: StructureReader;
+    /** Makes the load step's read throw this (a permanent ingest failure, for the code pass-through test). */
+    listAllError?: Error;
+    /** Collects the executions the legacy runner ran. */
+    legacyRuns?: Set<string>;
     /** Start the execution on the 1.0.0 flow, as one that was in flight at deploy was. */
     legacy?: boolean;
   } = {},
@@ -132,7 +137,10 @@ function stack(
         return facts.length;
       },
       list: async () => held,
-      listAll: async () => [...held, ...structured],
+      listAll: async () => {
+        if (o.listAllError) throw o.listAllError;
+        return [...held, ...structured];
+      },
     },
     structure: o.structure ?? noStructure(),
     summaryMaxChars: 400_000,
@@ -144,7 +152,11 @@ function stack(
     ...(planner && { planner }),
   };
   const current = () => visualizeDocumentFlow(() => planner);
-  const legacy = () => visualizeDocumentFlow(() => planner, { legacy: true });
+  const legacy = () =>
+    visualizeDocumentFlow(() => planner, {
+      legacy: true,
+      ...(o.legacyRuns && { legacyRuns: o.legacyRuns }),
+    });
   const app = buildApp(
     { kind: "custom", eventStore: sealed },
     { events: sealed },
@@ -416,6 +428,36 @@ describe("visualize-document flow", () => {
     expect(await s.run()).toEqual({ outcome: "empty" });
   });
 
+  it("ends empty, not failed, for a structure-only document when the planner emits nothing (the structure widgets are optional)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = stack([JSON.stringify({ facts: [] }), EMPTY_PLAN], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "empty" });
+    expect(s.held()).toEqual([]);
+    expect(s.structured().map((f) => f.ordinal)).toEqual([16]); // the structure facts exist, only the plan is empty
+    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+  });
+
+  it("keeps a genuinely invalid plan failed when the document has extracted facts and structure", async () => {
+    const s = stack([FACTS, "this is not json", "still not json"], { structure: STRUCTURE_READER });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
+  });
+
+  it("passes a permanent failure code through from the structure step", async () => {
+    const reader: StructureReader = {
+      ...STRUCTURE_READER,
+      title: async () => {
+        throw new PermanentIngestError("corrupt_content");
+      },
+    };
+    const s = stack([FACTS, PLAN], { structure: reader });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "corrupt_content" });
+  });
+
+  it("passes a permanent failure code through from the load step", async () => {
+    const s = stack([FACTS, PLAN], { listAllError: new PermanentIngestError("too_large") });
+    expect(await s.run()).toEqual({ outcome: "failed", code: "too_large" });
+  });
+
   it("makes no structure and no write when the visuals role is off", async () => {
     const s = stack(null, { structure: STRUCTURE_READER });
     expect(await s.run()).toEqual({ outcome: "skipped" });
@@ -460,6 +502,16 @@ describe("visualize-document flow", () => {
       .map((e) => (e.payload as { stepId: string }).stepId);
     expect(steps).toContain("visualize-extract");
     expect(steps).not.toContain("visualize-structure");
+  });
+
+  it("notes a 1.0.0 execution for the recorder, and a 1.1.0 execution not", async () => {
+    const legacyRuns = new Set<string>();
+    const old = stack([FACTS, PLAN], { legacy: true, legacyRuns });
+    expect(await old.run()).toEqual({ outcome: "done" });
+    expect([...legacyRuns]).toEqual([old.executionId]);
+    const current = stack([FACTS, PLAN], { legacyRuns });
+    expect(await current.run()).toEqual({ outcome: "done" });
+    expect(legacyRuns.has(current.executionId)).toBe(false);
   });
 
   it("a run started on 1.1.0 records the 1.1.0 hash and the structure step", async () => {

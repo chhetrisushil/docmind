@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { titleBind } from "../documents/repo";
+import { clipText as clip } from "../http/clip";
 
 export interface CiteDeps {
   pool: Pool;
@@ -17,20 +18,13 @@ export interface ResolvedCite {
 const MAX_LABEL = 200; // loom-ui's MAX_WIDGET_REF_LABEL
 /**
  * The most distinct chunk ids one call resolves. Unreachable by a well-formed caller: a fact cites at most 8 chunk ids
- * (`ChunkIds` in `flows/visualize-document/facts.ts`) and a document keeps at most MAX_FACTS (16) facts, so one document's
- * facts name at most 16 x 8 = 128 distinct ids, a quarter of this cap. It only bounds the `ANY($2)` array against a
+ * (`ChunkIds` in `flows/visualize-document/facts.ts`) and a document keeps at most MAX_FACTS (16) facts, so the
+ * extracted facts name at most 16 x 8 = 128 distinct ids, plus the outline's 120 and the entity map's 40: 288 in all,
+ * still under this cap. It only bounds the `ANY($2)` array against a
  * caller that passes more.
  */
 const MAX_IDS = 512;
 const UNTITLED = "Untitled document";
-
-/** Cuts to at most `max` UTF-16 units, never ending in half a surrogate pair. */
-const clip = (text: string, max: number): string => {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, max);
-  const last = cut.charCodeAt(cut.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
-};
 
 /** "<title>, <place>" (the place in the Sources panel's words), at most 200 characters, the title giving way. */
 export const citeLabel = (title: string, locator: Locator): string => {

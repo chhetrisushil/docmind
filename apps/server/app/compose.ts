@@ -234,9 +234,10 @@ export function buildServer(options: ComposeOptions) {
   const visualizeGate = newVisualizeGate();
   const visualRuns = new PgVisualRuns(pool);
   const afterDone = new Set<string>();
+  const legacyRuns = new Set<string>(); // executions the 1.0.0 flow ran: the recorder does not stamp them current
   const visualize = {
     flow: visualizeDocumentFlow(() => planner),
-    legacyFlow: visualizeDocumentFlow(() => planner, { legacy: true }),
+    legacyFlow: visualizeDocumentFlow(() => planner, { legacy: true, legacyRuns }),
     deps: {
       guard: new PgVisualizeGuard(pool),
       chunks: new PgChunkStore(pool, fields),
@@ -382,7 +383,11 @@ export function buildServer(options: ComposeOptions) {
   });
   // The end of a visualize execution is recorded (the detail page's `visuals.state`, the boot sweep's re-run source) and a
   // failed one tells the owner's open pages.
-  const visualRecorder = visualRunRecorder({ runs: visualRuns, bus: options.ingest.bus });
+  const visualRecorder = visualRunRecorder({
+    runs: visualRuns,
+    bus: options.ingest.bus,
+    legacyRuns,
+  });
   feed.sinks = [status.onEvent, activity.onEvent, visualRecorder.onEvent];
   const ingest = options.wrapIngest
     ? options.wrapIngest(loomIngest(app.runtime))

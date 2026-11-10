@@ -253,6 +253,51 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     const before = await lineage.resolveLatest(benLine);
     expect(before.ok && JSON.stringify(before.value)).toContain(BEN.label);
 
+    // Ben's document also has structure facts (an outline and an entity map), sealed under his key beside the extracted one.
+    const HEADING = "Zebra-Outline-Heading";
+    const ENTITY = "Zebra-Entity-Name";
+    const benRef = { tenantId: ben.tenantId, userId: ben.userId, documentId: benDoc };
+    const passage = (
+      await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal", [
+        benDoc,
+      ])
+    ).rows[0].id as string;
+    await new PgVisualFacts(st.app, st.fields).replaceStructure(benRef, [
+      {
+        kind: "outline",
+        title: "Zebra-Outline-Title",
+        nodes: [1, 2, 3].map((n) => ({
+          id: `s${n}`,
+          label: `${HEADING}-${n}`,
+          level: 1,
+          passageCount: 1,
+          firstChunkId: passage,
+        })),
+        chunkIds: [passage],
+        ordinal: 16,
+      },
+      {
+        kind: "cooccurrence",
+        entities: [1, 2, 3].map((n) => ({
+          name: `${ENTITY}-${n}`,
+          entityKind: "organization" as const,
+          passages: 2,
+        })),
+        edges: [
+          { a: 0, b: 1, weight: 2, firstChunkId: passage },
+          { a: 1, b: 2, weight: 2, firstChunkId: passage },
+        ],
+        chunkIds: [passage],
+        ordinal: 17,
+      },
+    ]);
+    const structureRows = () =>
+      st.db.owner.query(
+        "SELECT count(*)::int AS n FROM visual_facts WHERE document_id = $1 AND ordinal >= 16",
+        [benDoc],
+      );
+    expect((await structureRows()).rows[0].n).toBe(2); // not vacuous: the structure facts exist before the erasure
+
     const erased = await eraseMe(st, ben.cookie);
     expect(erased.status).toBe(202);
     await waitErased(st, ben.userId);
@@ -265,7 +310,8 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     // Raw rows: the artifact store and every event of every execution hold neither the label nor the value.
     const stored = await st.db.owner.query("SELECT count(*)::int AS n FROM lineage_content");
     expect(stored.rows[0].n).toBeGreaterThan(0); // not vacuous: ciphertext is still there
-    for (const needle of [BEN.label, String(BEN.value)]) {
+    expect((await structureRows()).rows[0].n).toBe(0); // the cascade removed the structure facts
+    for (const needle of [BEN.label, String(BEN.value), HEADING, ENTITY]) {
       const found = await st.db.owner.query(
         "SELECT 1 FROM lineage_content WHERE position(convert_to($1, 'UTF8') in bytes) > 0",
         [needle],

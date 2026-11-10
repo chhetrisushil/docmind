@@ -1,4 +1,5 @@
 import { factFormatFingerprint } from "@docmind/experiences";
+import type { EventEnvelope } from "@loom/core";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
@@ -7,9 +8,10 @@ import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
 import { ingestExecutionId } from "../../documents/ingest";
+import { InMemoryProgressBus } from "../../documents/progress";
 import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
 import { visualizeDocumentFlow } from "./flow";
-import { PgVisualRuns } from "./runs";
+import { PgVisualRuns, visualRunRecorder } from "./runs";
 import {
   loomVisualsStarter,
   pgReadyDocuments,
@@ -400,6 +402,43 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     await runs.record(at(1), "done", undefined, factFormatFingerprint());
     expect(await list(NIL, 10)).toEqual([]);
     expect(await pgStaleFormatDocuments(app, "docmind:other@2")(NIL, 10)).toHaveLength(1);
+  });
+
+  it("a run recorded on 1.0.0 that completes after the deploy stays in the stale-format list; a 1.1.0 run does not", async () => {
+    await owner.query("DELETE FROM documents");
+    const legacyDoc = await readyDoc();
+    const currentDoc = await readyDoc();
+    const legacyRuns = new Set<string>();
+    const recorder = visualRunRecorder({
+      runs,
+      bus: new InMemoryProgressBus(),
+      legacyRuns,
+      onError: (e) => {
+        throw e;
+      },
+    });
+    const finish = async (d: { id: string; g: number }, legacy: boolean) => {
+      const at = { userId: U1, documentId: d.id, generation: d.g, run: 1 };
+      await runs.record({ ...at, run: 0 }, "done", undefined, "old"); // planned before the deploy
+      await runs.record(at, "running"); // a boot re-run (or the in-flight run) is running
+      const executionId = visualizeExecutionId(U1, d.id, d.g, 1);
+      if (legacy) legacyRuns.add(executionId); // the 1.0.0 runner noted it
+      recorder.onEvent({
+        id: "e",
+        workflowId: "visualize-document",
+        executionId,
+        eventType: "EXECUTION_COMPLETED",
+        sequence: 9,
+        timestamp: 1,
+        payload: { output: { outcome: "done" } },
+      } as EventEnvelope);
+      await recorder.idle();
+    };
+    await finish(legacyDoc, true);
+    await finish(currentDoc, false);
+    const listed = (await pgStaleFormatDocuments(app)(NIL, 10)).map((d) => d.documentId);
+    expect(listed).toEqual([legacyDoc.id]); // the 1.0.0 run derived no structure: the next boot re-plans it
+    expect(legacyRuns.size).toBe(0);
   });
 
   it("the boot stale pass re-runs a NULL-format done run once, the end stamps it, and the next sweep leaves it", async () => {

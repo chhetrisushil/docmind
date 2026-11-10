@@ -89,6 +89,8 @@ const logClass = (err: unknown) =>
 export function visualRunRecorder(o: {
   runs: Pick<VisualRuns, "record">;
   bus: ProgressBus;
+  /** Execution ids the legacy 1.0.0 runner ran (`visualizeDocumentFlow`'s `legacyRuns`): such a run derived no structure, so it is not stamped. */
+  legacyRuns?: Set<string>;
   onError?: (err: unknown) => void;
 }): { onEvent(e: EventEnvelope): void; idle(): Promise<void> } {
   const report = o.onError ?? logClass;
@@ -105,6 +107,7 @@ export function visualRunRecorder(o: {
       if (!id) return;
       const end = endOf(e);
       if (!end) return;
+      const legacy = o.legacyRuns?.delete(e.executionId) === true;
       chain = chain
         .then(async () => {
           await o.runs.record(
@@ -116,7 +119,9 @@ export function visualRunRecorder(o: {
             },
             end.state,
             end.code,
-            ...(end.state === "done" ? [factFormatFingerprint()] : []),
+            ...(end.state === "done" && !legacy ? [factFormatFingerprint()] : []),
+            // A run of the legacy 1.0.0 flow (in flight at deploy) derived no structure, so it is not stamped: the row keeps its
+            // previous (older or NULL) stamp, stays stale, and the next boot re-plans it once with the structure derived.
             // A committed run (outcome done) is stamped with the format it planned over. Only this live feed stamps: a run
             // repaired at boot (`reconcile`) is not, since that process cannot know which code wrote it. The row keeps the
             // PREVIOUS stamp (COALESCE in the SQL), so a stale re-run whose end event was lost is still stale and is

@@ -26,6 +26,7 @@ import {
   factProvider,
   factRefOfPin,
   fitsShape,
+  turnFactProvider,
 } from "./visuals";
 
 const FIGURE: VisualFactRaw = {
@@ -436,6 +437,32 @@ describe("the visual.facts invoker target", () => {
       args: { id: id.toUpperCase() },
     });
     expect(visualFacts).toHaveBeenCalledTimes(1);
+  });
+  it("passes extractedOnly (the chat turn's read) to the reader, and keeps it a separate memo entry from the full read", async () => {
+    const visualFacts = vi.fn(async () => [FIGURE]);
+    const inv = createInvoker(readers(visualFacts));
+    await inv.invokeTransient(INVOKE_ID, { target: "visual.facts", args: { id } });
+    await inv.invokeTransient(INVOKE_ID, {
+      target: "visual.facts",
+      args: { id, extractedOnly: true },
+    });
+    expect(visualFacts).toHaveBeenCalledTimes(2);
+    expect(visualFacts).toHaveBeenNthCalledWith(1, { id });
+    expect(visualFacts).toHaveBeenNthCalledWith(2, { id, extractedOnly: true });
+    await expect(
+      inv.invokeTransient(INVOKE_ID, {
+        target: "visual.facts",
+        args: { id, extractedOnly: false },
+      }),
+    ).rejects.toMatchObject({ channel: "invalidArgs" });
+  });
+  it("a chat turn's provider for a stored document fact asks for the extracted facts only", () => {
+    const spec = turnFactProvider(
+      { kind: "doc", documentId: id, ordinal: 0 },
+      { chatId: id, ord: 1 },
+      "KeyFigure",
+    );
+    expect(JSON.stringify(spec)).toContain('"extractedOnly":true');
   });
   it("maps a missing document to notFound and bad args to invalidArgs", async () => {
     const inv = createInvoker(readers(async () => null));

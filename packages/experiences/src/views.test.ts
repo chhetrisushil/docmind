@@ -492,8 +492,8 @@ describe("turnWithVisuals", () => {
       (p.reshaping as { scriptRef: string }).scriptRef,
     ]);
     expect(steps).toEqual([
-      ["visual.facts", { id: A }, "visual-kpi-0"],
-      ["visual.facts", { id: B }, "visual-table-2"],
+      ["visual.facts", { id: A, extractedOnly: true }, "visual-kpi-0"],
+      ["visual.facts", { id: B, extractedOnly: true }, "visual-table-2"],
       ["turn.facts", { chatId: CHAT, ord: 6 }, "visual-bar-1"],
     ]);
   });
