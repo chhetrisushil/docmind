@@ -10,6 +10,7 @@ import {
   captureConsole,
   eraseMe,
   eventColumnProblems,
+  handleOfExecutions,
   intentRows,
   loginAs,
   seedUser,
@@ -158,68 +159,105 @@ describe.skipIf(!PG_URL)(
       WAIT,
     );
 
+    /** Every EXECUTION_DENIED row on any `h_<handle>` stream: a denied cancel would put the actor's UUID there in the clear. */
+    const deniedOnHandle = async (st: IngestStack, handle: string) =>
+      (
+        await st.db.owner.query(
+          "SELECT count(*)::int AS n FROM loom.events WHERE execution_id LIKE $1 AND event_type = 'EXECUTION_DENIED'",
+          [`h_${handle}%`],
+        )
+      ).rows[0].n as number;
+
+    /** Starts a held chat turn for a user, then erases them: the shred parks behind the running turn. */
+    const parkedErasure = async (email: string, restartWhileParked: boolean) => {
+      const outcomes: string[] = [];
+      // Make the park deterministic: the first stop signal is swallowed, so the held turn is still running when the
+      // eraser first asks Loom to shred (outcome "parked"); the stop it sends after that park is the real one.
+      let swallowed = false;
+      const wrap = (deps: ErasureDeps): ErasureDeps => ({
+        ...deps,
+        stopChat: async (identity, chatId) => {
+          if (!swallowed) {
+            swallowed = true;
+            return;
+          }
+          await deps.stopChat(identity, chatId);
+        },
+        eraseSubject: async (userId) => {
+          // The process dies right after the park: the h_ subject is shredded, the user's data key and the turn are not.
+          if (restartWhileParked && outcomes.includes("parked"))
+            throw new Error("simulated crash while the shred is parked");
+          const r = await deps.eraseSubject(userId);
+          outcomes.push(r.outcome);
+          return r;
+        },
+      });
+      const st = track(await startIngestStack({ chat: true, wrapErasure: wrap }));
+      const claude = st.claude;
+      if (!claude) throw new Error("no fake Claude");
+      const login = await st.signUpAndLogIn(email);
+      const user = await seedUser(st, login, email);
+      const handle = handleOfExecutions(user.executions);
+      if (handle === undefined) throw new Error("the seeded user has no new-format executions");
+
+      const asked = `sentinel-ask2-${randomBytes(6).toString("hex")}`;
+      const answered = `sentinel-answer2-${randomBytes(6).toString("hex")}`;
+      // A second question whose answer stops mid-stream and waits: the turn is running when the erasure begins.
+      scriptChat(claude, () => ({
+        stream: {
+          steps: [
+            { text: "Due " },
+            { hold: true },
+            { text: `in 30 days. ${answered}` },
+            { stop: "end_turn" },
+          ],
+        },
+      }));
+      const sent = await st.chatReq(user.cookie, "POST", `/api/chats/${user.chatId}/messages`, {
+        text: `And the interest? ${asked}`,
+      });
+      expect(sent.status).toBe(202);
+      const gate = await claude.streamHold(); // the model call is under way
+      let finishing = st;
+      try {
+        expect((await eraseMe(st, user.cookie)).status).toBe(202);
+        if (restartWhileParked) {
+          await vi.waitFor(() => expect(outcomes).toContain("parked"), {
+            timeout: 90_000,
+            interval: 50,
+          });
+          expect(await st.keys.wasDestroyed(`h_${handle}`)).toBe(true); // the handle is shredded, the user is parked
+          gate.release();
+          await st.close({ keepDb: true });
+          stacks.splice(stacks.indexOf(st), 1);
+          finishing = track(
+            await startIngestStack({
+              chat: true,
+              resume: { db: st.db, kek: st.kek, root: st.root },
+            }),
+          );
+        }
+        await waitErased(finishing, user.userId);
+      } finally {
+        gate.release();
+      }
+      return { st: finishing, user, handle, asked, answered, outcomes };
+    };
+
     it(
       "an erasure that finds a chat turn running stops it, waits for the conversation to park, and completes",
       async () => {
         const logs = captureConsole();
         try {
-          const outcomes: string[] = [];
-          // Make the park deterministic: the first stop signal is swallowed, so the held turn is still running when the
-          // eraser first asks Loom to shred (outcome "parked"); the stop it sends after that park is the real one.
-          let swallowed = false;
-          const wrap = (deps: ErasureDeps): ErasureDeps => ({
-            ...deps,
-            stopChat: async (identity, chatId) => {
-              if (!swallowed) {
-                swallowed = true;
-                return;
-              }
-              await deps.stopChat(identity, chatId);
-            },
-            eraseSubject: async (userId) => {
-              const r = await deps.eraseSubject(userId);
-              outcomes.push(r.outcome);
-              return r;
-            },
-          });
-          const st = track(await startIngestStack({ chat: true, wrapErasure: wrap }));
-          const claude = st.claude;
-          if (!claude) throw new Error("no fake Claude");
-          const login = await st.signUpAndLogIn("fay@example.com");
-          const fay = await seedUser(st, login, "fay@example.com");
-
-          const asked = `sentinel-ask2-${randomBytes(6).toString("hex")}`;
-          const answered = `sentinel-answer2-${randomBytes(6).toString("hex")}`;
-          // A second question whose answer stops mid-stream and waits: the turn is running when the erasure begins.
-          scriptChat(claude, () => ({
-            stream: {
-              steps: [
-                { text: "Due " },
-                { hold: true },
-                { text: `in 30 days. ${answered}` },
-                { stop: "end_turn" },
-              ],
-            },
-          }));
-          const sent = await st.chatReq(fay.cookie, "POST", `/api/chats/${fay.chatId}/messages`, {
-            text: `And the interest? ${asked}`,
-          });
-          expect(sent.status).toBe(202);
-          const gate = await claude.streamHold(); // the model call is under way
-          try {
-            expect((await eraseMe(st, fay.cookie)).status).toBe(202);
-            await waitErased(st, fay.userId);
-          } finally {
-            gate.release();
-          }
-          await assertErased(
+          const {
             st,
-            fay,
-            {
-              tenantGone: true,
-            },
-            [asked, answered],
-          );
+            user: fay,
+            handle,
+            asked,
+            answered,
+            outcomes,
+          } = await parkedErasure("fay@example.com", false);
+          await assertErased(st, fay, { tenantGone: true }, [asked, answered]);
           // F26: the shred parked behind the running turn, so Loom wrote its plaintext intent. It names the user and
           // nothing else, and the scan's allowance for it was exercised.
           const intents = await intentRows(st, fay.userId);
@@ -231,7 +269,29 @@ describe.skipIf(!PG_URL)(
             expect(Object.keys(intent.payload as object)).toEqual(["subjectId"]);
             expect(eventColumnProblems(intent)).toEqual([]);
           }
+          // The stop repeated after the park cancels only under subjects whose key is alive: Loom never refused a cancel on the
+          // shredded h_ stream, so it appended no denial naming the user.
+          expect(await deniedOnHandle(st, handle)).toBe(0);
           logs.assertClean([fay.email, asked, answered, ...fay.sentinels, ...SECRETS]);
+        } finally {
+          logs.restore();
+        }
+      },
+      WAIT,
+    );
+
+    it(
+      "the same, with the process killed right after the park: the next boot repeats the stop on a cold cache, denies nothing, and completes",
+      async () => {
+        const logs = captureConsole();
+        try {
+          const { st, user, handle, asked, answered } = await parkedErasure(
+            "hal@example.com",
+            true,
+          );
+          await assertErased(st, user, { tenantGone: true }, [asked, answered]);
+          expect(await deniedOnHandle(st, handle)).toBe(0);
+          logs.assertClean([user.email, asked, answered, ...user.sentinels, ...SECRETS]);
         } finally {
           logs.restore();
         }

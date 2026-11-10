@@ -165,10 +165,28 @@ describe.skipIf(!PG_URL)(
     const decrypted = (ref: IngestStartInput) =>
       durable.sealed.eventStore.read(legacyIngestId(ref.userId, ref.documentId));
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
+    /**
+     * The raw proof only knows the ids are sealed (any sealed value passes), so this ties them to the run: opened through the decrypting
+     * store, every flow input (the start and each step) is this document, user and tenant.
+     */
+    const inputsAre = async (ref: IngestStartInput) => {
+      const inputs = (await decrypted(ref))
+        .filter((e) => e.eventType === "EXECUTION_STARTED" || e.eventType === "STEP_STARTED")
+        .map((e) => (e.payload as { input?: unknown }).input);
+      expect(inputs.length).toBeGreaterThan(0);
+      for (const input of inputs) {
+        expect(input).toEqual({
+          documentId: ref.documentId,
+          tenantId: ref.tenantId,
+          userId: ref.userId,
+        });
+      }
+    };
 
     it("a successful run to ready: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
       const ref = await seedTxt("a".repeat(64));
       const raw = proven(await run(ref), ref);
+      await inputsAre(ref);
       expect(types(raw)).toEqual(FULL_RUN);
       expect(raw[3]?.payload).toEqual({
         output: { outcome: "done", count: 1 },
@@ -296,6 +314,7 @@ describe.skipIf(!PG_URL)(
       vi.spyOn(console, "error").mockImplementation(() => {});
       const ref = await seedTxt("e".repeat(64));
       const raw = proven(await run(ref), ref, await decrypted(ref));
+      await inputsAre(ref);
       expect(types(raw).slice(-2)).toEqual(["STEP_FAILED", "EXECUTION_FAILED"]);
       // Raw: an envelope. Decrypted: exactly the fixed text.
       expect((raw.at(-1)?.payload as { error: unknown }).error).toMatchObject({
@@ -749,6 +768,16 @@ describe.skipIf(!PG_URL)(
         await handle.waitForCompletion();
         const raw = await durable.raw.eventStore.read(legacyIngestId(ref.userId, ref.documentId));
         assertEventsAreContentFree(raw as RawEvent[], ref, models);
+        for (const e of await durable.sealed.eventStore.read(
+          legacyIngestId(ref.userId, ref.documentId),
+        )) {
+          if (e.eventType === "EXECUTION_STARTED" || e.eventType === "STEP_STARTED")
+            expect((e.payload as { input?: unknown }).input).toEqual({
+              documentId: ref.documentId,
+              tenantId: ref.tenantId,
+              userId: ref.userId,
+            });
+        }
         expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null });
         const json = JSON.stringify(raw);
         for (const text of [
