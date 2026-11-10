@@ -339,7 +339,7 @@ describe("the visuals role's limits: the planner's and chat's, and the document 
         DOCMIND_LLM_TIMEOUT_MS: "1000",
       }),
     ).toMatchObject({ timeoutMs: 1000, visualsExtractTimeoutMs: 90_000 });
-    for (const v of ["0", "600001", "abc"])
+    for (const v of ["0", "-1", "600001", "abc"])
       expect(() => loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: v })).toThrow(
         /^DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS must be/,
       );

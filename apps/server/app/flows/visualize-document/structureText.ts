@@ -32,6 +32,9 @@ export const cleanText = (raw: string, max: number): string =>
 /** The dedupe key of events, links and parties (defined in experiences, where the reshapers enforce it too). */
 export { nameKey } from "@docmind/experiences";
 
+/** The most cited passage ids read from one item. */
+const MAX_CITED_IDS = 8;
+
 /**
  * The passage of this document an item cites that comes first in the document, or null when none of its `ids` is one of the
  * document's passages. `position` maps each passage id (lower case) to its index in passage order, so its keys are exactly
@@ -43,7 +46,8 @@ export function earliestPassage(
 ): string | null {
   if (!Array.isArray(ids)) return null;
   let best: string | null = null;
-  for (const raw of ids) {
+  // Only the first few ids are read: the scan stays bounded whatever a provider returns (the prompt asks for at most 2).
+  for (const raw of ids.slice(0, MAX_CITED_IDS)) {
     if (typeof raw !== "string") continue;
     const id = raw.toLowerCase();
     const at = position.get(id);

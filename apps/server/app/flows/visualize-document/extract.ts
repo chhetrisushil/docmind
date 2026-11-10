@@ -13,6 +13,7 @@ import {
   type StepGuard,
   StepResult,
   type StepSeams,
+  StepTimeoutError,
   ingestStepOptions,
   stepEffectOf,
 } from "../ingest-document/stepEffect";
@@ -29,11 +30,14 @@ import type { VisualFactStore, VisualizeRef } from "./pgFacts";
 import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
 import { buildRelations, rawLinksOf } from "./relations";
 import type { VisualRuns } from "./runs";
+import { MAX_RAW_ITEMS } from "./structureText";
 import { buildTimeline, rawEventsOf } from "./timeline";
 
 /** The most chunk text sent to the model in one request; a window never splits a chunk. */
 export const EXTRACT_WINDOW_CHARS = 24_000;
 const READ_BATCH = 200;
+/** The fewest raw events (and links) one window may contribute, whatever the window count. */
+const MIN_WINDOW_ITEMS = 40;
 export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
 
 /**
@@ -187,10 +191,12 @@ export async function askForExtraction(
     (content) => jsonAnswer(content, DocumentAnswer),
     signal,
   );
+  // Each window gets a share of the raw-item bound, so one window's flood cannot crowd out the later windows' items.
+  const share = Math.max(Math.floor(MAX_RAW_ITEMS / Math.max(answers.length, 1)), MIN_WINDOW_ITEMS);
   return {
     drafts: answers.flatMap((a) => a.facts),
-    events: answers.flatMap((a) => rawEventsOf(a.timeline)),
-    links: answers.flatMap((a) => rawLinksOf(a.relations)),
+    events: answers.flatMap((a) => rawEventsOf(a.timeline).slice(0, share)),
+    links: answers.flatMap((a) => rawLinksOf(a.relations).slice(0, share)),
   };
 }
 
@@ -276,14 +282,18 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
     },
     {
       ...ingestStepOptions(
-        { ...deps, stepTimeoutMs: EXTRACT_STEP_TIMEOUT_MS },
+        { ...deps, stepTimeoutMs: deps.stepTimeoutMs ?? EXTRACT_STEP_TIMEOUT_MS },
         LLM_RETRY,
         LLM_BACKOFF_CAP_MS,
       ),
       // The model stayed unreachable (a timeout, a 5xx, a rate limit) through every attempt: a recorded failure the user
-      // can retry, not a failed execution.
+      // can retry, not a failed execution. The step clock (600 s for all the windows of one attempt) running out is the same
+      // thing: this step's time is its model calls (reads and the one write are fast), so a slow model that outlasts the
+      // clock, a long document at the 180 s per-call timeout or a single call at the 600 s ceiling, is "unavailable", as
+      // a call that outlasts its own provider timeout is. Mapping the clock (rather than sizing it by window count) keeps
+      // the flow's step list, and so its hash, untouched, and bounds a run at 6 attempts of 600 s.
       exhausted: (err) =>
-        err instanceof LlmUnavailableError
+        err instanceof LlmUnavailableError || err instanceof StepTimeoutError
           ? { outcome: "failed", code: "visuals-model-unavailable" }
           : undefined,
     },
