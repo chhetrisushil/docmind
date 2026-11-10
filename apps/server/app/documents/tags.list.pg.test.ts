@@ -170,9 +170,21 @@ describe.skipIf(!PG_URL)("GET /api/documents with a tag filter (needs DOCMIND_TE
     );
   });
 
+  it("refuses a repeated tags or match key instead of keeping the last", async () => {
+    for (const qs of [`tags=${tag.a}&tags=${tag.b}`, `tags=${tag.a}&match=all&match=any`]) {
+      const res = await get("alice", qs);
+      expect([res.status, ((await res.json()) as { error: { code: string } }).error.code]).toEqual([
+        400,
+        "invalid_request",
+      ]);
+    }
+  });
+
   it("collapses a duplicate id: a,a&match=all is a", async () => {
     expect(await ids(await get("alice", `tags=${tag.a},${tag.a}&match=all`))).toEqual(
       await ids(await get("alice", `tags=${tag.a}`)),
     );
+    const many = Array.from({ length: 12 }, () => tag.a).join(",");
+    expect(await ids(await get("alice", `tags=${many}`))).toEqual(at(0, 1, 2, 4));
   });
 });

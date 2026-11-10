@@ -73,9 +73,15 @@ export type TagNameRequest = z.infer<typeof TagNameRequest>;
 export const TagResponse = z.object({ tag: DocumentTag });
 export type TagResponse = z.infer<typeof TagResponse>;
 
+const MAX_RAW_IDS = 400;
 export const SetDocumentTagsRequest = z
   .object({
-    tagIds: z.array(Uuid.transform((s) => s.toLowerCase())).max(MAX_TAGS_PER_DOCUMENT),
+    // Duplicates collapse before the cap, so 21 copies of one id are one tag. The raw bound only keeps the work small.
+    tagIds: z
+      .array(Uuid.transform((s) => s.toLowerCase()))
+      .max(MAX_RAW_IDS)
+      .transform((ids) => [...new Set(ids)])
+      .pipe(z.array(z.string()).max(MAX_TAGS_PER_DOCUMENT)),
   })
   .strict();
 export type SetDocumentTagsRequest = z.infer<typeof SetDocumentTagsRequest>;
@@ -97,7 +103,7 @@ export type TagMatch = z.infer<typeof TagMatch>;
 /** The `tags` query value: comma-separated ids; empty is none; duplicates collapse; at most 10; anything else is refused. */
 export const TagIdList = z
   .string()
-  .max(MAX_TAGS_PER_FILTER * 37)
+  .max(MAX_RAW_IDS * 37) // duplicates collapse before the cap, so the raw length is only a work bound
   .transform((s, ctx) => {
     if (s === "") return [] as string[];
     const ids = [...new Set(s.split(",").map((x) => x.trim().toLowerCase()))];

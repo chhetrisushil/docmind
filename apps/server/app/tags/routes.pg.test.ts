@@ -33,6 +33,29 @@ describe.skipIf(!PG_URL)("tag routes (needs DOCMIND_TEST_PG_URL)", () => {
   const mk = async (user: string, name: string) =>
     TagResponse.parse(await (await call(user, "POST", "/api/tags", { name })).json()).tag;
 
+  it("answers 401 without a session on every method, and 413 for an oversized body", async () => {
+    const d = await seed();
+    for (const [method, path, body] of [
+      ["POST", "/api/tags", { name: "a" }],
+      ["PATCH", `/api/tags/${randomUUID()}`, { name: "a" }],
+      ["DELETE", `/api/tags/${randomUUID()}`, undefined],
+      ["PUT", `/api/documents/${d}/tags`, { tagIds: [] }],
+      ["POST", `/api/documents/${d}/tags`, { name: "a" }],
+      ["DELETE", `/api/documents/${d}/tags/${randomUUID()}`, undefined],
+    ] as const)
+      expect([method, (await call(null, method, path, body)).status]).toEqual([method, 401]);
+    const big = await call("alice", "POST", "/api/tags", { name: "x".repeat(20 * 1024) });
+    expect(big.status).toBe(413);
+  });
+
+  it("collapses duplicate ids in a set before the cap", async () => {
+    const d = await seed();
+    const t = await mk("alice", "one");
+    const same = Array.from({ length: 21 }, () => t.id);
+    const res = await call("alice", "PUT", `/api/documents/${d}/tags`, { tagIds: same });
+    expect(DocumentTagsResponse.parse(await res.json()).tags).toEqual([t]);
+  });
+
   it("needs a session, JSON, and a valid name", async () => {
     expect((await call(null, "GET", "/api/tags")).status).toBe(401);
     expect((await call("alice", "POST", "/api/tags", '{"name":"a"}', "text/plain")).status).toBe(

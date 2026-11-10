@@ -93,6 +93,13 @@ describe("tag schemas", () => {
     expect(TagIdList.safeParse(eleven).success).toBe(false);
     expect(TagIdList.safeParse(`${id(1)},nope`).success).toBe(false);
   });
+  it("duplicates collapse before the caps", () => {
+    const same = Array.from({ length: 21 }, () => id(1));
+    expect(SetDocumentTagsRequest.parse({ tagIds: same }).tagIds).toEqual([id(1)]);
+    expect(TagIdList.parse(Array.from({ length: 30 }, () => id(1)).join(","))).toEqual([id(1)]);
+    const distinct = Array.from({ length: 21 }, (_, i) => id(i + 1));
+    expect(SetDocumentTagsRequest.safeParse({ tagIds: distinct }).success).toBe(false);
+  });
   it("ListTagsResponse needs a document count per tag", () => {
     expect(ListTagsResponse.safeParse({ tags: [{ id: id(1), name: "a" }] }).success).toBe(false);
     expect(

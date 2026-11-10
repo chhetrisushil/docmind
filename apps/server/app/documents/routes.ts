@@ -315,7 +315,11 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
 
     "GET /api/documents": requireAuth(deps.authenticator, async (req, res, identity) => {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const query = ListDocumentsQuery.safeParse(Object.fromEntries(url.searchParams));
+      // A repeated tags or match key would silently keep the last value: refuse it.
+      const repeated = ["tags", "match"].some((k) => url.searchParams.getAll(k).length > 1);
+      const query = repeated
+        ? { success: false as const }
+        : ListDocumentsQuery.safeParse(Object.fromEntries(url.searchParams));
       if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
       const tagIds = query.data.tags ?? [];
       const filter = tagIds.length > 0 ? { tagIds, match: query.data.match } : undefined;
