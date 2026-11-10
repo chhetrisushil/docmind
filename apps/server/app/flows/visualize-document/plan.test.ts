@@ -11,8 +11,9 @@ import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { legacyIds } from "../../opaqueIds";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
-import { executionIdFor, subjectOfExecution } from "../../subject";
+import { subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { DocumentGoneError } from "../ingest-document/errors";
 import { DATE_PRECISIONS, type DatePrecision } from "./dates";
@@ -29,6 +30,8 @@ import {
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals, plannerUnavailable } from "./plan";
 import { aggregateFacts, recording, scriptedPlannerModel } from "./testing";
+
+const executionIdFor = legacyIds.named;
 
 const FIGURE: Fact = {
   kind: "figure",

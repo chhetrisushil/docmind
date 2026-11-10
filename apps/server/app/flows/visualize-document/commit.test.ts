@@ -6,11 +6,14 @@ import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { legacyIds } from "../../opaqueIds";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
-import { executionIdFor, subjectOfExecution } from "../../subject";
+import { subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
 import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { aPlan, childrenOf } from "./testing";
+
+const executionIdFor = legacyIds.named;
 
 const SECRET_LABEL = "Zebra-Secret-Label";
 const SECRET_SUMMARY = "Zebra-Secret-Summary";

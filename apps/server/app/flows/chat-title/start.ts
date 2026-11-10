@@ -4,7 +4,7 @@ import {
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
 import type { ChatRef } from "../../chats/turnItems";
-import { executionIdFor } from "../../subject";
+import { legacyIds } from "../../opaqueIds";
 import { ChatTitleInput, chatTitleFlow } from "./flow";
 
 export interface TitleStarter {
@@ -35,8 +35,8 @@ export function loomTitleStarter(
     });
     try {
       return await runtime.start(chatTitleFlow, input, {
-        // One title execution per chat: Loom starts a caller-chosen id once. The name holds no content.
-        executionId: executionIdFor(input.userId, `chat-title-${input.chatId}`),
+        // One title execution per chat: Loom starts a caller-chosen id once. PHASE 2 builds it with `UserIds.chatTitle` (`h_<H>:chat-title-<C>`); until then it is the old format.
+        executionId: legacyIds.chatTitle(input.userId, input.chatId),
         principal: { tenant: input.tenantId, actor: input.userId },
       });
     } catch (err) {

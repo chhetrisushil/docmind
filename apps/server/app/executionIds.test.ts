@@ -1,5 +1,5 @@
-import { readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
@@ -76,7 +76,7 @@ const snippet = (body: string) =>
       [
         VIRTUAL,
         `import type { WorkflowRuntime } from "@loom/workflow-runtime";
-         import { executionIdFor } from "./subject";
+         import { legacyIds } from "./opaqueIds";
          declare const rt: WorkflowRuntime; declare const flow: never; declare const user: string;
          export async function f() { ${body} }`,
       ],
@@ -84,11 +84,11 @@ const snippet = (body: string) =>
   );
 
 describe("execution ids", () => {
-  it("accepts a start and a fork whose executionId comes from executionIdFor", () => {
+  it("accepts a start and a fork whose executionId comes from an id builder", () => {
     expect(
-      snippet(`await rt.start(flow, {}, { executionId: executionIdFor(user, "n") });`),
+      snippet(`await rt.start(flow, {}, { executionId: legacyIds.named(user, "n") });`),
     ).toEqual([{ at: "__virtual__.ts:4", ok: true }]);
-    const forked = `const id = executionIdFor(user, "n"); await rt.fork("e", 3, { executionId: id });`;
+    const forked = `const id = legacyIds.named(user, "n"); await rt.fork("e", 3, { executionId: id });`;
     expect(snippet(forked).map((c) => c.ok)).toEqual([true]);
   });
 
@@ -106,5 +106,88 @@ describe("execution ids", () => {
     const calls = scanStarts(sources(APP));
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter((c) => !c.ok).map((c) => c.at)).toEqual([]);
+  });
+});
+
+/**
+ * Where an id is built or parsed outside `opaqueIds` (R14, spec O5): every string, template, template part or regex literal that carries
+ * an id's shape, and every import of Loom UI's lineage stream prefix. `virtual` adds in-memory files so the scan itself can be tested.
+ */
+const ID_SHAPES: readonly RegExp[] = [
+  /^\^?[uh]_/, // the user prefixes: `u_<uuid>` and `h_<handle>`
+  /:(?:ingest|visualize|suggest-tags|chat-title)-/, // a flow name after a user prefix
+  /\.c-/, // a conversation id
+  /^\^?(?:turn)?visuals-(?:\(|$)/, // a lineage line: the head of `visuals-${...}` or of a regex `^visuals-(...)`
+];
+
+function idShapesIn(files: string[], virtual = new Map<string, string>()): string[] {
+  const hits = new Set<string>();
+  const scan = (name: string, text: string) => {
+    const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node) => {
+      let literal: string | undefined;
+      if (
+        ts.isStringLiteral(node) ||
+        ts.isNoSubstitutionTemplateLiteral(node) ||
+        ts.isTemplateHead(node) ||
+        ts.isTemplateMiddle(node) ||
+        ts.isTemplateTail(node)
+      )
+        literal = node.text;
+      else if (ts.isRegularExpressionLiteral(node))
+        literal = node.text.replace(/^\/|\/[a-z]*$/g, "");
+      const imported = ts.isImportSpecifier(node) && node.name.text === "LINEAGE_STREAM_PREFIX";
+      if (
+        imported ||
+        (literal !== undefined && ID_SHAPES.some((shape) => shape.test(literal as string)))
+      ) {
+        const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+        hits.add(`${name.startsWith(APP) ? name.slice(APP.length + 1) : name}:${line}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  };
+  for (const file of files) scan(file, readFileSync(file, "utf8"));
+  for (const [name, text] of virtual) scan(name, text);
+  return [...hits];
+}
+
+/** The one named file outside `opaqueIds/` that may name an id's shape: it asserts about the ids themselves (what survives an erasure). */
+const MAY_NAME_IDS = new Set(["erasure/e2eSupport.ts"]);
+
+describe("no id is built or parsed outside opaqueIds", () => {
+  it.each([
+    ["an old-format user prefix", "export const a = `u_${user}:ingest-${doc}`;"],
+    ["a new-format prefix", 'export const a = "h_" + handle;'],
+    ["a flow name", 'export const a = ":visualize-" + doc;'],
+    ["a conversation separator", "export const a = `${prefix}.c-${chat}`;"],
+    ["a lineage template", "export const a = `visuals-${user}-${doc}`;"],
+    ["a turn lineage regex", "export const a = new RegExp(`^turnvisuals-(${U})`);"],
+    ["a lineage regex literal", "export const a = /^visuals-(x)/;"],
+    ["the lineage stream prefix", 'import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";'],
+  ])("flags %s (the scan is not blind)", (_name, body) => {
+    expect(idShapesIn([], new Map([[join(APP, "__virtual__.ts"), body]]))).toEqual([
+      "__virtual__.ts:1",
+    ]);
+  });
+
+  it("does not flag a failure code, a step id or ordinary text that only starts like a lineage word", () => {
+    const body = [
+      'export const a = "visuals-model-unavailable";',
+      'export const b = "visualize-extract";',
+      'export const c = "chat-title";',
+      'export const d = "the h_ prefix is documented elsewhere";',
+    ].join("\n");
+    expect(idShapesIn([], new Map([[join(APP, "__virtual__.ts"), body]]))).toEqual([]);
+  });
+
+  it("finds none in the real sources, beyond opaqueIds and the one named support file", () => {
+    const real = sources(APP).filter(
+      (f) =>
+        !f.startsWith(join(APP, "opaqueIds") + sep) && !MAY_NAME_IDS.has(f.slice(APP.length + 1)),
+    );
+    expect(real.length).toBeGreaterThan(100); // the scan reads the program, not an empty list
+    expect(idShapesIn(real)).toEqual([]);
   });
 });

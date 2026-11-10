@@ -19,14 +19,16 @@ import { chatConversationId } from "../chats/ids";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { InMemoryProgressBus } from "../documents/progress";
+import { legacyIds } from "../opaqueIds";
 import { IngestStatus } from "../status/ingestStatus";
 import { INGEST_STATUS_MODEL } from "../status/model";
 import { pgStatusWriter } from "../status/pgStores";
 import { flowSteps, statusSensitive } from "../status/wire";
 import { type DurableStorage, createDurableStorage } from "../storage";
-import { executionIdFor } from "../subject";
 import { userShredder } from "./compliance";
 import { tolerantSource } from "./tolerantSource";
+
+const executionIdFor = legacyIds.named;
 
 describe.skipIf(!PG_URL)("read-model boot over an erased user (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;

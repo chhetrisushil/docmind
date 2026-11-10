@@ -5,7 +5,7 @@ import { EMBED_RETRY, LLM_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 
 /**
  * Start input: ids only (never a filename, title or text), and strict so a field added later fails
- * loudly. The execution id is `executionIdFor(userId, "ingest-" + documentId)`, which is also the
+ * loudly. The execution id is built by `opaqueIds`, which is also the
  * idempotency key: Loom starts a caller-chosen id once.
  */
 export const IngestStartInput = z

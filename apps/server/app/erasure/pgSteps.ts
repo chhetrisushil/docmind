@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { CHAT_ACTIVITY_MODEL } from "../chats/sessions";
 import { pgSessionLock } from "../db/sessionLock";
 import { withTenant } from "../db/tenant";
-import { handleListerPrefixes, userPrefixes } from "../opaqueIds";
+import { handleListerPrefixes, prefixExtensions, userPrefixes } from "../opaqueIds";
 import { INGEST_STATUS_MODEL } from "../status/model";
 import type { ErasureDeps } from "./eraser";
 import type { ErasureRequest } from "./types";
@@ -85,7 +85,7 @@ export function pgErasureSql(
         for (const table of ["timers", "leases"] as const)
           await loom.query(
             `DELETE FROM loom.${table} WHERE execution_id = $1 OR starts_with(execution_id, $2) OR starts_with(execution_id, $3)`,
-            [prefix, `${prefix}:`, `${prefix}.c-`],
+            [prefix, ...prefixExtensions(prefix)],
           );
       }
       // 1b. The read-model tombstones under `h_<handle>` (left by the `readModels` step: `state` NULL, `erased`) still carry `scope` (the user

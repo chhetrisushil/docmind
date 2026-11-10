@@ -10,11 +10,16 @@ export const userPrefixes = (userId: string, handle?: string | null): string[] =
   ...(handle ? [`h_${handle}`] : []),
 ];
 
+/** What extends one user prefix into an id: `<prefix>:...` (a flow) and `<prefix>.c-...` (a chat conversation). For `starts_with` listers. */
+export const prefixExtensions = (prefix: string): [string, string] => [
+  `${prefix}:`,
+  `${prefix}.c-`,
+];
+
 /** Whether an execution id is the user's: a prefix itself, `<prefix>:...` (a flow) or `<prefix>.c-...` (a chat conversation, any generation). */
 export const isOwnedBy = (executionId: string, userId: string, handle?: string | null): boolean =>
   userPrefixes(userId, handle).some(
-    (p) =>
-      executionId === p || executionId.startsWith(`${p}:`) || executionId.startsWith(`${p}.c-`),
+    (p) => executionId === p || prefixExtensions(p).some((x) => executionId.startsWith(x)),
   );
 
 /**

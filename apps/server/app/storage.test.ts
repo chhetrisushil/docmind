@@ -6,13 +6,15 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "./db/testSupport";
+import { legacyIds } from "./opaqueIds";
 import {
   type DurableStorage,
   createDurableStorage,
   loomPoolConfig,
   openDurableStorage,
 } from "./storage";
-import { executionIdFor } from "./subject";
+
+const executionIdFor = legacyIds.named;
 
 describe("loomPoolConfig", () => {
   it("keeps Loom's search_path and sizes the pool only when asked", () => {

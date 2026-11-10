@@ -6,9 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../config";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { legacyIds } from "../opaqueIds";
 import { type DurableStorage, createDurableStorage } from "../storage";
-import { executionIdFor } from "../subject";
 import { hydrateSubjectIndex } from "./compliance";
+
+const executionIdFor = legacyIds.named;
 
 describe.skipIf(!PG_URL)("erasure wiring over durable storage (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;

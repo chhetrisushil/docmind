@@ -82,5 +82,6 @@ export {
   handleListerPrefixes,
   isOwnedBy,
   listerPrefixes,
+  prefixExtensions,
   userPrefixes,
 } from "./prefixes";

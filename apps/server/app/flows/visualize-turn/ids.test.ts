@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { legacyIds } from "../../opaqueIds";
 import { isVisualizeExecution } from "../../status/model";
-import { executionIdFor } from "../../subject";
 import {
   isTurnVisualizeExecution,
   parseTurnExecution,
   turnExecutionId,
   turnExperienceId,
 } from "./ids";
+
+const executionIdFor = legacyIds.named;
 
 const user = randomUUID();
 const chat = randomUUID();

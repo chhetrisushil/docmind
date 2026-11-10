@@ -2,7 +2,9 @@ import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { describe, expect, it } from "vitest";
 import { legacyIds, opaqueIds } from "./opaqueIds";
 import { testOpaqueIds } from "./opaqueIds/testing";
-import { executionIdFor, subjectOfExecution } from "./subject";
+import { subjectOfExecution } from "./subject";
+
+const executionIdFor = legacyIds.named;
 
 const USER = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 

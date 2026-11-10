@@ -1,4 +1,4 @@
-import { legacyIds, opaqueIds } from "./opaqueIds";
+import { opaqueIds } from "./opaqueIds";
 
 export { chatConversationId, chatIdOfConversation } from "./chats/ids";
 export type { ChatConversationId } from "./chats/ids";
@@ -16,9 +16,3 @@ export type { UserExecutionId } from "./opaqueIds";
 export function subjectOfExecution(e: { executionId: string }): string {
   return opaqueIds.subjectOf(e.executionId);
 }
-
-/**
- * The old-format id builder, kept so the families that still build `u_<user>:<name>` compile until each moves to `opaqueIds`
- * (the document flows in tasks 5 and 6, the chat flows in phase 2). Task 7 removes it.
- */
-export const executionIdFor = legacyIds.named;

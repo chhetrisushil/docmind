@@ -3,7 +3,7 @@ import type { RetryPolicy } from "@loom/core";
 import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
 import { z } from "zod";
 
-/** Ids only. The execution id is `executionIdFor(userId, "chat-title-" + chatId)`, which makes the start once-only. */
+/** Ids only. The execution id is built by `opaqueIds`, which makes the start once-only. */
 export const ChatTitleInput = z
   .object({ tenantId: z.string().uuid(), userId: z.string().uuid(), chatId: z.string().uuid() })
   .strict();

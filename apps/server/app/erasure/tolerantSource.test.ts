@@ -8,10 +8,13 @@ import {
   isShredded,
 } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
-import { executionIdFor, subjectOfExecution } from "../subject";
+import { legacyIds } from "../opaqueIds";
+import { subjectOfExecution } from "../subject";
 import { userShredder } from "./compliance";
 import { noSnapshots } from "./testing";
 import { sensitiveFromCovers, tolerantSource } from "./tolerantSource";
+
+const executionIdFor = legacyIds.named;
 
 const U = randomUUID();
 const EXEC = executionIdFor(U, "ingest-1");
