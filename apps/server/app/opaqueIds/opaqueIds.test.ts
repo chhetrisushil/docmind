@@ -480,6 +480,35 @@ describe("a handle whose h_ subject key is destroyed", () => {
   });
 });
 
+describe("a key store that fails the destroyed check", () => {
+  class FlakyStore extends InMemoryKeyStore {
+    down = false;
+    override async wasDestroyed(subjectId: string) {
+      if (this.down && subjectId.startsWith("h_")) throw new Error(`down: ${subjectId}`);
+      return super.wasDestroyed(subjectId);
+    }
+  }
+  it("surfaces FieldKeyStoreError from load, ensureHandle and warm, refuses ensureUser, and caches nothing", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const keys = new FlakyStore();
+    const handleOf = (await new OpaqueIds(keys, t.store).ensureUser({ tenantId: T, userId: U }))
+      .handle;
+    const cold = new OpaqueIds(keys, t.store);
+    keys.down = true;
+    const bad = (e: unknown) => expect(e).toBeInstanceOf(FieldKeyStoreError);
+    await cold.load({ tenantId: T, userId: U }).then(() => expect.fail("no throw"), bad);
+    await cold.ensureHandle(handleOf).then(() => expect.fail("no throw"), bad);
+    await cold.warm().then(() => expect.fail("no throw"), bad);
+    await cold.ensureUser({ tenantId: T, userId: U }).then(() => expect.fail("no throw"), bad);
+    expect(cold.cached(U)).toBeUndefined();
+    expect(cold.knows(handleOf)).toBe(false);
+    // Back up: the same instance works (the failure was not remembered as a retirement).
+    keys.down = false;
+    expect(await cold.load({ tenantId: T, userId: U })).toBe(true);
+  });
+});
+
 describe("the test id source", () => {
   it("builds the ids a test can compute without awaiting: deterministicUser equals what ensureUser gives", async () => {
     const ids = testIdSource();

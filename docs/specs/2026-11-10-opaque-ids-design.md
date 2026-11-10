@@ -89,6 +89,7 @@ Rejected:
   - Run counts and timing remain as records.
   - After a read-model rebuild, an erased handle's executions refold to neutral live rows (empty `state`, null `scope` and `app_key`) that carry only the `h_<H>` execution id, which holds no UUID. The handle's prefix can no longer be walked to tombstone them.
   - Another process keeps an erased user's id key in its cache until it restarts or a load miss evicts it: erasure calls `forgetSubject` only in the erasing process (no cross-process forget). If that process folds an event of the erased user's `h_` execution it can write `scope` and `app_key` beside the handle again. With one replica this cannot happen; with N replicas see `docs/design/cloud-scaling.md` §4 (S9).
+  - The same stale entry skips the durable destroyed-key check (`wasDestroyed(h_<H>)`) on a cache hit, so such a replica could rebuild an erased user's `h_` ids and issue a cancel that Loom denies with the actor's id in the clear, until it restarts. A single replica is covered by `forgetSubject` eviction; multi-replica needs the S9 fix (cross-process forget) first.
 - `cloud-deploy.md` notes that rolling back past the first `h_` run is unsafe: older code can't parse new ids.
 
 ## 7. Out of scope
