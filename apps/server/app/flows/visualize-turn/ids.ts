@@ -1,6 +1,5 @@
-import { ORD_PATTERN, RecordOrd } from "@docmind/contracts";
-import { UUID_PATTERN } from "../../chats/ids";
-import { type UserExecutionId, executionIdFor } from "../../subject";
+import { RecordOrd } from "@docmind/contracts";
+import { UUID_PATTERN, type UserExecutionId, legacyIds, opaqueIds } from "../../opaqueIds";
 
 /** What a visualize-turn run is about: ids only. `ord` is the assistant record's ordinal (`ChatMessageDto.id`). */
 export interface TurnRef {
@@ -23,8 +22,9 @@ const checkUuid = (what: string, id: string) => {
 };
 
 /**
- * `visualize-turn-<chatId>-<ord>`: the one automatic pass of a turn (Loom starts a caller-chosen id once, so it is also
- * the idempotency key). `rerun` makes `-r<n>`, an on-demand run. Ids only.
+ * The execution of a turn's one automatic pass (Loom starts a caller-chosen id once, so it is also the idempotency key); `rerun` makes
+ * `-r<n>`, an on-demand run. PHASE 2 switches this to `UserIds.turnVisualize` (`h_<H>:visualize-turn-<C>-<ord>[-rN]`); until then it is the
+ * old format. Ids only.
  */
 export function turnExecutionId(
   userId: string,
@@ -35,36 +35,33 @@ export function turnExecutionId(
   checkOrd(ord);
   if (rerun !== undefined && (!Number.isSafeInteger(rerun) || rerun < 1 || rerun > MAX_RERUN))
     throw new RangeError("rerun must be an integer from 1 to 999");
-  return executionIdFor(
-    userId,
-    `visualize-turn-${chatId.toLowerCase()}-${ord}${rerun === undefined ? "" : `-r${rerun}`}`,
-  );
+  return legacyIds.turnVisualize(userId, chatId.toLowerCase(), ord, rerun);
 }
 
 /**
- * The lineage line of a turn's visuals. Ids only: stored in plaintext, and it survives erasure (subject.ts parses it
- * back to the owner, so the shape is part of the erasure contract).
+ * The lineage line of a turn's visuals. PHASE 2 switches this to `UserIds.turnLineage` (`turnvisuals-<H>-<C>-<ord>`); until then it is the old
+ * format. Ids only: stored in plaintext, and it survives erasure (the subject mapping parses it back to the owner).
  */
 export const turnExperienceId = (r: { userId: string; chatId: string; ord: number }): string => {
   checkUuid("userId", r.userId);
   checkUuid("chatId", r.chatId);
   checkOrd(r.ord);
-  return `turnvisuals-${r.userId}-${r.chatId}-${r.ord}`;
+  return legacyIds.turnLineage(r.userId, r.chatId, r.ord);
 };
 
-const TURN_EXECUTION = new RegExp(
-  `^u_(${UUID_PATTERN}):visualize-turn-(${UUID_PATTERN})-(${ORD_PATTERN})(?:-r([1-9][0-9]{0,2}))?$`,
-);
+/** What a turn-visualize execution id names, in either format; null for any other id (or a new-format id whose user is not cached). */
 export function parseTurnExecution(
   id: string,
 ): { userId: string; chatId: string; ord: number; rerun?: number } | null {
-  const m = TURN_EXECUTION.exec(id);
-  if (!m) return null;
+  const p = opaqueIds.parse(id);
+  if (p?.family !== "turnVisualize") return null;
   return {
-    userId: m[1] as string,
-    chatId: m[2] as string,
-    ord: Number(m[3]),
-    ...(m[4] !== undefined && { rerun: Number(m[4]) }),
+    userId: p.userId,
+    chatId: p.chatId as string,
+    ord: p.ord as number,
+    ...(p.rerun !== undefined && { rerun: p.rerun }),
   };
 }
-export const isTurnVisualizeExecution = (id: string): boolean => TURN_EXECUTION.test(id);
+/** A turn-visualize execution of either format, from its shape alone (no key). */
+export const isTurnVisualizeExecution = (id: string): boolean =>
+  opaqueIds.family(id) === "turnVisualize";

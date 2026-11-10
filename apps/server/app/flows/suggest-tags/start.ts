@@ -4,7 +4,7 @@ import {
   type ExecutionHandle,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
-import { UUID_PATTERN } from "../../chats/ids";
+import { opaqueIds } from "../../opaqueIds";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS, rerunTracker } from "../rerunTracker";
 import { SuggestTagsInput, suggestTagsFlow } from "./flow";
@@ -44,12 +44,9 @@ export function suggestTagsExecutionId(
   return executionIdFor(userId, `suggest-tags-${documentId.toLowerCase()}-r${run}`);
 }
 
-const SUGGEST_TAGS_EXECUTION = new RegExp(
-  `^u_${UUID_PATTERN}:suggest-tags-${UUID_PATTERN}-r[1-9][0-9]{0,2}$`,
-);
-
 /** A suggest-tags execution (boot recovery re-drives it: the step replaces the suggestions row, so a re-run is safe). */
-export const isSuggestTagsExecution = (id: string): boolean => SUGGEST_TAGS_EXECUTION.test(id);
+export const isSuggestTagsExecution = (id: string): boolean =>
+  opaqueIds.family(id) === "suggestTags";
 
 const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.toLowerCase()}`;
 

@@ -3,7 +3,7 @@ import { tainted } from "@loom/classify";
 import type { Effect } from "@loom/effect-runtime";
 import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
 import { z } from "zod";
-import { parseVisualizeExecution, visualizeGenerationOf } from "../../status/model";
+import { visualizeGenerationOf, visualizeRunOf } from "../../status/model";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { jsonAnswer } from "../ingest-document/llmJson";
 import type { ChunkStore } from "../ingest-document/pgChunks";
@@ -249,7 +249,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       const spend = () => {
         if (executionId !== undefined) deps.reextract?.delete(executionId);
       };
-      const id = executionId === undefined ? null : parseVisualizeExecution(executionId);
+      const id = executionId === undefined ? null : visualizeRunOf(executionId);
       const rerun = id?.rerun ?? 0;
       if (executionId !== undefined && id && rerun > 0) {
         // The starter's note is read once and removed here (stored facts or not), so the set never fills up over a large boot.

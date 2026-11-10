@@ -4,7 +4,8 @@ import type { EventEnvelope } from "@loom/core";
 import type { Pool } from "pg";
 import { withTenant } from "../../db/tenant";
 import type { ProgressBus } from "../../documents/progress";
-import { parseVisualizeExecution } from "../../status/model";
+import { opaqueIds } from "../../opaqueIds";
+import { isVisualizeExecution, parseVisualizeExecution } from "../../status/model";
 import { VisualizeOutput } from "./flow";
 
 export type VisualRunState = "running" | VisualizeOutput["outcome"];
@@ -103,13 +104,18 @@ export function visualRunRecorder(o: {
         e.eventType !== "EXECUTION_CANCELLED"
       )
         return;
-      const id = parseVisualizeExecution(e.executionId);
-      if (!id) return;
+      if (!isVisualizeExecution(e.executionId)) return; // from the id's shape alone: no key
       const end = endOf(e);
       if (!end) return;
       const legacy = o.legacyRuns?.delete(e.executionId) === true;
+      const handle = opaqueIds.handleOf(e.executionId);
       chain = chain
         .then(async () => {
+          // A new-format id hides its user and document: fill the key cache for a cold user first (an outage throws into `report`, and
+          // the boot reconcile repairs a run whose end was not recorded). An erased user's run has no one to record for.
+          if (handle !== null) await opaqueIds.ensure(handle);
+          const id = parseVisualizeExecution(e.executionId);
+          if (!id) return;
           await o.runs.record(
             {
               userId: id.userId,

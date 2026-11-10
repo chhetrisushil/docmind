@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { ProgressDetail } from "@docmind/contracts";
 import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-model";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "../flows/ingest-document/errors";
+import { opaqueIds } from "../opaqueIds";
+import { testOpaqueIds } from "../opaqueIds/testing";
 import {
   INGEST_STATUS_MODEL,
   INITIAL_STATUS,
@@ -22,6 +24,7 @@ import {
   progressOf,
   viewOf,
   visualizeGenerationOf,
+  visualizeRunOf,
 } from "./model";
 import { MemoryLog, evt, ingestRun } from "./testing";
 
@@ -385,5 +388,66 @@ describe("visualize execution ids", () => {
   it("is never an ingest execution", () => {
     expect(isIngestExecution(`${base}-r1`)).toBe(false);
     expect(foldIngestStatus([evt(`${base}-r1`, 0, "EXECUTION_FAILED", {})])).toEqual({});
+  });
+});
+
+describe("new-format execution ids", () => {
+  const T = randomUUID();
+  afterEach(() => opaqueIds.install(undefined));
+
+  async function user() {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    return { ids: t.ids, user: await t.ids.ensureUser({ tenantId: T, userId: U }) };
+  }
+
+  it("classification and the generation need no key; the user and the document need the cache", async () => {
+    const { ids, user: u } = await user();
+    const ingest = u.ingest(D, 3);
+    const visualize = u.visualize(D, 3, 2);
+    // A cold process: nothing installed.
+    expect(opaqueIds.current()).toBeUndefined();
+    expect([
+      isIngestExecution(ingest),
+      generationOf(ingest),
+      isIngestExecution(visualize),
+      isVisualizeExecution(visualize),
+      isVisualizeExecution(ingest),
+      visualizeGenerationOf(visualize),
+      visualizeRunOf(visualize),
+    ]).toEqual([true, 3, false, true, false, 3, { generation: 3, rerun: 2 }]);
+    expect([
+      ingestKeyOf(ingest),
+      ingestScopeOf(ingest),
+      parseVisualizeExecution(visualize),
+    ]).toEqual([undefined, undefined, null]);
+    // Warm: the same ids resolve.
+    opaqueIds.install(ids);
+    expect([ingestKeyOf(ingest), ingestScopeOf(ingest)]).toEqual([D, U]);
+    expect(parseVisualizeExecution(visualize)).toEqual({
+      userId: U,
+      documentId: D,
+      generation: 3,
+      rerun: 2,
+    });
+  });
+
+  it("an old-format id keeps resolving with nothing installed, beside a new one", async () => {
+    const { ids, user: u } = await user();
+    opaqueIds.install(ids);
+    expect([ingestKeyOf(exec(".2")), ingestScopeOf(exec(".2"))]).toEqual([D, U]);
+    expect(generationOf(u.ingest(D, 1))).toBe(1);
+    expect(generationOf(exec())).toBe(1);
+  });
+
+  it("progressOf names the user and the document of a new-format event once the user is known, and nothing before", async () => {
+    const { ids, user: u } = await user();
+    const e = evt(u.ingest(D, 2), 1, "STEP_STARTED", { stepId: "ingest-embed" });
+    expect(progressOf(e)).toBeNull();
+    opaqueIds.install(ids);
+    expect(progressOf(e)).toEqual({
+      userId: U,
+      progress: { documentId: D, step: "embed", status: "embedding" },
+    });
   });
 });

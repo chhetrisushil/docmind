@@ -216,5 +216,79 @@ describe.skipIf(!PG_URL)(
       expect(await live(mineChat)).toBe(true);
       expect(await live(theirs)).toBe(false);
     });
+    it("a rebuild after erasure leaves no scope or app_key on a row under the erased handle (the fold of an unknown h_ execution is neutral)", async () => {
+      const { opaqueIds } = await import("../opaqueIds");
+      const { testOpaqueIds } = await import("../opaqueIds/testing");
+      const { handleListerPrefixes } = await import("../opaqueIds");
+      const [who, docId, chatId] = [ALICE.userId, randomUUID(), randomUUID()];
+      const t = testOpaqueIds();
+      t.store.add(who, ALICE.tenantId);
+      const user = await t.ids.ensureUser({ tenantId: ALICE.tenantId, userId: who });
+      opaqueIds.install(t.ids);
+      try {
+        const ingestId = user.ingest(docId, 2);
+        const conv = user.conversation(chatId);
+        const log = new MemoryLog();
+        log.append(
+          ...ingestRun(ingestId, "ready"),
+          evt(conv, 0, "EXECUTION_STARTED", { input: {} }),
+        );
+        const userExecutions = pgUserExecutions(loom);
+        const make = () => ({
+          status: new IngestStatus({
+            writer: pgStatusWriter(loom),
+            readerFor: pgStatusReaderFor(app),
+            source: log,
+            sensitive: {},
+            bus: new InMemoryProgressBus(),
+            userExecutions,
+            onError: () => {},
+          }),
+          activity: new ChatActivity({
+            writer: pgStatusWriter(loom),
+            source: log,
+            sensitive: {},
+            userExecutions,
+            onError: () => {},
+          }),
+        });
+        const linked = (h: string) => {
+          const p = handleListerPrefixes(h);
+          return db.owner.query<{ model_id: string; scope: string | null; app_key: string | null }>(
+            `SELECT model_id, scope, app_key FROM read_model_state
+              WHERE execution_id = $1 OR starts_with(execution_id, $2) OR starts_with(execution_id, $3)`,
+            [p.exact, ...p.starts],
+          );
+        };
+        const first = make();
+        await first.status.boot();
+        await first.activity.boot();
+        const before = await linked(user.handle);
+        expect(before.rows.map((r) => [r.scope, r.app_key])).toEqual(
+          expect.arrayContaining([[who, docId]]),
+        ); // the precondition: a live user's rows do link
+        expect(before.rows.length).toBe(4); // each of the two executions has a row in both models
+
+        // Erasure: the models forget, the handle row and the key go, the cache drops the user.
+        await first.status.forgetUser(who, user.handle);
+        await first.activity.forgetUser(who, user.handle);
+        await t.keys.destroy(who);
+        t.store.rows.delete(who);
+        t.ids.forgetSubject(who);
+        // A rebuild (a changed projection version, or a restored database) re-folds the log from nothing.
+        await db.owner.query(
+          "DELETE FROM read_model_state WHERE execution_id = $1 OR starts_with(execution_id, $2) OR starts_with(execution_id, $3)",
+          [`h_${user.handle}`, `h_${user.handle}:`, `h_${user.handle}.c-`],
+        );
+        const second = make();
+        await second.status.boot();
+        await second.activity.boot();
+        const after = await linked(user.handle);
+        expect(after.rows.length).toBe(4); // the rows exist again (neutral), under the handle only
+        expect(after.rows.every((r) => r.scope === null && r.app_key === null)).toBe(true);
+      } finally {
+        opaqueIds.install(undefined);
+      }
+    });
   },
 );

@@ -4,6 +4,8 @@ import { factFormatFingerprint } from "@docmind/experiences";
 import type { EventEnvelope } from "@loom/core";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { OpaqueIds, opaqueIds } from "../../opaqueIds";
+import { testOpaqueIds } from "../../opaqueIds/testing";
 import { type VisualRuns, visualRunRecorder } from "./runs";
 import { visualizeExecutionId } from "./start";
 
@@ -161,5 +163,65 @@ describe("visualRunRecorder", () => {
     await s.rec.idle();
     expect(s.errors).toHaveLength(1);
     expect(s.record.mock.calls.map((c) => c[1])).toEqual(["done", "empty"]);
+  });
+});
+
+describe("visualRunRecorder with new-format ids", () => {
+  it("records the end of a run on a cold cache once the user's key is cached, from the id alone otherwise", async () => {
+    const T = randomUUID();
+    const who = ids();
+    const t = testOpaqueIds();
+    t.store.add(who.userId, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: who.userId });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // a process that has not cached this user
+    try {
+      const record = vi.fn<VisualRuns["record"]>(async () => {});
+      const rec = visualRunRecorder({ runs: { record }, bus: new InMemoryProgressBus() });
+      rec.onEvent(
+        event(user.visualize(who.documentId, 3, 2), "EXECUTION_COMPLETED", {
+          output: { outcome: "done" },
+        }),
+      );
+      await rec.idle();
+      expect(record).toHaveBeenCalledWith(
+        { userId: who.userId, documentId: who.documentId, generation: 3, run: 2 },
+        "done",
+        undefined,
+        factFormatFingerprint(),
+      );
+    } finally {
+      opaqueIds.install(undefined);
+    }
+  });
+
+  it("reports a key store that stays down and records nothing (the boot reconcile repairs the run)", async () => {
+    const T = randomUUID();
+    const who = ids();
+    const t = testOpaqueIds();
+    t.store.add(who.userId, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: who.userId });
+    t.store.userOf = async () => {
+      throw new Error("down");
+    };
+    opaqueIds.install(new OpaqueIds(t.keys, t.store));
+    try {
+      const record = vi.fn<VisualRuns["record"]>(async () => {});
+      const errors: unknown[] = [];
+      const rec = visualRunRecorder({
+        runs: { record },
+        bus: new InMemoryProgressBus(),
+        onError: (e) => errors.push(e),
+      });
+      rec.onEvent(
+        event(user.visualize(who.documentId, 2), "EXECUTION_COMPLETED", {
+          output: { outcome: "done" },
+        }),
+      );
+      await rec.idle();
+      expect(record).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
+    } finally {
+      opaqueIds.install(undefined);
+    }
   });
 });

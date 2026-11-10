@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { opaqueIds } from "../opaqueIds";
+import { testOpaqueIds } from "../opaqueIds/testing";
 import {
   CHAT_EFFECT_IDS,
   CHAT_TOOL_IDS,
@@ -85,6 +87,39 @@ describe("chat ids and grants", () => {
   it("knows the two chat flow ids and nothing else", () => {
     expect(["doc-chat", "doc-chat-gk"].every(isChatFlowId)).toBe(true);
     expect(["ingest-document", "chat-title", "doc-chat-x", "conversation"].some(isChatFlowId)).toBe(
+      false,
+    );
+  });
+});
+
+describe("the new chat shapes (read now, written by phase 2)", () => {
+  const TENANT = "00000000-0000-0000-0000-0000000000aa";
+  afterEach(() => opaqueIds.install(undefined));
+
+  async function user() {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    return { ids: t.ids, user: await t.ids.ensureUser({ tenantId: TENANT, userId: USER }) };
+  }
+
+  it("reads the user and the chat of an h_ conversation, with or without a generation, once the user is cached", async () => {
+    const { ids, user: u } = await user();
+    const id = u.conversation(CHAT);
+    expect(chatIdOfConversation(id)).toBeNull(); // cold: the tokens cannot be opened
+    opaqueIds.install(ids);
+    expect(chatIdOfConversation(id)).toEqual({ userId: USER, chatId: CHAT });
+    expect(chatIdOfConversation(`${id}~3`)).toEqual({ userId: USER, chatId: CHAT });
+    expect(chatIdOfConversation(u.chatTitle(CHAT))).toBeNull(); // a title is not a conversation
+  });
+
+  it("classifies a new-format conversation and title from the shape alone, so recovery never misses on a cold cache", async () => {
+    const { user: u } = await user();
+    expect(opaqueIds.current()).toBeUndefined();
+    expect(isChatTitleExecution(u.chatTitle(CHAT))).toBe(true);
+    expect(isChatTitleExecution(u.conversation(CHAT))).toBe(false);
+    for (const id of [u.chatTitle(CHAT), u.conversation(CHAT), `${u.conversation(CHAT)}~2`])
+      expect(isRecoverableChatExecution(id)).toBe(true);
+    expect(isRecoverableChatExecution(u.ingest("0f8fad5b-d9cb-469f-a165-70867728950e", 2))).toBe(
       false,
     );
   });

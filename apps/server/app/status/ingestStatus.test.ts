@@ -5,9 +5,11 @@ import {
   type FoldedApplyResult,
   InMemoryReadModelStore,
 } from "@loom/plugin-read-model";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { INGEST_GENERATION, ingestExecutionId } from "../documents/ingest";
 import { InMemoryProgressBus } from "../documents/progress";
+import { OpaqueIds, opaqueIds } from "../opaqueIds";
+import { testOpaqueIds } from "../opaqueIds/testing";
 import { IngestStatus, type IngestStatusOptions } from "./ingestStatus";
 import { INGEST_STATUS_MODEL, STATUS_MESSAGES, UPLOADED } from "./model";
 import { MemoryLog, atDefault, evt, ingestRun } from "./testing";
@@ -31,6 +33,7 @@ function setup(over: Partial<IngestStatusOptions> = {}) {
     sensitive: {},
     bus,
     onError: (e) => errors.push(e),
+    ensureSleep: async () => {},
     ...over,
   });
   /** What Loom does: persist the event, then call onEvent. */
@@ -306,5 +309,110 @@ describe("IngestStatus", () => {
   it("forgetUser refuses an id that is not a uuid", () => {
     const { status } = setup();
     expect(() => status.forgetUser("not-a-uuid")).toThrow(/forgetUser: userId must be a uuid/);
+  });
+});
+
+describe("IngestStatus with new-format ids", () => {
+  const T = randomUUID();
+  const U2 = randomUUID();
+  afterEach(() => opaqueIds.install(undefined));
+
+  /** Users with handles, and a process whose key cache has never heard of them (a replica, or a user created after boot). */
+  async function coldUsers() {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    t.store.add(U2, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: U });
+    const second = await t.ids.ensureUser({ tenantId: T, userId: U2 });
+    const cold = new OpaqueIds(t.keys, t.store);
+    opaqueIds.install(cold);
+    return { ...t, user, second, cold };
+  }
+  /** The first event of an ingest execution carries the start input, which holds the tenant (the ready hook reads it). */
+  const withTenant = (events: ReturnType<typeof ingestRun>) => {
+    const [first, ...rest] = events;
+    return [{ ...(first as (typeof events)[0]), payload: { input: { tenantId: T } } }, ...rest];
+  };
+
+  it("a ready ingest on a cold cache is folded, published and fires onReady once; nothing is dropped", async () => {
+    const { user } = await coldUsers();
+    const ready: unknown[] = [];
+    const { status, feed, errors, seen } = setup({
+      onReady: (ref, generation) => ready.push([ref, generation]),
+    });
+    await status.boot();
+    feed(...withTenant(ingestRun(user.ingest(D1, 2), "ready")));
+    await status.close();
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toEqual({
+      status: "ready",
+      step: "finalize",
+      error: null,
+    });
+    expect(ready).toEqual([[{ tenantId: T, userId: U, documentId: D1 }, 2]]);
+    expect(seen).toContainEqual({ documentId: D1, step: "finalize", status: "ready" });
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps log order: a cold user's events are folded before a later event of a warm user", async () => {
+    const { user, second, cold } = await coldUsers();
+    await cold.ensureUser({ tenantId: T, userId: U2 }); // the second user is warm, the first is cold
+    const { status, feed } = setup();
+    await status.boot();
+    feed(...ingestRun(user.ingest(D1, 2), "parsed")); // cold: waits for ensure
+    feed(...ingestRun(second.ingest(D2, 2), "parsed")); // warm: must not overtake it
+    await status.close();
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({
+      status: "parsing",
+    });
+    const other = { tenantId: T, userId: U2 };
+    expect((await status.forPage(other, atDefault(D2))).get(D2)).toMatchObject({
+      status: "parsing",
+    });
+  });
+
+  it("boot catch-up folds a new-format log once the key cache is warm", async () => {
+    const { user, cold } = await coldUsers();
+    const { log, status } = setup();
+    log.append(...ingestRun(user.ingest(D1, 2), "ready"));
+    await cold.warm();
+    await status.boot();
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({ status: "ready" });
+  });
+
+  it("forDocument finds a row under either id format", async () => {
+    const { user, cold } = await coldUsers();
+    await cold.ensureUser({ tenantId: T, userId: U });
+    const { log, status } = setup();
+    await status.boot();
+    log.append(...ingestRun(user.ingest(D1, 2), "ready")); // new format, never fed live
+    log.append(...ingestRun(exec(D2), "ready")); // old format
+    expect(await status.forDocument(ALICE, D1, 2)).toMatchObject({ status: "ready" });
+    expect(await status.forDocument(ALICE, D2, 2)).toMatchObject({ status: "ready" });
+  });
+
+  it("a key store that is down for a cold user is reported, folds nothing, and the next boot's catch-up folds it", async () => {
+    const { user, cold, store } = await coldUsers();
+    const real = store.userOf.bind(store);
+    store.userOf = async () => {
+      throw new Error("key store down");
+    };
+    const { status, feed, errors, log, store: model, bus } = setup({ onReady: () => {} });
+    await status.boot();
+    feed(...withTenant(ingestRun(user.ingest(D1, 2), "ready")));
+    await status.close();
+    expect(errors).toHaveLength(1);
+    store.userOf = real; // the store is back: the next boot warms and catches up from the watermark
+    await cold.warm();
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toBeUndefined(); // it was not folded under an unknown user
+    const next = new IngestStatus({
+      writer: model,
+      readerFor: () => model,
+      source: log,
+      sensitive: {},
+      bus,
+      ensureSleep: async () => {},
+    });
+    await next.boot();
+    expect((await next.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({ status: "ready" });
   });
 });

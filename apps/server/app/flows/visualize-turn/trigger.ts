@@ -1,5 +1,6 @@
 import type { TurnSettledEvent } from "@loom/conversation";
 import { chatIdOfConversation } from "../../chats/ids";
+import { opaqueIds } from "../../opaqueIds";
 import type { TurnRef } from "./ids";
 import type { TurnRead } from "./readTurn";
 
@@ -26,6 +27,9 @@ export async function turnToVisualize(
   d: TriggerDeps,
 ): Promise<TurnRef | null> {
   if (e.status !== "complete" || !d.enabled()) return null;
+  // A new-format conversation id hides its user and chat: fill the key cache for it first (this is an async entry point).
+  const handle = opaqueIds.handleOf(e.conversationId);
+  if (handle !== null) await opaqueIds.ensure(handle);
   const ids = chatIdOfConversation(e.conversationId);
   if (!ids || d.backlog() >= d.maxWaiting) return null;
   const tenantId = await d.tenantOf(ids.userId, ids.chatId);
