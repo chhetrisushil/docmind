@@ -1,15 +1,11 @@
-import type { TagSummary } from "@docmind/contracts";
+import { MAX_TAGS_PER_FILTER, type TagMatch, type TagSummary } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
 import { baseStyles } from "../styles/base";
 
-export type TagMatch = "any" | "all";
 export interface TagSelectionDetail {
   tags: string[];
   match: TagMatch;
 }
-/** A filter holds at most 10 tags (the server refuses more). */
-export const MAX_SELECTED_TAGS = 10;
-
 /**
  * The library's tag bar: one toggle chip per tag, an Any / All radio group (enabled from 2 selected tags), Clear and Manage
  * tags. It owns no data: the page gives it the tags and the selection, and it reports changes as `tag-selection`.
@@ -68,12 +64,13 @@ export class DmTagBar extends LitElement {
     );
   }
   private announcement(): string {
-    if (this.selected.length === 0 || this.count === null) return "";
+    // At 0 the page announces "No documents match these tags", so the bar stays silent (no double announcement).
+    if (this.selected.length === 0 || this.count === null || this.count === 0) return "";
     return this.count === 1 ? "1 document matches" : `${this.count} documents match`;
   }
 
   render() {
-    const full = this.selected.length >= MAX_SELECTED_TAGS;
+    const full = this.selected.length >= MAX_TAGS_PER_FILTER;
     return html`
       <div class="bar" role="group" aria-label="Filter by tag">
         <div class="chips">

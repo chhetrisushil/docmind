@@ -1,4 +1,4 @@
-import { Uuid } from "@docmind/contracts";
+import { MAX_TAGS_PER_FILTER, Uuid } from "@docmind/contracts";
 import { Store } from "./state/store";
 
 export type Route =
@@ -13,8 +13,6 @@ export type Route =
 
 const isUuid = (s: string) => Uuid.safeParse(s).success;
 
-const MAX_TAGS = 10;
-
 /** The library's `?tags=<id>,<id>&match=all`: valid ids only, lower-cased, deduplicated, at most 10; match is All or (omitted) Any. */
 function libraryRoute(search: string): Route {
   const p = new URLSearchParams(search);
@@ -25,7 +23,7 @@ function libraryRoute(search: string): Route {
         .map((s) => s.trim().toLowerCase())
         .filter(isUuid),
     ),
-  ].slice(0, MAX_TAGS);
+  ].slice(0, MAX_TAGS_PER_FILTER);
   if (ids.length === 0) return { name: "documents" };
   return {
     name: "documents",

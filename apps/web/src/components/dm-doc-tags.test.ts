@@ -156,6 +156,32 @@ describe("dm-doc-tags", () => {
     expect(input.getAttribute("list")).toBe(q(s.el, "datalist").id);
   });
 
+  it("hides an autocomplete option that normalises to a linked tag (width, case, spacing)", async () => {
+    const s = await setup(dto([t(9, "\uFF2C\uFF25\uFF27\uFF21\uFF2C")], []));
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    input.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(s.api.listTags).toHaveBeenCalledTimes(1));
+    await s.el.updateComplete;
+    expect(all<HTMLOptionElement>(s.el, "datalist option").map((o) => o.value)).toEqual([
+      "Finance",
+      "Spare",
+    ]);
+  });
+
+  it("limits a name to 40 characters, not 40 UTF-16 units", async () => {
+    const s = await setup(dto([], []));
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    expect(input.hasAttribute("maxlength")).toBe(false);
+    input.value = "\u{1F600}".repeat(40);
+    input.dispatchEvent(new Event("input"));
+    await s.el.updateComplete;
+    expect([...input.value]).toHaveLength(40);
+    input.value = "\u{1F600}".repeat(45);
+    input.dispatchEvent(new Event("input"));
+    await s.el.updateComplete;
+    expect([...input.value]).toHaveLength(40);
+  });
+
   it("shows each suggestion with Accept and Dismiss, and accepting moves it to the tags", async () => {
     const s = await setup(dto([], ["Legal", "Misc"]));
     await vi.waitFor(() => expect(all(s.el, "[data-suggested] .chip")).toHaveLength(2));

@@ -131,7 +131,9 @@ export const DocumentProgressEvent = z
     detail: ProgressDetail.optional(),
     /**
      * The document's visuals were committed (`ready`: an open detail page reloads its experience) or its last run ended
-     * failed (`failed`: the page offers a retry).
+     * failed (`failed`: the page offers a retry). A refresh is allowed once a summary exists, which can be before the document
+     * finishes ingest, so this event borrows `ready` / `finalize` only to satisfy the shape: its `status` and `step` say
+     * nothing about the document. Read `tags`, never `status`, to act on it.
      */
     visuals: z.enum(["ready", "failed"]).optional(),
     /**

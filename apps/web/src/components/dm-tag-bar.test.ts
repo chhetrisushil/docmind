@@ -86,6 +86,11 @@ describe("dm-tag-bar", () => {
     expect(seen).toEqual([{ tags: [], match: "any" }]);
   });
 
+  it("leaves the count to the page when nothing matches", async () => {
+    const el = await mount({ selected: [TAGS[0]?.id], count: 0 });
+    expect(root(el).querySelector("[role=status]")?.textContent?.trim()).toBe("");
+  });
+
   it("stops at 10 selected tags: the others cannot be pressed, the pressed ones can be released", async () => {
     const many = Array.from({ length: 11 }, (_, i) => tag(i + 1, `t${i}`, 1));
     const el = await mount({ tags: many, selected: many.slice(0, 10).map((t) => t.id) });

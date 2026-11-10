@@ -107,13 +107,13 @@ async function upsertTag(
   return { id: p.id, created: true };
 }
 
+const CONTENDED = "tag suggestion update contended";
+
 /**
  * Every read and write of tags, links and suggestions. Names are sealed under the owner's key and compared by a keyed hash;
  * all key-store calls (seal, open, hash) happen outside the transactions, never under a row lock. Every statement names the
  * owner and the tenant, in addition to row-level security. Nothing here logs or puts a name in an error.
  */
-const CONTENDED = "tag suggestion update contended";
-
 export class TagService {
   constructor(
     private readonly pool: Pool,

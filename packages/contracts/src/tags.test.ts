@@ -6,6 +6,7 @@ import {
   TagName,
   TagNameRequest,
   cleanTagName,
+  clipTagName,
   normaliseTagName,
 } from "./tags";
 
@@ -105,5 +106,12 @@ describe("tag schemas", () => {
     expect(
       ListTagsResponse.safeParse({ tags: [{ id: id(1), name: "a", documents: 0 }] }).success,
     ).toBe(true);
+  });
+});
+
+describe("clipTagName", () => {
+  it("keeps 40 code points and never splits a surrogate pair", () => {
+    expect([...clipTagName("\u{1F600}".repeat(45))]).toHaveLength(40);
+    expect(clipTagName("abc")).toBe("abc");
   });
 });

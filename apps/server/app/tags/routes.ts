@@ -3,6 +3,8 @@ import type { Authenticator } from "@docmind/auth";
 import {
   type DocumentTagsResponse,
   type ListTagsResponse,
+  MAX_TAGS_PER_DOCUMENT,
+  MAX_TAGS_PER_USER,
   SetDocumentTagsRequest,
   TagNameRequest,
   type TagResponse,
@@ -44,8 +46,8 @@ export async function answering(res: ServerResponse, work: () => Promise<void>):
         409,
         "tag_limit",
         err.limit === "document"
-          ? "a document holds at most 20 tags"
-          : "you can have at most 200 tags",
+          ? `a document holds at most ${MAX_TAGS_PER_DOCUMENT} tags`
+          : `you can have at most ${MAX_TAGS_PER_USER} tags`,
       );
     if (err instanceof TagExistsError)
       return sendError(res, 409, "tag_exists", "a tag with this name already exists");
