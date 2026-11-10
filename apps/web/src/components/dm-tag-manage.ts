@@ -113,7 +113,12 @@ export class DmTagManage extends LitElement {
   }
   private onKey(e: KeyboardEvent, t: TagSummary): void {
     if (e.key === "Enter") void this.save(t);
-    else if (e.key === "Escape") this.editing = null;
+    else if (e.key === "Escape") this.stopEditing();
+  }
+  /** Leaves the rename without saving; its error goes with it, so a stale message never sits under the list. */
+  private stopEditing(): void {
+    this.editing = null;
+    this.error = null;
   }
 
   render() {
@@ -129,9 +134,7 @@ export class DmTagManage extends LitElement {
                 if (input.value !== this.draft) input.value = this.draft;
               }} @keydown=${(e: KeyboardEvent) => this.onKey(e, t)} />
                 <button type="button" class="btn primary" data-save ?disabled=${this.busy} @click=${() => void this.save(t)}>Save</button>
-                <button type="button" class="btn ghost" data-cancel @click=${() => {
-                  this.editing = null;
-                }}>Cancel</button></li>`
+                <button type="button" class="btn ghost" data-cancel @click=${() => this.stopEditing()}>Cancel</button></li>`
             : html`<li><span class="name">${t.name}</span> <span class="n">${used(t.documents)}</span>
                 <button type="button" class="btn ghost" aria-label=${`Rename ${t.name}`} @click=${() => this.edit(t)}>Rename</button>
                 <button type="button" class="btn ghost" aria-label=${`Delete ${t.name}`} @click=${() => void this.confirmRemove(t)}>Delete</button></li>`,
