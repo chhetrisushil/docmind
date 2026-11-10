@@ -636,6 +636,12 @@ export function buildServer(options: ComposeOptions) {
     /** The id cache (installed process-wide): `bootIngest` warms it before the status model boots; tests build ids with it. */
     ids,
     /**
+     * Whether an erasure subject (a user UUID or `h_<H>`) was erased: its key's durable destroyed proof. Recovery skips that subject's
+     * executions, whose shredded logs cannot be folded.
+     */
+    subjectErased: async (subject: string): Promise<boolean> =>
+      (await keys.wasDestroyed?.(subject)) === true,
+    /**
      * The visuals lineage's artifact store: Postgres under the per-user sealing wrapper, built once. Task 9 builds
      * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.
      */
