@@ -243,4 +243,74 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
     expect(map.get(d1)?.map((t) => t.name)).toEqual(["one"]);
     expect(map.get(d2)).toBeUndefined();
   });
+
+  it("serialises concurrent creates of one name, and the per-document and per-user caps", async () => {
+    const same = await Promise.allSettled(
+      Array.from({ length: 12 }, (_, i) => svc.create(A, i % 2 ? " finance " : "Finance")),
+    );
+    expect(same.every((r) => r.status === "fulfilled")).toBe(true);
+    expect(same.filter((r) => r.status === "fulfilled" && r.value.created).length).toBe(1);
+    expect(await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1])).toBe(1);
+
+    const d = await doc();
+    const adds = await Promise.allSettled(
+      Array.from({ length: 30 }, (_, i) => svc.addToDocument(A, d, `c${i}`)),
+    );
+    expect(
+      await count("SELECT count(*)::int AS n FROM document_tags WHERE document_id = $1", [d]),
+    ).toBe(20);
+    for (const r of adds)
+      if (r.status === "rejected") expect(r.reason).toMatchObject({ limit: "document" });
+
+    await fx.db.owner.query(
+      `INSERT INTO tags (id, tenant_id, owner_id, name_enc, name_bind)
+       SELECT gen_random_uuid(), $1, $2, '{}', decode(md5(g::text) || md5(g::text || 'y'), 'hex')
+         FROM generate_series(1, $3) g`,
+      [T1, U1, MAX_TAGS_PER_USER - 30 - 1 - 0],
+    );
+    const have = await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1]);
+    const room = MAX_TAGS_PER_USER - have;
+    const more = await Promise.allSettled(
+      Array.from({ length: room + 5 }, (_, i) => svc.create(A, `extra${i}`)),
+    );
+    expect(more.filter((r) => r.status === "fulfilled")).toHaveLength(room);
+    expect(await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1])).toBe(
+      MAX_TAGS_PER_USER,
+    );
+  });
+
+  it("answers a tag deleted under a link, and a document deleted under a suggestion write, as domain results", async () => {
+    const d = await doc();
+    const t = (await svc.create(A, "gone")).tag;
+    await Promise.allSettled([svc.remove(A, t.id), svc.setForDocument(A, d, [t.id])]);
+    for (let i = 0; i < 10; i++) {
+      const x = (await svc.create(A, `r${i}`)).tag;
+      const rs = await Promise.allSettled([svc.remove(A, x.id), svc.setForDocument(A, d, [x.id])]);
+      for (const r of rs)
+        if (r.status === "rejected") expect(r.reason).toBeInstanceOf(UnknownTagError);
+    }
+    for (let i = 0; i < 10; i++) {
+      const dd = await doc();
+      const rs = await Promise.allSettled([
+        fx.db.owner.query("DELETE FROM documents WHERE id = $1", [dd]),
+        svc.putSuggestions({ ...A, documentId: dd }, ["x"]),
+      ]);
+      expect(rs.every((r) => r.status === "fulfilled")).toBe(true);
+    }
+  });
+
+  it("caps and cleans stored suggestions at the storage boundary", async () => {
+    const d = await doc();
+    await svc.putSuggestions({ ...A, documentId: d }, [
+      "a",
+      "A",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "\u0000x",
+    ]);
+    expect((await svc.detail(A, d))?.suggestedTags).toEqual(["a", "b", "c", "d", "e"]);
+  });
 });
