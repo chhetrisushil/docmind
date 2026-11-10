@@ -3,6 +3,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { PgDocumentResults } from "../flows/ingest-document/pgResults";
+import { commitPlan, visualsLineage } from "../flows/visualize-document/lineage";
+import { aPlan } from "../flows/visualize-document/testing";
+import { subjectOfExecution } from "../subject";
 import { eraseMe, seedUser, waitErased } from "./e2eSupport";
 
 const WAIT = 300_000;
@@ -66,6 +69,20 @@ describe.skipIf(!PG_URL)(
         const handle = runId.slice(0, runId.indexOf(":")); // the Loom subject of every new-format run: h_<H>
         expect(await st.keys.wasDestroyed(handle)).toBe(false);
 
+        // A document visuals line committed through the composed stores (new-format id `visuals-<H>-<D>`).
+        const lineage = visualsLineage({
+          events: st.durable.storage.eventStore,
+          content: st.composed.lineageContent,
+          keys: st.keys,
+          subjectOf: subjectOfExecution,
+        });
+        const line = (await st.composed.ids.ensureUser(ref)).documentLineage(ref.documentId);
+        expect(line).toMatch(/^visuals-/);
+        await commitPlan(lineage, st.composed.ids, ref, await aPlan("revenue", "Revenue"), () =>
+          new Date().toISOString(),
+        );
+        expect((await lineage.resolveLatest(line)).ok).toBe(true);
+
         // The composed erasure deps carry `ids`: with them erasure names the user's h_ run, cancels it and destroys the handle's key.
         expect((await eraseMe(st, user.cookie)).status).toBe(202);
         await waitErased(st, user.userId, 60_000);
@@ -75,6 +92,10 @@ describe.skipIf(!PG_URL)(
           user.userId,
         ]);
         expect(rows).toEqual([]);
+        expect(await lineage.resolveLatest(line)).toMatchObject({
+          ok: false,
+          refusal: { kind: "refused", finding: { code: "line-erased" } },
+        });
         expect(st.composed.ids.cached(user.userId)).toBeUndefined(); // the cached id key went with the subject key
       },
       WAIT,

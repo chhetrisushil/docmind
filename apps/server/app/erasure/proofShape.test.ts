@@ -108,6 +108,15 @@ describe("the proof's allowlist of residue", () => {
       false,
     );
     expect(payloadIsIdsOnly(["a plain string"])).toBe(false);
+    // a new-format subject is accepted only for the erased user's own handle
+    const own = "h_abcdefghijklmnopqrstuvwxya";
+    const handle = own.slice(2);
+    const other = "h_bcdefghijklmnopqrstuvwxyza";
+    expect(payloadIsIdsOnly({ input: { userId: `${own}:flow` } }, "", handle)).toBe(true);
+    expect(payloadIsIdsOnly({ input: { userId: own } }, "", handle)).toBe(true);
+    expect(payloadIsIdsOnly({ input: { userId: `${other}:flow` } }, "", handle)).toBe(false);
+    expect(payloadIsIdsOnly({ input: { userId: own } })).toBe(false); // no handle given: none accepted
+    expect(unlistedStrings({ input: { userId: other } }, "", handle)).toEqual(["userId"]);
     const bad = unexpected(
       [
         hit("loom.events", "payload", {

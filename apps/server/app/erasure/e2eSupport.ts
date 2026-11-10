@@ -414,10 +414,25 @@ const sealed = (v: unknown) =>
   (v as { __loomEnc?: unknown }).__loomEnc === "loom/aes-256-gcm";
 
 const UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const HANDLE_RE = "h_[a-z2-7]{25}[aeimquy4]"; // a new-format subject: the user's handle (R14)
-const ID_VALUE = new RegExp(
-  `^(${UUID_RE}|${HANDLE_RE}|u_${UUID_RE}([:.~][A-Za-z0-9_.:~-]*)?|${HANDLE_RE}([:.~][A-Za-z0-9_.:~-]*)?)$`,
-);
+const SUFFIX_RE = "([:.~][A-Za-z0-9_.:~-]*)?";
+/** An id value: a UUID or an old-format subject, and (only when `handle` is given) the erased user's OWN `h_<handle>` subject, bare or with a suffix. */
+const idValue = (handle?: string): RegExp =>
+  new RegExp(
+    `^(${UUID_RE}|u_${UUID_RE}${SUFFIX_RE}${handle === undefined ? "" : `|h_${handle}${SUFFIX_RE}`})$`,
+  );
+const ID_VALUE = idValue();
+const ID_KEYS = new Set([
+  "userId",
+  "tenantId",
+  "documentId",
+  "chatId",
+  "subjectId",
+  "conversationId",
+  "actor",
+  "tenant",
+]);
+const checkFor = (key: string, handle?: string): Check | undefined =>
+  ID_KEYS.has(key) ? idValue(handle) : PAYLOAD_STRINGS[key];
 const oneOf = (...values: string[]): RegExp =>
   new RegExp(`^(${values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);
 const exactly = (values: readonly string[]) => ({ test: (v: string) => values.includes(v) });
@@ -432,14 +447,6 @@ const TOOLS = CHAT_TOOL_DEFS as readonly { name: string; description: string }[]
  * could hide, and fails.
  */
 const PAYLOAD_STRINGS: Record<string, Check> = {
-  userId: ID_VALUE,
-  tenantId: ID_VALUE,
-  documentId: ID_VALUE,
-  chatId: ID_VALUE,
-  subjectId: ID_VALUE,
-  conversationId: ID_VALUE,
-  actor: ID_VALUE,
-  tenant: ID_VALUE,
   flowHash: /^fnv1a:[0-9a-f]{8}$/,
   stepId: /^(ingest-[a-z]+|chat-title|conv#[a-z0-9#:]+)$/,
   decisionId: /^conv#[a-z0-9#:]+$/,
@@ -476,11 +483,11 @@ const PAYLOAD_STRINGS: Record<string, Check> = {
 };
 
 /** The keys (never the values) under which a payload holds a string that is neither an envelope nor a listed id or token. */
-export function unlistedStrings(value: unknown, key = ""): string[] {
-  if (typeof value === "string") return PAYLOAD_STRINGS[key]?.test(value) === true ? [] : [key];
+export function unlistedStrings(value: unknown, key = "", handle?: string): string[] {
+  if (typeof value === "string") return checkFor(key, handle)?.test(value) === true ? [] : [key];
   if (value === null || typeof value !== "object" || sealed(value)) return [];
   return Object.entries(value).flatMap(([k, v]) =>
-    unlistedStrings(v, Array.isArray(value) ? key : k),
+    unlistedStrings(v, Array.isArray(value) ? key : k, handle),
   );
 }
 
@@ -488,13 +495,13 @@ export function unlistedStrings(value: unknown, key = ""): string[] {
  * A payload is acceptable residue only if it is a sealed (or shredded) envelope, or a plaintext object whose string
  * leaves are all listed ids or tokens (numbers, booleans and null are fine). Exported for its unit test.
  */
-export function payloadIsIdsOnly(value: unknown, key = ""): boolean {
+export function payloadIsIdsOnly(value: unknown, key = "", handle?: string): boolean {
   if (value === null || typeof value === "number" || typeof value === "boolean") return true;
-  if (typeof value === "string") return PAYLOAD_STRINGS[key]?.test(value) === true;
-  if (Array.isArray(value)) return value.every((v) => payloadIsIdsOnly(v, key));
+  if (typeof value === "string") return checkFor(key, handle)?.test(value) === true;
+  if (Array.isArray(value)) return value.every((v) => payloadIsIdsOnly(v, key, handle));
   if (typeof value === "object") {
     if (sealed(value)) return true;
-    return Object.entries(value).every(([k, v]) => payloadIsIdsOnly(v, k));
+    return Object.entries(value).every(([k, v]) => payloadIsIdsOnly(v, k, handle));
   }
   return false;
 }
@@ -593,7 +600,9 @@ const ALLOWED: Allowed[] = [
     reason:
       "ids only: the flow input (userId, tenantId, documentId, chatId), the sender, the conversation id and the erase intent/tombstone of the user's own executions; every other leaf is a sealed envelope, a number or a listed token",
     ok: (row, who) =>
-      ownExecution(row, who) && noContent(row, who) && payloadIsIdsOnly(row.payload),
+      ownExecution(row, who) &&
+      noContent(row, who) &&
+      payloadIsIdsOnly(row.payload, "", who.handle),
   },
   {
     table: "loom.events",
@@ -604,7 +613,7 @@ const ALLOWED: Allowed[] = [
       row.execution_id === "__loom_erasure__" &&
       row.event_type === "ERASURE_PENDING" &&
       (row.payload as { subjectId?: unknown } | null)?.subjectId === who.userId &&
-      payloadIsIdsOnly(row.payload) &&
+      payloadIsIdsOnly(row.payload, "", who.handle) &&
       noContent(row, who),
   },
   {
@@ -643,9 +652,13 @@ const ALLOWED: Allowed[] = [
   {
     table: "public.data_keys",
     column: "subject_id",
-    reason: "D7: the key tombstone (no key material, destroyed_at set)",
+    reason:
+      "D7: the key tombstone of the user and of their id handle (no key material, destroyed_at set)",
     ok: (row, who) =>
-      row.subject_id === who.userId && row.wrapped_dek === null && row.destroyed_at !== null,
+      (row.subject_id === who.userId ||
+        (who.handle !== undefined && row.subject_id === `h_${who.handle}`)) &&
+      row.wrapped_dek === null &&
+      row.destroyed_at !== null,
   },
   {
     table: "public.erasure_requests",
@@ -687,9 +700,11 @@ export function needlesOf(
   gone: Seeded,
   opts: { tenantGone?: boolean; emailReused?: boolean } = {},
 ): string[] {
+  const handle = handleOfExecutions(gone.executions);
   return [
     ...gone.sentinels,
     gone.userId,
+    ...(handle !== undefined ? [`h_${handle}`] : []),
     gone.documentId,
     gone.chatId,
     gone.passageId,
@@ -804,7 +819,9 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
     expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
     // Every payload of the execution, needle or not: a sealed or shredded envelope, a tombstone, or listed ids/tokens.
     expect(
-      events.flatMap((e) => unlistedStrings(e.payload).map((key) => `${e.eventType}:${key}`)),
+      events.flatMap((e) =>
+        unlistedStrings(e.payload, "", handle).map((key) => `${e.eventType}:${key}`),
+      ),
     ).toEqual([]);
     const sealedPayloads = JSON.stringify(events).includes("__loomEnc");
     try {
@@ -883,6 +900,16 @@ export async function assertErased(
       [`u_${user.userId}`],
     );
     expect(tomb.rows.map((r) => r.model_id).sort()).toEqual(["chat-activity", "ingest-status"]);
+    if (who.handle !== undefined) {
+      // the document flows' rows are keyed by the handle (`h_<H>:...`): tombstoned too, and holding no scope or app key
+      const hRows = await db.owner.query(
+        "SELECT model_id, erased, state IS NULL AS no_state, scope IS NULL AS no_scope, app_key IS NULL AS no_app_key FROM read_model_state WHERE starts_with(execution_id, $1)",
+        [`h_${who.handle}`],
+      );
+      expect(hRows.rows.some((r) => r.model_id === "ingest-status")).toBe(true);
+      for (const r of hRows.rows)
+        expect(r).toMatchObject({ erased: true, no_state: true, no_scope: true, no_app_key: true });
+    }
   }
 
   // 3. The key: destroyed, remembered as destroyed, and the tombstone row holds no key material.
