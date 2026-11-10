@@ -2,6 +2,7 @@ import { ConversationNotFoundError } from "@loom/conversation";
 import { InboxClosedError } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../chats/ids";
+import { existingUser } from "../documents/executionCandidates";
 import { OpaqueIds, legacyIds } from "../opaqueIds";
 import { testOpaqueIds } from "../opaqueIds/testing";
 import { erasureDeps, requireKeyDestroyedProof } from "./wire";
@@ -288,6 +289,7 @@ describe("erasureDeps", () => {
     let outcome: "parked" | "erased" = "parked";
     const { parts: p } = parts({
       ids: t.ids,
+      keys: { destroy: async () => {}, wasDestroyed: async () => outcome === "erased" }, // parked: the key is alive
       app: {
         eraseSubject: async () => {
           // What a concurrent document delete or a visuals reconcile does mid-shred (the key may already be destroyed by Loom).
@@ -311,6 +313,53 @@ describe("erasureDeps", () => {
     expect(t.ids.cached(USER)).toBeUndefined();
   });
 
+  it("a shred that commits and then throws leaves the handle unusable: no h_ id is built and no cancel reaches Loom", async () => {
+    for (const check of ["destroyed", "throws"] as const) {
+      const t = testOpaqueIds();
+      t.store.add(USER, TENANT);
+      const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+      const wasDestroyed = async (s: string) => {
+        if (check === "throws") throw new Error("key store down");
+        return t.keys.wasDestroyed(s);
+      };
+      const { parts: p, calls } = parts({
+        ids: t.ids,
+        keys: { destroy: async () => {}, wasDestroyed },
+        app: {
+          eraseSubject: async () => {
+            await t.keys.destroy(`h_${user.handle}`); // Loom's shred committed
+            throw new Error("then it threw");
+          },
+        },
+      });
+      const deps = erasureDeps(p);
+      await expect(deps.eraseSubject(`h_${user.handle}`)).rejects.toThrow("then it threw");
+      expect(t.ids.cached(USER)).toBeUndefined();
+      expect(await existingUser(t.ids, who)).toBeUndefined();
+      await expect(t.ids.ensureUser(who)).rejects.toBeDefined();
+      await deps.cancelTitle(who, CHAT);
+      await deps.stopChat(who, CHAT);
+      expect(calls.filter((c) => c.includes(`h_${user.handle}`))).toEqual([]);
+    }
+  });
+
+  it("keeps the handle usable when the key store durably says the key is alive after a throw", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({
+      ids: t.ids,
+      keys: { destroy: async () => {}, wasDestroyed: async () => false },
+      app: {
+        eraseSubject: async () => {
+          throw new Error("failed before anything was destroyed");
+        },
+      },
+    });
+    await expect(erasureDeps(p).eraseSubject(`h_${user.handle}`)).rejects.toThrow();
+    expect(t.ids.cached(USER)).toBeDefined();
+  });
+
   it("keeps the cached id key when the shred did not erase (parked or unknown)", async () => {
     const t = testOpaqueIds();
     t.store.add(USER, TENANT);
@@ -318,6 +367,7 @@ describe("erasureDeps", () => {
     const { parts: p } = parts({
       ids: t.ids,
       app: { eraseSubject: async () => ({ outcome: "parked" as const }) },
+      keys: { destroy: async () => {}, wasDestroyed: async () => false }, // the key is alive
     });
     await erasureDeps(p).eraseSubject(`h_${user.handle}`);
     expect(t.ids.cached(USER)).toBeDefined();
