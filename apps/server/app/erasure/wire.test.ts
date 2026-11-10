@@ -270,4 +270,30 @@ describe("erasureDeps", () => {
     await erasureDeps(p).eraseSubject(`h_${user.handle}`);
     expect(t.ids.cached(USER)).toBeDefined();
   });
+
+  it("evicts the cached id key when the shred answers unknown but the key is already destroyed (a retry after a committed shred)", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({
+      ids: t.ids,
+      app: { eraseSubject: async () => ({ outcome: "unknown" as const }) },
+      keys: { destroy: async () => {}, wasDestroyed: async () => true },
+    });
+    await erasureDeps(p).eraseSubject(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeUndefined();
+  });
+
+  it("keeps the cached id key on unknown when the key is not destroyed", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({
+      ids: t.ids,
+      app: { eraseSubject: async () => ({ outcome: "unknown" as const }) },
+      keys: { destroy: async () => {}, wasDestroyed: async () => false },
+    });
+    await erasureDeps(p).eraseSubject(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeDefined();
+  });
 });
