@@ -2,6 +2,7 @@ import { LlmOutputError } from "@docmind/llm-anthropic";
 import type { ParsedDocument } from "@docmind/parsers";
 import { type LlmProvider, type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
 import { describe, expect, it } from "vitest";
+import { reduceInstruction } from "./prompts";
 import { summarizeDocument } from "./summarize";
 
 const doc = (texts: string[]): ParsedDocument => ({
@@ -216,5 +217,70 @@ describe("summarizeDocument", () => {
       });
       expect(requests).toHaveLength(3);
     }
+  });
+});
+
+describe("summarizeDocument tag suggestions", () => {
+  const withTags = (suggestedTags: unknown) =>
+    JSON.stringify({
+      tldr: "T",
+      keyPoints: ["k"],
+      entities: ["Acme"],
+      topics: ["t"],
+      suggestedQuestions: ["q?"],
+      suggestedTags,
+    });
+  const userText = (r: LlmRequest) => JSON.stringify(r.messages);
+
+  it("returns the model's suggested names beside a summary that does not carry them", async () => {
+    const { provider } = scripted({ reduce: () => withTags(["Finance", "Q3"]) });
+    const out = await summarizeDocument(provider, doc(["one"]), { maxChars: 1_000 });
+    expect(out?.suggestedTags).toEqual(["Finance", "Q3"]);
+    expect(out?.summary).toEqual({
+      tldr: "T",
+      keyPoints: ["k"],
+      entities: ["Acme"],
+      topics: ["t"],
+      suggestedQuestions: ["q?"],
+    });
+  });
+
+  it("asks for the tags in the reduce call only, listing the existing ones as quoted JSON", async () => {
+    const { provider, requests } = scripted();
+    await summarizeDocument(provider, doc(["a", "b"]), {
+      maxChars: 1_000,
+      groupChars: 1,
+      existingTags: ["Finance", 'say "hi"'],
+    });
+    const reduce = requests.filter(isReduce);
+    expect(reduce).toHaveLength(1);
+    expect(userText(reduce[0] as LlmRequest)).toContain(
+      '[\\"Finance\\",\\"say \\\\\\"hi\\\\\\"\\"]',
+    );
+    for (const r of requests.filter((x) => !isReduce(x)))
+      expect(userText(r)).not.toContain("suggestedTags");
+  });
+
+  it("asks for up to 3 new names when the user has no tags", async () => {
+    const { provider, requests } = scripted();
+    await summarizeDocument(provider, doc(["one"]), { maxChars: 1_000 });
+    expect(userText(requests.filter(isReduce)[0] as LlmRequest)).toContain(
+      "up to 3 short topic tags",
+    );
+  });
+
+  it("a missing or malformed suggestedTags is [] and the summary still comes back", async () => {
+    for (const reduce of [() => withTags(undefined), () => withTags(42), () => REDUCE]) {
+      const out = await summarizeDocument(scripted({ reduce }).provider, doc(["one"]), {
+        maxChars: 1_000,
+      });
+      expect(out?.suggestedTags).toEqual([]);
+      expect(out?.summary.tldr).toBe("T");
+    }
+  });
+
+  it("reduceInstruction names every summary field and suggestedTags", () => {
+    expect(reduceInstruction([])).toContain('"suggestedTags"');
+    expect(reduceInstruction([])).toContain('"suggestedQuestions"');
   });
 });
