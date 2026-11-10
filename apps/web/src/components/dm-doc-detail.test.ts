@@ -704,6 +704,70 @@ describe("dm-doc-detail: rendered content", () => {
       }
     });
 
+    describe("Refresh visuals", () => {
+      const refresh = (p: Element) =>
+        p.shadowRoot?.querySelector<HTMLButtonElement>("button[data-visuals-refresh]");
+      const note = (p: Element) => p.shadowRoot?.querySelector("[data-visuals-note]");
+
+      it("is present on a ready document, with an accessible name and help text", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        expect(refresh(page)?.textContent?.trim()).toBe("Refresh visuals");
+        expect(refresh(page)?.getAttribute("aria-label")).toBe("Refresh visuals");
+        expect(refresh(page)?.title).toContain("re-read the document once");
+      });
+
+      it("click calls the retry route once and shows Refreshing… until a visuals event", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        refresh(page)?.click();
+        await vi.waitFor(() => expect(refresh(page)?.textContent?.trim()).toBe("Refreshing…"));
+        expect(refresh(page)?.disabled).toBe(true);
+        expect(t.api.retryDocumentVisuals).toHaveBeenCalledTimes(1);
+        expect(t.api.retryDocumentVisuals).toHaveBeenCalledWith(id(1));
+        t.progress(id(1), "ready", { visuals: "ready" });
+        await vi.waitFor(() => expect(refresh(page)?.textContent?.trim()).toBe("Refresh visuals"));
+        expect(refresh(page)?.disabled).toBe(false);
+      });
+
+      it("a double click sends one request", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        refresh(page)?.click();
+        refresh(page)?.click();
+        await new Promise((r) => setTimeout(r, 20));
+        expect(t.api.retryDocumentVisuals).toHaveBeenCalledTimes(1);
+      });
+
+      it("shows the refusal notes (limited, busy)", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "ready";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(refresh(page)).not.toBeNull());
+        t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(429, "too_many_requests"));
+        refresh(page)?.click();
+        await vi.waitFor(() => expect(note(page)?.textContent).toContain("Too many"));
+        expect(refresh(page)?.disabled).toBe(false);
+        t.api.retryDocumentVisuals.mockRejectedValueOnce(new ApiError(409, "not_visualizable"));
+        refresh(page)?.click();
+        await vi.waitFor(() => expect(note(page)?.textContent).toContain("can't be made"));
+      });
+
+      it("is hidden while the visuals are running", async () => {
+        const t = setup({ name: "document", id: id(1) });
+        t.ui.detail.visuals = "running";
+        const page = await ready(t);
+        await vi.waitFor(() => expect(making(page)).not.toBeNull());
+        expect(refresh(page)).toBeNull();
+      });
+    });
+
     it("429 gives the button back with a note; 409 visualize_running keeps waiting", async () => {
       const t = setup({ name: "document", id: id(1) });
       t.ui.detail.visuals = "failed";

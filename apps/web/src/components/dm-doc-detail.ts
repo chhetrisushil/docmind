@@ -362,15 +362,31 @@ export class DmDocDetail extends LitElement {
    * already exist.
    */
   private visualsBanner() {
-    const quiet = this.visualsState !== "failed" && this.visualsState !== "running";
-    if (!this.served || (quiet && !this.retrying)) return null;
+    if (!this.served) return null;
+    const failed = this.visualsState === "failed";
+    if (this.visualsState === "running" && !this.retrying)
+      return html`<p class="muted" data-visuals-making role="status">Making visuals…</p>`;
+    if (!failed) return this.refreshControl();
     if (this.retrying)
       return html`<p class="muted" data-visuals-retrying role="status">Retrying…</p>`;
-    if (this.visualsState === "running")
-      return html`<p class="muted" data-visuals-making role="status">Making visuals…</p>`;
     return html`<p class="muted" data-visuals-failed role="status">Visuals couldn't be made.
       <button class="btn secondary" data-visuals-retry @click=${() => this.retryVisuals()}>Retry</button>
       ${this.retryNote ? html`<span data-visuals-note>${this.retryNote}</span>` : null}</p>`;
+  }
+
+  /** The always-present re-run: the same retry path ("Refreshing…" holds until a `visuals` event or 60 s). */
+  private refreshControl() {
+    const busy = this.retrying;
+    return html`<p class="muted" data-visuals-refresh-row>
+      <button
+        class="btn secondary"
+        data-visuals-refresh
+        ?disabled=${busy}
+        aria-label=${busy ? "Refreshing visuals" : "Refresh visuals"}
+        title="Re-makes the visuals. May re-read the document once to add new diagram types."
+        @click=${() => this.retryVisuals()}
+      >${busy ? "Refreshing…" : "Refresh visuals"}</button>
+      ${this.retryNote ? html`<span data-visuals-note role="status">${this.retryNote}</span>` : null}</p>`;
   }
 
   render() {
