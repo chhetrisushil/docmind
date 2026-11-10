@@ -77,8 +77,11 @@ export class OpaqueIds {
   private readonly byHandle = new Map<string, Entry>();
   private readonly byUser = new Map<string, Entry>();
   private readonly inflight = new Map<string, Promise<Entry>>();
-  /** Bumped by `forget`: a mint or key load that started before it must not cache its result (the user was erased meanwhile). */
-  private readonly epochs = new Map<string, number>();
+  /**
+   * Key fetches in flight, by `u:<userId>` and `h:<handle>`. `forget` cancels the tickets under the key it drops, so a mint or key load that
+   * started before an erasure does not cache its result. An entry exists only while a fetch is in flight (nothing grows per erased user).
+   */
+  private readonly fetches = new Map<string, Set<{ cancelled: boolean }>>();
   /** Handles the store said nobody holds, with an expiry: an erased user's leftover ids must not cost a lookup each. */
   private readonly misses = new Map<string, number>();
 
@@ -112,8 +115,42 @@ export class OpaqueIds {
     return (await pending).ids;
   }
 
+  private ticket(keys: string[]): { cancelled: boolean; done(): void } {
+    const t = {
+      cancelled: false,
+      done: () => {
+        for (const k of keys) {
+          const set = this.fetches.get(k);
+          set?.delete(t);
+          if (set?.size === 0) this.fetches.delete(k);
+        }
+      },
+    };
+    for (const k of keys) {
+      const set = this.fetches.get(k) ?? new Set();
+      set.add(t);
+      this.fetches.set(k, set);
+    }
+    return t;
+  }
+
+  private cancel(key: string): void {
+    for (const t of this.fetches.get(key) ?? []) t.cancelled = true;
+  }
+
   private async mint(who: { tenantId: string; userId: string }): Promise<Entry> {
-    const epoch = this.epochs.get(who.userId);
+    const ticket = this.ticket([`u:${who.userId}`]);
+    try {
+      return await this.mintKey(who, ticket);
+    } finally {
+      ticket.done();
+    }
+  }
+
+  private async mintKey(
+    who: { tenantId: string; userId: string },
+    ticket: { cancelled: boolean },
+  ): Promise<Entry> {
     let dek: Buffer;
     try {
       dek = await this.keys.getOrCreate(who.userId);
@@ -126,7 +163,7 @@ export class OpaqueIds {
     const handle = handleOfKey(key);
     if ((await guarded(() => this.store.claim(who, handle))) !== handle)
       throw new HandleMismatchError();
-    if (this.epochs.get(who.userId) !== epoch) throw new FieldKeyUnavailableError();
+    if (ticket.cancelled) throw new FieldKeyUnavailableError();
     return this.put(who.userId, key, handle);
   }
 
@@ -141,34 +178,39 @@ export class OpaqueIds {
     const missUntil = this.misses.get(handle);
     if (missUntil !== undefined && missUntil > Date.now()) return null;
     const userId = await guarded(() => this.store.userOf(handle));
-    if (userId === null) {
-      this.misses.delete(handle);
-      if (this.misses.size >= MISS_LIMIT) {
-        const oldest = this.misses.keys().next().value;
-        if (oldest !== undefined) this.misses.delete(oldest);
-      }
-      this.misses.set(handle, Date.now() + MISS_TTL_MS);
-      return null;
-    }
-    const entry = await this.loadKey(userId, handle);
+    const entry = userId === null ? null : await this.loadKey(userId, handle);
+    if (entry === null) this.recordMiss(handle); // never issued, erased, or the key is destroyed
     return entry?.ids ?? null;
+  }
+
+  private recordMiss(handle: string): void {
+    this.misses.delete(handle);
+    if (this.misses.size >= MISS_LIMIT) {
+      const oldest = this.misses.keys().next().value;
+      if (oldest !== undefined) this.misses.delete(oldest);
+    }
+    this.misses.set(handle, Date.now() + MISS_TTL_MS);
   }
 
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
     const hit = this.byUser.get(userId);
     if (hit) return hit;
-    const epoch = this.epochs.get(userId);
-    let dek: Buffer | null;
+    const ticket = this.ticket([`u:${userId}`, `h:${handle}`]);
     try {
-      dek = await this.keys.get(userId);
-    } catch {
-      throw new FieldKeyStoreError();
+      let dek: Buffer | null;
+      try {
+        dek = await this.keys.get(userId);
+      } catch {
+        throw new FieldKeyStoreError();
+      }
+      if (dek === null) return null;
+      const key = deriveIdKey(dek);
+      if (handleOfKey(key) !== handle) throw new HandleMismatchError();
+      if (ticket.cancelled) return null; // forgotten while the key was being fetched
+      return this.put(userId, key, handle);
+    } finally {
+      ticket.done();
     }
-    if (dek === null) return null;
-    const key = deriveIdKey(dek);
-    if (handleOfKey(key) !== handle) throw new HandleMismatchError();
-    if (this.epochs.get(userId) !== epoch) return null; // forgotten while the key was being fetched
-    return this.put(userId, key, handle);
   }
 
   /**
@@ -238,13 +280,14 @@ export class OpaqueIds {
       this.forget(subjectId);
       return;
     }
+    this.cancel(`h:${handle}`);
     const entry = this.byHandle.get(handle);
     if (entry) this.forget(entry.ids.userId);
   }
 
   /** Drops a user from the cache (erasure, after the key is destroyed). */
   forget(userId: string): void {
-    this.epochs.set(userId, (this.epochs.get(userId) ?? 0) + 1);
+    this.cancel(`u:${userId}`);
     this.inflight.delete(userId);
     const entry = this.byUser.get(userId);
     if (entry) this.byHandle.delete(entry.ids.handle);

@@ -294,6 +294,11 @@ export const subjectOfHandle = (handle: string): string => `h_${handle}`;
 export const handleOfSubject = (subject: string): string | null =>
   new RegExp(`^h_(${H})$`).exec(subject)?.[1] ?? null;
 
+/** A user id stays strict (a non-canonical one is a bug, as with the old builders): no lower-casing. */
+const checkUser = (id: string): string => {
+  if (!CANONICAL.test(id)) throw new RangeError("userId must be a canonical lower-case uuid");
+  return id;
+};
 const checkUuid = (what: string, id: string): string => {
   // The old builders lower-cased a document or chat id; so do these (a mixed-case UUID is the same UUID).
   const lower = id.toLowerCase();
@@ -328,10 +333,10 @@ const rerunSuffix = (n: number | undefined) => (n === undefined ? "" : `-r${chec
 export const legacyIds = {
   /** Any `u_<user>:<name>` id: the free-form shape Loom's `::` children and `~n` successors extend. For tests of the subject mapping; the families below are what the app ran. */
   named: (userId: string, name: string): UserExecutionId =>
-    within(`u_${checkUuid("userId", userId)}:${name}`),
+    within(`u_${checkUser(userId)}:${name}`),
   ingest: (userId: string, documentId: string, generation: number): UserExecutionId =>
     within(
-      `u_${checkUuid("userId", userId)}:ingest-${checkUuid("documentId", documentId)}${generationSuffix(checkGeneration(generation))}`,
+      `u_${checkUser(userId)}:ingest-${checkUuid("documentId", documentId)}${generationSuffix(checkGeneration(generation))}`,
     ),
   visualize: (
     userId: string,
@@ -340,27 +345,27 @@ export const legacyIds = {
     rerun?: number,
   ): UserExecutionId =>
     within(
-      `u_${checkUuid("userId", userId)}:visualize-${checkUuid("documentId", documentId)}${generationSuffix(checkGeneration(generation))}${rerunSuffix(rerun)}`,
+      `u_${checkUser(userId)}:visualize-${checkUuid("documentId", documentId)}${generationSuffix(checkGeneration(generation))}${rerunSuffix(rerun)}`,
     ),
   suggestTags: (userId: string, documentId: string, run: number): UserExecutionId =>
     within(
-      `u_${checkUuid("userId", userId)}:suggest-tags-${checkUuid("documentId", documentId)}-r${checkRerun(run)}`,
+      `u_${checkUser(userId)}:suggest-tags-${checkUuid("documentId", documentId)}-r${checkRerun(run)}`,
     ),
   turnVisualize: (userId: string, chatId: string, ord: number, rerun?: number): UserExecutionId =>
     within(
-      `u_${checkUuid("userId", userId)}:visualize-turn-${checkUuid("chatId", chatId)}-${checkOrd(ord)}${rerunSuffix(rerun)}`,
+      `u_${checkUser(userId)}:visualize-turn-${checkUuid("chatId", chatId)}-${checkOrd(ord)}${rerunSuffix(rerun)}`,
     ),
   chatTitle: (userId: string, chatId: string): UserExecutionId =>
-    within(`u_${checkUuid("userId", userId)}:chat-title-${checkUuid("chatId", chatId)}`),
+    within(`u_${checkUser(userId)}:chat-title-${checkUuid("chatId", chatId)}`),
   conversation: (userId: string, chatId: string): ChatConversationId => {
-    const id = `u_${checkUuid("userId", userId)}.c-${checkUuid("chatId", chatId)}`;
+    const id = `u_${checkUser(userId)}.c-${checkUuid("chatId", chatId)}`;
     if (!isValidConversationId(id)) throw new RangeError("not a valid Loom conversation id");
     return id as ChatConversationId;
   },
   documentLineage: (userId: string, documentId: string): string =>
-    `visuals-${checkUuid("userId", userId)}-${checkUuid("documentId", documentId)}`,
+    `visuals-${checkUser(userId)}-${checkUuid("documentId", documentId)}`,
   turnLineage: (userId: string, chatId: string, ord: number): string =>
-    `turnvisuals-${checkUuid("userId", userId)}-${checkUuid("chatId", chatId)}-${checkOrd(ord)}`,
+    `turnvisuals-${checkUser(userId)}-${checkUuid("chatId", chatId)}-${checkOrd(ord)}`,
 };
 
 /** One user's builders, new format. Make one with `OpaqueIds.ensureUser` (it has fetched the key and the handle). Pure and synchronous. */
