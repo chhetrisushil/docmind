@@ -1,10 +1,12 @@
 import type { KeyStore } from "@loom/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../crypto/fields";
 import {
+  HANDLE_RE,
   type IdFamily,
   type OpaqueShape,
   type ParsedId,
   UserIds,
+  handleOfAnyId,
   shapeOfExecution,
   shapeOfLineage,
 } from "./ids";
@@ -33,6 +35,27 @@ export class HandleMismatchError extends Error {
   }
 }
 
+/** The handle store failed. Fixed message, no cause: a driver error may carry the handle, a parameter or SQL text. */
+export class HandleStoreError extends Error {
+  constructor() {
+    super("the id handle store failed");
+    this.name = "HandleStoreError";
+  }
+}
+
+const isUniqueViolation = (err: unknown): boolean =>
+  typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23505";
+
+/** Runs a store call, replacing any error with a `HandleStoreError` (and a unique-key collision with `HandleMismatchError`). */
+async function guarded<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (err instanceof HandleMismatchError) throw err;
+    throw isUniqueViolation(err) ? new HandleMismatchError() : new HandleStoreError();
+  }
+}
+
 interface Entry {
   readonly ids: UserIds;
   readonly key: IdKey;
@@ -40,6 +63,8 @@ interface Entry {
 
 export const WARM_PAGE = 500;
 export const WARM_CONCURRENCY = 8;
+const MISS_LIMIT = 1000;
+const MISS_TTL_MS = 30_000;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /**
@@ -52,6 +77,10 @@ export class OpaqueIds {
   private readonly byHandle = new Map<string, Entry>();
   private readonly byUser = new Map<string, Entry>();
   private readonly inflight = new Map<string, Promise<Entry>>();
+  /** Bumped by `forget`: a mint or key load that started before it must not cache its result (the user was erased meanwhile). */
+  private readonly epochs = new Map<string, number>();
+  /** Handles the store said nobody holds, with an expiry: an erased user's leftover ids must not cost a lookup each. */
+  private readonly misses = new Map<string, number>();
 
   constructor(
     private readonly keys: Pick<KeyStore, "get" | "getOrCreate" | "wasDestroyed">,
@@ -62,6 +91,7 @@ export class OpaqueIds {
 
   private put(userId: string, key: IdKey, handle: string): Entry {
     const entry = { ids: new UserIds(userId, handle, key), key };
+    this.misses.delete(handle);
     this.byHandle.set(handle, entry);
     this.byUser.set(userId, entry);
     return entry;
@@ -71,14 +101,19 @@ export class OpaqueIds {
   async ensureUser(who: { tenantId: string; userId: string }): Promise<UserIds> {
     const hit = this.byUser.get(who.userId);
     if (hit) return hit.ids;
-    const pending =
-      this.inflight.get(who.userId) ??
-      this.mint(who).finally(() => this.inflight.delete(who.userId));
-    this.inflight.set(who.userId, pending);
+    let pending = this.inflight.get(who.userId);
+    if (!pending) {
+      const started = this.mint(who);
+      pending = started.finally(() => {
+        if (this.inflight.get(who.userId) === pending) this.inflight.delete(who.userId);
+      });
+      this.inflight.set(who.userId, pending);
+    }
     return (await pending).ids;
   }
 
   private async mint(who: { tenantId: string; userId: string }): Promise<Entry> {
+    const epoch = this.epochs.get(who.userId);
     let dek: Buffer;
     try {
       dek = await this.keys.getOrCreate(who.userId);
@@ -89,7 +124,9 @@ export class OpaqueIds {
     }
     const key = deriveIdKey(dek);
     const handle = handleOfKey(key);
-    if ((await this.store.claim(who, handle)) !== handle) throw new HandleMismatchError();
+    if ((await guarded(() => this.store.claim(who, handle))) !== handle)
+      throw new HandleMismatchError();
+    if (this.epochs.get(who.userId) !== epoch) throw new FieldKeyUnavailableError();
     return this.put(who.userId, key, handle);
   }
 
@@ -100,8 +137,19 @@ export class OpaqueIds {
   async ensureHandle(handle: string): Promise<UserIds | null> {
     const hit = this.byHandle.get(handle);
     if (hit) return hit.ids;
-    const userId = await this.store.userOf(handle);
-    if (userId === null) return null;
+    if (!HANDLE_RE.test(handle)) return null;
+    const missUntil = this.misses.get(handle);
+    if (missUntil !== undefined && missUntil > Date.now()) return null;
+    const userId = await guarded(() => this.store.userOf(handle));
+    if (userId === null) {
+      this.misses.delete(handle);
+      if (this.misses.size >= MISS_LIMIT) {
+        const oldest = this.misses.keys().next().value;
+        if (oldest !== undefined) this.misses.delete(oldest);
+      }
+      this.misses.set(handle, Date.now() + MISS_TTL_MS);
+      return null;
+    }
     const entry = await this.loadKey(userId, handle);
     return entry?.ids ?? null;
   }
@@ -109,6 +157,7 @@ export class OpaqueIds {
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
     const hit = this.byUser.get(userId);
     if (hit) return hit;
+    const epoch = this.epochs.get(userId);
     let dek: Buffer | null;
     try {
       dek = await this.keys.get(userId);
@@ -118,6 +167,7 @@ export class OpaqueIds {
     if (dek === null) return null;
     const key = deriveIdKey(dek);
     if (handleOfKey(key) !== handle) throw new HandleMismatchError();
+    if (this.epochs.get(userId) !== epoch) return null; // forgotten while the key was being fetched
     return this.put(userId, key, handle);
   }
 
@@ -141,7 +191,7 @@ export class OpaqueIds {
         });
     };
     for (;;) {
-      const page = await this.store.page(after, pageSize);
+      const page = await guarded(() => this.store.page(after, pageSize));
       for (let i = 0; i < page.length; i += WARM_CONCURRENCY) {
         const loaded = await Promise.all(
           page.slice(i, i + WARM_CONCURRENCY).map(async (u) => {
@@ -171,7 +221,7 @@ export class OpaqueIds {
    */
   async load(who: { tenantId: string; userId: string }): Promise<boolean> {
     if (this.byUser.has(who.userId)) return true;
-    const handle = await this.store.read(who);
+    const handle = await guarded(() => this.store.read(who));
     if (handle === null) return false;
     return (await this.ensureHandle(handle)) !== null;
   }
@@ -184,12 +234,18 @@ export class OpaqueIds {
   /** Drops what a destroyed subject key leaves: the user's cache entry for a user UUID, the entry of a handle for an `h_<H>` subject. */
   forgetSubject(subjectId: string): void {
     const handle = subjectId.startsWith("h_") ? subjectId.slice(2) : null;
-    const entry = handle === null ? this.byUser.get(subjectId) : this.byHandle.get(handle);
+    if (handle === null) {
+      this.forget(subjectId);
+      return;
+    }
+    const entry = this.byHandle.get(handle);
     if (entry) this.forget(entry.ids.userId);
   }
 
   /** Drops a user from the cache (erasure, after the key is destroyed). */
   forget(userId: string): void {
+    this.epochs.set(userId, (this.epochs.get(userId) ?? 0) + 1);
+    this.inflight.delete(userId);
     const entry = this.byUser.get(userId);
     if (entry) this.byHandle.delete(entry.ids.handle);
     this.byUser.delete(userId);
@@ -202,8 +258,7 @@ export class OpaqueIds {
 
   /** The handle of a new-format execution id (so a caller can `ensureHandle` first), or null for any other id. */
   handleOfId(id: string): string | null {
-    const shape = shapeOfExecution(id) ?? shapeOfLineage(id);
-    return shape?.format === "opaque" ? shape.shape.handle : null;
+    return handleOfAnyId(id);
   }
 
   /** What an execution or conversation id names, or null (unknown shape, unknown handle, a token that fails authentication). */

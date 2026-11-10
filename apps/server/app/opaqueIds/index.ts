@@ -3,6 +3,7 @@ import {
   type ParsedId,
   clearFieldsOf,
   familyOfExecution,
+  handleOfAnyId,
   handleOfSubject,
   shapeOfExecution,
   shapeOfLineage,
@@ -11,7 +12,13 @@ import {
 } from "./ids";
 import type { OpaqueIds } from "./opaqueIds";
 
-export { OpaqueIds, HandleMismatchError, WARM_CONCURRENCY, WARM_PAGE } from "./opaqueIds";
+export {
+  OpaqueIds,
+  HandleMismatchError,
+  HandleStoreError,
+  WARM_CONCURRENCY,
+  WARM_PAGE,
+} from "./opaqueIds";
 export type { HandleStore } from "./opaqueIds";
 export {
   UUID_PATTERN,
@@ -57,10 +64,7 @@ export const opaqueIds = {
   /** The subject of a user's new-format executions, `h_<handle>`. */
   subjectOfHandle,
   /** The handle of a new-format id, or null (old format, or not an id). */
-  handleOf(id: string): string | null {
-    const shape = shapeOfExecution(id) ?? shapeOfLineage(id);
-    return shape?.format === "opaque" ? shape.shape.handle : null;
-  },
+  handleOf: handleOfAnyId,
   /** Whether the installed instance has this handle cached (false when none is installed or the id is old-format). */
   known: (handle: string): boolean => installed?.knows(handle) ?? false,
   /** Loads an existing user's id key without minting one (see `OpaqueIds.load`); false when none is installed. */

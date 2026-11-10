@@ -1,7 +1,15 @@
+import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FieldKeyUnavailableError } from "../crypto/fields";
-import { OpaqueIds, WARM_CONCURRENCY, legacyIds, opaqueIds } from "./index";
+import { FieldKeyStoreError, FieldKeyUnavailableError } from "../crypto/fields";
+import {
+  HandleMismatchError,
+  HandleStoreError,
+  OpaqueIds,
+  WARM_CONCURRENCY,
+  legacyIds,
+  opaqueIds,
+} from "./index";
 import { deterministicUser, testIdSource, testOpaqueIds } from "./testing";
 
 const T = "00000000-0000-0000-0000-0000000000aa";
@@ -159,7 +167,7 @@ describe("every family builds and parses, in both formats", () => {
 
   it("refuses bad inputs", async () => {
     const { userIds: u } = await userIds();
-    expect(() => u.ingest(D.toUpperCase(), 2)).toThrow(RangeError);
+    expect(() => u.ingest("not-a-uuid", 2)).toThrow(RangeError);
     expect(() => u.ingest(D, 0)).toThrow(RangeError);
     expect(() => u.visualize(D, 1_000_000_000)).toThrow(RangeError);
     expect(() => u.visualize(D, 1, 1000)).toThrow(RangeError);
@@ -411,5 +419,183 @@ describe("the test id source", () => {
     expect(computed.handle).toBe(built.handle);
     expect(computed.ingest(D, 2)).toBe(built.ingest(D, 2));
     expect(deterministicUser(U2).handle).not.toBe(computed.handle);
+  });
+});
+
+class GatedKeyStore extends InMemoryKeyStore {
+  gate: Promise<void> | undefined;
+  failWith: Error | undefined;
+  override async getOrCreate(subjectId: string) {
+    const dek = await super.getOrCreate(subjectId);
+    if (this.failWith) throw this.failWith;
+    await this.gate;
+    return dek;
+  }
+  override async get(subjectId: string) {
+    const dek = await super.get(subjectId);
+    if (this.failWith) throw this.failWith;
+    await this.gate;
+    return dek;
+  }
+}
+
+function gatedIds() {
+  const keys = new GatedKeyStore();
+  const store = new (
+    testOpaqueIds().store.constructor as new () => ReturnType<typeof testOpaqueIds>["store"]
+  )();
+  store.add(U, T);
+  return { keys, store, ids: new OpaqueIds(keys, store) };
+}
+
+describe("review fixes", () => {
+  it("forget during an in-flight ensureUser: nothing is cached afterwards (1)", async () => {
+    const g = gatedIds();
+    let open: () => void = () => {};
+    g.keys.gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const pending = g.ids.ensureUser({ tenantId: T, userId: U });
+    const settled = pending.then(
+      () => "ok",
+      (e: unknown) => e,
+    );
+    await new Promise((r) => setTimeout(r, 5));
+    g.ids.forget(U);
+    open();
+    expect(await settled).toBeInstanceOf(FieldKeyUnavailableError);
+    expect(g.ids.cached(U)).toBeUndefined();
+  });
+
+  it("forget during an in-flight ensureHandle: nothing is cached afterwards (1)", async () => {
+    const warm = await userIds();
+    const keys = new GatedKeyStore();
+    await keys.getOrCreate(U);
+    const dek = (await keys.get(U)) as Buffer;
+    expect(dek).not.toBeNull();
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const first = new OpaqueIds(keys, t.store);
+    const minted = await first.ensureUser({ tenantId: T, userId: U });
+    const cold = new OpaqueIds(keys, t.store);
+    let open: () => void = () => {};
+    keys.gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const pending = cold.ensureHandle(minted.handle);
+    await new Promise((r) => setTimeout(r, 5));
+    cold.forget(U);
+    open();
+    expect(await pending).toBeNull();
+    expect(cold.cached(U)).toBeUndefined();
+    expect(cold.knows(minted.handle)).toBe(false);
+    expect(warm.ids).toBeDefined();
+  });
+
+  it("a key-store outage is FieldKeyStoreError with no user text, never a fallback (2)", async () => {
+    const g = gatedIds();
+    g.keys.failWith = new Error(`kek down ${U}`);
+    const err = await g.ids.ensureUser({ tenantId: T, userId: U }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(FieldKeyStoreError);
+    expect(String((err as Error).message)).not.toContain(U);
+    expect((err as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(g.ids.cached(U)).toBeUndefined();
+
+    // ensureHandle and warm: a stored handle, then the key store fails.
+    g.keys.failWith = undefined;
+    const minted = await g.ids.ensureUser({ tenantId: T, userId: U });
+    const cold = new OpaqueIds(g.keys, g.store);
+    g.keys.failWith = new Error(`kek down ${U}`);
+    const e2 = await cold.ensureHandle(minted.handle).catch((e: Error) => e);
+    expect(e2).toBeInstanceOf(FieldKeyStoreError);
+    expect(String((e2 as Error).message)).not.toContain(U);
+    const e3 = await cold.warm().catch((e: Error) => e);
+    expect(e3).toBeInstanceOf(FieldKeyStoreError);
+    expect(cold.cached(U)).toBeUndefined();
+  });
+
+  it("an opaque generation suffix is .2 and up: .1 is not an id (3)", async () => {
+    const { ids, userIds: u } = await userIds();
+    opaqueIds.install(ids);
+    expect(opaqueIds.parse(`${u.ingest(D, 1)}.1`)).toBeNull();
+    expect(opaqueIds.parse(`${u.visualize(D, 1)}.1`)).toBeNull();
+    expect(opaqueIds.parse(u.ingest(D, 2))).toMatchObject({ generation: 2 });
+    expect(opaqueIds.parse(u.ingest(D, 10))).toMatchObject({ generation: 10 });
+    expect(opaqueIds.parse(`u_${U}:ingest-${D}.1`)).toMatchObject({ generation: 1 });
+  });
+
+  it("store errors are fixed-message HandleStoreError; a collision is HandleMismatchError (4)", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    t.store.claim = async () => {
+      throw new Error(`boom h ${U}`);
+    };
+    const e1 = await t.ids.ensureUser({ tenantId: T, userId: U }).catch((e: Error) => e);
+    expect(e1).toBeInstanceOf(HandleStoreError);
+    expect((e1 as Error).message).not.toContain(U);
+    expect((e1 as Error & { cause?: unknown }).cause).toBeUndefined();
+
+    t.store.claim = async () => {
+      throw Object.assign(new Error("duplicate key (id_handle)=(x)"), { code: "23505" });
+    };
+    await expect(t.ids.ensureUser({ tenantId: T, userId: U })).rejects.toBeInstanceOf(
+      HandleMismatchError,
+    );
+
+    const other = testOpaqueIds();
+    other.store.userOf = async () => {
+      throw new Error("sql text");
+    };
+    other.store.read = async () => {
+      throw new Error("sql text");
+    };
+    other.store.page = async () => {
+      throw new Error("sql text");
+    };
+    await expect(other.ids.ensureHandle("a".repeat(26))).rejects.toBeInstanceOf(HandleStoreError);
+    await expect(other.ids.load({ tenantId: T, userId: U })).rejects.toBeInstanceOf(
+      HandleStoreError,
+    );
+    await expect(other.ids.warm()).rejects.toBeInstanceOf(HandleStoreError);
+  });
+
+  it("ensureHandle checks the shape first and remembers misses until an insert (5)", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    let lookups = 0;
+    const userOf = t.store.userOf.bind(t.store);
+    t.store.userOf = async (h) => {
+      lookups += 1;
+      return userOf(h);
+    };
+    expect(await t.ids.ensureHandle("not a handle")).toBeNull();
+    expect(await t.ids.ensureHandle(`${"a".repeat(25)}b`)).toBeNull(); // padding bits
+    expect(lookups).toBe(0);
+    const absent = "e".repeat(26);
+    expect(await t.ids.ensureHandle(absent)).toBeNull();
+    expect(await t.ids.ensureHandle(absent)).toBeNull();
+    expect(lookups).toBe(1);
+    // minting the handle clears its miss
+    const minted = await t.ids.ensureUser({ tenantId: T, userId: U });
+    t.ids.forget(U);
+    expect(await t.ids.ensureHandle("a".repeat(26))).toBeNull();
+    expect((await t.ids.ensureHandle(minted.handle))?.handle).toBe(minted.handle);
+  });
+
+  it("handleOf and handleOfId strip the lineage stream prefix like subjectOf (6)", async () => {
+    const { ids, userIds: u } = await userIds();
+    const line = `__loom_ui_lineage__:${u.documentLineage(D)}`;
+    expect(opaqueIds.handleOf(line)).toBe(u.handle);
+    expect(ids.handleOfId(line)).toBe(u.handle);
+    expect(opaqueIds.handleOf(`__loom_ui_lineage__:${legacyIds.documentLineage(U, D)}`)).toBeNull();
+  });
+
+  it("the builders lower-case a UUID input (7)", async () => {
+    const { userIds: u } = await userIds();
+    expect(u.ingest(D.toUpperCase(), 2)).toBe(u.ingest(D, 2));
+    expect(u.chatTitle(C.toUpperCase())).toBe(u.chatTitle(C));
+    expect(legacyIds.suggestTags(U.toUpperCase(), D.toUpperCase(), 1)).toBe(
+      legacyIds.suggestTags(U, D, 1),
+    );
   });
 });
