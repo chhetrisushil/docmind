@@ -79,7 +79,7 @@ Rejected:
 - **Amendment, tombstones:** a read-model tombstone nulls `state` only and keeps `scope` (the user UUID) and `app_key` (the document UUID) beside the `h_<H>` execution id. Erasure scrubs `scope` and `app_key` on the erased rows under `h_<H>` (in the `rows` step, before the handle is deleted), so no row links the handle to a UUID.
 - Erasure:
   1. Computes or reads `H` while the keys exist.
-  2. Stops and cancels executions under both prefixes.
+  2. Stops and cancels executions under both prefixes. A stop repeated after a park (the shred of the user subject parked behind a running turn, after the `h_<H>` subject was already shredded) cancels only under subjects whose key is still alive: the `h_<H>` subject key's durable tombstone (`wasDestroyed`) marks the handle retired, so no `h_<H>` id is built for it. The shred said `erased` for it, so it has no run left, and Loom would otherwise refuse the cancel and append an `EXECUTION_DENIED` naming the actor's UUID on the `h_` stream.
   3. Destroys the data key, the `h_<H>` subject key and the cached id key.
   4. Deletes `users.id_handle` along with the user.
 
@@ -87,6 +87,7 @@ Rejected:
 - **Residual:**
   - Old-format ids, those from runs before deploy, stay readable.
   - Run counts and timing remain as records.
+  - After a read-model rebuild, an erased handle's executions refold to neutral live rows (empty `state`, null `scope` and `app_key`) that carry only the `h_<H>` execution id, which holds no UUID. The handle's prefix can no longer be walked to tombstone them.
   - Another process keeps an erased user's id key in its cache until it restarts or a load miss evicts it: erasure calls `forgetSubject` only in the erasing process (no cross-process forget). If that process folds an event of the erased user's `h_` execution it can write `scope` and `app_key` beside the handle again. With one replica this cannot happen; with N replicas see `docs/design/cloud-scaling.md` §4 (S9).
 - `cloud-deploy.md` notes that rolling back past the first `h_` run is unsafe: older code can't parse new ids.
 

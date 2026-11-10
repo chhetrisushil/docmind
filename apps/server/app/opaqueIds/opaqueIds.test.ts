@@ -424,16 +424,59 @@ describe("clear fields, load and forgetSubject", () => {
   });
 });
 
-describe("a retired handle", () => {
-  it("is not loaded again after its h_ subject key was destroyed, though the user's data key is alive (so an erasure's stop builds no h_ cancel)", async () => {
+describe("a handle whose h_ subject key is destroyed", () => {
+  const ctx = async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const u = await t.ids.ensureUser({ tenantId: T, userId: U });
+    await t.keys.destroy(`h_${u.handle}`); // the user's data key stays alive: the erasure destroys them in turn
+    return { t, handle: u.handle };
+  };
+  const refuses = async (t: ReturnType<typeof testOpaqueIds>, handle: string) => {
+    const cold = new OpaqueIds(t.keys, t.store); // a restart
+    expect(await cold.load({ tenantId: T, userId: U })).toBe(false);
+    expect(await cold.ensureHandle(handle)).toBeNull();
+    expect(await cold.warm()).toBe(0);
+    expect(cold.cached(U)).toBeUndefined();
+    await expect(cold.ensureUser({ tenantId: T, userId: U })).rejects.toBeInstanceOf(
+      FieldKeyUnavailableError,
+    );
+    expect(cold.cached(U)).toBeUndefined();
+  };
+
+  it("is refused by a fresh instance (load, ensureHandle, warm, ensureUser)", async () => {
+    const { t, handle } = await ctx();
+    await refuses(t, handle);
+  });
+
+  it("is still refused after more than an hour", async () => {
+    vi.useFakeTimers();
+    try {
+      const { t, handle } = await ctx();
+      vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+      await refuses(t, handle);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is still refused after 1000+ other misses evict any in-memory note", async () => {
+    const { t, handle } = await ctx();
+    const ids = new OpaqueIds(t.keys, t.store);
+    expect(await ids.ensureHandle(handle)).toBeNull();
+    for (let i = 0; i < 1100; i++) await ids.ensureHandle(`${String(i).padStart(25, "b")}a`);
+    expect(await ids.ensureHandle(handle)).toBeNull();
+    expect(await ids.load({ tenantId: T, userId: U })).toBe(false);
+    await expect(ids.ensureUser({ tenantId: T, userId: U })).rejects.toBeInstanceOf(
+      FieldKeyUnavailableError,
+    );
+  });
+
+  it("forgetSubject keeps no note: the key store is the only source", async () => {
     const { ids, userIds: u } = await userIds();
     ids.forgetSubject(`h_${u.handle}`);
-    expect(await ids.load({ tenantId: T, userId: U })).toBe(false);
-    expect(await ids.ensureHandle(u.handle)).toBeNull();
-    expect(ids.cached(U)).toBeUndefined();
-    // The user can still be (re)minted by an explicit start: only the cold read path is closed.
-    await ids.ensureUser({ tenantId: T, userId: U });
-    expect(ids.cached(U)).toBeDefined();
+    // The h_ key is not destroyed here, so nothing refuses a reload.
+    expect(await ids.load({ tenantId: T, userId: U })).toBe(true);
   });
 });
 

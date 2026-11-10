@@ -11,7 +11,7 @@ vi.mock("@docmind/auth", () => ({ primeDecoy: async () => void calls.push("prime
 vi.mock("./flows/ingest-document/verifyVectors", () => ({
   verifyVectors: async (_v: unknown, cleanup: (() => Promise<unknown>)[]) => {
     calls.push("verifyVectors");
-    expect(cleanup).toHaveLength(4);
+    expect(cleanup).toHaveLength(5);
   },
 }));
 vi.mock("./flows/ingest-document/limits", () => ({
@@ -523,7 +523,6 @@ describe("bootIngest: the id key cache", () => {
   });
 
   it("stop() removes the process-wide id cache as the very last closer, so the next stack in the same process starts cold", async () => {
-    opaqueIds.install({} as never);
     const booted = await bootIngest(parts());
     let installedAtPoolEnd: unknown = "unset";
     const p = parts();
@@ -531,13 +530,41 @@ describe("bootIngest: the id key cache", () => {
       installedAtPoolEnd = opaqueIds.current();
       calls.push("endPool");
     };
-    opaqueIds.install({} as never);
+    opaqueIds.install(p.built.ids as never);
     const second = await bootIngest(p);
     await second.stop();
     // Still installed while the pool ends, gone afterwards.
-    expect(installedAtPoolEnd).toBeDefined();
+    expect(installedAtPoolEnd).toBe(p.built.ids);
     expect(opaqueIds.current()).toBeUndefined();
     await booted.stop();
     expect(opaqueIds.current()).toBeUndefined();
+  });
+
+  it("stopping an older stack leaves a newer stack's id cache installed (two stacks, stopped in creation order)", async () => {
+    const older = parts();
+    const newer = parts();
+    opaqueIds.install(older.built.ids as never);
+    const first = await bootIngest(older);
+    opaqueIds.install(newer.built.ids as never); // the newer stack's build installed its own
+    const second = await bootIngest(newer);
+    await first.stop();
+    expect(opaqueIds.current()).toBe(newer.built.ids);
+    await second.stop();
+    expect(opaqueIds.current()).toBeUndefined();
+  });
+
+  it("a failed boot uninstalls its own id cache, and only its own", async () => {
+    const failing = parts();
+    warmIds = async () => {
+      throw new Error("keys down");
+    };
+    opaqueIds.install(failing.built.ids as never);
+    await expect(bootIngest(failing)).rejects.toThrow("id keys failed to boot");
+    expect(opaqueIds.current()).toBeUndefined();
+    const other = parts();
+    opaqueIds.install(other.built.ids as never);
+    await expect(bootIngest(failing)).rejects.toThrow("id keys failed to boot");
+    expect(opaqueIds.current()).toBe(other.built.ids); // not the failing stack's: left alone
+    opaqueIds.install(undefined);
   });
 });

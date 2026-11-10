@@ -129,6 +129,52 @@ describe("the proof's allowlist of residue", () => {
     expect(bad).toEqual(["loom.events.payload"]);
   });
 
+  it("on an h_<handle> row, no id key may hold a plaintext UUID: only a sealed value or the user's own handle", () => {
+    const handle = "abcdefghijklmnopqrstuvwxya";
+    const hWho: Who = { ...who, handle };
+    const hId = `h_${handle}:ingest-${"a".repeat(51)}q.2`;
+    const row = (payload: unknown) => hit("loom.events", "payload", { execution_id: hId, payload });
+    // the leak the denied cancel made: the actor's UUID in the clear on an h_ stream
+    expect(unexpected([row({ op: "cancel", reason: "x", actor: who.userId })], hWho)).toEqual([
+      "loom.events.payload",
+    ]);
+    expect(unexpected([row({ input: { userId: who.userId } })], hWho)).toEqual([
+      "loom.events.payload",
+    ]);
+    expect(unexpected([row({ input: { documentId: randomUUID() } })], hWho)).toEqual([
+      "loom.events.payload",
+    ]);
+    expect(unlistedStrings({ actor: who.userId }, "", handle, true)).toEqual(["actor"]);
+    // sealed values and the own handle are fine, and a u_ row keeps today's rule
+    expect(unexpected([row({ input: { userId: envelope, tenantId: envelope } })], hWho)).toEqual(
+      [],
+    );
+    expect(unexpected([row({ actor: `h_${handle}` })], hWho)).toEqual([]);
+    expect(
+      unexpected(
+        [hit("loom.events", "payload", { execution_id: own, payload: { actor: who.userId } })],
+        hWho,
+      ),
+    ).toEqual([]);
+  });
+
+  it("a neutral refolded row is allowed only when its execution id holds no UUID", () => {
+    const handle = "abcdefghijklmnopqrstuvwxya";
+    const hWho: Who = { ...who, handle };
+    const neutral = (execution_id: string) =>
+      hit("public.read_model_state", "execution_id", {
+        execution_id,
+        scope: null,
+        app_key: null,
+        erased: false,
+        state: {},
+      });
+    expect(unexpected([neutral(`h_${handle}:ingest-${"a".repeat(51)}q.2`)], hWho)).toEqual([]);
+    expect(unexpected([neutral(`h_${handle}:ingest-${who.userId}.2`)], hWho)).toEqual([
+      "public.read_model_state.execution_id",
+    ]);
+  });
+
   it("judges every string of a payload, with or without an id or sentinel beside it", () => {
     expect(payloadIsIdsOnly({ reason: "erased" })).toBe(true);
     expect(payloadIsIdsOnly({ reason: "Acme Holdings invoice" })).toBe(false);

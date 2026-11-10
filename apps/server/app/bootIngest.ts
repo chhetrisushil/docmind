@@ -114,11 +114,17 @@ export async function bootIngest(
     eraser,
     erasureLocks,
   } = built;
+  // `opaqueIds.install` is process-wide: remove this stack's cache only if it is still the installed one (a newer stack in the same process
+  // owns the slot now, and stopping an older one must not strip it).
+  const uninstallIds = async () => {
+    if (opaqueIds.current() === built.ids) opaqueIds.install(undefined);
+  };
   const cleanup = [
     () => closeIngest(ingest),
     () => app.close(),
     () => durable.close(),
     () => pool.end(),
+    uninstallIds, // a failed boot must not leave id keys derived from live data keys installed
   ];
 
   // The schema (applied out of band by `pnpm db:migrate`) must fit the embedder before anything else starts.
@@ -297,8 +303,8 @@ export async function bootIngest(
             closeReadiness: () => readiness.close(),
             endPool: () => pool.end(),
           }),
-          // The last closer: `opaqueIds.install` is process-wide, so a later stack in this process must start cold, not inherit this cache.
-          async () => opaqueIds.install(undefined),
+          // The last closer: a later stack in this process must start cold, not inherit this cache (and a newer stack's cache stays).
+          uninstallIds,
         );
       };
       await (parts.drainServer ?? ((then) => then()))(close);

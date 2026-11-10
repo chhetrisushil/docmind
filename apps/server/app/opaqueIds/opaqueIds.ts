@@ -67,8 +67,6 @@ export const WARM_PAGE = 500;
 export const WARM_CONCURRENCY = 8;
 const MISS_LIMIT = 1000;
 const MISS_TTL_MS = 30_000;
-/** How long a handle whose `h_` subject key was destroyed stays unloadable: longer than any park-and-retry of an erasure. */
-const RETIRED_TTL_MS = 60 * 60 * 1000;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /**
@@ -167,6 +165,7 @@ export class OpaqueIds {
     const handle = handleOfKey(key);
     if ((await guarded(() => this.store.claim(who, handle))) !== handle)
       throw new HandleMismatchError();
+    if (await this.handleRetired(handle)) throw new FieldKeyUnavailableError();
     if (ticket.cancelled) throw new FieldKeyUnavailableError();
     return this.put(who.userId, key, handle);
   }
@@ -187,13 +186,26 @@ export class OpaqueIds {
     return entry?.ids ?? null;
   }
 
-  private recordMiss(handle: string, ttlMs = MISS_TTL_MS): void {
+  private recordMiss(handle: string): void {
     this.misses.delete(handle);
     if (this.misses.size >= MISS_LIMIT) {
       const oldest = this.misses.keys().next().value;
       if (oldest !== undefined) this.misses.delete(oldest);
     }
-    this.misses.set(handle, Date.now() + ttlMs);
+    this.misses.set(handle, Date.now() + MISS_TTL_MS);
+  }
+
+  /**
+   * Whether the `h_<handle>` subject key was destroyed: the durable mark that a handle is retired. The erasure destroys that key before the
+   * user's data key (which this cache derives the id key from), so a stop repeated after a park must not rebuild an `h_` id for it (Loom
+   * would refuse the cancel and audit the actor's UUID in the clear on the `h_` stream).
+   */
+  private async handleRetired(handle: string): Promise<boolean> {
+    try {
+      return (await this.keys.wasDestroyed?.(`h_${handle}`)) === true;
+    } catch {
+      throw new FieldKeyStoreError();
+    }
   }
 
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
@@ -210,6 +222,10 @@ export class OpaqueIds {
       if (dek === null) return null;
       const key = deriveIdKey(dek);
       if (handleOfKey(key) !== handle) throw new HandleMismatchError();
+      if (await this.handleRetired(handle)) {
+        this.recordMiss(handle); // only a cache of the durable answer
+        return null;
+      }
       if (ticket.cancelled) return null; // forgotten while the key was being fetched
       return this.put(userId, key, handle);
     } finally {
@@ -287,10 +303,8 @@ export class OpaqueIds {
     this.cancel(`h:${handle}`);
     const entry = this.byHandle.get(handle);
     if (entry) this.forget(entry.ids.userId);
-    // The user's data key may outlive the handle's subject key (the erasure destroys them in turn), and this cache derives from the data
-    // key: without this, the next cold `load` would hand an erasure's stop an `h_` id it can only be refused on (and Loom audits the refusal
-    // with the actor's id in the clear). A bounded, expiring entry (the miss map), so nothing grows per erased user.
-    this.recordMiss(handle, RETIRED_TTL_MS);
+    // The user's data key may outlive the handle's subject key (the erasure destroys them in turn): `loadKey` and `mintKey` read the key
+    // store's durable tombstone for `h_<handle>`, so nothing here needs to remember the retirement.
   }
 
   /** Drops a user from the cache (erasure, after the key is destroyed). */

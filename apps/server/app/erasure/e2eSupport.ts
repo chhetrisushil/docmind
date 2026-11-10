@@ -431,8 +431,17 @@ const ID_KEYS = new Set([
   "actor",
   "tenant",
 ]);
-const checkFor = (key: string, handle?: string): Check | undefined =>
-  ID_KEYS.has(key) ? idValue(handle) : PAYLOAD_STRINGS[key];
+/**
+ * On an `h_<handle>` row (`opaque`) an id key may hold only a sealed value (never a string) or the erased user's OWN handle subject: a
+ * plaintext UUID there is a durable link between the handle and the user (the denial a repeated stop used to append is the example).
+ */
+const ownHandleValue = (handle?: string): Check =>
+  handle === undefined ? { test: () => false } : new RegExp(`^h_${handle}${SUFFIX_RE}$`);
+const checkFor = (key: string, handle?: string, opaque = false): Check | undefined =>
+  ID_KEYS.has(key) ? (opaque ? ownHandleValue(handle) : idValue(handle)) : PAYLOAD_STRINGS[key];
+/** Whether an execution id is one of the erased user's new-format (`h_<handle>`) executions. */
+export const isOpaqueExecution = (executionId: unknown, handle?: string): boolean =>
+  handle !== undefined && String(executionId).startsWith(`h_${handle}`);
 const oneOf = (...values: string[]): RegExp =>
   new RegExp(`^(${values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);
 const exactly = (values: readonly string[]) => ({ test: (v: string) => values.includes(v) });
@@ -483,11 +492,17 @@ const PAYLOAD_STRINGS: Record<string, Check> = {
 };
 
 /** The keys (never the values) under which a payload holds a string that is neither an envelope nor a listed id or token. */
-export function unlistedStrings(value: unknown, key = "", handle?: string): string[] {
-  if (typeof value === "string") return checkFor(key, handle)?.test(value) === true ? [] : [key];
+export function unlistedStrings(
+  value: unknown,
+  key = "",
+  handle?: string,
+  opaque = false,
+): string[] {
+  if (typeof value === "string")
+    return checkFor(key, handle, opaque)?.test(value) === true ? [] : [key];
   if (value === null || typeof value !== "object" || sealed(value)) return [];
   return Object.entries(value).flatMap(([k, v]) =>
-    unlistedStrings(v, Array.isArray(value) ? key : k, handle),
+    unlistedStrings(v, Array.isArray(value) ? key : k, handle, opaque),
   );
 }
 
@@ -495,13 +510,18 @@ export function unlistedStrings(value: unknown, key = "", handle?: string): stri
  * A payload is acceptable residue only if it is a sealed (or shredded) envelope, or a plaintext object whose string
  * leaves are all listed ids or tokens (numbers, booleans and null are fine). Exported for its unit test.
  */
-export function payloadIsIdsOnly(value: unknown, key = "", handle?: string): boolean {
+export function payloadIsIdsOnly(
+  value: unknown,
+  key = "",
+  handle?: string,
+  opaque = false,
+): boolean {
   if (value === null || typeof value === "number" || typeof value === "boolean") return true;
-  if (typeof value === "string") return checkFor(key, handle)?.test(value) === true;
-  if (Array.isArray(value)) return value.every((v) => payloadIsIdsOnly(v, key, handle));
+  if (typeof value === "string") return checkFor(key, handle, opaque)?.test(value) === true;
+  if (Array.isArray(value)) return value.every((v) => payloadIsIdsOnly(v, key, handle, opaque));
   if (typeof value === "object") {
     if (sealed(value)) return true;
-    return Object.entries(value).every(([k, v]) => payloadIsIdsOnly(v, k, handle));
+    return Object.entries(value).every(([k, v]) => payloadIsIdsOnly(v, k, handle, opaque));
   }
   return false;
 }
@@ -602,7 +622,12 @@ const ALLOWED: Allowed[] = [
     ok: (row, who) =>
       ownExecution(row, who) &&
       noContent(row, who) &&
-      payloadIsIdsOnly(row.payload, "", who.handle),
+      payloadIsIdsOnly(
+        row.payload,
+        "",
+        who.handle,
+        isOpaqueExecution(row.execution_id, who.handle),
+      ),
   },
   {
     table: "loom.events",
@@ -689,6 +714,7 @@ const ALLOWED: Allowed[] = [
     ok: (row: Row, who: Who) =>
       who.handle !== undefined &&
       String(row.execution_id).startsWith(`h_${who.handle}`) &&
+      !new RegExp(UUID_RE).test(String(row.execution_id)) && // the rest of the id is opaque too
       row.erased === false &&
       typeof row.state === "object" &&
       row.state !== null &&
@@ -839,7 +865,9 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
     // Every payload of the execution, needle or not: a sealed or shredded envelope, a tombstone, or listed ids/tokens.
     expect(
       events.flatMap((e) =>
-        unlistedStrings(e.payload, "", handle).map((key) => `${e.eventType}:${key}`),
+        unlistedStrings(e.payload, "", handle, isOpaqueExecution(id, handle)).map(
+          (key) => `${e.eventType}:${key}`,
+        ),
       ),
     ).toEqual([]);
     const sealedPayloads = JSON.stringify(events).includes("__loomEnc");

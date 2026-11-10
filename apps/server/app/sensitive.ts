@@ -21,8 +21,8 @@ const FLOW_INPUT_IDS = [
  *    before its path is registered stays readable in the clear forever;
  *  - execution ids are plaintext and survive erasure, so they never contain user content either.
  *
- * M2's only flow (`ingest-document`) has a start input of three UUIDs and a two-value enum output, so
- * it registers nothing. M4 registers the conversation paths below (flow doc-chat) and the ADR 0133
+ * M2's only flow (`ingest-document`) has a start input of three ids (sealed by `FLOW_INPUT_IDS`, not listed per flow) and a two-value
+ * enum output, so it registers no content path of its own. M4 registers the conversation paths below (flow doc-chat) and the ADR 0133
  * reasoning paths (Task 162); the raw event-log proof fails if a path is missing.
  */
 export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> = {

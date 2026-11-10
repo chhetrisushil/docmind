@@ -2,7 +2,7 @@ import { ConversationNotFoundError } from "@loom/conversation";
 import { InboxClosedError } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../chats/ids";
-import { legacyIds } from "../opaqueIds";
+import { OpaqueIds, legacyIds } from "../opaqueIds";
 import { testOpaqueIds } from "../opaqueIds/testing";
 import { executionIdFor } from "../subject";
 import { erasureDeps, requireKeyDestroyedProof } from "./wire";
@@ -223,6 +223,26 @@ describe("erasureDeps", () => {
     expect(gone.calls.filter((c) => c.startsWith("cancel:"))).toEqual([
       `cancel:${legacyIds.chatTitle(USER, CHAT)}`,
     ]);
+  });
+
+  it("after the h_ shred, a repeated stop builds no h_ candidate, on a cold or a warm cache (the data key is still alive)", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const first = parts({ ids: t.ids, keys: t.keys });
+    const deps = erasureDeps(first.parts);
+    await deps.eraseSubject(`h_${user.handle}`);
+    await t.keys.destroy(`h_${user.handle}`); // what Loom's shred did
+    // Another cache writer (a sweep, a restart) re-reads the user: still no h_ id.
+    for (const ids of [t.ids, new OpaqueIds(t.keys, t.store)]) {
+      const again = parts({ ids, keys: t.keys });
+      const d = erasureDeps(again.parts);
+      await d.cancelTitle(who, CHAT);
+      await d.stopChat(who, CHAT);
+      const sent = again.calls.filter((c) => /^(cancel|stop|close):/.test(c));
+      expect(sent.filter((c) => c.includes(`h_${user.handle}`))).toEqual([]);
+      expect(sent.length).toBeGreaterThan(0); // the legacy candidates are still stopped
+    }
   });
 
   it("forgets the cached id key of every subject whose key it destroys", async () => {
