@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SubjectIndex } from "@loom/compliance";
@@ -17,7 +17,8 @@ import {
   userSubjectOf,
   warningFor,
 } from "./compliance";
-import { noSnapshots } from "./testing";
+import { erasureControlKeys } from "./controlKey";
+import { noSnapshots, testControlKeys } from "./testing";
 
 const executionIdFor = legacyIds.named;
 
@@ -199,12 +200,33 @@ describe("complianceConfig", () => {
     const cfg = complianceConfig({
       keys,
       raw: { eventStore: new InMemoryAsyncEventStore(), snapshotStore: noSnapshots },
+      controlStreamKeys: testControlKeys(),
     });
     expect(cfg.subjectOf).toBe(userSubjectOf);
     expect(typeof cfg.erase.shred).toBe("function");
     expect(await cfg.erase.destroyed?.(A)).toBe(false);
     await keys.destroy(A);
     expect(await cfg.erase.destroyed?.(A)).toBe(true);
+  });
+});
+
+describe("complianceConfig control-stream keys", () => {
+  const raw = { eventStore: new InMemoryAsyncEventStore(), snapshotStore: noSnapshots };
+  const kek = (id: string) => ({ id, key: createSecretKey(randomBytes(32)) });
+
+  it("sets controlStreamKey from the derived current key, and no previous key without a previous KEK", () => {
+    const controlStreamKeys = erasureControlKeys([kek("kek-1")]);
+    const cfg = complianceConfig({ keys: new InMemoryKeyStore(), raw, controlStreamKeys });
+    expect(cfg.erase.controlStreamKey).toBe(controlStreamKeys.current);
+    expect(cfg.erase.controlStreamKey.length).toBeGreaterThanOrEqual(16);
+    expect("previousControlStreamKeys" in cfg.erase).toBe(false);
+  });
+
+  it("passes the previous KEKs' derived keys as previousControlStreamKeys", () => {
+    const controlStreamKeys = erasureControlKeys([kek("kek-2"), kek("kek-1")]);
+    const cfg = complianceConfig({ keys: new InMemoryKeyStore(), raw, controlStreamKeys });
+    expect(cfg.erase.previousControlStreamKeys).toEqual(controlStreamKeys.previous);
+    expect(cfg.erase.previousControlStreamKeys).toHaveLength(1);
   });
 });
 

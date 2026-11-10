@@ -49,11 +49,16 @@ Loom's erasure control stream (`__loom_erasure__`) is plaintext and never cleare
 configured and no extra secret exists). Treat it like the KEK: it must stay secret, because with it a guessed id can be tested
 against a `subjectRef`.
 
-A rotation changes the derived key. While `DOCMIND_KEK_PREVIOUS` is set the server passes the previous KEK's derived key as
-`previousControlStreamKeys`, so a row written before the rotation is still recognised. An erasure that is *open* (its intent
-written, not finished) under a key the server no longer holds makes `eraseSubject` throw `ControlStreamKeyError`, which names the
-`keyId` and the intent: keep `DOCMIND_KEK_PREVIOUS` set (step 6 postponed) until no erasure is pending, then remove it. Finished
-rows under the old key need nothing.
+The key matters only once keyed rows exist, that is, once content, archive or sender deletion is configured or a park is recorded
+(`record: true`). Today DocMind writes none of these (the eraser parks with `record: false`), so a rotation has nothing to
+recognise. Plaintext `ERASURE_PENDING` rows from parks before this change stay plaintext, are honoured without any key, and
+need nothing from a rotation.
+
+If keyed rows ever exist: a rotation changes the derived key. While `DOCMIND_KEK_PREVIOUS` is set the server passes the previous
+KEK's derived key as `previousControlStreamKeys`, so a row written before the rotation is still recognised. An erasure that is
+*open* (its intent written, not finished) under a key the server no longer holds makes `eraseSubject` throw
+`ControlStreamKeyError`, which names the `keyId` and the intent: keep `DOCMIND_KEK_PREVIOUS` set (step 6 postponed) until no
+erasure is pending, then remove it. Finished rows under the old key need nothing.
 
 ## Destroying a user's key, and what it does not erase
 

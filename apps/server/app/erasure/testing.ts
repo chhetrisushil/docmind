@@ -1,4 +1,6 @@
+import { createSecretKey, randomBytes } from "node:crypto";
 import type { ErasureWiring } from "./compliance";
+import { erasureControlKeys } from "./controlKey";
 import {
   ERASURE_STEPS,
   type ErasureRequest,
@@ -16,6 +18,10 @@ export const noSnapshots = {
   loadLatest: async () => null,
   loadLatestSealed: async () => null,
 } as unknown as ErasureWiring["raw"]["snapshotStore"];
+
+/** Control-stream keys of a throwaway KEK, for tests that build the erasure wiring. */
+export const testControlKeys = () =>
+  erasureControlKeys([{ id: "kek-1", key: createSecretKey(randomBytes(32)) }]);
 
 /** The request store without a database, with the same answers as `PgErasureStore` (Task 169's unit tests use it). */
 export class MemoryErasureStore implements ErasureStore {

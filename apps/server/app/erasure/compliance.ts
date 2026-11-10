@@ -19,8 +19,8 @@ export interface ErasureWiring {
     eventStore: EventStore;
     snapshotStore: NonNullable<ShredOptions["snapshotStore"]>;
   };
-  /** The keys of Loom's erasure control stream (`controlStreamKey`, `previousControlStreamKeys`; see `controlKey.ts`). Absent: plaintext subject ids on that stream. */
-  controlStreamKeys?: ControlStreamKeys;
+  /** The keys of Loom's erasure control stream (`controlStreamKey`, `previousControlStreamKeys`; see `controlKey.ts`). Required: without it Loom writes plaintext subject ids on that stream. */
+  controlStreamKeys: ControlStreamKeys;
 }
 
 /**
@@ -40,7 +40,7 @@ export function userSubjectOf(e: { executionId: string }): string | undefined {
  * would be unreadable), and be given the raw snapshot store so the tombstone's sequence clears any
  * checkpoint. Idempotent: `shredSubject` skips an execution that already has its tombstone.
  */
-export function userShredder({ keys, raw }: ErasureWiring): Shredder {
+export function userShredder({ keys, raw }: Pick<ErasureWiring, "keys" | "raw">): Shredder {
   return async (subjectId, executionIds, options) => {
     const first = executionIds[0];
     if (first === undefined) return; // Loom answers "unknown" before it gets here
@@ -66,11 +66,9 @@ export function complianceConfig({ keys, raw, controlStreamKeys }: ErasureWiring
     erase: {
       shred: userShredder({ keys, raw }),
       ...(proof && { destroyed: proof }),
-      ...(controlStreamKeys && {
-        controlStreamKey: controlStreamKeys.current,
-        ...(controlStreamKeys.previous.length > 0 && {
-          previousControlStreamKeys: controlStreamKeys.previous,
-        }),
+      controlStreamKey: controlStreamKeys.current,
+      ...(controlStreamKeys.previous.length > 0 && {
+        previousControlStreamKeys: controlStreamKeys.previous,
       }),
     },
   };
