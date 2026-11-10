@@ -16,7 +16,7 @@ export interface ExistingTag {
 
 const LOOK_AT = 20;
 
-/** The model's `suggestedTags` read leniently: the strings of an array (first 20), else `[]`. Never throws. */
+/** The model's `suggestedTags` read leniently: the strings of an array (the first 20 strings, non-strings skipped), else `[]`. Never throws. */
 export function parseSuggestedTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((v): v is string => typeof v === "string").slice(0, LOOK_AT);
@@ -56,7 +56,8 @@ export function normaliseSuggestions(raw: unknown, existingTags: readonly Existi
 
 /**
  * The one prompt line that asks for `suggestedTags`. The existing tags are the user's own words, so they go in as a JSON array
- * (quoted and escaped, at most 200): a tag name can never read as an instruction.
+ * (quoted and escaped, at most 200): a name cannot break out of the list or the prompt's structure. A name may still be
+ * words a model could follow (accepted suggestions come from untrusted document text), so the prompt treats it as data only.
  */
 export function tagInstruction(existing: readonly string[]): string {
   const known = existing.slice(0, MAX_TAGS_PER_USER);

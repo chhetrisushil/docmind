@@ -6,8 +6,9 @@ import {
   tagInstruction,
 } from "./suggestions";
 
+let counter = 0;
 const tag = (name: string, linked = false): ExistingTag => ({
-  id: `00000000-0000-4000-8000-${String(name.length).padStart(12, "0")}`,
+  id: `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`,
   name,
   linked,
 });
