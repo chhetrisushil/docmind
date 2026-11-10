@@ -1,4 +1,12 @@
-import type { DocumentTag, DocumentTagsResponse, TagSummary } from "@docmind/contracts";
+import {
+  type DocumentTag,
+  type DocumentTagsResponse,
+  MAX_TAGS_PER_DOCUMENT,
+  MAX_TAG_NAME_CHARS,
+  type TagSummary,
+  clipTagName,
+  normaliseTagName,
+} from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
@@ -11,8 +19,8 @@ import { baseStyles } from "../styles/base";
 export const TAG_SUGGEST_TIMEOUT_MS = 60_000;
 
 const NOTES: Record<string, string> = {
-  tag_limit: "A document holds at most 20 tags.",
-  invalid_request: "A tag name is 1 to 40 characters, with no control characters.",
+  tag_limit: `A document holds at most ${MAX_TAGS_PER_DOCUMENT} tags.`,
+  invalid_request: `A tag name is 1 to ${MAX_TAG_NAME_CHARS} characters, with no control characters.`,
 };
 
 /** One document's Tags row (chips with remove, an input with autocomplete) and Suggested line (accept, dismiss, Suggest tags). */
@@ -223,18 +231,22 @@ export class DmDocTags extends LitElement {
   }
 
   render() {
-    const have = new Set(this.tags.map((t) => t.name.toLowerCase()));
-    const options = (this.all ?? []).filter((t) => !have.has(t.name.toLowerCase()));
+    // The server links by the normalised name, so the autocomplete hides by the same form (width, case, spacing).
+    const key = (n: string) => normaliseTagName(n) ?? n.toLowerCase();
+    const have = new Set(this.tags.map((t) => key(t.name)));
+    const options = (this.all ?? []).filter((t) => !have.has(key(t.name)));
     const noSummary = this.loadState === "ready" && !this.hasSummary;
     const reasonId = "suggest-reason";
     return html`
       <div class="row" role="group" aria-label="Tags" data-tags>
         <span class="label">Tags</span>
         ${this.tags.map((t) => html`<span class="chip"><span data-name>${t.name}</span><button type="button" aria-label=${`Remove tag ${t.name}`} @click=${() => void this.act((api, id) => api.removeDocumentTag(id, t.id), `Removed tag ${t.name}`)}>×</button></span>`)}
-        <input aria-label="Add a tag" list="doc-tag-options" autocomplete="off" maxlength="40" .value=${live(this.draft)}
+        <input aria-label="Add a tag" list="doc-tag-options" autocomplete="off" .value=${live(this.draft)}
           @focus=${() => void this.loadAll()}
           @input=${(e: Event) => {
-            this.draft = (e.target as HTMLInputElement).value;
+            const input = e.target as HTMLInputElement;
+            this.draft = clipTagName(input.value);
+            if (input.value !== this.draft) input.value = this.draft; // the draft may not change, so Lit would not rewrite it
           }}
           @keydown=${(e: KeyboardEvent) => {
             if (e.key === "Enter") {

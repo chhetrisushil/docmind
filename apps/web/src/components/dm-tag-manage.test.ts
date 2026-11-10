@@ -46,6 +46,18 @@ describe("dm-tag-manage", () => {
     await vi.waitFor(() => expect(t.changed).toHaveLength(1));
   });
 
+  it("limits a new name to 40 characters, not 40 UTF-16 units", async () => {
+    const t = await setup();
+    q<HTMLButtonElement>(t.el, "button[aria-label='Rename Finance']").click();
+    await t.el.updateComplete;
+    const input = q<HTMLInputElement>(t.el, "input[aria-label='New name for Finance']");
+    expect(input.hasAttribute("maxlength")).toBe(false);
+    input.value = "\u{1F600}".repeat(45);
+    input.dispatchEvent(new Event("input"));
+    await t.el.updateComplete;
+    expect([...input.value]).toHaveLength(40);
+  });
+
   it("Escape cancels the edit without calling the server", async () => {
     const t = await setup();
     q<HTMLButtonElement>(t.el, "button[aria-label='Rename Legal']").click();

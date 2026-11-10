@@ -108,8 +108,9 @@ export function loomSuggestTagsStarter(
     },
     async cancel(identity, documentId, reason) {
       const principal = { tenant: identity.tenantId, actor: identity.userId };
-      // Run numbers are taken in order, so the durable runs of a document are r1..rK with no gap: walk up from r1 until
-      // Loom has no such execution (a restart forgets this process's counter, so it cannot be trusted alone).
+      // Run numbers are taken in order, so the durable runs of a document are normally r1..rK: walk up from r1 until Loom
+      // has no such execution (a restart forgets this process's counter, so it cannot be trusted alone). A start that failed
+      // after taking a number can leave a gap and stop the walk early; recovery ownership then re-drives or ends that run.
       const seen = Math.min(tracker.last(keyOf(identity.userId, documentId)), MAX_RERUNS);
       for (let n = 1; n <= MAX_RERUNS; n++) {
         const executionId = suggestTagsExecutionId(identity.userId, documentId, n);

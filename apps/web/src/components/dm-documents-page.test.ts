@@ -535,6 +535,19 @@ describe("dm-documents-page tag filter", () => {
     await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
   });
 
+  it("closes Manage tags when the last tag is deleted, and does not reopen it for the next tag", async () => {
+    const t = await setup(items(), [fin]);
+    await openManage(t.page);
+    t.live.tagList = [];
+    t.live.items = t.live.items.map((d) => ({ ...d, tags: [] }));
+    manageChanged(t.page);
+    await vi.waitFor(() => expect(bar(t.page)).toBeNull());
+    t.live.tagList = [fin];
+    (t.page as unknown as { loadTags: () => Promise<void> }).loadTags();
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    expect(t.page.shadowRoot?.querySelector("dm-tag-manage")).toBeNull();
+  });
+
   it("deselecting down to one tag drops match=all from the address", async () => {
     const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
     await vi.waitFor(() => expect(chip(t.page, leg)?.getAttribute("aria-pressed")).toBe("true"));

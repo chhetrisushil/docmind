@@ -23,6 +23,12 @@ export function cleanTagName(raw: string): string | null {
   return name;
 }
 
+/** What an input keeps while the user types: the first 40 characters (code points), never split mid-pair. Not a validation. */
+export function clipTagName(raw: string): string {
+  const chars = [...raw];
+  return chars.length <= MAX_TAG_NAME_CHARS ? raw : chars.slice(0, MAX_TAG_NAME_CHARS).join("");
+}
+
 /**
  * What the keyed lookup hash is taken over: NFKC, trimmed, inner whitespace collapsed to one space, case-folded
  * (upper then lower case, then ß to "ss": "ẞ" lower-cases to "ß" but "ß" upper-cases to "SS", so the explicit map is what

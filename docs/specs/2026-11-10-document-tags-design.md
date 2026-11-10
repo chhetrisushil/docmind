@@ -1,6 +1,6 @@
 # Document tags (design)
 
-Date: 2026-11-10. Status: draft for review.
+Date: 2026-11-10. Status: accepted; as built (see the As built section).
 
 ## 1. Goal
 
@@ -36,14 +36,14 @@ Rejected:
 **`document_tags`**
 - Columns: `document_id` (FK `ON DELETE CASCADE`), `tag_id` (FK `ON DELETE CASCADE`), `tenant_id`, `owner_id`, `created_at`.
 - PK `(document_id, tag_id)`, plus an index on `(owner_id, tag_id, document_id)`.
-- A CHECK or trigger guarantees the document and the tag share the owner.
+- Composite foreign keys `(tenant_id, owner_id, document_id)` and `(tenant_id, owner_id, tag_id)` guarantee that the document and the tag share the owner (as built; see the As built section).
 
 **`document_tag_suggestions`**
 - Columns: `document_id PK` (FK `ON DELETE CASCADE`), `tenant_id`, `owner_id`, `names_enc jsonb` (sealed list of up to 5 names), `updated_at`.
 - Each ingest or "Suggest tags" run replaces the row. Accept or dismiss removes the name from it.
 
 **Rules common to all three tables**
-- Owner-scoped row-level security on each table, with the same policies as `documents`.
+- Row-level security on each table, with the same tenant-only policy as `documents`; every query also names the owner explicitly.
 - Erasing a user deletes their rows. The names are sealed under the user's key, so crypto-shredding also covers them.
 - Limits: 20 tags per document, 200 tags per user, 10 tags per filter.
 - Adding a name whose normalised form already exists reuses that tag.
@@ -72,7 +72,7 @@ Rejected:
 - `DocumentSummary` (in contracts) is unchanged, because suggestions do not live in the summary.
 
 **On demand**
-- A small Loom flow, `suggest-tags`, keyed per document with a per-key lock (the `rerunTracker` pattern).
+- A small Loom flow, `suggest-tags`, keyed per document with a per-key lock (the `rerunTracker` pattern). It is recovery-owned (like the chat-title flow): boot recovery re-drives an interrupted run, and erasure cancels a user's runs from Loom's durable state.
 - It reads the stored summary (tldr, topics, keyPoints) and the tag names.
 - It makes one model call with the same answer schema and normalisation, writes the suggestions row, and emits a document event so the detail page updates.
 - It never reads passages.
@@ -80,7 +80,7 @@ Rejected:
 
 **Ingest flow version**
 - The summary step's prompt and inputs change, but its step list does not.
-- The plan verifies whether Loom's flow hash changes. If it does, ingest moves to the next version and keeps the old version registered for runs in flight. That is the visualize-document treatment, and needs a rollback note in `cloud-deploy.md`.
+- The plan verifies whether Loom's flow hash changes. If it does, ingest moves to the next version and keeps the old version registered for runs in flight. That is the visualize-document treatment, and needs a rollback note in `cloud-deploy.md`. As built, the hash does not change (see the As built section).
 
 **Failures**
 - A suggestion problem never fails ingest. The summary is stored as today, and suggestions are empty.
@@ -111,7 +111,7 @@ All routes are owner-scoped, need the session and CSRF as existing routes do, an
 **Listing filter**
 - Syntax: `GET /api/documents?tags=<id>,<id>&match=any|all`.
 - `any` gives `EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id = d.id AND dt.owner_id = $owner AND dt.tag_id = ANY($ids))`.
-- `all` gives `(SELECT count(*) FROM document_tags dt WHERE … AND dt.tag_id = ANY($ids)) = cardinality($ids)`.
+- `all` gives `d.id IN (SELECT dt.document_id FROM document_tags dt WHERE … AND dt.tag_id = ANY($ids) GROUP BY dt.document_id HAVING count(*) = cardinality($ids))`, a set-based form (as built).
 - Ordering and the cursor are unchanged, and the filter is part of the cursor's validity: a cursor used with a different filter answers 400.
 - The query carries explicit owner and tenant predicates.
 - With zero tags, the listing is unfiltered and `match` is ignored.
@@ -175,3 +175,16 @@ All routes are owner-scoped, need the session and CSRF as existing routes do, an
 - Filtering chat retrieval by tag ("ask only within tag X"); a natural follow-up.
 - Automatic tagging without review.
 - A bulk-tag action on several selected documents.
+
+## 10. As built
+
+- **Owner guarantee.** Migration 0036 uses composite foreign keys instead of a CHECK or trigger: `documents` gains `UNIQUE (tenant_id, owner_id, id)`, `tags` carries the same key, and `document_tags` and `document_tag_suggestions` reference them, so a link can never join a document and a tag of different owners. All three tables cascade from the document, the tag and the user.
+- **Row-level security** is tenant-only, like `documents`; the owner predicate is explicit in every statement (including `readSuggestions` and the listing).
+- **Filter.** `all` is set-based (`IN (… GROUP BY document_id HAVING count(*) = cardinality(ids))`), not a correlated count. A tag id in the filter that belongs to another user, or does not exist, answers 200 with an empty list, identical to an unknown id (nothing leaks). A repeated `tags` or `match` key answers 400; ids are deduplicated before the cap of 10.
+- **Recovery.** `suggest-tags` is recovery-owned, and erasure cancels its runs durably by walking r1..rK in Loom. The walk stops at the first missing run number, so a start that failed after taking a number can leave a gap; recovery ownership still re-drives or ends such a run at boot (accepted). A recovered in-flight run is not treated as running by `start()`: one extra suggestion call can follow a restart, and the later result replaces the earlier (accepted).
+- **Ingest version.** The summarize prompt is not part of the Loom flow hash (it covers flow id, version, steps and retry), so `ingest-document` stays at 3.0.0 and the "legacy ingest version" test is not applicable. A test pins the hash.
+- **`tags` event.** The document event for a suggestions refresh borrows `status: "ready"`, `step: "finalize"` to satisfy the event shape. A refresh needs only a stored summary, so it can fire before the document is fully ingested; consumers act on the `tags` field and must not read `status` from it.
+- **Names and limits.** The input clips a name at 40 code points (the server's unit), the autocomplete hides tags by the normalised name, and the web takes the limits from `@docmind/contracts`.
+- **Library page.** The result count is announced by the page when nothing matches ("No documents match these tags"), and the tag bar stays silent at 0. Manage tags closes when the last tag is deleted.
+- **Erasure and tag writes.** A tag write already in flight when the erasure's `rows` step deletes the user can deadlock with the cascade (a `KEY SHARE` on the document against the tag row). Postgres aborts one side (40P01); the erasure step is idempotent and retries, and the request answers 500. Accepted: it needs a request already past authentication after the sessions are deleted.
+- **Rows.** Row chips use loom-ui's token-list table cell (pin fc34435).

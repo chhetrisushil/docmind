@@ -157,6 +157,7 @@ export class DmDocumentsPage extends LitElement {
       const { tags } = await api.listTags();
       if (epoch !== this.epoch) return;
       this.tags = tags;
+      if (tags.length === 0) this.managing = false; // the panel closes with the bar, and must not reopen for the next tag
       this.pruneSelection();
     } catch {
       // The bar keeps what it had; the table still works without it.

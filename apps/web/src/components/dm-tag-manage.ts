@@ -1,5 +1,6 @@
-import type { TagSummary } from "@docmind/contracts";
+import { type TagSummary, clipTagName } from "@docmind/contracts";
 import { LitElement, css, html } from "lit";
+import { live } from "lit/directives/live.js";
 import { ApiError } from "../api/http";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";
@@ -120,10 +121,12 @@ export class DmTagManage extends LitElement {
       <ul>
         ${this.tags.map((t) =>
           this.editing === t.id
-            ? html`<li><input aria-label=${`New name for ${t.name}`} maxlength="40" .value=${this.draft} @input=${(
+            ? html`<li><input aria-label=${`New name for ${t.name}`} .value=${live(this.draft)} @input=${(
                 e: Event,
               ) => {
-                this.draft = (e.target as HTMLInputElement).value;
+                const input = e.target as HTMLInputElement;
+                this.draft = clipTagName(input.value);
+                if (input.value !== this.draft) input.value = this.draft;
               }} @keydown=${(e: KeyboardEvent) => this.onKey(e, t)} />
                 <button type="button" class="btn primary" data-save ?disabled=${this.busy} @click=${() => void this.save(t)}>Save</button>
                 <button type="button" class="btn ghost" data-cancel @click=${() => {
