@@ -102,7 +102,11 @@ export class DmTagManage extends LitElement {
     try {
       await api.deleteTag(t.id);
       this.changed();
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        this.changed(); // already gone: reload the list
+        return;
+      }
       this.error = "Couldn't delete the tag. Try again.";
     }
   }

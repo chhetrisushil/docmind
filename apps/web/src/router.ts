@@ -30,7 +30,7 @@ function libraryRoute(search: string): Route {
   return {
     name: "documents",
     tags: ids,
-    ...(p.get("match") === "all" && { match: "all" as const }),
+    ...(ids.length > 1 && p.get("match") === "all" && { match: "all" as const }),
   };
 }
 
@@ -74,7 +74,7 @@ export function hrefOf(r: Route): string {
       return `/documents/${r.id}${r.passage ? `?passage=${r.passage}` : ""}`;
     case "documents": {
       if (!r.tags || r.tags.length === 0) return "/documents";
-      return `/documents?tags=${r.tags.join(",")}${r.match === "all" ? "&match=all" : ""}`;
+      return `/documents?tags=${r.tags.join(",")}${r.tags.length > 1 && r.match === "all" ? "&match=all" : ""}`;
     }
     case "not-found":
       return "/chats";

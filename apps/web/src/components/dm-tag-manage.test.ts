@@ -100,4 +100,16 @@ describe("dm-tag-manage", () => {
     await vi.waitFor(() => expect(document.querySelector("dm-dialog")).toBeNull());
     expect(t.api.deleteTag).not.toHaveBeenCalled();
   });
+
+  it("reloads the list when the tag was already deleted elsewhere (404)", async () => {
+    const t = await setup();
+    t.api.deleteTag.mockRejectedValueOnce(new ApiError(404, "not_found"));
+    q<HTMLButtonElement>(t.el, "button[aria-label='Delete Legal']").click();
+    await vi.waitFor(() => expect(document.querySelector("dm-dialog")).not.toBeNull());
+    [...document.querySelectorAll("dm-dialog button")]
+      .find((b) => b.textContent === "Delete")
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await vi.waitFor(() => expect(t.changed).toHaveLength(1));
+    expect(q(t.el, "[role=alert]")).toBeNull();
+  });
 });
