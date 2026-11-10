@@ -242,9 +242,13 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
       },
       ALICE,
     );
-    expect((await readers.documents({ limit: 200, status: "processing" })).items).toEqual([]);
+    expect(
+      (await readers.documents({ limit: 200, status: "processing", tags: [], match: "any" })).items,
+    ).toEqual([]);
     expect(opened).toBe(0);
-    expect((await readers.documents({ limit: 1, status: "all" })).items).toHaveLength(1);
+    expect(
+      (await readers.documents({ limit: 1, status: "all", tags: [], match: "any" })).items,
+    ).toHaveLength(1);
     expect(opened).toBe(2); // one document: its title and its filename
   });
 

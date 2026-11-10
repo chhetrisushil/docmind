@@ -60,7 +60,7 @@ describe("hydrate", () => {
     const r = readers();
     const [out] = await views().hydrate("library", [req("library", "doc-total")], r, "user-1");
     expect(out).toEqual({ state: "ready", value: { value: 1, label: "in your library" } });
-    expect(r.documents).toHaveBeenCalledWith({ limit: 200, status: "all" });
+    expect(r.documents).toHaveBeenCalledWith({ limit: 200, status: "all", tags: [], match: "any" });
   });
 
   it("handles that share a step share one read", async () => {
@@ -78,7 +78,12 @@ describe("hydrate", () => {
   it("a parameter overrides only what the step declares: status for the table, not for the counts", async () => {
     const r = readers();
     await views().hydrate("library", [req("library", "documents", { status: "failed" })], r, "u");
-    expect(r.documents).toHaveBeenCalledWith({ limit: 200, status: "failed" });
+    expect(r.documents).toHaveBeenCalledWith({
+      limit: 200,
+      status: "failed",
+      tags: [],
+      match: "any",
+    });
     const r2 = readers();
     await views().hydrate(
       "library",
@@ -86,7 +91,58 @@ describe("hydrate", () => {
       r2,
       "u",
     );
-    expect(r2.documents).toHaveBeenCalledWith({ limit: 200, status: "all" });
+    expect(r2.documents).toHaveBeenCalledWith({
+      limit: 200,
+      status: "all",
+      tags: [],
+      match: "any",
+    });
+  });
+
+  it("a tags and match parameter override only the documents step, and reach the reader as ids", async () => {
+    // Ids with hex letters: an upper-cased digit-only id is unchanged, and the case folding would go untested.
+    const a = "0a000000-0000-4000-8000-00000000000a";
+    const b = "0b000000-0000-4000-8000-00000000000b";
+    expect(b.toUpperCase()).not.toBe(b);
+    const r = readers();
+    await views().hydrate(
+      "library",
+      [req("library", "documents", { tags: `${a},${b.toUpperCase()},${a}`, match: "all" })],
+      r,
+      "u",
+    );
+    expect(r.documents).toHaveBeenCalledWith({
+      limit: 200,
+      status: "all",
+      tags: [a, b],
+      match: "all",
+    });
+    const counts = readers();
+    await views().hydrate(
+      "library",
+      [req("library", "doc-total", { tags: a, match: "all" })],
+      counts,
+      "u",
+    );
+    expect(counts.documents).toHaveBeenCalledWith({
+      limit: 200,
+      status: "all",
+      tags: [],
+      match: "any",
+    });
+  });
+
+  it("refuses a malformed tags or match parameter before any reader runs", async () => {
+    const r = readers();
+    const eleven = Array.from({ length: 11 }, (_, i) => id(i + 1)).join(",");
+    for (const params of [{ tags: "nope" }, { tags: eleven }, { match: "some" }] as Record<
+      string,
+      string
+    >[]) {
+      const [out] = await views().hydrate("library", [req("library", "documents", params)], r, "u");
+      expect(out?.state).not.toBe("ready");
+    }
+    expect(r.documents).not.toHaveBeenCalled();
   });
 
   it("validates a parameter again, on the server: a bad status, id, upto or passage never reaches a reader", async () => {

@@ -67,8 +67,8 @@ const library = (): Experience =>
       ingest: summary("ingest", "library-health"),
       documents: provider("documents", {
         target: "documents.list",
-        args: { limit: LIST_CAP, status: "all" },
-        overridable: ["status"],
+        args: { limit: LIST_CAP, status: "all", tags: "", match: "any" },
+        overridable: ["status", "tags", "match"],
         reshaper: "library-table",
       }),
     },

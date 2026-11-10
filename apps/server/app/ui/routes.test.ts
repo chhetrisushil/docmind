@@ -187,7 +187,10 @@ describe("POST /api/ui/hydrate", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const { results } = (await res.json()) as { results: { state: string }[] };
     expect(results.map((r) => r.state)).toEqual(["ready", "ready"]);
-    expect(readerCalls).toContainEqual(["documents", { limit: 200, status: "ready" }]);
+    expect(readerCalls).toContainEqual([
+      "documents",
+      { limit: 200, status: "ready", tags: [], match: "any" },
+    ]);
   });
   it("builds the readers fresh for every request, from the session identity only", async () => {
     builtFor.length = 0;

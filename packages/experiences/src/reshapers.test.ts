@@ -1,5 +1,5 @@
 import type { ChatSessionDto, DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { checkKindValue } from "@loom-ui/core";
+import { checkKindValue, tableRowProblems } from "@loom-ui/core";
 import { describe, expect, it } from "vitest";
 import { formatBytes } from "./format";
 import { shape } from "./reshapers";
@@ -109,9 +109,9 @@ describe("the library shapes", () => {
       rowKeys: string[];
       rowActions: { id: string }[][];
     };
-    expect(t.columns).toEqual(["Name", "Type", "Size", "Status", "Added"]);
-    expect(t.rows[0]).toEqual(["Title 1", "PDF", "1.5 KB", "Ready", "2026-10-01"]);
-    expect(t.rows[1]?.[3]).toBe("Failed");
+    expect(t.columns).toEqual(["Name", "Tags", "Type", "Size", "Status", "Added"]);
+    expect(t.rows[0]).toEqual(["Title 1", { tokens: [] }, "PDF", "1.5 KB", "Ready", "2026-10-01"]);
+    expect(t.rows[1]?.[4]).toBe("Failed");
     expect(t.rowKeys).toEqual([id(1), id(2), id(3)]);
     expect(t.rowActions.map((a) => a.map((x) => x.id))).toEqual([
       ["open", "ask", "delete"],
@@ -119,6 +119,36 @@ describe("the library shapes", () => {
       ["open", "delete"],
     ]);
     valid("Table", t);
+  });
+  it("shows each document's tags as a loom-ui token cell that loom-ui accepts", () => {
+    const a = "0a000000-0000-4000-8000-00000000000a";
+    const b = "0b000000-0000-4000-8000-00000000000b";
+    const t = shape(
+      "library-table",
+      raw([
+        doc(1, {
+          tags: [
+            { id: a, name: "Finance" },
+            { id: b, name: "Q3" },
+          ],
+        }),
+        doc(2),
+      ]),
+    ) as {
+      rows: unknown[][];
+      rowKeys: string[];
+      rowActions: unknown[][];
+    };
+    expect(t.rows[0]?.[1]).toEqual({
+      tokens: [
+        { id: a, label: "Finance" },
+        { id: b, label: "Q3" },
+      ],
+    });
+    expect(t.rows[1]?.[1]).toEqual({ tokens: [] });
+    expect(
+      tableRowProblems({ rows: t.rows, rowKeys: t.rowKeys, rowActions: t.rowActions } as never),
+    ).toEqual([]);
   });
 });
 

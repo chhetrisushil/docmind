@@ -5,6 +5,8 @@ import {
   type DocumentDto,
   type DocumentPassage,
   DocumentProgressEvent,
+  type DocumentTag,
+  type TagSummary,
   UiHydrateRequest,
   ViewName,
 } from "@docmind/contracts";
@@ -42,6 +44,12 @@ export const answerMarkdown = (marker: string): string =>
 export class FakeServer {
   loggedIn = false;
   docs: DocumentDto[] = [];
+  /** The user's tags (a tag with no document stays); documents carry their tags in `docs[i].tags`. */
+  tagDefs: DocumentTag[] = [];
+  /** Open suggestions by document id. */
+  suggestions = new Map<string, string[]>();
+  /** Document ids the suggest-tags refresh was asked for, in order. */
+  refreshes: string[] = [];
   chats: ChatSessionDto[] = [];
   messages = new Map<string, ChatMessageDto[]>();
   calls: string[] = [];
@@ -212,7 +220,8 @@ export class FakeServer {
     if (m) {
       const doc = this.docs.find((d) => d.id === m?.[1]);
       if (!doc) return fail(404, "not_found");
-      if (method === "GET") return json(200, doc);
+      if (method === "GET")
+        return json(200, { ...doc, suggestedTags: this.suggestions.get(doc.id) ?? [] });
       if (method === "DELETE") {
         this.docs = this.docs.filter((d) => d !== doc);
         return new Response(null, { status: 204 });
@@ -224,6 +233,92 @@ export class FakeServer {
         ? json(200, { items: this.passages.get(m[1] as string) ?? [], nextCursor: null })
         : fail(404, "not_found");
 
+    const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+    const view = (doc: DocumentDto) =>
+      json(200, { tags: doc.tags, suggestedTags: this.suggestions.get(doc.id) ?? [] });
+    const ensureTag = (name: string): DocumentTag => {
+      const found = this.tagDefs.find((t) => norm(t.name) === norm(name));
+      if (found) return found;
+      const tag = { id: crypto.randomUUID(), name: name.trim() };
+      this.tagDefs.push(tag);
+      return tag;
+    };
+    if (path === "/api/tags" && method === "GET")
+      return json(200, {
+        tags: [...this.tagDefs]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(
+            (t): TagSummary => ({
+              ...t,
+              documents: this.docs.filter((d) => d.tags.some((x) => x.id === t.id)).length,
+            }),
+          ),
+      });
+    if (path === "/api/tags" && method === "POST") {
+      const existed = this.tagDefs.some((t) => norm(t.name) === norm(String(body.name)));
+      return json(existed ? 200 : 201, { tag: ensureTag(String(body.name)) });
+    }
+    m = /^\/api\/tags\/([^/]+)$/.exec(path);
+    if (m) {
+      const tag = this.tagDefs.find((t) => t.id === m?.[1]);
+      if (!tag) return fail(404, "not_found");
+      if (method === "PATCH") {
+        if (this.tagDefs.some((t) => t !== tag && norm(t.name) === norm(String(body.name))))
+          return fail(409, "tag_exists");
+        tag.name = String(body.name).trim();
+        for (const d of this.docs) for (const x of d.tags) if (x.id === tag.id) x.name = tag.name;
+        return json(200, { tag });
+      }
+      if (method === "DELETE") {
+        this.tagDefs = this.tagDefs.filter((t) => t !== tag);
+        for (const d of this.docs) d.tags = d.tags.filter((x) => x.id !== tag.id);
+        return new Response(null, { status: 204 });
+      }
+    }
+    m =
+      /^\/api\/documents\/([^/]+)\/(tags|tags\/([^/]+)|tag-suggestions\/(accept|dismiss|refresh))$/.exec(
+        path,
+      );
+    if (m) {
+      const doc = this.docs.find((d) => d.id === m?.[1]);
+      if (!doc) return fail(404, "not_found");
+      const link = (name: string) => {
+        const tag = ensureTag(name);
+        if (!doc.tags.some((x) => x.id === tag.id))
+          doc.tags = [...doc.tags, { ...tag }].sort((a, b) => a.name.localeCompare(b.name));
+      };
+      const drop = (name: string) =>
+        this.suggestions.set(
+          doc.id,
+          (this.suggestions.get(doc.id) ?? []).filter((n) => norm(n) !== norm(name)),
+        );
+      if (m[2] === "tags" && method === "POST") {
+        if (
+          doc.tags.length >= 20 &&
+          !doc.tags.some((t) => norm(t.name) === norm(String(body.name)))
+        )
+          return fail(409, "tag_limit");
+        link(String(body.name));
+        return view(doc);
+      }
+      if (m[3] && method === "DELETE") {
+        doc.tags = doc.tags.filter((x) => x.id !== m?.[3]);
+        return view(doc);
+      }
+      if (m[4] === "accept" && method === "POST") {
+        link(String(body.name));
+        drop(String(body.name));
+        return view(doc);
+      }
+      if (m[4] === "dismiss" && method === "POST") {
+        drop(String(body.name));
+        return view(doc);
+      }
+      if (m[4] === "refresh" && method === "POST") {
+        this.refreshes.push(doc.id);
+        return json(202, { started: true });
+      }
+    }
     if (path === "/api/chats" && method === "GET")
       return json(200, { items: [...this.chats].reverse(), nextCursor: null });
     if (path === "/api/chats" && method === "POST") {
@@ -280,12 +375,16 @@ export class FakeServer {
   private readers(): UiReaders {
     const ready = new Set(["uploaded", "parsing", "embedding"]);
     return {
-      documents: async ({ limit, status }) => ({
+      documents: async ({ limit, status, tags, match }) => ({
         items: this.docs
           .filter(
             (d) =>
-              status === "all" ||
-              (status === "processing" ? ready.has(d.status) : d.status === status),
+              (status === "all" ||
+                (status === "processing" ? ready.has(d.status) : d.status === status)) &&
+              (tags.length === 0 ||
+                (match === "all"
+                  ? tags.every((t) => d.tags.some((x) => x.id === t))
+                  : tags.some((t) => d.tags.some((x) => x.id === t)))),
           )
           .slice(0, limit),
         truncated: false,

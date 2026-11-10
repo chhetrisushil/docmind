@@ -537,7 +537,7 @@ describe("factCapabilities", () => {
       ["visual.facts", "docmind:turn.facts@1#fact-1"],
       ["turn.facts", `docmind:turn.facts@1#${A}/fact-1`],
       ["turn.facts", "docmind:turn.facts@2#fact-1"],
-      ["document.get", "docmind:document.get@1"],
+      ["document.get", "docmind:document.get@2"],
       // hostile: a trailing newline, an ordinal of three digits, a mixed-case document id
       ["visual.facts", "docmind:visual.facts@1#fact-1\n"],
       ["visual.facts", `docmind:visual.facts@1#${A}/fact-1\n`],

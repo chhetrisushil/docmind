@@ -85,6 +85,44 @@ describe("createApi", () => {
     });
   });
 
+  it("reads, creates, renames and deletes tags, and tags a document, on the documented routes", async () => {
+    const t = { id: "6c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f", name: "Finance" };
+    const view = { tags: [t], suggestedTags: ["Legal"] };
+    const { api, calls } = apiWith((url, init) =>
+      init.method === "DELETE" && url.startsWith("/api/tags/")
+        ? new Response(null, { status: 204 })
+        : url === "/api/tags" && init.method === "GET"
+          ? ok({ tags: [{ ...t, documents: 2 }] })
+          : url === "/api/tags"
+            ? ok({ tag: t }, 201)
+            : url.startsWith("/api/tags/")
+              ? ok({ tag: { ...t, name: "Money" } })
+              : url.endsWith("/refresh")
+                ? ok({ started: true }, 202)
+                : ok(view),
+    );
+    expect((await api.listTags()).tags[0]?.documents).toBe(2);
+    expect((await api.createTag("Finance")).tag).toEqual(t);
+    expect(await api.renameTag(t.id, "Money")).toEqual({ ...t, name: "Money" });
+    await api.deleteTag(t.id);
+    expect(await api.addDocumentTag("d1", "Finance")).toEqual(view);
+    expect(await api.removeDocumentTag("d1", t.id)).toEqual(view);
+    expect(await api.acceptTagSuggestion("d1", "Legal")).toEqual(view);
+    expect(await api.dismissTagSuggestion("d1", "Legal")).toEqual(view);
+    await api.refreshTagSuggestions("d1");
+    expect(calls).toEqual([
+      { url: "/api/tags", method: "GET" },
+      { url: "/api/tags", method: "POST", body: { name: "Finance" } },
+      { url: `/api/tags/${t.id}`, method: "PATCH", body: { name: "Money" } },
+      { url: `/api/tags/${t.id}`, method: "DELETE" },
+      { url: "/api/documents/d1/tags", method: "POST", body: { name: "Finance" } },
+      { url: `/api/documents/d1/tags/${t.id}`, method: "DELETE" },
+      { url: "/api/documents/d1/tag-suggestions/accept", method: "POST", body: { name: "Legal" } },
+      { url: "/api/documents/d1/tag-suggestions/dismiss", method: "POST", body: { name: "Legal" } },
+      { url: "/api/documents/d1/tag-suggestions/refresh", method: "POST" },
+    ]);
+  });
+
   it("encodes an id it builds into a path", async () => {
     const { api, calls } = apiWith(() => new Response(null, { status: 204 }));
     await api.deleteChat("../x?y");

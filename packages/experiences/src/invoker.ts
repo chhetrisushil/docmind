@@ -1,5 +1,5 @@
 import type { ChatSessionDto, DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { RecordOrd, Uuid } from "@docmind/contracts";
+import { RecordOrd, TagIdList, TagMatch, Uuid } from "@docmind/contracts";
 import type { TransientInvoker } from "@loom-ui/hydration";
 import { TypedFailure } from "@loom/core";
 import { z } from "zod";
@@ -60,6 +60,8 @@ export interface UiReaders {
   documents(a: {
     limit: number;
     status: "all" | "ready" | "processing" | "failed";
+    tags: string[];
+    match: "any" | "all";
   }): Promise<RawDocuments>;
   document(a: { id: string }): Promise<DocumentDto | null>;
   content(a: { id: string; upto: number; passage?: string }): Promise<RawContent | null>;
@@ -81,6 +83,9 @@ const ARGS = {
     .object({
       limit: z.number().int().min(1).max(LIST_CAP),
       status: z.enum(["all", "ready", "processing", "failed"]).default("all"),
+      /** Comma-separated tag ids (at most 10, deduplicated, lower-cased); empty is no filter. */
+      tags: TagIdList.default(""),
+      match: TagMatch.default("any"),
     })
     .strict(),
   "document.get": z.object({ id: Id }).strict(),
