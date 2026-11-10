@@ -106,7 +106,11 @@ docker run --rm \
   id per ingested document, all in one transaction under `ACCESS EXCLUSIVE` locks. Every read and write of those two tables,
   logins included, waits until it commits, for a time proportional to the number of documents. Drain the old pods before running
   it. The server repeats the fill at boot, for documents updated in the last 7 days, to repair a document an old pod ingested
-  during a rolling deploy. Rolling back after `0038` is not supported.
+  during a rolling deploy. Rolling back after `0038` is not supported: the migration replaces five sweep functions with versions
+  that compare the stored id columns (which old pods never write), and once any `h_` run exists older code cannot parse the new ids
+  (it would fold such an ingest as no document, never start its visuals and read its events under no subject). After the release a
+  user's first document flow creates their id handle (`users.id_handle`); a key-store outage fails that start, which is retried like
+  any other.
 - Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
   role on, the first boot after it re-plans every visualized document once (one planner call each over its stored facts, at
   most 2 at a time, no extraction) to add the Connections section; it is stamped when it completes, so later boots do not repeat it (a re-plan whose end is lost to a crash is re-planned once more).
