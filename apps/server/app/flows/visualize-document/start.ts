@@ -293,6 +293,12 @@ export function loomVisualsStarter(
         principal: { tenant: input.tenantId, actor: input.userId },
       });
       tracker.track(genKey(input.userId, input.documentId, generation), executionId, handle);
+      // A noted run that ends without an extraction write (failed, cancelled, document gone) must not leave its note behind.
+      if (rerun !== undefined && reextract)
+        void handle.waitForCompletion().then(
+          () => reextract.delete(executionId),
+          () => reextract.delete(executionId),
+        );
       // Every run (the automatic one is run 0) is recorded as running once Loom has it, so a restart while Loom recovers it
       // never lets a retry start another beside it. A fast end (recorded by the event feed) is never overwritten: the table
       // does not reopen a finished run.
@@ -385,7 +391,12 @@ export function loomVisualsStarter(
           afterDone.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
         }
         if (byUser && reextract) {
-          if (reextract.size >= 1000) reextract.clear(); // ids only; a lost note just means the run re-plans
+          // ids only; at the bound the OLDEST notes are evicted (insertion order), never the pending ones wholesale
+          while (reextract.size >= 1000) {
+            const oldest = reextract.values().next().value;
+            if (oldest === undefined) break;
+            reextract.delete(oldest);
+          }
           reextract.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
         }
         return startOne(ref, generation, n);
