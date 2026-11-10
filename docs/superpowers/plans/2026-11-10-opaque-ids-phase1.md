@@ -16,23 +16,23 @@ Every existing name in this plan was verified against the code at `main` 875fe1e
 
 | Id | Finding | Where handled |
 |---|---|---|
-| F1 | **AES-SIV (hard question 1).** Node here is 24.18 (`engines`: `>=22.13.0`, no `.nvmrc`). `crypto.getCiphers()` lists `aes-128/192/256-ctr` and no `siv`: RFC 5297 AES-SIV is not in `node:crypto`. `pnpm-lock.yaml` has no `@noble/*` or any cipher library (the server's direct dependencies are `busboy`, `pg`, `zod` and the sibling Loom and loom-ui links), and this plan adds none: a dependency that holds a key-handling primitive for one call site is a supply-chain surface the repo has avoided, and Loom itself builds its sealed format from `node:crypto` primitives with a synthetic IV (`plugins/crypto/src/EncryptingContentStore.ts`, "an SIV over the associated data: HMAC(ivKey, ...)"). **Decision:** the standard SIV composition from `node:crypto`: `IV = HMAC-SHA256(macKey, family || 0x00 || uuid)[0..16]`, `token = base32(IV || AES-256-CTR(encKey, IV, uuid))`, decryption recomputes the IV and compares in constant time (that is the authentication). `macKey` and `encKey` are separate HKDF outputs (explicit key separation), the family (`doc` or `chat`) is authenticated with the token, and the handle is a third use of the root key under its own label. Known-answer vectors are pinned in `siv.test.ts` (computed from this construction; the base32 alphabet is checked against the RFC 4648 vectors `foobar` and `ff ff`). The spec says "AES-SIV"; this is the SIV construction with AES-256-CTR as the cipher and HMAC-SHA256 as the PRF, not RFC 5297's CMAC-based S2V. | Task 1 |
+| F1 | **AES-SIV (hard question 1).** Node here is 24.18 (`engines`: `>=22.13.0`, no `.nvmrc`). `crypto.getCiphers()` lists `aes-128/192/256-ctr` and no `siv`: RFC 5297 AES-SIV is not in `node:crypto`. `pnpm-lock.yaml` has no `@noble/*` or any cipher library (the server's direct dependencies are `busboy`, `pg`, `zod` and the sibling Loom and loom-ui links), and this plan adds none: a dependency that holds a key-handling primitive for one call site is a supply-chain surface the repo has avoided, and Loom itself builds its sealed format from `node:crypto` primitives with a synthetic IV (`plugins/crypto/src/EncryptingContentStore.ts`, "an SIV over the associated data: HMAC(ivKey, ...)"). **Decision:** the standard SIV composition from `node:crypto`: `IV = HMAC-SHA256(macKey, family || 0x00 || uuid)[0..16]`, `token = base32(IV || AES-256-CTR(encKey, IV, uuid))`, decryption recomputes the IV and compares in constant time (that is the authentication). `macKey` and `encKey` are separate HKDF outputs (explicit key separation), the family (`doc` or `chat`) is authenticated with the token, and the handle is a third use of the root key under its own label. Known-answer vectors are pinned in `siv.test.ts` (computed from this construction; the base32 alphabet is checked against the RFC 4648 vectors `foobar` and `ff ff`). The spec said "AES-SIV" and now records this deviation (its O4 amendment); this is the SIV construction with AES-256-CTR as the cipher and HMAC-SHA256 as the PRF, not RFC 5297's CMAC-based S2V. | Task 1 |
 | F2 | **Key derivation (hard question 2).** `TagKeys.forUser` and `EntityKeys.forUser` (`crypto/tagKeys.ts`, `crypto/entityKeys.ts`) take the user's data key from the KeyStore (`getOrCreate(userId)` for a tag, which can be a first write; `get(userId)` for an entity read) and derive `Buffer.from(hkdfSync("sha256", dek, Buffer.alloc(0), INFO, 32))` with `INFO` = `docmind-tag-v1` and `docmind-entity-v1`, mapping a store failure to `FieldKeyStoreError` and a destroyed key to `FieldKeyUnavailableError`. The id key is the same mechanism with `docmind-id-v1`; its two sub-keys use `docmind-id-v1/mac` and `docmind-id-v1/enc`. `OpaqueIds.ensureUser` mints through `getOrCreate` (a start can be the user's first write) and `OpaqueIds.ensureHandle` and `load` read through `get` (a reader never mints). | Task 1 |
 | F3 | **Loom subject `h_<H>` (hard question 3).** `public.data_keys.subject_id` is `text` (0007) and `PostgresKeyStore` keys, wraps (AAD = subject) and destroys by that string, so `h_<H>` gets its own key exactly as the existing `x:<id>` subjects do. `EncryptingEventStore`, `EncryptingSnapshotStore` and `EncryptingContentStore` take the subject from `subjectOfExecution` (`storage.ts`), so every event, snapshot and lineage blob of an `h_<H>...` execution is sealed under `h_<H>`'s key. Loom's `eraseSubject(subjectId)` groups by `SubjectIndex.executionsOf(subjectId)` and calls the app's shredder, which runs `shredSubject(keys, raw.eventStore, first, { subjectId, executionIds, ... })` and destroys THAT subject's key: one call per subject. So erasure calls `eraseSubject` for `h_<H>` and for the user UUID; the `key` step still destroys the user's data key; the `rows` step destroys `h_<H>`'s key before it deletes the row that holds the handle; and `OpaqueIds.forgetSubject` evicts the cache after each destroy. The KeyStore tombstones (`data_keys` rows with `wrapped_dek` NULL and `destroyed_at`) remain for both subjects, so a later `getOrCreate` refuses to re-mint. Residual, noted in the docs: the two tombstones carry near-equal `destroyed_at`, so someone holding the table and a quiet erasure window could pair `h_<H>` with a user UUID by time alone. | Tasks 3, 8 |
 | F4 | **Cache (hard question 4).** `OpaqueIds` keeps `handle -> {userId, key}` and `userId -> same`. **Classification, the ingest generation, the run number and the erasure subject never need the key** (they are in the clear in both formats), so `isIngestExecution`, `generationOf`, recovery ownership, compaction exemption, the pruner and `subjectOfExecution` cannot miss on a cold cache. Only the user and document or chat ids need it (the status fold's key and scope, the run recorder, the ready hook, chat scope and activity). Fill paths: a start awaits `ensureUser`; a reader awaits `load` (no minting); the boot awaits `warm()` (every user with a handle, in pages of 500, 8 key reads at a time, before the status model boots, so before recovery, the fold or any observer; a destroyed key is skipped, a key-store outage fails the boot with the fixed label); a live event whose handle is not cached goes through `ensureGate` (`status/ensureGate.ts`), which queues it and everything behind it, awaits `opaqueIds.ensure(handle)` and only then folds, so log order holds and a cold user's `ready` is folded and still fires `onReady`; an `ensure` that keeps failing is reported by class and the event is left for the next boot's catch-up (never folded under an unknown user, which would store a row no reader sees). The ready hook awaits `ensure` itself and reports an identity it cannot resolve instead of returning silently. A parse that misses answers `null`. | Tasks 1, 4, 6 |
 | F5 | **Flow hashes (hard question 5).** Loom's `flowContentHash` (`packages/core/src/flowHash.ts` at 4af27eaa) hashes `definition.id`, `version`, `deadlineMs` and each step's `id`, tool id, timeout and retry, and nothing else: no execution id, no input, no handler. So the id format changes no hash and no flow version moves. Pinned with the real function: `visualize-document` 1.1.0 `sha256:d3bfb104f3d015ab8165a9784f5f958bd46a347f3a2fb66f4d0d7be6c4e25f9e` and `ingest-document` 3.0.0 `sha256:e9c2819cd68e5b3d2bae57d5ef9e7d55af3067a99db66e225b00f0adfa864dc4` (both already pinned by `flowHash.test.ts` in their folders; Task 5 re-runs them), and new pins for `suggest-tags` 1.0.0 `sha256:3d99db0fdaf88f4bbeb69d371610811f5fcf57d208ff31494e2235d81490189b` and `chat-title` 1.0.0 `sha256:f56568832761a1d68e89a5daf6b8edcf299eeadce26c916438f5f83a2cfa2007` (computed on `main`). | Task 5 |
 | F6 | **SQL builds ids in six places, not one (hard question 6).** `ui/connections.ts` (`EXEC_KEY`) and five SECURITY DEFINER functions: `docmind_stale_uploads_v2` (0024), `docmind_ready_documents` (0028), `docmind_visual_retry_documents` (0030), `docmind_visual_stale_format_documents` (0032) and `docmind_visual_unrecorded_documents` (0034) each build `'u_' \|\| owner \|\| ':ingest-' \|\| doc ...` (and `:visualize-`) to look up the status row. A new-format id cannot be built in SQL (it needs the user's key), and the sweeps run across tenants with `LIMIT`, so filtering in application code after the page is cut would starve the page. **Decision: store.** Migration 0038 adds `documents.ingest_execution_id` and `documents.visualize_execution_id` (the current generation's ingest id and visualize run-0 id); the application records the id it starts (`documents/executionIds.ts`, called before the start, so a crash leaves a recorded id with no status row, which the sweep lists and re-starts); `bumpGeneration` clears both with the generation; the six sites compare the column. A document whose current generation already has an old-format status row is backfilled with that exact old id, so a run in flight at deploy stays found. Computing in application code was rejected for connections too: it needs a second query per request and a LIMIT-correct over-fetch, for no gain, while a plain column in the lateral subquery's output keeps the "leakproof comparison" property the existing comment relies on. | Tasks 2, 5, 6 |
 | F7 | **Prefix walks.** Five sites walk `u_<uuid>`: `erasure/compliance.ts` (hydrate), `status/forgetUser.ts`, `erasure/pgSteps.ts` (`loom.timers`/`loom.leases`), `status/pgStores.ts` (`pgUserExecutions`), `snapshots/pruner.ts`. Each now walks `u_` and `h_` (the pruner and hydrate by range, the others by `u_<uuid>` and `h_<H>` prefixes from `opaqueIds/prefixes.ts`). The handle is read from `users.id_handle` BEFORE the row is deleted: `pgSteps.rows` deletes timers and leases first, and the eraser reads the handle for the `shred` and `readModels` steps and destroys `h_<H>`'s key in the `rows` step. A re-run after the row is gone finds the work already done (each step is idempotent and ordered so). | Task 3 |
-| F8 | **Spec deviation, flagged.** Spec section 4 says an unknown handle makes `subjectOfExecution` answer "no subject" so the stores refuse the write. A subject that depends on the cache would make a replica that has not seen a user refuse that user's legitimate events (recovery, a second replica) and would make the subject index miss at hydrate. This plan makes the subject depend on the id's shape only (`h_<H>` for `h_<H>...`), keeps "no subject" for a lineage id of any other shape, and relies on the fact that only `opaqueIds` builds a new-format id and only after the user's key and handle exist (`ensureUser`); a forged handle gets a fresh subject key that no user owns. The id of an erased user parses to `null` (handle gone, key destroyed), which is the part of the spec that matters for erasure. | Tasks 1, 3 |
+| F8 | **Spec deviation, recorded in the spec (its section 4 amendment).** Spec section 4 said an unknown handle makes `subjectOfExecution` answer "no subject" so the stores refuse the write. A subject that depends on the cache would make a replica that has not seen a user refuse that user's legitimate events (recovery, a second replica) and would make the subject index miss at hydrate. This plan makes the subject depend on the id's shape only (`h_<H>` for `h_<H>...`), keeps "no subject" for a lineage id of any other shape, and relies on the fact that only `opaqueIds` builds a new-format id and only after the user's key and handle exist (`ensureUser`); a forged handle gets a fresh subject key that no user owns. The id of an erased user parses to `null` (handle gone, key destroyed), which is the part of the spec that matters for erasure. | Tasks 1, 3 |
 | F9 | **Phase boundary.** The document flows move to the new format in this phase. The chat builders (`chatConversationId`, `turnExecutionId`, `turnExperienceId`, the chat-title start) keep building the old format through `legacyIds`, but every PARSER already reads the new chat shapes (`h_<H>.c-<C>[~n]`, `h_<H>:chat-title-<C>`, `h_<H>:visualize-turn-<C>-<ord>[-rN]`, `turnvisuals-<H>-<C>-<ord>`), the chat activity model and the run gate use the ensure gate, the erasure cancels both formats for chats, and the snapshot pruner walks both ranges. The remaining phase 2 work is listed at the end of this plan. | Tasks 3, 4, 7 |
-| F10 | **Not covered by the spec's list, noted.** `public.read_model_state` (DocMind's table, not Loom's) keeps `app_key` (document id) and `scope` (user id) as plain UUIDs and a tombstone keeps `scope` ("A tombstone keeps the sequence, execution id and scope", `status/ingestStatus.ts`). This is unchanged by this work and outside spec section 6's list (executions, events, timers, leases, snapshots, lineage); the existing erasure e2e already scans every column of every table for the user's ids and allows exactly this residue. | Task 8 (docs) |
-| F11 | **Flow inputs carry plain ids (a gap in the spec).** Every flow's start input and every step's input is `{ tenantId, userId, documentId }` or `{ tenantId, userId, chatId }` in plaintext in `loom.events.payload` (`sensitive.ts` pins this: a test asserts "leaves an ingest execution's events untouched", and the erasure scan allow-lists it as "ids only: the flow input"). Opaque execution ids alone therefore leave the user and document UUIDs of every new run in the log after an erasure, and spec section 8's scan of Loom's tables could not pass. **Decision:** seal those four fields (`FLOW_INPUT_IDS`) under the subject key, with the proof helpers updated. Tried in a scratch copy: the erasure e2e and the ingest raw-log proof pass with it. | Task 6 |
+| F10 | **Read-model tombstones keep plain ids beside the handle (scan F1, critical).** `public.read_model_state` is DocMind's table, not in spec section 6's list of Loom tables, and a tombstone (`state` NULL, `erased`) keeps `execution_id`, `scope` (the user UUID) and `app_key` (the document or chat UUID). For a new-format run that one row names `h_<H>:ingest-<token>` and both plain UUIDs for good: the exact link spec section 1 removes, and one the earlier plan dismissed as out of scope. **Decision:** the erasure's `rows` step sets `scope` and `app_key` to NULL on the erased `ingest-status` and `chat-activity` rows under `h_<H>` before the handle is deleted (the loom role has table-level UPDATE and a FOR ALL policy, migration 0012; no SECURITY DEFINER function is needed); Task 8's allow-list tolerates `scope` and `app_key` only on old-format tombstones and a scan asserts that no row holds the handle with a plain id. Old-format tombstones are unchanged (spec section 6 residual). | Tasks 3, 8 |
+| F11 | **Flow inputs carry plain ids (a gap in the spec, now recorded in its section 6 amendment).** Every flow's start input and every step's input is `{ tenantId, userId, documentId }` or `{ tenantId, userId, chatId }` in plaintext in `loom.events.payload` (`sensitive.ts` pins this: a test asserts "leaves an ingest execution's events untouched", and the erasure scan allow-lists it as "ids only: the flow input"). Opaque execution ids alone therefore leave the user and document UUIDs of every new run in the log after an erasure, and spec section 8's scan of Loom's tables could not pass. **Decision:** seal those four fields (`FLOW_INPUT_IDS`) under the subject key, with the proof helpers updated. Tried in a scratch copy: the erasure e2e and the ingest raw-log proof pass with it. | Task 6 |
 
 ## How the earlier scans' defects are avoided here
 
 | Defect class | Design |
 |---|---|
-| Schemas capped too low | The two new columns allow 1024 characters (Loom's `MAX_EXECUTION_ID_BYTES`); every new-format id is under 140 bytes and a test asserts both. The handle column is exactly `^[a-z2-7]{26}$`; a token is exactly 52 characters; the generation (9 digits), run (3 digits) and ordinal (15 digits) patterns are copied from the code they replace. |
+| Schemas capped too low | The two new columns allow 1024 characters (Loom's `MAX_EXECUTION_ID_BYTES`); every new-format id is under 140 bytes and a test asserts both. The handle column is exactly `^[a-z2-7]{25}[aeimquy4]$` (the one canonical spelling of 128 bits); a token is exactly 52 characters ending in `a` or `q` (the one canonical spelling of 256 bits); the generation (9 digits), run (3 digits) and ordinal (15 digits) patterns are copied from the code they replace. |
 | Planner and sample mismatches | No planner, catalogue or sample is touched. |
 | Flaky EXPLAIN tests | None added. The connections reader keeps its existing plan-shape tests (Task 6 reruns them); the only SQL change there is a column in place of an expression. |
 | Random-UUID ordering | No test depends on the order of random ids or handles: pages are checked by sorted id sets, and the key-cache tests use fixed UUIDs. |
@@ -41,11 +41,11 @@ Every existing name in this plan was verified against the code at `main` 875fe1e
 | SQL without owner and tenant predicates | `PgHandleStore.claim` and `read` and `PgExecutionRecorder` name the user, the tenant and the generation in every statement; the two cross-tenant lookups are SECURITY DEFINER functions that return ids only; the migration's backfill runs as the owner role. |
 | Biome failures in pasted code | The code in Tasks 1 to 3 was run through `biome check --write` before it was pasted; each commit step runs it again. |
 | Typecheck gates that need a later task | `executionIdFor` stays exported from `subject.ts` (as `legacyIds.named`) until Task 7 removes it with the last caller, so Tasks 3 to 6 each compile on their own; `ingestExecutionId`, `visualizeExecutionId` and the other old builders are removed in the task that moves their last caller. |
-| Unclosed code fences | Every fence in this plan is closed; Task 8's last step counts them. |
+| Unclosed or nested code fences | Every fence in this plan is closed and none opens inside another; Task 8's last step runs an `awk` state check (a line starting with three backticks and a language tag inside an open fence is an error, and so is a fence still open at the end of the file), not just a parity count. |
 
 ## Global Constraints
 
-Every task's requirements include these (copied verbatim from the spec):
+Every task's requirements include these (copied verbatim from the spec as amended by the "docs(ids): record spec deviations for phase 1" commit, which precedes Task 1; the amendments are marked "Amendment"):
 
 ## 1. Goal
 
@@ -60,11 +60,11 @@ The record of how many runs happened and when may remain. Removing that too woul
 | O1 | **Keyed, reversible pseudonyms.** No lookup table of ids. |
 | O2 | **A per-user id key.** It is derived with HKDF from the user's data key, under a label distinct from every other derived key, and cached in memory once derived. |
 | O3 | **A user handle.** `H = base32(HMAC(idKey, "user"))`, 128 bits. It is stored in a new `users.id_handle` column (nullable, unique; migration 0038). The handle is created lazily on the user's first new-format start. New ids use `h_<H>` where they used `u_<userId>`. |
-| O4 | **Id tokens.** Document and chat ids become `base32(AES-SIV(idKey, uuid))`: deterministic, authenticated, and reversible while the key exists. Generation (`.g`), run (`-rN`) and chat ordinal stay in clear. |
+| O4 | **Id tokens.** Document and chat ids become `base32(IV || AES-256-CTR(encKey, IV, uuid))`: deterministic, authenticated, and reversible while the key exists. Generation (`.g`), run (`-rN`) and chat ordinal stay in clear. **Amendment:** RFC 5297 AES-SIV is not in `node:crypto` and the repo takes no cipher library, so the token is the SIV composition from Node primitives: `IV = HMAC-SHA256(macKey, family \|\| 0x00 \|\| uuid)[0..16]`, with `macKey` and `encKey` separate HKDF outputs under `docmind-id-v1/mac` and `docmind-id-v1/enc`. Decryption recomputes the IV and compares it in constant time, which is the authentication. The family (`doc` or `chat`) is authenticated with the token. This is not RFC 5297's CMAC-based S2V and claims no interoperability with it. |
 | O5 | **One module, `opaqueIds`.** It builds and parses every id family in both the old and the new format. A ratchet test forbids any other code from building or parsing ids. |
 | O6 | **Loom subject.** It is `h_<H>` for new ids and the user UUID for old ids. Erasure destroys both subject keys, the user's data key and the handle. |
 | O7 | **Compatibility.** Old `u_` executions keep working indefinitely, through dual-format parsing. New runs use the new format from deploy. There is no backfill. The old ids stay readable after erasure; this is a documented residual. |
-| O8 | **Two phases, one PR each.** Phase 1 covers the core, migration 0038, dual parsing everywhere and the document flows. Phase 2 covers the chat flows and the snapshot pruner. |
+| O8 | **Two phases, one PR each.** Phase 1 covers the core, migration 0038, dual parsing everywhere, the document flows and the snapshot pruner. Phase 2 covers the chat flows. **Amendment:** the pruner moved to phase 1 (it only walks id ranges, and both ranges are needed as soon as an `h_` run exists). |
 
 Rejected:
 - A one-way HMAC plus a sealed lookup table. Every parse would become a database read, and the table would need to stay consistent.
@@ -90,7 +90,8 @@ Rejected:
 
 - `opaqueIds.parse(id)` returns `{ userId, documentId? , chatId?, generation?, run?, ord? }` or `null`. It is synchronous.
   - For an `h_` id, it looks up the handle in an in-memory map from handle to user id and id key, then decrypts the token.
-  - An unknown handle, or a token that fails authentication, gives `null`. `subjectOfExecution` then answers "no subject", and the encrypting stores refuse to write under it.
+  - An unknown handle, or a token that fails authentication, gives `null`.
+  - **Amendment:** `subjectOfExecution` does not depend on the cache. The subject is shape-only: `h_<H>` for an `h_<H>...` id, the user UUID for a `u_<uuid>...` id, and "no subject" for a lineage id of any other shape. A cache-dependent subject would make a replica that has not seen a user refuse that user's legitimate events (recovery, a second replica) and would make the subject index miss at hydrate. Only `opaqueIds` builds a new-format id, and only after the user's key and handle exist; a forged handle gets a fresh subject key that no user owns. The id of an erased user parses to `null` (handle gone, key destroyed), and the stores refuse to write under a destroyed subject key.
 - **Cache fill.**
   - A start fills the cache for its user.
   - Boot warms it for every user that has a recoverable or in-flight execution, before recovery, the status fold or any observer runs.
@@ -119,6 +120,8 @@ Rejected:
 ## 6. Privacy and erasure
 
 - No new execution id, lineage id, Loom timer or lease row, or log line contains a plain user, document or chat UUID.
+- **Amendment, flow inputs:** every flow's start input and step inputs carry `userId` and `documentId` or `chatId` in plaintext in the event log. Phase 1 seals those four fields under the subject key, so a new run's events hold no plain UUID after erasure.
+- **Amendment, tombstones:** a read-model tombstone nulls `state` only and keeps `scope` (the user UUID) and `app_key` (the document UUID) beside the `h_<H>` execution id. Erasure scrubs `scope` and `app_key` on the erased rows under `h_<H>` (in the `rows` step, before the handle is deleted), so no row links the handle to a UUID.
 - Erasure:
   1. Computes or reads `H` while the keys exist.
   2. Stops and cancels executions under both prefixes.
@@ -140,7 +143,7 @@ Rejected:
 ## 8. Testing
 
 - **Unit:**
-  - AES-SIV round trip, determinism and tamper rejection;
+  - token round trip, determinism and tamper rejection (the HMAC-SHA256 synthetic IV with AES-256-CTR construction), with pinned known-answer vectors;
   - handle derivation and domain separation;
   - building and parsing every family in both formats;
   - the byte limit;
@@ -151,9 +154,9 @@ Rejected:
   - erasure destroys both keys, deletes the handle and covers both prefixes;
   - after erasure, a full scan of Loom's tables (executions, events, timers, leases, snapshots, lineage) contains none of the user's, documents' or chats' UUIDs from new runs.
 - **Recovery:** after a restart with a cold cache, `h_` runs are recovered and their status folds correctly.
-- **Mixed history:** a user with both old and new runs. Check status, re-run, re-extract-once, connections and erasure.
+- **Mixed history:** a user with both old and new runs. Check status, re-run, re-extract-once, connections and erasure. **Amendment:** phase 1 tests these piecewise (candidates for reads and cancels, the sweeps with a stored old id, the status fold of both formats, connections, erasure of both prefixes) rather than as one scenario test.
 - **End to end:**
-  - Phase 1: upload, visualize, suggest tags, then erase; nothing linkable remains.
+  - Phase 1: upload, visualize, suggest tags, then erase; nothing linkable remains, including no row that holds both the handle and any UUID.
   - Phase 2: chat, title, turn visuals, then erase; the same holds.
 - **Browser check before each PR.**
 
@@ -189,7 +192,7 @@ Created (`apps/server/app/opaqueIds/`):
 - `testing.ts`: `MemoryHandleStore`, `testOpaqueIds`.
 - Tests beside each (`siv.test.ts`, `opaqueIds.test.ts`, `prefixes.test.ts`, `pgHandles.pg.test.ts`).
 
-Created elsewhere: `infra/migrations/0038_opaque_ids.sql`; `documents/executionIds.ts` (the recorder) and `documents/executionCandidates.ts` (old and new candidates for reads and cancels); `status/ensureGate.ts`; `db/executionIds.pg.test.ts`.
+Created elsewhere: `infra/migrations/0038_opaque_ids.sql`; `documents/executionIds.ts` (the recorder and the boot repair), `documents/executionIds.e2e.pg.test.ts` and `documents/executionCandidates.ts` (old and new candidates for reads and cancels); `status/ensureGate.ts`; `db/executionIds.pg.test.ts`.
 
 Modified: `subject.ts`, `erasure/{compliance,eraser,wire,pgSteps}.ts`, `status/{model,ingestStatus,forgetUser,pgStores}.ts`, `chats/{ids,activity,scope,reasoningStore}.ts`, `flows/visualize-turn/{trigger,ids}.ts`, `flows/visualize-document/{runs,extract,structure,deps,start,lineage,commit}.ts`, `flows/suggest-tags/start.ts`, `flows/chat-title/start.ts`, `documents/{ingest,repo,testHarness}.ts`, `ui/{connections,routes}.ts`, `snapshots/pruner.ts`, `compose.ts`, `bootIngest.ts`, `config.ts`, `erasure/e2eSupport.ts`, `executionIds.test.ts`, `docs/architecture.md`, `docs/operations/cloud-deploy.md`, and the tests named per task.
 
@@ -204,7 +207,7 @@ Modified: `subject.ts`, `erasure/{compliance,eraser,wire,pgSteps}.ts`, `status/{
 **Interfaces:**
 - Consumes: `KeyStore` (`@loom/plugin-crypto`: `get`, `getOrCreate`, `wasDestroyed?`), `FieldKeyStoreError` and `FieldKeyUnavailableError` (`crypto/fields.ts`), `ORD_PATTERN` (`@docmind/contracts`), `LINEAGE_STREAM_PREFIX` (`@loom-ui/lineage`), `isValidConversationId` (`@loom/conversation`), `MAX_EXECUTION_ID_BYTES` (`@loom/plugin-postgres`).
 - Produces (all from `apps/server/app/opaqueIds/index.ts`):
-  - `class OpaqueIds { constructor(keys: Pick<KeyStore,"get"|"getOrCreate"|"wasDestroyed">, store: HandleStore); ensureUser(who: {tenantId; userId}): Promise<UserIds>; ensureHandle(handle: string): Promise<UserIds | null>; load(who): Promise<boolean>; warm(): Promise<number>; cached(userId): UserIds | undefined; knows(handle): boolean; forget(userId): void; forgetSubject(subjectId): void; parse(id): ParsedId | null; parseLineage(id): ParsedId | null; handleOfId(id): string | null }`
+  - `class OpaqueIds { constructor(keys: Pick<KeyStore,"get"|"getOrCreate"|"wasDestroyed">, store: HandleStore, options?: { warmPage?: number }); ensureUser(who: {tenantId; userId}): Promise<UserIds>; ensureHandle(handle: string): Promise<UserIds | null>; load(who): Promise<boolean>; warm(): Promise<number>; cached(userId): UserIds | undefined; knows(handle): boolean; forget(userId): void; forgetSubject(subjectId): void; parse(id): ParsedId | null; parseLineage(id): ParsedId | null; handleOfId(id): string | null }`
   - `interface HandleStore { read(who); claim(who, handle): Promise<string>; userOf(handle): Promise<string | null>; page(after: string, limit: number): Promise<{userId; handle}[]> }`; `class HandleMismatchError`; `WARM_PAGE` (500), `WARM_CONCURRENCY` (8).
   - `class UserIds { userId; handle; ingest(documentId, generation); visualize(documentId, generation, rerun?); suggestTags(documentId, run); turnVisualize(chatId, ord, rerun?); chatTitle(chatId); conversation(chatId); documentLineage(documentId); turnLineage(chatId, ord) }` (all synchronous; `UserExecutionId` or `ChatConversationId` for executions, `string` for lineage ids).
   - `legacyIds` (the old-format builders: `named`, `ingest`, `visualize`, `suggestTags`, `turnVisualize`, `chatTitle`, `conversation`, `documentLineage`, `turnLineage`), `UUID_PATTERN`, `subjectOfId`, `subjectOfHandle(handle): string` (`h_<handle>`), `handleOfSubject`.
@@ -212,7 +215,7 @@ Modified: `subject.ts`, `erasure/{compliance,eraser,wire,pgSteps}.ts`, `status/{
   - The facade `opaqueIds`: `install(ids | undefined)`, `current()`, `parse(id)`, `parseLineage(id)`, `clear(id)` (family, generation, rerun, ord: no key), `family(id)`, `subjectOf(executionId)`, `subjectOfHandle(handle)`, `handleOf(id)`, `known(handle)`, `loadUser(who)`, `ensure(handle)`.
   - Test support (`testing.ts`): `MemoryHandleStore`, `AutoHandleStore` (registers any user it is asked about), `testOpaqueIds()` (a fresh key store, handle store and `OpaqueIds`), `DeterministicKeyStore` and `testIdSource()` (an `OpaqueIds` whose data keys are a fixed function of the user, so `deterministicUser(userId): UserIds` computes the ids a starter will build without awaiting it), and the old-format builders tests seed with: `legacyIngestId(userId, documentId, generation = 2)`, `legacyVisualizeId(userId, documentId, generation, rerun?)`, `legacySuggestTagsId(userId, documentId, run)`.
 
-Design notes (the evidence is F1, F2 and F4 above): the new shapes are `h_<H>:ingest-<D>[.g]`, `h_<H>:visualize-<D>[.g][-rN]`, `h_<H>:visualize-turn-<C>-<ord>[-rN]`, `h_<H>:suggest-tags-<D>-rN`, `h_<H>:chat-title-<C>`, `h_<H>.c-<C>[~n]`, `visuals-<H>-<D>` and `turnvisuals-<H>-<C>-<ord>` with `H` 26 and `D`, `C` 52 characters of `[a-z2-7]`. The alphabet has no `-`, `.`, `:`, `~` or `_`, so tokens never contain a delimiter.
+Design notes (the evidence is F1, F2 and F4 above): the new shapes are `h_<H>:ingest-<D>[.g]`, `h_<H>:visualize-<D>[.g][-rN]`, `h_<H>:visualize-turn-<C>-<ord>[-rN]`, `h_<H>:suggest-tags-<D>-rN`, `h_<H>:chat-title-<C>`, `h_<H>.c-<C>[~n]`, `visuals-<H>-<D>` and `turnvisuals-<H>-<C>-<ord>` with `H` 26 and `D`, `C` 52 characters of `[a-z2-7]`, in their one canonical spelling (the last character of `H` is one of `aeimquy4`, of `D` and `C` one of `aq`: the padding bits are zero), so a value has exactly one spelling. The alphabet has no `-`, `.`, `:`, `~` or `_`, so tokens never contain a delimiter.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -294,7 +297,7 @@ describe("the id key and the SIV token", () => {
 
 ```ts
 import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyUnavailableError } from "../crypto/fields";
 import { OpaqueIds, WARM_CONCURRENCY, legacyIds, opaqueIds } from "./index";
 import { deterministicUser, testIdSource, testOpaqueIds } from "./testing";
@@ -489,6 +492,19 @@ describe("parse answers null, never a wrong id", () => {
     expect(opaqueIds.parse(swapped)).toBeNull();
   });
 
+  it("a value has one spelling: a handle or token whose padding bits are not zero is not an id", async () => {
+    const { userIds: u } = await userIds();
+    const good = u.ingest(D, 2);
+    expect(opaqueIds.clear(good)).not.toBeNull();
+    const [head, token] = good.split(":ingest-") as [string, string];
+    // The last character of a handle must be one of a e i m q u y 4, of a token a or q: "b" is a second spelling of "a".
+    expect(opaqueIds.clear(`${head.slice(0, -1)}b:ingest-${token}`)).toBeNull();
+    expect(opaqueIds.clear(`${head}:ingest-${token.replace(/.(\.2)$/, "b$1")}`)).toBeNull();
+    expect(opaqueIds.clear(`h_${"a".repeat(25)}a:ingest-${"a".repeat(51)}a.2`)).not.toBeNull();
+    expect(opaqueIds.clear(`h_${"a".repeat(25)}b:ingest-${"a".repeat(51)}a.2`)).toBeNull();
+    expect(opaqueIds.clear(`h_${"a".repeat(26)}:ingest-${"a".repeat(51)}b.2`)).toBeNull();
+  });
+
   it("an id that is neither format", () => {
     for (const id of [
       "",
@@ -579,13 +595,13 @@ describe("the cache: ensureUser, ensureHandle, warm, forget", () => {
     expect(opaqueIds.parse(id)).toBeNull();
     expect(await opaqueIds.ensure(warm.userIds.handle)).toBe(true);
     expect(opaqueIds.parse(id)).toMatchObject({ userId: U, documentId: D, generation: 2 });
-    expect(await opaqueIds.ensure("b".repeat(26))).toBe(false); // nobody holds it
-    warm.store.add(U2, T, "c".repeat(26));
-    expect(await opaqueIds.ensure("c".repeat(26))).toBe(false); // a user with no key: not minted
+    expect(await opaqueIds.ensure("e".repeat(26))).toBe(false); // nobody holds it
+    warm.store.add(U2, T, "i".repeat(26));
+    expect(await opaqueIds.ensure("i".repeat(26))).toBe(false); // a user with no key: not minted
     expect(await warm.keys.get(U2)).toBeNull();
   });
 
-  it("warm loads every user with a handle, in pages, and skips a destroyed key", async () => {
+  it("warm loads every user with a handle and skips a destroyed key", async () => {
     const t = testOpaqueIds();
     const users = Array.from(
       { length: WARM_CONCURRENCY + 3 },
@@ -601,6 +617,39 @@ describe("the cache: ensureUser, ensureHandle, warm, forget", () => {
     expect(await cold.warm()).toBe(users.length - 1);
     expect(cold.cached(users[0] as string)).toBeDefined();
     expect(cold.cached(gone)).toBeUndefined();
+  });
+
+  it("warm crosses page boundaries, and one user with a mismatched handle is skipped and counted, not fatal", async () => {
+    const t = testOpaqueIds();
+    const users = Array.from(
+      { length: 5 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    for (const u of users) {
+      t.store.add(u, T);
+      await t.ids.ensureUser({ tenantId: T, userId: u });
+    }
+    const bad = "00000000-0000-4000-8000-000000000099";
+    t.store.add(bad, T, "a".repeat(26)); // a handle its key does not derive
+    await t.keys.getOrCreate(bad);
+    let pages = 0;
+    const page = t.store.page.bind(t.store);
+    t.store.page = async (...a) => {
+      pages += 1;
+      return page(...a);
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cold = new OpaqueIds(t.keys, t.store, { warmPage: 2 });
+    expect(await cold.warm()).toBe(5);
+    expect(pages).toBe(4); // 6 users with a handle at 2 per page: three full pages, then the empty page that ends the walk
+    expect(warn).toHaveBeenCalledWith("id keys: users skipped at warm-up", {
+      reason: "HandleMismatchError",
+      count: 1,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(bad);
+    for (const u of users) expect(cold.cached(u)).toBeDefined();
+    expect(cold.cached(bad)).toBeUndefined();
+    warn.mockRestore();
   });
 
   it("forget drops both directions", async () => {
@@ -822,8 +871,11 @@ import { type IdKey, TOKEN_LENGTH, sealToken } from "./siv";
 export const UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const CANONICAL = new RegExp(`^${UUID_PATTERN}$`);
 const U = UUID_PATTERN;
-const H = "[a-z2-7]{26}";
-const T = `[a-z2-7]{${TOKEN_LENGTH}}`;
+// One spelling per value: a 26-character handle holds 128 bits, so its last character carries 2 padding bits that must be zero
+// (`a e i m q u y 4`); a 52-character token holds 256 bits, so its last carries 4 zero bits (`a q`). The strict decoder already
+// refuses any other spelling of a token; the shapes below refuse it everywhere else (the parse regexes and the column CHECK).
+const H = "[a-z2-7]{25}[aeimquy4]";
+const T = `[a-z2-7]{${TOKEN_LENGTH - 1}}[aq]`;
 const GEN = "[1-9][0-9]{0,8}";
 const RERUN = "[1-9][0-9]{0,2}";
 const MAX_GENERATION = 999_999_999;
@@ -1276,6 +1328,8 @@ export class OpaqueIds {
   constructor(
     private readonly keys: Pick<KeyStore, "get" | "getOrCreate" | "wasDestroyed">,
     private readonly store: HandleStore,
+    /** `warmPage`: users per page of the boot warm-up (default `WARM_PAGE`); a test sets a small one to cross a page boundary. */
+    private readonly options: { warmPage?: number } = {},
   ) {}
 
   private put(userId: string, key: IdKey, handle: string): Entry {
@@ -1342,21 +1396,43 @@ export class OpaqueIds {
   /**
    * Boot: caches every user that has a handle, before recovery, the status fold or any observer runs. It covers a superset of the users with
    * a recoverable or in-flight execution (Loom lists executions by id prefix only, and a read-model rebuild folds every user's executions),
-   * in pages of `WARM_PAGE` with `WARM_CONCURRENCY` key reads at a time. A destroyed key is skipped; a key-store outage throws.
+   * in pages of `WARM_PAGE` with `WARM_CONCURRENCY` key reads at a time. A destroyed key is skipped; a key-store outage throws. A user
+   * whose stored handle does not match their key (`HandleMismatchError`) is skipped too: one corrupted row must not fail the boot for every
+   * user (the spec only requires failing on a key-store outage). The skips are reported once, by class and count, never by user.
    */
   async warm(): Promise<number> {
+    const pageSize = this.options.warmPage ?? WARM_PAGE;
     let after = NIL_UUID;
     let warmed = 0;
+    let mismatched = 0;
+    const report = () => {
+      if (mismatched > 0)
+        console.warn("id keys: users skipped at warm-up", {
+          reason: "HandleMismatchError",
+          count: mismatched,
+        });
+    };
     for (;;) {
-      const page = await this.store.page(after, WARM_PAGE);
+      const page = await this.store.page(after, pageSize);
       for (let i = 0; i < page.length; i += WARM_CONCURRENCY) {
         const loaded = await Promise.all(
-          page.slice(i, i + WARM_CONCURRENCY).map((u) => this.loadKey(u.userId, u.handle)),
+          page.slice(i, i + WARM_CONCURRENCY).map(async (u) => {
+            try {
+              return await this.loadKey(u.userId, u.handle);
+            } catch (err) {
+              if (!(err instanceof HandleMismatchError)) throw err;
+              mismatched += 1;
+              return null;
+            }
+          }),
         );
         warmed += loaded.filter((e) => e !== null).length;
       }
       const last = page[page.length - 1];
-      if (page.length < WARM_PAGE || !last) return warmed;
+      if (page.length < pageSize || !last) {
+        report();
+        return warmed;
+      }
       after = last.userId;
     }
   }
@@ -1626,7 +1702,7 @@ export function testOpaqueIds() {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd apps/server && pnpm exec vitest run app/opaqueIds`
-Expected: PASS (27 tests across the two files).
+Expected: PASS (every test in the two files).
 
 - [ ] **Step 6: Typecheck, lint, commit**
 
@@ -1640,12 +1716,12 @@ git commit -m "feat(ids): the opaqueIds core, a synthetic-IV token and the per-u
 
 ---
 
-### Task 2: Migration 0038, the handle store and the execution-id recorder (O3, F6)
+### Task 2: Migration 0038, the handle store and the execution-id recorder (O3, F6, F2 of the scan)
 
 **Files:**
 - Create: `infra/migrations/0038_opaque_ids.sql`, `apps/server/app/opaqueIds/pgHandles.ts`, `apps/server/app/documents/executionIds.ts`
-- Modify: `apps/server/app/documents/repo.ts:211-221` (`bumpGeneration`), `apps/server/app/documents/testHarness.ts:588-599` (`seedRow`; new `backfillExecutionIds`), the pg tests named in step 6
-- Test: `apps/server/app/opaqueIds/pgHandles.pg.test.ts`, `apps/server/app/db/executionIds.pg.test.ts`
+- Modify: `apps/server/app/documents/repo.ts:207-221` (`bumpGeneration`), `apps/server/app/documents/testHarness.ts:588-599` (`seedRow`; new `backfillExecutionIds`), `apps/server/app/documents/ingest.ts` (`loomIngest` records the legacy id), `apps/server/app/flows/visualize-document/start.ts` (`startOne` records the legacy id), `apps/server/app/compose.ts` (wires the recorder), the pg tests named in step 7
+- Test: `apps/server/app/opaqueIds/pgHandles.pg.test.ts`, `apps/server/app/db/executionIds.pg.test.ts`, `apps/server/app/documents/executionIds.e2e.pg.test.ts`
 
 **Interfaces:**
 - Consumes: `HandleStore` (Task 1), `withTenant(pool, tenantId, fn)` (`db/tenant.ts`), `FieldKeyUnavailableError`, `seedDoc`/`seedRow`/`seedUsers`/`ALICE`/`BOB`/`U1`/`U2` (`documents/testHarness.ts`).
@@ -1653,7 +1729,10 @@ git commit -m "feat(ids): the opaqueIds core, a synthetic-IV token and the per-u
   - `class PgHandleStore implements HandleStore { constructor(pool: Pool) }` (the app role's pool).
   - `interface ExecutionRecorder { recordIngest(who: {tenantId; userId}, documentId, generation, executionId): Promise<void>; recordVisualize(...same): Promise<void> }` and `class PgExecutionRecorder implements ExecutionRecorder { constructor(pool: Pool) }` (`documents/executionIds.ts`).
   - SQL: `users.id_handle`, `documents.ingest_execution_id`, `documents.visualize_execution_id`, `public.docmind_user_of_handle(text) -> uuid`, `public.docmind_user_handles(uuid, integer) -> (id uuid, id_handle text)`; the five sweep functions now compare the columns.
-  - Test helper `backfillExecutionIds(owner: Pool): Promise<void>` (runs the migration's two backfill statements, read from the migration file so they cannot drift); `seedRow` calls it.
+  - `repairStoredExecutionIds(pool: Pool): Promise<number>` (`documents/executionIds.ts`): calls `public.docmind_repair_execution_ids()`, the idempotent backfill (below), and returns how many columns it set. Task 6 runs it at boot.
+  - SQL: `public.docmind_repair_execution_ids() -> integer` (SECURITY DEFINER; sets `ingest_execution_id` and `visualize_execution_id` from an old-format status row of the current generation, only where the column IS NULL; the migration calls it once).
+  - `loomIngest(runtime, executions?: ExecutionRecorder)` and `VisualsStarterOptions.executions?: ExecutionRecorder`: both record the id they start BEFORE the start. **In this task the id is the LEGACY (old-format) id from the existing builders** (`ingestExecutionId`, `visualizeExecutionId`); `compose.ts` wires `new PgExecutionRecorder(pool)` into both. So from this commit on every real upload stores the id the five rewritten sweeps and the connections reader will compare, and every commit stays green. Task 5 only switches which id is recorded (the new-format one) and moves the second parameter of `loomIngest` into its options object.
+  - Test helper `backfillExecutionIds(owner: Pool): Promise<void>` (runs `public.docmind_repair_execution_ids()` as the owner, so the helper cannot drift from the migration); `seedRow` calls it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1668,7 +1747,7 @@ import { ALICE, ALICE2, BOB, T1, U1, U1B, U2, seedUsers } from "../documents/tes
 import { PgHandleStore } from "./pgHandles";
 
 const H1 = "a".repeat(26);
-const H2 = "b".repeat(26);
+const H2 = "e".repeat(26);
 
 describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG_URL)", () => {
   let db: TestDb;
@@ -1698,10 +1777,18 @@ describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG
     const results = await Promise.all([
       store.claim(ALICE2, H2),
       store.claim(ALICE2, H2),
-      store.claim(ALICE2, "c".repeat(26)),
+      store.claim(ALICE2, "i".repeat(26)),
     ]);
     expect(new Set(results).size).toBe(1);
     expect(await store.read(ALICE2)).toBe(results[0]);
+  });
+
+  it("the column accepts only the canonical spelling of a handle (last character a e i m q u y 4)", async () => {
+    for (const bad of [`${"a".repeat(25)}b`, "a".repeat(25), "a".repeat(27), `${"a".repeat(25)}z`])
+      await expect(
+        db.owner.query("UPDATE users SET id_handle = $2 WHERE id = $1", [U2, bad]),
+      ).rejects.toMatchObject({ code: "23514" });
+    await db.owner.query("UPDATE users SET id_handle = NULL WHERE id = $1", [U2]);
   });
 
   it("is unique across users and tenants, and shaped", async () => {
@@ -1715,7 +1802,7 @@ describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG
   });
 
   it("row-level security keeps a claim inside its tenant", async () => {
-    await expect(store.claim({ tenantId: T1, userId: U2 }, "d".repeat(26))).rejects.toThrow();
+    await expect(store.claim({ tenantId: T1, userId: U2 }, "m".repeat(26))).rejects.toThrow();
     expect(await store.read({ tenantId: T1, userId: U2 })).toBeNull();
   });
 
@@ -1725,13 +1812,13 @@ describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG
       [T1],
     );
     await expect(
-      store.claim({ tenantId: T1, userId: "c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1" }, "e".repeat(26)),
+      store.claim({ tenantId: T1, userId: "c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1" }, "q".repeat(26)),
     ).rejects.toMatchObject({ name: "FieldKeyUnavailableError" });
   });
 
   it("finds the user of a handle across tenants, and pages the users that have one", async () => {
     expect(await store.userOf(H1)).toBe(U1);
-    expect(await store.userOf("z".repeat(26))).toBeNull();
+    expect(await store.userOf("y".repeat(26))).toBeNull();
     const all = await store.page("00000000-0000-0000-0000-000000000000", 500);
     expect(all.map((r) => r.userId)).toEqual([U1, U1B].sort());
     const first = all[0] as { userId: string };
@@ -1750,7 +1837,7 @@ import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
-import { PgExecutionRecorder } from "../documents/executionIds";
+import { PgExecutionRecorder, repairStoredExecutionIds } from "../documents/executionIds";
 import { bumpGeneration } from "../documents/repo";
 import { ALICE, BOB, U1, U2, backfillExecutionIds, seedDoc, seedRow, seedUsers } from "../documents/testHarness";
 import { legacyIds } from "../opaqueIds";
@@ -1822,6 +1909,41 @@ describe.skipIf(!PG_URL)(
       expect((await column(without)).i).toBeNull();
     });
 
+    it("the backfill is idempotent: it never overwrites a recorded id (not even with seedRow's own sync), and a second run changes nothing", async () => {
+      const id = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+      await recorder.recordIngest(ALICE, id, 2, opaque(id, "ingest"));
+      await recorder.recordVisualize(ALICE, id, 2, opaque(id, "visualize"));
+      // An old-format row for the same generation appears later (a replayed log, an old pod): the recorded new-format ids stay.
+      await seedRow(owner, legacyIds.ingest(U1, id, 2), id, U1, READY);
+      await seedRow(owner, legacyIds.visualize(U1, id, 2), id, U1);
+      await backfillExecutionIds(owner);
+      expect(await column(id)).toEqual({ i: opaque(id, "ingest"), v: opaque(id, "visualize") });
+      const again = await owner.query("SELECT public.docmind_repair_execution_ids() AS n");
+      expect(again.rows[0].n).toBe(0);
+    });
+
+    it("the boot repair (repairStoredExecutionIds, on the app role) repairs a document an OLD pod ingested after the migration, and the stale sweep stops listing it", async () => {
+      const id = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+      // What an old pod leaves behind: the old-format status row, and a NULL column (it never writes it). Not `seedRow`: that repairs.
+      await owner.query(
+        "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, $2, $3, 0, $4)",
+        [legacyIds.ingest(U1, id, 2), id, U1, READY],
+      );
+      expect((await column(id)).i).toBeNull();
+      const stale = async () =>
+        (
+          await app.query(
+            "SELECT id FROM docmind_stale_uploads_v2(make_interval(secs => 120), make_interval(secs => 604800), 500)",
+          )
+        ).rows.map((r) => r.id);
+      // Before the repair the sweep cannot match the old-format row: it would start a second ingest under a new-format id.
+      expect(await stale()).toContain(id);
+      expect(await repairStoredExecutionIds(app)).toBeGreaterThanOrEqual(1);
+      expect((await column(id)).i).toBe(legacyIds.ingest(U1, id, 2));
+      expect(await stale()).not.toContain(id);
+      expect(await repairStoredExecutionIds(app)).toBe(0); // idempotent
+    });
+
     it("docmind_ready_documents compares the stored ids: old and new format both match, a NULL never does", async () => {
       await owner.query("DELETE FROM documents");
       await owner.query("DELETE FROM read_model_state");
@@ -1868,14 +1990,82 @@ describe.skipIf(!PG_URL)(
 );
 ```
 
+`apps/server/app/documents/executionIds.e2e.pg.test.ts` (a REAL upload through the production composition: with the migration alone the five sweeps would read columns nothing writes, so this proves the recorder wired in step 6 keeps them working at this commit; the ids are the old-format ones until Task 5):
+
+```ts
+import type { UploadDocumentResponse } from "@docmind/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PG_URL } from "../db/testSupport";
+import { visualizeExecutionId } from "../flows/visualize-document/start";
+import { ingestExecutionId } from "./ingest";
+import { type IngestStack, startIngestStack } from "./ingestStack";
+
+const NIL = "00000000-0000-0000-0000-000000000000";
+
+describe.skipIf(!PG_URL)("a real upload records its execution ids, so the sweeps find it (needs DOCMIND_TEST_PG_URL)", () => {
+  const stacks: IngestStack[] = [];
+  afterEach(async () => {
+    for (const s of stacks.splice(0)) await s.close();
+  });
+
+  async function uploadReady(st: IngestStack, email: string) {
+    const { cookie, userId } = await st.signUpAndLogIn(email);
+    const events = await st.events(cookie);
+    try {
+      const res = await st.upload(cookie, "report.txt", Buffer.from("Revenue was 1200 dollars."));
+      expect(res.status).toBe(201);
+      const id = ((await res.json()) as UploadDocumentResponse).document.id;
+      const seen = await st.until(events, id, (s) => s === "ready" || s === "failed");
+      expect(seen.at(-1)?.status).toBe("ready");
+      return { id, userId };
+    } finally {
+      events.close();
+    }
+  }
+  const columns = async (st: IngestStack, id: string) =>
+    (
+      await st.db.owner.query(
+        "SELECT ingest_generation AS g, ingest_execution_id AS i, visualize_execution_id AS v FROM documents WHERE id = $1",
+        [id],
+      )
+    ).rows[0] as { g: number; i: string | null; v: string | null };
+
+  it("the ingest id is on the document, the stale-upload sweep does not list it, and a document with no visualize run is listed as ready", async () => {
+    const st = await startIngestStack(); // visuals off: nothing visualizes, so the ready sweep has this document to find
+    stacks.push(st);
+    const { id, userId } = await uploadReady(st, "records-ingest@example.com");
+    const row = await columns(st, id);
+    expect(row.i).toBe(ingestExecutionId(userId, id, Number(row.g)));
+    expect(row.v).toBeNull();
+    const stale = await st.app.query(
+      "SELECT id FROM docmind_stale_uploads_v2(make_interval(secs => 0), make_interval(secs => 604800), 500)",
+    );
+    expect(stale.rows.map((r) => r.id)).not.toContain(id); // it has a status row under the recorded id
+    const ready = await st.app.query("SELECT id FROM docmind_ready_documents($1::uuid, 500)", [NIL]);
+    expect(ready.rows.map((r) => r.id)).toContain(id);
+  });
+
+  it("with the visuals role on, the visualize id is recorded too", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    const { id, userId } = await uploadReady(st, "records-visuals@example.com");
+    const g = Number((await columns(st, id)).g);
+    await vi.waitFor(async () => expect((await columns(st, id)).v).toBe(visualizeExecutionId(userId, id, g)), {
+      timeout: 30_000,
+      interval: 50,
+    });
+  });
+});
+```
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/opaqueIds/pgHandles app/db/executionIds`
-Expected: FAIL (no `id_handle` column, no `PgHandleStore`, no `documents/executionIds`, no `backfillExecutionIds`).
+Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/opaqueIds/pgHandles app/db/executionIds app/documents/executionIds.e2e`
+Expected: FAIL (no `id_handle` column, no `PgHandleStore`, no `documents/executionIds`, no `backfillExecutionIds`, no recorded ids on a real upload).
 
 - [ ] **Step 3: Write the migration**
 
-`infra/migrations/0038_opaque_ids.sql`. The two backfill `UPDATE` statements must stay between the line `UPDATE documents d` and the line `CREATE FUNCTION public.docmind_user_of_handle`: the test helper slices the file there.
+`infra/migrations/0038_opaque_ids.sql`. The backfill is a SECURITY DEFINER function (`docmind_repair_execution_ids`), called once by the migration and again by the server at every boot (Task 6), so it must stay idempotent: every statement guards on `IS NULL`.
 
 ```sql
 -- 0038: opaque execution and lineage ids (R14, docs/specs/2026-11-10-opaque-ids-design.md, phase 1).
@@ -1889,36 +2079,57 @@ Expected: FAIL (no `id_handle` column, no `PgHandleStore`, no `documents/executi
 --    UUIDs; a new-format id cannot be built in SQL (it needs the user's key), so the application stores the id it started and the SQL
 --    only compares it. NULL means "no execution recorded for this generation": it never matches a status row. The application writes
 --    both when it starts the execution (documents/executionIds.ts) and `bumpGeneration` clears both with the generation.
---    Backfill: a document whose current generation already has an old-format status row keeps that exact old id, so a run that
---    started before the deploy stays found; any other document stays NULL and the next start records its (new-format) id.
+--    Backfill (`docmind_repair_execution_ids`): a document whose current generation already has an old-format status row keeps that
+--    exact old id, so a run that started before the deploy stays found; any other document stays NULL and the next start records its
+--    (new-format) id. It only ever fills a NULL column, so it can run again: the migration runs it once, and the server runs it at
+--    every boot, so a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is repaired before the
+--    sweeps start. Rolling BACK after this migration is not supported (see docs/operations/cloud-deploy.md).
 -- 4. The five SECURITY DEFINER functions that built ids (0024's `docmind_stale_uploads_v2`, 0028's `docmind_ready_documents`,
 --    0030's `docmind_visual_retry_documents`, 0032's `docmind_visual_stale_format_documents`, 0034's
 --    `docmind_visual_unrecorded_documents`) are replaced with the same signature, columns and grants (CREATE OR REPLACE keeps the
 --    ACL), comparing the stored columns. Their other predicates are unchanged. Old migrations are never edited.
 ALTER TABLE users ADD COLUMN id_handle text
-  CONSTRAINT users_id_handle_shape CHECK (id_handle ~ '^[a-z2-7]{26}$')
+  CONSTRAINT users_id_handle_shape CHECK (id_handle ~ '^[a-z2-7]{25}[aeimquy4]$')
   CONSTRAINT users_id_handle_key UNIQUE;
 
 ALTER TABLE documents
   ADD COLUMN ingest_execution_id text CHECK (ingest_execution_id IS NULL OR length(ingest_execution_id) <= 1024),
   ADD COLUMN visualize_execution_id text CHECK (visualize_execution_id IS NULL OR length(visualize_execution_id) <= 1024);
 
-UPDATE documents d
-   SET ingest_execution_id = 'u_' || d.owner_id::text || ':ingest-' || d.id::text
-         || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
- WHERE EXISTS (
-   SELECT 1 FROM read_model_state s
-    WHERE s.model_id = 'ingest-status'
-      AND s.execution_id = 'u_' || d.owner_id::text || ':ingest-' || d.id::text
-          || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END);
-UPDATE documents d
-   SET visualize_execution_id = 'u_' || d.owner_id::text || ':visualize-' || d.id::text
-         || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
- WHERE EXISTS (
-   SELECT 1 FROM read_model_state s
-    WHERE s.model_id = 'ingest-status'
-      AND s.execution_id = 'u_' || d.owner_id::text || ':visualize-' || d.id::text
-          || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END);
+CREATE FUNCTION public.docmind_repair_execution_ids()
+RETURNS integer
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  ingest_set integer;
+  visualize_set integer;
+BEGIN
+  UPDATE public.documents d
+     SET ingest_execution_id = 'u_' || d.owner_id::text || ':ingest-' || d.id::text
+           || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
+   WHERE d.ingest_execution_id IS NULL
+     AND EXISTS (
+       SELECT 1 FROM public.read_model_state s
+        WHERE s.model_id = 'ingest-status'
+          AND s.execution_id = 'u_' || d.owner_id::text || ':ingest-' || d.id::text
+              || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END);
+  GET DIAGNOSTICS ingest_set = ROW_COUNT;
+  UPDATE public.documents d
+     SET visualize_execution_id = 'u_' || d.owner_id::text || ':visualize-' || d.id::text
+           || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
+   WHERE d.visualize_execution_id IS NULL
+     AND EXISTS (
+       SELECT 1 FROM public.read_model_state s
+        WHERE s.model_id = 'ingest-status'
+          AND s.execution_id = 'u_' || d.owner_id::text || ':visualize-' || d.id::text
+              || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END);
+  GET DIAGNOSTICS visualize_set = ROW_COUNT;
+  RETURN ingest_set + visualize_set;
+END
+$$;
+REVOKE ALL ON FUNCTION public.docmind_repair_execution_ids() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.docmind_repair_execution_ids() TO docmind_app;
+-- Once, now: a run that started before the deploy stays found. The server calls it again at every boot (repairStoredExecutionIds).
+SELECT public.docmind_repair_execution_ids();
 
 CREATE FUNCTION public.docmind_user_of_handle(p_handle text)
 RETURNS uuid
@@ -2140,6 +2351,19 @@ export interface ExecutionRecorder {
 
 const COLUMN = { ingest: "ingest_execution_id", visualize: "visualize_execution_id" } as const;
 
+/**
+ * Runs migration 0038's idempotent backfill (`public.docmind_repair_execution_ids`, SECURITY DEFINER: the sweep's cross-tenant reach) and
+ * returns how many columns it set. A document whose current generation has an old-format status row and no stored id gets that id: this is
+ * how a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is found by the sweeps. It never overwrites
+ * a stored id. `bootIngest` calls it before the sweeps start (Task 6).
+ */
+export async function repairStoredExecutionIds(pool: Pick<Pool, "query">): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>(
+    "SELECT public.docmind_repair_execution_ids() AS n",
+  );
+  return rows[0]?.n ?? 0;
+}
+
 export class PgExecutionRecorder implements ExecutionRecorder {
   constructor(private readonly pool: Pool) {}
 
@@ -2181,7 +2405,7 @@ export class PgExecutionRecorder implements ExecutionRecorder {
 }
 ```
 
-In `apps/server/app/documents/repo.ts`, replace the `bumpGeneration` doc comment and statement so the stored ids go with the generation:
+In `apps/server/app/documents/repo.ts` (`bumpGeneration`, lines 207-221), replace the `bumpGeneration` doc comment and statement so the stored ids go with the generation:
 
 ```ts
 /** D1: moves the owner's document to the next generation if it is still at `from`. Also stamps updated_at (the sweep's clock), clears the extraction format stamp (so the new generation's run extracts again) and clears the stored execution ids (the new generation has no execution yet: the next start records its own). */
@@ -2204,21 +2428,12 @@ export async function bumpGeneration(
 
 - [ ] **Step 5: Add the test helpers**
 
-In `apps/server/app/documents/testHarness.ts`, extend the `node:fs` import to `import { mkdtempSync, readFileSync, rmSync } from "node:fs";` (line 2; `join` and `Pool` are already imported). Replace `seedRow` (line 589) and add `backfillExecutionIds` before it. Every status row a test seeds under an old-format id now also gets its document's stored id, as the migration's backfill would give it:
+In `apps/server/app/documents/testHarness.ts`, replace `seedRow` (line 589) and add `backfillExecutionIds` before it (no new import). Every status row a test seeds under an old-format id now also gets its document's stored id, as the migration's backfill would give it:
 
 ```ts
-/** The migration's two backfill statements (0038), run as the owner: a document whose current generation has an old-format status row gets that id stored. */
+/** The migration's backfill (0038, `docmind_repair_execution_ids`), run as the owner: a document whose current generation has an old-format status row and no stored id gets that id stored. It never overwrites a stored id. */
 export async function backfillExecutionIds(owner: Pool): Promise<void> {
-  const text = readFileSync(
-    join(__dirname, "../../../../infra/migrations/0038_opaque_ids.sql"),
-    "utf8",
-  );
-  await owner.query(
-    text.slice(
-      text.indexOf("UPDATE documents d"),
-      text.indexOf("CREATE FUNCTION public.docmind_user_of_handle"),
-    ),
-  );
+  await owner.query("SELECT public.docmind_repair_execution_ids()");
 }
 
 // What the status model's writer would have stored for an execution (and, as the migration's backfill would have, the id on its document).
@@ -2237,26 +2452,81 @@ export const seedRow = async (
 };
 ```
 
-(`__dirname` is available: the server compiles to CommonJS, as `erasure/compliance.test.ts` already relies on.)
 
-- [ ] **Step 6: Run the new tests, then keep every existing suite that touches the sweeps green**
+- [ ] **Step 6: Record the legacy ids from the real starters (so the sweeps work at this commit)**
+
+The five rewritten sweeps and the connections reader read the stored columns, so from this commit something must write them for every real upload. This task records the ids the EXISTING builders produce (old format); Task 5 only changes which id is recorded.
+
+`apps/server/app/documents/ingest.ts`: add `import type { ExecutionRecorder } from "./executionIds";` and replace `loomIngest`'s signature and `start` with (the `cancel` member and everything else stay):
+
+```ts
+export function loomIngest(
+  runtime: Pick<WorkflowRuntime, "start" | "cancel">,
+  /** Records the id of the generation's execution on the document before it starts (migration 0038); absent in tests that need no sweep. */
+  executions?: ExecutionRecorder,
+): IngestPort {
+  return {
+    async start(identity, documentId, generation) {
+      const { ref, executionId, principal } = target(identity, documentId, generation);
+      // Recorded BEFORE the start: a crash in between leaves an id with no status row, which the stale-upload sweep lists and starts again.
+      await executions?.recordIngest(
+        { tenantId: ref.tenantId, userId: ref.userId },
+        ref.documentId,
+        generation,
+        executionId,
+      );
+      try {
+        return await runtime.start(ingestDocumentFlow, ref, { executionId, principal });
+      } catch (err) {
+        if (err instanceof ExecutionAlreadyExistsError) return null;
+        throw err;
+      }
+    },
+```
+
+`apps/server/app/flows/visualize-document/start.ts`: add `import type { ExecutionRecorder } from "../../documents/executionIds";`; in `VisualsStarterOptions` add before `runs?`:
+
+```ts
+  /** Records the automatic run's id on the document before it starts (migration 0038), so the boot sweeps can compare it with the status rows. */
+  executions?: ExecutionRecorder;
+```
+
+add `executions,` to the destructuring of `options` in `loomVisualsStarter`, and in `startOne`, directly after the line `const executionId = visualizeExecutionId(input.userId, input.documentId, generation, rerun);` add:
+
+```ts
+    // The automatic run's id goes on the document BEFORE the start (the boot sweeps compare it with the status rows); a re-run is never swept.
+    if (rerun === undefined)
+      await executions?.recordVisualize(
+        { tenantId: input.tenantId, userId: input.userId },
+        input.documentId,
+        generation,
+        executionId,
+      );
+```
+
+`apps/server/app/compose.ts`: add `import { PgExecutionRecorder } from "./documents/executionIds";`; after `const fields = new FieldCrypto(keys);` add `const executions = new PgExecutionRecorder(pool);` with the comment `// Each document's current ingest and visualize execution ids (migration 0038), which the boot sweeps and the connections reader compare with the status rows.`; add `executions,` as the first member of the `loomVisualsStarter(app.runtime, visualize.flow, { ... })` options; and change both `loomIngest(app.runtime)` calls (the `wrapIngest` ternary) to `loomIngest(app.runtime, executions)`.
+
+Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/documents/ingest.test app/flows/visualize-document/start.test app/documents/executionIds.e2e`
+Expected: PASS (the existing unit tests pass no recorder, so they are unchanged; the e2e now sees the ids on the document).
+
+- [ ] **Step 7: Run the new tests, then keep every existing suite that touches the sweeps green**
 
 Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/opaqueIds/pgHandles app/db/executionIds`
-Expected: PASS (6 + 4 tests; the summary must show them run, not skipped).
+Expected: PASS (the summary must show the pg and e2e tests run, not skipped).
 
-The five sweep functions and the connections reader now depend on the stored ids, so the existing suites that seed status rows directly need the same sync. `seedRow` does it for them; each place that inserts into `read_model_state` with a literal `INSERT` needs one added line `await backfillExecutionIds(owner);` after it. Find them with `grep -n "INSERT INTO read_model_state" apps/server/app/documents/sweepSql.pg.test.ts apps/server/app/flows/visualize-document/ready.pg.test.ts apps/server/app/flows/visualize-document/rollout.pg.test.ts apps/server/app/flows/visualize-document/runs.pg.test.ts apps/server/app/documents/visuals.e2e.pg.test.ts apps/server/app/ui/connections.pg.test.ts apps/server/app/ui/testSupport.ts apps/server/app/db/embeddings.pg.test.ts` and add the line after each hit that writes an old-format execution id of a document's current generation (a neutral visualize row, for example `INSERT INTO read_model_state (...) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')` in `ready.pg.test.ts`). `ui/testSupport.ts:63` seeds through `seedRow`-style code with `ingestExecutionId(who.userId, d.id, 2)`: leave it (the builder still exists until Task 5) and add the sync line after its insert.
+The five sweep functions and the connections reader now depend on the stored ids, so the existing suites that seed status rows directly need the same sync. `seedRow` does it for them; each place that inserts into `read_model_state` with a literal `INSERT` needs one added line `await backfillExecutionIds(owner);` after it. Find them with `grep -n "INSERT INTO read_model_state" apps/server/app/documents/sweepSql.pg.test.ts apps/server/app/flows/visualize-document/ready.pg.test.ts apps/server/app/flows/visualize-document/rollout.pg.test.ts apps/server/app/flows/visualize-document/runs.pg.test.ts apps/server/app/documents/visuals.e2e.pg.test.ts apps/server/app/ui/connections.pg.test.ts apps/server/app/ui/testSupport.ts apps/server/app/db/embeddings.pg.test.ts` and add the line after each hit that writes an old-format execution id of a document's current generation (a neutral visualize row, for example `INSERT INTO read_model_state (...) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')` in `ready.pg.test.ts`).
 
-Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/documents/sweepSql app/flows/visualize-document/ready app/flows/visualize-document/rollout app/flows/visualize-document/runs app/documents/visuals.e2e app/ui/connections app/db`
+Run: `set -a; . ./.env; set +a; cd apps/server && pnpm exec vitest run app/documents/sweepSql app/flows/visualize-document/ready app/flows/visualize-document/rollout app/flows/visualize-document/runs app/documents/visuals.e2e app/documents/executionIds.e2e app/ui/connections app/db`
 Expected: PASS. If a test fails with a document missing from a sweep's list, its status row has no stored id: add the sync line after that insert.
 
-- [ ] **Step 7: Typecheck, lint, commit**
+- [ ] **Step 8: Typecheck, lint, commit**
 
-Run: `pnpm exec biome check --write apps/server/app/opaqueIds apps/server/app/documents apps/server/app/db infra && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
+Run: `pnpm exec biome check --write apps/server/app/opaqueIds apps/server/app/documents apps/server/app/db apps/server/app/flows/visualize-document apps/server/app/compose.ts infra && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: no errors.
 
 ```bash
 git add infra/migrations/0038_opaque_ids.sql apps/server/app
-git commit -m "feat(ids): migration 0038, users.id_handle, stored execution ids, the handle store and the recorder"
+git commit -m "feat(ids): migration 0038, users.id_handle, stored execution ids, the handle store, and the recorder wired with the legacy ids"
 ```
 
 ---
@@ -2265,19 +2535,19 @@ git commit -m "feat(ids): migration 0038, users.id_handle, stored execution ids,
 
 **Files:**
 - Create: `apps/server/app/opaqueIds/prefixes.ts`
-- Modify: `apps/server/app/opaqueIds/index.ts` (one export line), `apps/server/app/subject.ts`, `apps/server/app/erasure/compliance.ts:63-130`, `apps/server/app/erasure/eraser.ts` (`ErasureDeps`, the `shred`, `readModels` and `rows` steps), `apps/server/app/erasure/wire.ts`, `apps/server/app/erasure/pgSteps.ts:11-80`, `apps/server/app/status/forgetUser.ts`, `apps/server/app/status/pgStores.ts:50-70`, `apps/server/app/status/ingestStatus.ts:213-222` (`forgetUser`), `apps/server/app/chats/activity.ts:136-146` (`forgetUser`)
+- Modify: `apps/server/app/opaqueIds/index.ts` (one export line), `apps/server/app/subject.ts`, `apps/server/app/erasure/compliance.ts:63-130`, `apps/server/app/erasure/eraser.ts` (`ErasureDeps`, the `shred`, `readModels` and `rows` steps), `apps/server/app/erasure/wire.ts`, `apps/server/app/erasure/pgSteps.ts:11-80` (`rows` also scrubs the tombstones, F1 of the scan), `apps/server/app/status/forgetUser.ts`, `apps/server/app/status/pgStores.ts:50-70`, `apps/server/app/status/ingestStatus.ts:213-222` (`forgetUser`), `apps/server/app/chats/activity.ts:162` (`forgetUser`)
 - Test: `apps/server/app/opaqueIds/prefixes.test.ts`, `apps/server/app/subject.test.ts`, `apps/server/app/erasure/compliance.test.ts`, `apps/server/app/erasure/eraser.test.ts`, `apps/server/app/erasure/wire.test.ts`, `apps/server/app/erasure/pgSteps.pg.test.ts`, `apps/server/app/status/forgetUser.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 (`opaqueIds.subjectOf`, `legacyIds`, `OpaqueIds.load/cached/forgetSubject`), `shredSubject` (`@loom/plugin-crypto`), `SubjectIndex` (`@loom/compliance`).
 - Produces:
-  - `opaqueIds/prefixes.ts`: `USER_ID_PREFIXES = ["u_", "h_"] as const`; `userPrefixes(userId: string, handle?: string | null): string[]`; `isOwnedBy(executionId: string, userId: string, handle?: string | null): boolean`; `listerPrefixes(userId, handle?): { exact: string[]; starts: string[] }`.
+  - `opaqueIds/prefixes.ts`: `USER_ID_PREFIXES = ["u_", "h_"] as const`; `userPrefixes(userId: string, handle?: string | null): string[]`; `isOwnedBy(executionId: string, userId: string, handle?: string | null): boolean`; `listerPrefixes(userId, handle?): { exact: string[]; starts: string[] }`, `handleListerPrefixes(handle): { exact: string; starts: string[] }`.
   - `subjectOfExecution(e: { executionId: string }): string` (unchanged signature; now `opaqueIds.subjectOf`); `executionIdFor` stays exported (an alias of `legacyIds.named`) until Task 7.
   - `ErasureDeps.handleOf?(req: ErasureRequest): Promise<string | null>` (absent means no handle), `ErasureDeps.forgetStatus(userId: string, handle?: string | null)` and `forgetActivity(userId, handle?)`, `ErasureParts.ids?: Pick<OpaqueIds, "load" | "cached" | "forgetSubject">`.
   - `UserExecutionLister = (modelId: string, userId: string, handle?: string | null) => Promise<readonly string[]>`; `forgetUserRows(service, modelId, userId, lister?, source?, handle?)`; `isUserExecution(executionId, userId, handle?)`.
   - `hydrateSubjectIndex` walks `u_` then `h_`; `redactIds` and `warningFor` know `h_` ids.
 
-Behaviour (the evidence is F3 and F7): `subjectOfExecution` is the one mapping both encrypting stores and the compliance subject index use, and it reads the id only. For an old-format id it is the user UUID (as today); for a new-format id it is `h_<H>`; for a lineage line of either format it is the owner's subject; any other lineage id is `""` (the stores refuse). Erasure calls Loom's `eraseSubject` once per subject (`h_<H>` first, then the user), destroys `h_<H>`'s key in the `rows` step before the row that holds the handle is deleted, and the `key` step still destroys the user's key.
+Behaviour (the evidence is F3 and F7): `subjectOfExecution` is the one mapping both encrypting stores and the compliance subject index use, and it reads the id only. For an old-format id it is the user UUID (as today); for a new-format id it is `h_<H>`; for a lineage line of either format it is the owner's subject; any other lineage id is `""` (the stores refuse). Erasure calls Loom's `eraseSubject` once per subject (`h_<H>` first, then the user), destroys `h_<H>`'s key in the `rows` step before the row that holds the handle is deleted, and the `key` step still destroys the user's key. **Tombstone scrub (scan F1, spec section 6 amendment):** the read-model tombstone that the `readModels` step leaves (`state` NULL, `erased`) keeps `execution_id`, `scope` (the user UUID) and `app_key` (the document or chat UUID), so for a new-format run it would hold `h_<H>:ingest-<token>` beside both plain UUIDs for good, which is exactly the link this work removes. The `rows` step therefore sets `scope` and `app_key` to NULL on the erased `ingest-status` and `chat-activity` rows under `h_<H>` BEFORE the user row (and with it the handle) is deleted. No SECURITY DEFINER function is needed: migration 0012 grants `docmind_loom` table-level `SELECT, INSERT, UPDATE, DELETE` on `read_model_state` and the policy `ingest_all` is `FOR ALL TO docmind_loom USING (true) WITH CHECK (true)`; the `scope` CHECK allows NULL, and the pool `pgErasureSql` already has for `loom.timers` is that role. A NULL-scope tombstone is what the fold writes for a neutral row, so readers are unaffected. Old-format (`u_`) tombstones keep their columns: that is the spec's documented residual, and the row names no handle.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2285,12 +2555,21 @@ Behaviour (the evidence is F3 and F7): `subjectOfExecution` is the one mapping b
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { USER_ID_PREFIXES, isOwnedBy, listerPrefixes, userPrefixes } from "./prefixes";
+import { USER_ID_PREFIXES, handleListerPrefixes, isOwnedBy, listerPrefixes, userPrefixes } from "./prefixes";
 
 const U = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
 const H = "a".repeat(26);
-const H2 = "b".repeat(26);
+const H2 = "e".repeat(26);
+
+describe("handleListerPrefixes", () => {
+  it("is the h_ half of listerPrefixes: the handle's prefix, and its flow and conversation forms", () => {
+    const { exact, starts } = handleListerPrefixes(H);
+    expect(exact).toBe(`h_${H}`);
+    expect(starts).toEqual([`h_${H}:`, `h_${H}.c-`]);
+    expect(listerPrefixes(U, H).exact).toContain(exact);
+  });
+});
 
 describe("the user prefixes", () => {
   it("are the two ranges the walks cover", () => {
@@ -2355,7 +2634,7 @@ describe("erasure subject of a new-format id", () => {
 
   it("does not map a lookalike to a handle, and answers no subject for a bad lineage id", () => {
     const H = "a".repeat(26);
-    const T52 = "b".repeat(52);
+    const T52 = "q".repeat(52);
     for (const executionId of [`h_${H}x:ingest`, `h_${H.slice(1)}:ingest`, `h_${H.toUpperCase()}:x`, `h_${H}-c-x`, `H_${H}:x`])
       expect(subjectOfExecution({ executionId })).toBe(`x:${executionId}`);
     for (const id of [`visuals-${H}`, `visuals-${H}-${T52}x`, `visuals-${H.toUpperCase()}-${T52}`, `turnvisuals-${H}-${T52}`])
@@ -2366,23 +2645,20 @@ describe("erasure subject of a new-format id", () => {
 
 with these imports added at the top of `subject.test.ts`: `import { opaqueIds } from "./opaqueIds";` and `import { testOpaqueIds } from "./opaqueIds/testing";`.
 
-Append to `apps/server/app/erasure/compliance.test.ts` (inside `describe("hydrateSubjectIndex", ...)`, after the "seeks to the user range" test; the existing test's `expect(seen.cursors).toHaveLength(2)` becomes the three calls below, because the `h_` range is walked after the `u_` range):
+In `apps/server/app/erasure/compliance.test.ts` edit the existing test `seeks to the user range and stops at its end, never walking the rest of the log` IN PLACE (do not add a copy: its old assertion of two cursor calls fails once the `h_` range is walked after the `u_` range). Rename it to `seeks to each user range (u_, then h_) and stops at its end, never walking the rest of the log` and replace its last two lines (the comment and `expect(seen.cursors).toHaveLength(2);`) with:
 
 ```ts
-  it("walks the u_ range and then the h_ range, each seeking to its prefix", async () => {
-    const tail = Array.from({ length: 50 }, (_, i) => `zz-${String(i).padStart(3, "0")}`);
-    const head = Array.from({ length: 50 }, (_, i) => `aa-${String(i).padStart(3, "0")}`);
-    const seen = { cursors: [] as (string | undefined)[] };
-    const idx = index();
-    expect(await hydrateSubjectIndex(listOnly([...head, ...ids, ...tail], seen), idx, 4)).toBe(6);
-    expect(seen.cursors[0]).toBe("u_");
-    expect(seen.cursors).toHaveLength(3); // u_ (two pages: the second reaches the first non-user id), then h_ (one page)
+    // 6 user ids at 4 per page: the u_ walk reads two pages (the second reaches the first non-user id and ends it), then the h_ walk reads one.
+    expect(seen.cursors).toHaveLength(3);
     expect(seen.cursors[2]).toBe("h_");
-  });
+```
 
+Then append (inside `describe("hydrateSubjectIndex", ...)`, after that test) the one new test below, and the redaction test after it (the new-format attribution is the only new behaviour; the seek is the edited test above):
+
+```ts
   it("attributes new-format executions to their h_<handle> subject from the id alone, and a user's two subjects stay apart", async () => {
     const H = "a".repeat(26);
-    const T52 = "b".repeat(52);
+    const T52 = "q".repeat(52);
     const fresh = [
       `h_${H}:ingest-${T52}.2`,
       `h_${H}:visualize-${T52}.2-r1`,
@@ -2402,13 +2678,13 @@ and, in the `warningFor`/`redactIds` tests of the same file (find them with `gre
 ```ts
   it("redacts an h_ execution id like a u_ one, whatever follows it", () => {
     const H = "a".repeat(26);
-    const T52 = "b".repeat(52);
+    const T52 = "q".repeat(52);
     for (const id of [`h_${H}:ingest-${T52}.2`, `h_${H}.c-${T52}~1`, `h_${H}`]) {
       const out = redactIds(`erasure of ${id} failed: ${id}`);
       expect(out).not.toContain(H);
       expect(out).toContain("<id>");
     }
-    expect(warningFor(`stuck h_${"c".repeat(26)}:x`)).not.toContain("c".repeat(26));
+    expect(warningFor(`stuck h_${"i".repeat(26)}:x`)).not.toContain("i".repeat(26));
   });
 ```
 
@@ -2423,7 +2699,7 @@ Append to `apps/server/app/status/forgetUser.test.ts` (reuse its fake `service` 
     expect(isUserExecution(`h_${H}:ingest-x`, U, H)).toBe(true);
     expect(isUserExecution(`h_${H}.c-x`, U, H)).toBe(true);
     expect(isUserExecution(`h_${H}:ingest-x`, U)).toBe(false);
-    expect(isUserExecution(`h_${"b".repeat(26)}:ingest-x`, U, H)).toBe(false);
+    expect(isUserExecution(`h_${"e".repeat(26)}:ingest-x`, U, H)).toBe(false);
     expect(isUserExecution(`u_${U}:ingest-x`, U, H)).toBe(true);
   });
 ```
@@ -2538,13 +2814,13 @@ Append to `apps/server/app/erasure/pgSteps.pg.test.ts`, after the existing `rows
     const { tenantId, users } = await tenantWith("handle@erase.test");
     const [u] = users as [(typeof users)[0]];
     const mine = "a".repeat(26);
-    const theirs = "b".repeat(26);
+    const theirs = "e".repeat(26);
     await db.owner.query(
       "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
       [u.userId, mine],
     );
-    const own = [`h_${mine}:ingest-${"c".repeat(52)}.2`, `h_${mine}.c-${"d".repeat(52)}`];
-    const other = `h_${theirs}:ingest-${"c".repeat(52)}.2`;
+    const own = [`h_${mine}:ingest-${"a".repeat(52)}.2`, `h_${mine}.c-${"q".repeat(52)}`];
+    const other = `h_${theirs}:ingest-${"a".repeat(52)}.2`;
     for (const id of [...own, other]) {
       await durable.pool.query("INSERT INTO loom.timers (execution_id, wake_at) VALUES ($1, 1)", [id]);
       await durable.pool.query(
@@ -2572,6 +2848,72 @@ Append to `apps/server/app/erasure/pgSteps.pg.test.ts`, after the existing `rows
       await count("SELECT count(*)::int AS n FROM loom.leases WHERE execution_id = $1", [other]),
     ).toBe(1);
     expect(await sql.handleOf?.(request(tenantId, u.userId))).toBeNull(); // the row is gone: nothing left to read it from
+  });
+
+  it("rows: scrubs scope and app_key from the erased read-model rows under h_<handle> (so no row links the handle to a uuid), and only those", async () => {
+    const { tenantId, users } = await tenantWith("scrub@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = "i".repeat(26);
+    const theirs = "m".repeat(26);
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const doc = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    const chat = "3a4b5c6d-7e8f-4a9b-8c1d-2e3f4a5b6c7d";
+    const tomb = (model: string, executionId: string, scope: string | null, appKey: string | null, erased = true) =>
+      db.owner.query(
+        "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ($1, $2, $3, $4, 0, $5, $6)",
+        [model, executionId, appKey, scope, erased ? null : "{}", erased],
+      );
+    const mineIngest = `h_${mine}:ingest-${"a".repeat(52)}.2`;
+    const mineChat = `h_${mine}.c-${"a".repeat(52)}`;
+    const theirsIngest = `h_${theirs}:ingest-${"a".repeat(52)}.2`;
+    const legacy = `u_${u.userId}:ingest-${doc}.2`;
+    await tomb("ingest-status", mineIngest, u.userId, doc);
+    await tomb("chat-activity", mineChat, u.userId, chat);
+    await tomb("ingest-status", theirsIngest, u.userId, doc); // another handle's row: not this erasure's to touch
+    await tomb("ingest-status", legacy, u.userId, doc); // old format: the documented residual, left as it is
+    const row = async (model: string, id: string) =>
+      (
+        await db.owner.query(
+          "SELECT execution_id, scope, app_key, erased FROM read_model_state WHERE model_id = $1 AND execution_id = $2",
+          [model, id],
+        )
+      ).rows[0];
+    // The control: before the step the row names the handle, the user and the document at once (the link to remove).
+    expect(await row("ingest-status", mineIngest)).toMatchObject({ scope: u.userId, app_key: doc });
+
+    await sql.rows(request(tenantId, u.userId));
+    await sql.rows(request(tenantId, u.userId)); // idempotent: the second run has no handle and nothing to scrub
+
+    expect(await row("ingest-status", mineIngest)).toEqual({
+      execution_id: mineIngest,
+      scope: null,
+      app_key: null,
+      erased: true,
+    });
+    expect(await row("chat-activity", mineChat)).toMatchObject({ scope: null, app_key: null, erased: true });
+    expect(await row("ingest-status", theirsIngest)).toMatchObject({ scope: u.userId, app_key: doc });
+    expect(await row("ingest-status", legacy)).toMatchObject({ scope: u.userId, app_key: doc });
+  });
+
+  it("rows: a live (not erased) read-model row is never blanked by the scrub", async () => {
+    const { tenantId, users } = await tenantWith("live@erase.test");
+    const [u] = users as [(typeof users)[0]];
+    const mine = "q".repeat(26);
+    await db.owner.query(
+      "UPDATE users SET id_handle = $2, email = 'erased:' || id::text, erasing_at = now() WHERE id = $1",
+      [u.userId, mine],
+    );
+    const id = `h_${mine}:ingest-${"q".repeat(52)}.2`;
+    await db.owner.query(
+      "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state, erased) VALUES ('ingest-status', $1, $2, $3, 0, '{}', false)",
+      [id, "0f8fad5b-d9cb-469f-a165-70867728950e", u.userId],
+    );
+    await sql.rows(request(tenantId, u.userId));
+    const { rows } = await db.owner.query("SELECT scope FROM read_model_state WHERE execution_id = $1", [id]);
+    expect(rows[0].scope).toBe(u.userId); // the readModels step purges live rows; the scrub only finishes tombstones
   });
 ```
 
@@ -2615,12 +2957,18 @@ export const listerPrefixes = (
   const exact = userPrefixes(userId, handle);
   return { exact, starts: exact.flatMap((p) => [`${p}:`, `${p}.c-`]) };
 };
+
+/** The same match for ONE handle's executions only (the `h_` half of `listerPrefixes`): the tombstone scrub in erasure's `rows` step. */
+export const handleListerPrefixes = (handle: string): { exact: string; starts: string[] } => {
+  const exact = `h_${handle}`;
+  return { exact, starts: [`${exact}:`, `${exact}.c-`] };
+};
 ```
 
 Append to `apps/server/app/opaqueIds/index.ts`:
 
 ```ts
-export { USER_ID_PREFIXES, isOwnedBy, listerPrefixes, userPrefixes } from "./prefixes";
+export { USER_ID_PREFIXES, handleListerPrefixes, isOwnedBy, listerPrefixes, userPrefixes } from "./prefixes";
 ```
 
 Replace the whole of `apps/server/app/subject.ts` with:
@@ -2682,7 +3030,6 @@ and replace everything from `const USER_PREFIX = "u_";` (the old constant and it
 ```ts
 export const HYDRATE_PAGE = 500;
 
-```ts
 const bootstrapOf = (executionId: string): EventEnvelope => ({
   id: `hydrate-${executionId}`,
   workflowId: "",
@@ -2729,7 +3076,6 @@ export async function hydrateSubjectIndex(
   }
   return attributed;
 }
-```
 ```
 
 (The old `USER_PREFIX` constant and its doc comment are deleted; `USER_ID_PREFIXES` replaces it.)
@@ -2860,7 +3206,7 @@ Replace `stopChat`, `cancelTitle` and `keys` in the returned object:
 
 and widen the parts' types: `status: { forgetUser(userId: string, handle?: string | null): Promise<unknown> };` and the same for `activity`. Also change `app.eraseSubject(userId: string, tenantId: undefined, ...)` to `eraseSubject(subjectId: string, tenantId: undefined, ...)`. (The existing wire test at line 152 expects `cancelTitle` to reject with a `RangeError` for a bad chat id: `legacyIds.chatTitle` throws one, so it still does.)
 
-`apps/server/app/erasure/pgSteps.ts`. Add `import { userPrefixes } from "../opaqueIds";`, change the return type to `Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf">`, and inside `pgErasureSql` before the `return`, add:
+`apps/server/app/erasure/pgSteps.ts`. Add `import { CHAT_ACTIVITY_MODEL } from "../chats/sessions";`, `import { handleListerPrefixes, userPrefixes } from "../opaqueIds";` and `import { INGEST_STATUS_MODEL } from "../status/model";`, change the return type to `Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf">`, and inside `pgErasureSql` before the `return`, add:
 
 ```ts
   /** The user's `users.id_handle`, read under the tenant while the row exists; null when there is none (or no row). */
@@ -2883,9 +3229,23 @@ Add `handleOf,` to the returned object, and replace the body of `rows` with:
       // 1. Loom retires the timers of terminal executions but has no prefix API: remove what is left, under both prefixes
       //    (`u_<uuid>` for runs before the deploy, `h_<handle>` after). This runs BEFORE the user row goes, because the handle that
       //    names the second prefix is on that row; a retry after the row is gone has no handle, and nothing left to find.
-      for (const prefix of userPrefixes(req.userId, await handleOf(req))) {
+      const handle = await handleOf(req);
+      for (const prefix of userPrefixes(req.userId, handle)) {
         await loom.query("DELETE FROM loom.timers WHERE starts_with(execution_id, $1)", [prefix]);
         await loom.query("DELETE FROM loom.leases WHERE starts_with(execution_id, $1)", [prefix]);
+      }
+      // 1b. The read-model tombstones under `h_<handle>` (left by the `readModels` step: `state` NULL, `erased`) still carry `scope` (the user
+      //     UUID) and `app_key` (the document or chat UUID) beside the handle: that row would link them for good. Scrub both while the handle
+      //     can still be read (it goes with the user row below). The loom role has UPDATE on the table and a FOR ALL policy (migration 0012);
+      //     only erased rows are touched, and a NULL scope is what the fold writes for a neutral row. Idempotent: a retry re-runs it.
+      if (handle !== null) {
+        const mine = handleListerPrefixes(handle);
+        await loom.query(
+          `UPDATE public.read_model_state SET scope = NULL, app_key = NULL
+            WHERE model_id = ANY($1::text[]) AND erased
+              AND (execution_id = $2 OR EXISTS (SELECT 1 FROM unnest($3::text[]) AS p WHERE starts_with(execution_id, p)))`,
+          [[INGEST_STATUS_MODEL, CHAT_ACTIVITY_MODEL], mine.exact, mine.starts],
+        );
       }
       // 2. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities, visual facts),
       //    tags (with their links and suggestions) and chats (turn items, reasoning texts). The handle goes with it.
@@ -2969,19 +3329,16 @@ import { listerPrefixes } from "../opaqueIds";
 export const pgUserExecutions =
   (loomPool: Pick<Pool, "query">): UserExecutionLister =>
   async (modelId, userId, handle) => {
+    // `exact` is the prefixes themselves, `starts` their `:` and `.c-` forms; one array per kind, so the statement is the same with or without a handle.
     const { exact, starts } = listerPrefixes(userId, handle);
-    // Without a handle the second set repeats the first: harmless, and the statement keeps one shape.
-    const [e1, e2] = [exact[0] as string, exact[1] ?? (exact[0] as string)];
-    const [s1, s2] = [starts[0] as string, starts[1] as string];
-    const [s3, s4] = [starts[2] ?? s1, starts[3] ?? s2];
     const { rows } = await loomPool.query<{ execution_id: string }>(
       `SELECT execution_id FROM public.read_model_state
         WHERE model_id = $1 AND NOT erased
-          AND (execution_id = $2 OR starts_with(execution_id, $3) OR starts_with(execution_id, $4)
-            OR execution_id = $5 OR starts_with(execution_id, $6) OR starts_with(execution_id, $7))
+          AND (execution_id = ANY($2::text[])
+            OR EXISTS (SELECT 1 FROM unnest($3::text[]) AS p WHERE starts_with(execution_id, p)))
         ORDER BY execution_id
         LIMIT ${LIST_BATCH}`,
-      [modelId, e1, s1, s2, e2, s3, s4],
+      [modelId, exact, starts],
     );
     return rows.map((r) => r.execution_id);
   };
@@ -3083,7 +3440,7 @@ describe("ensureGate", () => {
     await cold();
     const seen: string[] = [];
     const gate = ensureGate(() => {}, noSleep);
-    gate("z".repeat(26), () => seen.push("erased"));
+    gate("y".repeat(26), () => seen.push("erased"));
     await vi.waitFor(() => expect(seen).toEqual(["erased"]));
   });
 
@@ -3187,7 +3544,7 @@ describe("new-format execution ids", () => {
 });
 ```
 
-In `apps/server/app/status/ingestStatus.test.ts`: change the vitest import to `import { afterEach, describe, expect, it } from "vitest";`, add `import { OpaqueIds, opaqueIds } from "../opaqueIds";` and `import { testOpaqueIds } from "../opaqueIds/testing";`, and append (this is the cold-cache proof: the ready ingest is folded, published and fires `onReady` once; log order holds; a down key store is reported and the next boot folds the event):
+In `apps/server/app/status/ingestStatus.test.ts`: the file's `setup()` helper passes `ensureSleep: async () => {}` in the options it gives `new IngestStatus(...)` (so the down-key-store test below does not wait the real 250 + 500 + 1000 ms of backoff); change the vitest import to `import { afterEach, describe, expect, it } from "vitest";`, add `import { OpaqueIds, opaqueIds } from "../opaqueIds";` and `import { testOpaqueIds } from "../opaqueIds/testing";`, and append (this is the cold-cache proof: the ready ingest is folded, published and fires `onReady` once; log order holds; a down key store is reported and the next boot folds the event):
 
 ```ts
 describe("IngestStatus with new-format ids", () => {
@@ -3288,6 +3645,7 @@ describe("IngestStatus with new-format ids", () => {
       source: log,
       sensitive: {},
       bus,
+      ensureSleep: async () => {},
     });
     await next.boot();
     expect((await next.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({ status: "ready" });
@@ -3461,30 +3819,48 @@ describe("turnToVisualize with a new-format conversation", () => {
 In `apps/server/app/snapshots/pruner.test.ts`, insert before `describe("startSnapshotPruner"`:
 
 ```ts
+/** A log that lists a sorted array with Loom's real cursor semantics (strictly after the cursor, code-point order), as `compliance.test.ts` `listOnly` does. */
+const sortedLog = (ids: string[]) => {
+  const sorted = [...ids].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+  return vi.fn(async ({ cursor, limit }: { cursor?: string; limit?: number }) => {
+    const after = cursor === undefined ? sorted : sorted.filter((id) => id > cursor);
+    const executionIds = after.slice(0, limit ?? 1000);
+    return {
+      executionIds,
+      ...(after.length > executionIds.length && {
+        nextCursor: executionIds[executionIds.length - 1] as string,
+      }),
+    };
+  });
+};
+
 describe("sweepChatSnapshots over both id formats", () => {
-  it("walks the u_ range and then the h_ range, and prunes new-format conversations (every generation) and nothing else", async () => {
+  it("walks the u_ range and then the h_ range of a real sorted log, and prunes the conversations of both (every generation) and nothing else", async () => {
     const H = "a".repeat(26);
-    const T52 = "b".repeat(52);
+    const T52 = "q".repeat(52);
     const conversation = `h_${H}.c-${T52}`;
     const generation = `${conversation}~2`;
     const ingest = `h_${H}:ingest-${T52}.2`;
-    const cursors: (string | undefined)[] = [];
-    const { d } = deps([[CHAT]], {
-      listExecutionsPage: vi.fn(async ({ cursor }: { cursor?: string }) => {
-        cursors.push(cursor);
-        return cursor === "h_"
-          ? { executionIds: [conversation, generation, ingest, "zz-next"] }
-          : { executionIds: [CHAT, INGEST, "h_after-the-u_-range"] };
-      }),
-    });
+    const listExecutionsPage = sortedLog([
+      "aa-before-both-ranges", // sorts before h_: the h_ seek must skip it
+      ingest,
+      generation,
+      conversation,
+      INGEST,
+      CHAT_GEN2,
+      CHAT,
+      "zz-after-both-ranges", // sorts after u_: the walk must stop here, not read on
+    ]);
+    const { d } = deps([[]], { listExecutionsPage });
     const report = await sweepChatSnapshots(d);
-    expect(cursors).toEqual(["u_", "h_"]);
+    expect(listExecutionsPage.mock.calls.map(([o]) => o.cursor)).toEqual(["u_", "h_"]);
     expect(vi.mocked(d.prune).mock.calls.map((c) => c[0])).toEqual([
       CHAT,
+      CHAT_GEN2,
       conversation,
       generation,
     ]);
-    expect(report.executions).toBe(3);
+    expect(report.executions).toBe(4);
   });
 });
 ```
@@ -3493,7 +3869,7 @@ In `apps/server/app/bootIngest.test.ts`, extend the `recoveryOwns` test with the
 
 ```ts
     const handle = "a".repeat(26);
-    const token = "b".repeat(52);
+    const token = "q".repeat(52);
     expect(recoveryOwns(`h_${handle}:ingest-${token}.2`)).toBe(true);
     expect(recoveryOwns(`h_${handle}:visualize-${token}.2-r1`)).toBe(true);
     expect(recoveryOwns(`h_${handle}:visualize-turn-${token}-6-r2`)).toBe(true);
@@ -3648,7 +4024,14 @@ export const generationOf = (executionId: string): number | undefined => {
 
 - [ ] **Step 5: The ingest status gate, the ready hook and the readers**
 
-In `apps/server/app/status/ingestStatus.ts`: remove `import { ingestExecutionId } from "../documents/ingest";`, add `import { legacyIds, opaqueIds } from "../opaqueIds";` and `import { ensureGate } from "./ensureGate";`, and replace the class header, fields and constructor with:
+In `apps/server/app/status/ingestStatus.ts`: remove `import { ingestExecutionId } from "../documents/ingest";`, add `import { legacyIds, opaqueIds } from "../opaqueIds";` and `import { ensureGate } from "./ensureGate";`, add to `IngestStatusOptions` (after `onError?`):
+
+```ts
+  /** The pause between `ensure` attempts (default: a real sleep, 250 ms doubling over 4 attempts). A test passes a no-op so a down key store does not make it wait 1.75 s. */
+  ensureSleep?: (ms: number) => Promise<void>;
+```
+
+and replace the class header, fields and constructor with:
 
 ```ts
 export class IngestStatus implements DocumentStatusReads {
@@ -3659,7 +4042,7 @@ export class IngestStatus implements DocumentStatusReads {
 
   constructor(private readonly o: IngestStatusOptions) {
     this.report = o.onError ?? logClass;
-    this.gate = ensureGate((err) => this.report(err));
+    this.gate = ensureGate((err) => this.report(err), o.ensureSleep);
     this.service = new ReadModelService(o.writer, {
       liveSource: o.source,
       sensitive: o.sensitive,
@@ -3778,7 +4161,7 @@ In `forgetDocument` add `await opaqueIds.loadUser(identity);` as its first line.
 
 - [ ] **Step 6: The chat parsers and the turn ids**
 
-`apps/server/app/chats/ids.ts`: the file now starts with these imports, and everything from `declare const chatConversation` through the end of the file is replaced (the constants between them, `CHAT_FLOW_ID` through `isChatFlowId`, are unchanged):
+`apps/server/app/chats/ids.ts`: two regions change and the constants between them do not. (1) The file head, lines 1-9 (the `isValidConversationId` import, the `UUID_PATTERN` and `CANONICAL` declarations and the `CHAT_CONVERSATION` regexp), is replaced by the two lines of the first block below (`isValidConversationId` is imported by the second block's code, where `legacyIds` owns it, so nothing else in the file needs it). (2) The region from `declare const chatConversation` to the end of the file is replaced by the second block. `CHAT_FLOW_ID` through `isChatFlowId` (lines 11-31) stay exactly as they are: the second block must NOT declare `isChatFlowId` again.
 
 ```ts
 import { type ChatConversationId, UUID_PATTERN, legacyIds, opaqueIds } from "../opaqueIds";
@@ -3788,8 +4171,6 @@ export type { ChatConversationId };
 ```
 
 ```ts
-export const isChatFlowId = (id: string): boolean => id === CHAT_FLOW_ID || id === CHAT_GK_FLOW_ID;
-
 /**
  * The Loom conversation id of a chat. PHASE 2 switches this to `UserIds.conversation` (`h_<H>.c-<C>`); until then chats keep the old
  * `u_<user>.c-<chat>` (Loom ids may not contain a colon, so the `u_<uuid>:` form is not available). `subjectOfExecution` and
@@ -3816,7 +4197,7 @@ export const isRecoverableChatExecution = (id: string): boolean =>
   isChatConversation(id) || isChatTitleExecution(id);
 ```
 
-`apps/server/app/chats/activity.ts`: add `import { opaqueIds } from "../opaqueIds";`, `import { ensureGate } from "../status/ensureGate";` and `isChatConversation` to the `./ids` import; replace `isChatExecution` with `export const isChatExecution = (executionId: string): boolean => isChatConversation(executionId);` (shape only); replace the class header with:
+`apps/server/app/chats/activity.ts`: add `import { opaqueIds } from "../opaqueIds";`, `import { ensureGate } from "../status/ensureGate";` and `isChatConversation` to the `./ids` import; add the same `ensureSleep?: (ms: number) => Promise<void>;` member (doc comment as for `IngestStatusOptions`) to `ChatActivityOptions`; replace `isChatExecution` with `export const isChatExecution = (executionId: string): boolean => isChatConversation(executionId);` (shape only); replace the class header with:
 
 ```ts
 export class ChatActivity {
@@ -3826,7 +4207,7 @@ export class ChatActivity {
 
   constructor(private readonly o: ChatActivityOptions) {
     this.report = o.onError ?? logClass;
-    this.gate = ensureGate((err) => this.report(err));
+    this.gate = ensureGate((err) => this.report(err), o.ensureSleep);
     this.service = new ReadModelService(o.writer, {
       liveSource: o.source,
       sensitive: o.sensitive,
@@ -3845,7 +4226,6 @@ and the `onEvent`, `drain` and `close` members (the `forgetUser` member is the o
     this.gate(opaqueIds.handleOf(event.executionId), () => this.service.handleEvent(event));
   };
 
-  /** Wait for every fold scheduled so far. */
   /** User erasure: tombstones every chat-activity row of the user, the neutral rows of their ingest and title executions included. */
   forgetUser(userId: string, handle?: string | null): Promise<number> {
     return forgetUserRows(
@@ -3858,6 +4238,7 @@ and the `onEvent`, `drain` and `close` members (the `forgetUser` member is the o
     );
   }
 
+  /** Wait for every fold scheduled so far (the gate's queued folds first). */
   async drain(): Promise<void> {
     await this.gate.idle();
     await this.service.drain();
@@ -3871,7 +4252,6 @@ and the `onEvent`, `drain` and `close` members (the `forgetUser` member is the o
 }
 ```
 
-with `await this.gate.idle();` added as the first line of `drain()` and `close()`.
 
 `apps/server/app/flows/visualize-document/runs.ts`: add `import { opaqueIds } from "../../opaqueIds";` and `isVisualizeExecution` to the `../../status/model` import, and replace `onEvent` (the recorder classifies from the shape, then resolves the user inside its own chain, after `ensure`):
 
@@ -4074,7 +4454,7 @@ git commit -m "feat(ids): dual-format parsers everywhere, the ensure gate, and a
   - `VisualsStarterOptions.ids: UserIdSource` (required) and `.executions?: ExecutionRecorder`; `hasVisualsHead(lineage: Pick<Lineage, "head">, ids: Pick<UserIdSource, "load" | "cached">)`; `commitPlan(lineage, ids: Pick<UserIdSource, "ensureUser">, ref, plan, now)`; `VisualizeDeps.ids`; `loomSuggestTagsStarter(runtime, o: { ids: UserIdSource; enabled?: () => boolean })`; `UiRouteDeps.ids: Pick<UserIdSource, "load" | "cached">`; `ComposeOptions.ids?: OpaqueIds` (a test seam) and the `ids` member of what `buildServer` returns.
   - `flows/visualize-document/testSupport.ts`: `lineageTestIds` (a shared `testIdSource()`) and `async experienceIdOf(ref)` (the new-format line a test commits to and reads back).
 
-Behaviour: a start awaits `ensureUser` (a key-store outage throws before Loom sees anything), builds the new-format id, records it on the document (ingest and visualize run 0, before the start), then starts. A cancel or a state read tries the candidates of both formats and never mints a key. The commit writes the new line, a read tries the new line first and falls back to the old. Flow hashes do not move (F5): the tests below pin them.
+Behaviour: a start awaits `ensureUser` (a key-store outage throws before Loom sees anything), builds the new-format id, records it on the document (ingest and visualize run 0, before the start), then starts. **Task 2 already records the legacy ids through the same `ExecutionRecorder` (wired in `compose.ts`); this task only switches WHICH id is recorded** (the new-format one) and moves `loomIngest`'s second parameter into its options object. A cancel or a state read tries the candidates of both formats and never mints a key. The commit writes the new line, a read tries the new line first and falls back to the old. Flow hashes do not move (F5): the tests below pin them.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4265,7 +4645,7 @@ describe("suggest-tags execution ids", () => {
     await loomSuggestTagsStarter({ start } as never, { ids }).start(r);
     const user = await ids.ensureUser(r);
     expect(started).toEqual([user.suggestTags(r.documentId, 1)]);
-    expect(started[0]).toMatch(/^h_[a-z2-7]{26}:suggest-tags-[a-z2-7]{52}-r1$/);
+    expect(started[0]).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:suggest-tags-[a-z2-7]{51}[aq]-r1$/);
     expect(started[0]).not.toContain(r.userId);
     expect(started[0]).not.toContain(r.documentId);
   });
@@ -4347,8 +4727,8 @@ describe("the visualize execution ids a start builds", () => {
   it("are h_<handle>:visualize-<token>[.<gen>][-r<n>], with no plain user or document id and the generation in the clear", () => {
     const r = ref();
     const user = deterministicUser(r.userId);
-    expect(user.visualize(r.documentId, 1)).toMatch(/^h_[a-z2-7]{26}:visualize-[a-z2-7]{52}$/);
-    expect(user.visualize(r.documentId, 3)).toMatch(/^h_[a-z2-7]{26}:visualize-[a-z2-7]{52}\.3$/);
+    expect(user.visualize(r.documentId, 1)).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:visualize-[a-z2-7]{51}[aq]$/);
+    expect(user.visualize(r.documentId, 3)).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:visualize-[a-z2-7]{51}[aq]\.3$/);
     expect(user.visualize(r.documentId, 3, 999)).toMatch(/\.3-r999$/);
     for (const id of [user.visualize(r.documentId, 3), user.visualize(r.documentId, 1, 2)]) {
       expect(id).not.toContain(r.userId);
@@ -4584,7 +4964,7 @@ export const documentLineageCandidates = (
 
 - [ ] **Step 4: Move the builders**
 
-`apps/server/app/documents/ingest.ts`: delete `ingestExecutionId` (and its doc comment), replace the import of `executionIdFor` with `import { type UserIdSource, existingUser, ingestCandidates } from "./executionCandidates";` and `import type { ExecutionRecorder } from "./executionIds";`, and replace everything from `const target = (identity: Identity` to the end of the file with (`INGEST_GENERATION`, `ingestStartInput`, `checkGeneration` and the `IngestPort` interface above it stay):
+`apps/server/app/documents/ingest.ts`: delete `ingestExecutionId` (and its doc comment), replace the import of `executionIdFor` with `import { type UserIdSource, existingUser, ingestCandidates } from "./executionCandidates";` (the `ExecutionRecorder` import Task 2 added stays), and replace everything from `const target = (identity: Identity` to the end of the file with (`INGEST_GENERATION`, `ingestStartInput`, `checkGeneration` and the `IngestPort` interface above it stay):
 
 ```ts
 const target = (identity: Identity, documentId: string, generation: number) => {
@@ -4665,8 +5045,9 @@ import {
   existingUser,
   visualizeCandidates,
 } from "../../documents/executionCandidates";
-import type { ExecutionRecorder } from "../../documents/executionIds";
 ```
+
+(the `ExecutionRecorder` import Task 2 added stays)
 
 2. Delete `const MAX_GENERATION = 999_999_999;` and the whole `visualizeExecutionId` function with its doc comment (the new builder validates the generation and the run number itself).
 3. Replace `hasVisualsHead` (its doc comment included) with:
@@ -4700,30 +5081,20 @@ export const hasVisualsHead =
   };
 ```
 
-4. In `VisualsStarterOptions` add before `runs?`:
+4. In `VisualsStarterOptions` add before `executions?` (which Task 2 added):
 
 ```ts
   /** The id cache: a start builds the new-format id with the user's key; a read or a cancel also tries the old format. Required: there is no id without it. */
   ids: UserIdSource;
-  /** Records the automatic run's id on the document before it starts (migration 0038), so the boot sweeps can compare it with the status rows. */
-  executions?: ExecutionRecorder;
 ```
 
-make the `options` parameter of `loomVisualsStarter` required (`options: VisualsStarterOptions,`, no `= {}`), and add `ids,` and `executions,` to its destructuring.
-5. In `startOne`, replace the line `const executionId = visualizeExecutionId(...)` with:
+make the `options` parameter of `loomVisualsStarter` required (`options: VisualsStarterOptions,`, no `= {}`), and add `ids,` to its destructuring (`executions,` is already there).
+5. In `startOne`, replace ONLY the line `const executionId = visualizeExecutionId(...)` with the two lines below. The `if (rerun === undefined) await executions?.recordVisualize(...)` block Task 2 added right after it stays as it is: it now records the new-format id, because it records `executionId`.
 
 ```ts
     // A key-store outage throws here, before Loom sees anything: a start never falls back to an id with the plain UUIDs.
     const user = await ids.ensureUser({ tenantId: input.tenantId, userId: input.userId });
     const executionId = user.visualize(input.documentId, generation, rerun);
-    // The automatic run's id goes on the document BEFORE the start (the boot sweeps compare it with the status rows); a re-run is never swept.
-    if (rerun === undefined)
-      await executions?.recordVisualize(
-        { tenantId: input.tenantId, userId: input.userId },
-        input.documentId,
-        generation,
-        executionId,
-      );
 ```
 
 6. Add `stateOf` before `reconcile` and use it in `reconcile` and `recordUnvisualized` (the old inline `loadState(visualizeExecutionId(...))` calls become `await stateOf(ref, generation, last.run === 0 ? undefined : last.run)` and `await stateOf(d, d.generation, undefined)`):
@@ -4872,29 +5243,32 @@ export const commitPlan = async (
   };
 ```
 
-`apps/server/app/compose.ts`: add the imports `import { PgExecutionRecorder } from "./documents/executionIds";`, `import { OpaqueIds, opaqueIds } from "./opaqueIds";` and `import { PgHandleStore } from "./opaqueIds/pgHandles";`; add `ids?: OpaqueIds;` (a test seam with a doc comment) to `ComposeOptions`; after `const fields = new FieldCrypto(keys);` add
+`apps/server/app/compose.ts`: add the imports `import { OpaqueIds, opaqueIds } from "./opaqueIds";` and `import { PgHandleStore } from "./opaqueIds/pgHandles";` (the `PgExecutionRecorder` import and the `executions` constant are Task 2's); add `ids?: OpaqueIds;` (a test seam with a doc comment) to `ComposeOptions`; after `const fields = new FieldCrypto(keys);` add
 
 ```ts
   // The id module (R14): the per-user key cache and the handle store. Installed process-wide so the synchronous parsers (the status fold, the
-  // stores' subject mapping) can read new-format ids; `bootIngest` warms it before anything runs. `executions` records each document's current ids.
+  // stores' subject mapping) can read new-format ids; `bootIngest` warms it before anything runs. `executions` (Task 2) records each document's current ids.
   const ids = options.ids ?? new OpaqueIds(keys, new PgHandleStore(pool));
   opaqueIds.install(ids);
-  const executions = new PgExecutionRecorder(pool);
 ```
 
-and wire `ids` into: `visualize.deps` (`ids,` after `lineage: visualsLineageOf,`), `loomSuggestTagsStarter(app.runtime, { ids, enabled: ... })`, `loomVisualsStarter(app.runtime, visualize.flow, { ids, executions, ... visualized: hasVisualsHead(visualsLineageOf, ids), ... })`, `loomIngest(app.runtime, { ids, executions })` (both branches of the `wrapIngest` ternary), `erasureDeps({ ..., ids, ... })` (the erasure parts' `ids`, from Task 3), `uiRoutes({ ..., ids, ... })`, and add `ids,` (with a doc comment: `bootIngest` warms it before the status model boots) as the third member of the object `buildServer` returns, after `app` and `server`. The two pg-backed `sql` members already come from `pgErasureSql`, whose `handleOf` Task 3 added.
+and wire `ids` into: `visualize.deps` (`ids,` after `lineage: visualsLineageOf,`), `loomSuggestTagsStarter(app.runtime, { ids, enabled: ... })`, `loomVisualsStarter(app.runtime, visualize.flow, { ids, executions, ... visualized: hasVisualsHead(visualsLineageOf, ids), ... })` (`executions` is already there; add `ids`), `loomIngest(app.runtime, { ids, executions })` (both branches of the `wrapIngest` ternary; Task 2 had `loomIngest(app.runtime, executions)`), `erasureDeps({ ..., ids, ... })` (the erasure parts' `ids`, from Task 3), `uiRoutes({ ..., ids, ... })`, and add `ids,` (with a doc comment: `bootIngest` warms it before the status model boots) as the third member of the object `buildServer` returns, after `app` and `server`. The two pg-backed `sql` members already come from `pgErasureSql`, whose `handleOf` Task 3 added.
 
 - [ ] **Step 5: Move every existing caller to the new builders**
 
-Typecheck now lists every caller: `pnpm typecheck:tests` reports about 180 errors in about 45 files, all of the five kinds below. Fix them in this order; each rule is mechanical and the compiler lists what is left.
+Typecheck now lists every caller: `pnpm typecheck:tests` reports about 180 errors in about 45 files, all of the five kinds below. Fix them in this order; each rule is mechanical and the compiler lists what is left. **Report every file you touch.** The implementer's report for this task must contain the complete list of files changed in steps 5 and 6 (`git diff --name-only` against the previous commit, grouped as: files the rewrite script changed, files changed by hand, support files), so the reviewer reads a list instead of discovering it. Run `pnpm typecheck:tests` before the script (to record the error count and the file list it prints), after it (what is left to do by hand) and after the last hand edit (it must be clean).
 
-1. **Removed old builders.** `ingestExecutionId`, `visualizeExecutionId` and `suggestTagsExecutionId` are gone; `experienceIdOf` is gone from `lineage.ts`. A test that wants the OLD id (a status row or a run "from before the deploy") imports `legacyIngestId`, `legacyVisualizeId` or `legacySuggestTagsId` from `opaqueIds/testing` (same argument order as before; `legacyIngestId`'s generation still defaults to 2). Run this once from `apps/server/app` to rewrite the imports and calls (it is idempotent):
+1. **Removed old builders.** `ingestExecutionId`, `visualizeExecutionId` and `suggestTagsExecutionId` are gone; `experienceIdOf` is gone from `lineage.ts`. A test that wants the OLD id (a status row or a run "from before the deploy") imports `legacyIngestId`, `legacyVisualizeId` or `legacySuggestTagsId` from `opaqueIds/testing` (same argument order as before; `legacyIngestId`'s generation still defaults to 2). Run this once from `apps/server/app` to rewrite the imports and calls (it is idempotent). It may touch only `*.test.ts` files and the four support files `ui/testSupport.ts`, `flows/ingest-document/testing.ts`, `flows/ingest-document/recoveryHarness.ts` and `documents/testHarness.ts`; its first act is a check that FAILS (exit 1, nothing written) when any other file still uses an old builder, so a source file the earlier steps missed is fixed by hand first and named in the report:
 
 ```bash
 python3 - <<'PY'
-import os, re, subprocess
+import os, re, subprocess, sys
 names = {"ingestExecutionId": "legacyIngestId", "visualizeExecutionId": "legacyVisualizeId", "suggestTagsExecutionId": "legacySuggestTagsId"}
+SUPPORT = {"./ui/testSupport.ts", "./flows/ingest-document/testing.ts", "./flows/ingest-document/recoveryHarness.ts", "./documents/testHarness.ts"}
 files = subprocess.check_output("grep -rlE 'ingestExecutionId|visualizeExecutionId|suggestTagsExecutionId' . --include='*.ts'", shell=True, text=True).split()
+outside = sorted(f for f in files if not (f.endswith(".test.ts") or f in SUPPORT))
+if outside:
+    sys.exit("hand-edit these first (not a test, not one of the four support files):\n  " + "\n  ".join(outside))
 for f in files:
     s = open(f).read()
     used = set()
@@ -4915,13 +5289,15 @@ for f in files:
 PY
 ```
 
+The guard is the script's own: it opens only paths from `files`, after checking that each is a test or one of the four support files. Afterwards list what it wrote with `git status --short apps/server/app` and put that list in the report (the files steps 3 and 4 changed by hand, such as the builders, `compose.ts`, `routes.ts` and `ingestStack.ts`, are listed separately). Biome merges an import the file already had from the same module.
+
    Where a test asserts the id a STARTER built (a `starts` list, a `started` set, a cancel list for a user who has a handle), the expected value is the new-format id, not the old one: use `deterministicUser(userId).visualize(documentId, generation, rerun)` (or `.ingest`, `.suggestTags`), which equals what a starter given `testIdSource()` builds, with no await. Keep `legacyVisualizeId` where the test seeds an old-format run on purpose (a reconcile or a cancel for a user with no handle).
 2. **Starters need `ids`.** `loomIngest(runtime)` becomes `loomIngest(runtime, { ids: testIdSource() })`, `loomSuggestTagsStarter(runtime, opts)` becomes `loomSuggestTagsStarter(runtime, { ids: testIdSource(), ...opts })`, and `loomVisualsStarter(runtime, flow, opts)` becomes `loomVisualsStarter(runtime, flow, { ids: testIdSource(), ...opts })` (a call with no options gets the object). Import `testIdSource` from `opaqueIds/testing`. A test that also needs the user's ids afterwards (`cancel` for a user with a handle, a reconcile of a new-format run) creates `const ids = testIdSource()`, passes it, and calls `await ids.ensureUser(ref)` first.
 3. **The lineage tests.** `experienceIdOf` now lives in `flows/visualize-document/testSupport.ts` as an async helper, and `commitPlan` takes the id cache as its second argument. In `flows/visualize-document/{lineage,commit,flow,recovery,rollout.pg,lineage.erasure.pg}.test.ts`, `ui/{routes,visuals.e2e}.test.ts`, `storage/{pgContentStore.pg,lineageGc.pg}.test.ts` and `documents/visuals.e2e.pg.test.ts`: import `experienceIdOf` and `lineageTestIds` from `testSupport`, write `await experienceIdOf(ref)`, and write `commitPlan(lineage, lineageTestIds, ref, plan, now)`. A sync arrow that called `experienceIdOf` becomes `async` and its callers `await` it (`lineage.erasure.pg.test.ts` has one: `streamOf`). Deps objects typed `VisualizeDeps` or passed to `commitEffect` and `uiRoutes` get `ids: lineageTestIds` beside their `lineage`.
-4. **Tests with a stub pool.** `buildServer` now builds a `PgHandleStore` over `options.pool`. A test whose pool is a stub (`status/compose.test.ts`) passes the new seam `ids: new OpaqueIds(keys, new AutoHandleStore())` and the same `keys` it gives `buildServer` (`AutoHandleStore` and `OpaqueIds` come from `opaqueIds/testing` and `opaqueIds`).
+4. **Tests with a stub pool.** `buildServer` now builds a `PgHandleStore` over `options.pool`. A test whose pool is a stub (`status/compose.test.ts`) passes the new seam `ids: new OpaqueIds(keys, new AutoHandleStore())` and the same `keys` it gives `buildServer` (`AutoHandleStore` and `OpaqueIds` come from `opaqueIds/testing` and `opaqueIds`). `buildServer` installs the cache process-wide and only `bootIngest`'s `stop()` uninstalls it (Task 6), so such a test, and any test that builds a server without booting it, adds `afterEach(() => opaqueIds.install(undefined));` (import `opaqueIds` from `../opaqueIds`).
 5. **`hasVisualsHead`** takes the id cache as its second argument: `hasVisualsHead(lineage, testIdSource())`.
 
-`flows/ingest-document/testing.ts`, `recoveryHarness.ts`, `ui/testSupport.ts` and `documents/testHarness.ts` are support files with the same errors: `loomIngest(runtime, { ids: testIdSource() })` in the harness, and the old-format helper for the rows they seed. The harness's `loomIngest` call is the one the pg and e2e suites use: it must pass the stack's own id cache (`composed.ids`, the member `buildServer` returns), not a fresh one, so a test that reads an execution's log by id builds the id from the same keys.
+`flows/ingest-document/testing.ts`, `recoveryHarness.ts`, `ui/testSupport.ts` and `documents/testHarness.ts` are support files with the same errors: `loomIngest(runtime, { ids: testIdSource() })` in the harness, and the old-format helper for the rows they seed. `documents/testHarness.ts` has no composed server (only `startIngestStack` has `composed`): its `loomIngest(loom.runtime)` call (line 263) becomes `loomIngest(loom.runtime, { ids: testIdSource() })`. Only `startIngestStack` (`documents/ingestStack.ts`), which has `composed`, passes `composed.ids`: any call there that builds a port or an id (the `runIds` helper below) uses the stack's own cache, so a test that reads an execution's log by id builds the id from the same keys.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -4954,6 +5330,8 @@ and, in the object `startIngestStack` returns (beside `composed`):
 
 (`2` is `INGEST_GENERATION`, a new document's first generation.) Then, in each failing test, replace the old-format helper that names a real run with `await st.runIds.<family>(identity, ...)`: the test keeps `legacyIngestId`, `legacyVisualizeId` and `legacySuggestTagsId` only where it seeds an old-format run on purpose (a status row, a reconcile). The files that fail this way on a first run are `documents/ingest.e2e.pg.test.ts`, `documents/visuals.e2e.pg.test.ts`, `documents/tags.e2e.pg.test.ts`, `flows/ingest-document/providers.pg.test.ts`, `flows/ingest-document/eventLog.pg.test.ts` (only where it reads a run an upload started), `chats/golden.e2e.pg.test.ts`, `chats/summary.e2e.pg.test.ts`, `erasure/erasure.after.e2e.pg.test.ts` and `erasure/suggestTags.restart.e2e.pg.test.ts`; a test that starts a run itself with `runtime.start(..., { executionId: legacyIngestId(...) })` (the flow-level tests) is unaffected, because it chose the id. The suites that seed status rows directly (`flows/visualize-document/{ready,rollout,runs}.pg.test.ts`, `documents/sweepSql.pg.test.ts`, `storage/lineageGc.pg.test.ts`) fail the other way: a sweep lists no document because its row has no stored id; each `INSERT INTO read_model_state` into those suites is followed by `await backfillExecutionIds(owner);` (Task 2 step 6), and a lineage test reads the line through `await experienceIdOf(ref)` (step 5, rule 3).
 
+Before the commit run `pnpm typecheck:tests` once more (it must be clean) and finish the report with the complete list of touched files from steps 5 and 6, each marked as script-written, hand-edited test, or support file.
+
 - [ ] **Step 7: Typecheck, lint, commit**
 
 Run: `pnpm exec biome check --write apps/server/app && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
@@ -4969,12 +5347,12 @@ git commit -m "feat(ids): the document flows build opaque ids; reads and cancels
 ### Task 6: Connections SQL, sealed flow-input ids and the boot warm-up (O2, F4, F6, F11)
 
 **Files:**
-- Modify: `apps/server/app/ui/connections.ts:19-27,50,86` (`EXEC_KEY`, `RELATED_SQL`, `ENTITIES_SQL`), `apps/server/app/bootIngest.ts` (the warm-up before the status boot), `apps/server/app/sensitive.ts` (seal the id fields of flow inputs), `apps/server/app/flows/ingest-document/testing.ts` (the raw-log proof accepts them sealed)
+- Modify: `apps/server/app/ui/connections.ts:24,61,109` (`EXEC_KEY`, `RELATED_SQL`, `ENTITIES_SQL`), `apps/server/app/bootIngest.ts` (the warm-up before the status boot, the stored-id repair after it, the uninstall at shutdown), `apps/server/app/sensitive.ts` (seal the id fields of flow inputs), `apps/server/app/flows/ingest-document/testing.ts` (the raw-log proof accepts them sealed)
 - Test: `apps/server/app/ui/connections.pg.test.ts`, `apps/server/app/bootIngest.test.ts`, `apps/server/app/sensitive.test.ts`, `apps/server/app/flows/ingest-document/eventLog.pg.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2 (`documents.ingest_execution_id`), Task 5 (`buildServer().ids`), Task 1 (`OpaqueIds.warm`).
-- Produces: the connections reader no longer builds an id in SQL (the only remaining `'u_' ||` expression in the application's TypeScript is gone); `bootIngest` warms the key cache before the status model boots; `FLOW_INPUT_IDS` in `sensitive.ts`: the `tenantId`, `userId`, `documentId` and `chatId` of a flow's start input and of every step's input are sealed under the subject key.
+- Produces: the connections reader no longer builds an id in SQL (the only remaining `'u_' ||` expression in the application's TypeScript is gone); `bootIngest` warms the key cache before the status model boots, repairs the stored execution ids (`repairStoredExecutionIds`, Task 2) once the status model has caught up and before recovery and the sweeps start, and uninstalls the process-wide id cache at shutdown; `FLOW_INPUT_IDS` in `sensitive.ts`: the `tenantId`, `userId`, `documentId` and `chatId` of a flow's start input and of every step's input are sealed under the subject key.
 
 Decision (hard question 6, F6): connections STORES. It compares the document's `ingest_execution_id` (recorded by the application when it starts the ingest; backfilled by migration 0038 for a run that began before the deploy), exactly as the five sweep functions now do, instead of computing the id in application code: a computation needs a second query per request and an over-fetch to keep `LIMIT $3` correct (the readiness filter decides which documents count), for no gain. The comparison stays a key lookup: the id is a plain column in the lateral subquery's output, which keeps the "leakproof comparison" property the existing comment relies on.
 
@@ -5011,9 +5389,11 @@ In `apps/server/app/ui/connections.pg.test.ts`: change the harness import to `im
       ch("fresh", 1),
       ch("unrecorded", 1),
     ]);
-    expect(shared).toBeTruthy();
-    const names = (await read("a"))?.entities.flatMap((e) => e.documents.map((d) => d.documentId));
-    expect(names?.sort()).toEqual([id("fresh"), id("old")].sort());
+    const entities = (await read("a"))?.entities ?? [];
+    expect(entities.map((e) => e.entityId)).toEqual([shared]); // the seeded entity is the one listed
+    expect(entities[0]?.documents.map((d) => d.documentId).sort()).toEqual(
+      [id("fresh"), id("old")].sort(),
+    );
   });
 ```
 
@@ -5059,7 +5439,18 @@ In `apps/server/app/sensitive.test.ts`, replace the test `leaves an ingest execu
   });
 ```
 
-In `apps/server/app/bootIngest.test.ts`: the fake build gets an id cache. Add `ids: { warm: warmIds },` to the `built` object of `parts()` (before `vectors: {},`), declare `let warmIds: () => Promise<number> = async () => 0;` above `beforeEach`, reset it there (`warmIds = async () => 0;`), and append:
+In `apps/server/app/bootIngest.test.ts`: the fake build gets an id cache. Add `import { opaqueIds } from "./opaqueIds";`, add `ids: { warm: warmIds },` to the `built` object of `parts()` (before `vectors: {},`), declare `let warmIds: () => Promise<number> = async () => 0;` and `let repairIds: () => Promise<number> = async () => 0;` above `beforeEach`, reset both there, add next to the other `vi.mock` calls
+
+```ts
+vi.mock("./documents/executionIds", () => ({
+  repairStoredExecutionIds: async () => {
+    calls.push("repairIds");
+    return repairIds();
+  },
+}));
+```
+
+and append:
 
 ```ts
 describe("bootIngest: the id key cache", () => {
@@ -5080,6 +5471,30 @@ describe("bootIngest: the id key cache", () => {
     await expect(bootIngest(parts())).rejects.toThrow("id keys failed to boot");
     expect(calls).not.toContain("bootStatus");
     expect(calls).toContain("closeApp");
+  });
+
+  it("repairs the stored execution ids after the status model has caught up and before recovery or the sweeps start", async () => {
+    repairIds = async () => 2;
+    await bootIngest(parts());
+    expect(calls.indexOf("repairIds")).toBeGreaterThan(calls.indexOf("bootStatus"));
+    expect(calls.indexOf("repairIds")).toBeLessThan(calls.findIndex((c) => c.startsWith("startRecovery")));
+    expect(calls.indexOf("repairIds")).toBeLessThan(calls.indexOf("startSweeper"));
+  });
+
+  it("a failed repair cleans up with the fixed label, never starts recovery, and never prints an id", async () => {
+    repairIds = async () => {
+      throw new Error("db down: u_secret");
+    };
+    await expect(bootIngest(parts())).rejects.toThrow("stored execution ids failed to boot");
+    expect(calls.some((c) => c.startsWith("startRecovery"))).toBe(false);
+    expect(calls).toContain("closeApp");
+  });
+
+  it("stop() removes the process-wide id cache, so the next stack in the same process starts cold", async () => {
+    opaqueIds.install({} as never);
+    const booted = await bootIngest(parts());
+    await booted.stop();
+    expect(opaqueIds.current()).toBeUndefined();
   });
 });
 ```
@@ -5130,6 +5545,33 @@ In `apps/server/app/bootIngest.ts`, between `await verifyVectors(vectors, cleanu
 ```
 
 Warming happens before `bootStatus(status, cleanup)`, so it runs before the status fold, before recovery and before any observer reads a new-format id; the `h_` runs recovery re-drives need no key (ownership is from the shape), but the fold's key and scope do.
+
+Directly after `await bootStatus(status, cleanup);` (the status model's catch-up has then written every status row, including those an OLD pod's executions produced during a rolling deploy), add the repair of the stored ids, and import `repairStoredExecutionIds` from `./documents/executionIds` and `opaqueIds` from `./opaqueIds`:
+
+```ts
+  // An old pod never writes `documents.ingest_execution_id` or `visualize_execution_id` (migration 0038), so a document it ingested during a
+  // rolling deploy has an old-format status row and no stored id: the stale-upload sweep would start a second ingest for it, and the ready and
+  // visuals sweeps would never find it. The repair is idempotent (it only fills a NULL column from an existing status row) and runs here,
+  // before recovery and every sweep. A failure is fatal with the fixed label: a sweep that lists on missing ids would double-start work.
+  await bootStatus(
+    {
+      boot: async () => {
+        // A count only, so a slow boot after a long rollout is explained.
+        console.info("stored execution ids repaired", { columns: await repairStoredExecutionIds(pool) });
+      },
+    },
+    cleanup,
+    "stored execution ids",
+  );
+```
+
+At shutdown, `opaqueIds.install` is process-wide state that `buildServer` sets and nothing cleared: a later stack in the same process (a test file, a script) would inherit the earlier cache, and a test that asserts "cold, nothing installed" would pass or fail on order. In `stop()`'s `close`, add as the LAST function of the `runAll(...closeSequence({ ... }), ...)` call (after the pool is ended, so nothing still running reads a cleared cache):
+
+```ts
+          async () => opaqueIds.install(undefined),
+```
+
+(`runAll` takes the closers after the sequence's own; the `closeSequence` spread stays first.) Tests that call `buildServer` without `bootIngest` (`status/compose.test.ts`, Task 5 step 5 rule 4) uninstall in their own `afterEach(() => opaqueIds.install(undefined))`; the e2e harness (`startIngestStack`) gets it through `boot.stop`.
 
 - [ ] **Step 5: Seal the id fields of flow inputs**
 
@@ -5338,7 +5780,7 @@ git commit -m "test(ids): a ratchet that keeps id building and parsing inside op
 
 ---
 
-### Task 8: End to end (upload, visualize, suggest tags, erase; a cold restart), the erasure scan, and the docs (spec section 8, F10)
+### Task 8: End to end (upload, visualize, suggest tags, erase; a cold restart), the erasure scan, and the docs (spec section 8, F1 and F10 of the plans, F1 of the scan)
 
 **Files:**
 - Create: `apps/server/app/erasure/opaqueIds.e2e.pg.test.ts`
@@ -5346,7 +5788,7 @@ git commit -m "test(ids): a ratchet that keeps id building and parsing inside op
 
 **Interfaces:**
 - Consumes: Tasks 1 to 7; the existing erasure e2e harness (`seedUser`, `eraseMe`, `waitErased`, `assertErased`, `needlesOf`, `scanTables`) and `startIngestStack` (its `composed` member is `buildServer()`'s result, so `st.composed.ids` is the stack's id cache).
-- Produces: `Seeded.handle: string | null` (the user's `users.id_handle` once seeded), `Who.handle?: string | null`; the new e2e proves spec section 8's end-to-end and recovery claims for the document flows; the docs describe the new ids, the two subjects, the residuals and the rollback rule.
+- Produces: `Seeded.handle: string | null` (the user's `users.id_handle` once seeded), `Who.handle?: string | null`; `rowsLinkingHandleToIds(owner, handle, ids): Promise<string[]>` (the tables that hold the handle and a plain id in one row); an allow-list that tolerates `scope` and `app_key` only on old-format tombstones; the new e2e proves spec section 8's end-to-end and recovery claims for the document flows; the docs describe the new ids, the two subjects, the residuals and the rollback rule.
 
 - [ ] **Step 1: The erasure harness knows both id formats**
 
@@ -5375,7 +5817,7 @@ const isUserExecution = (id: unknown, who: Who) =>
 
 ```ts
 const ID_VALUE = new RegExp(
-  `^(${UUID_RE}|u_${UUID_RE}([:.~][A-Za-z0-9_.:~-]*)?|h_[a-z2-7]{26}([:.~][A-Za-z0-9_.:~-]*)?)$`,
+  `^(${UUID_RE}|u_${UUID_RE}([:.~][A-Za-z0-9_.:~-]*)?|h_[a-z2-7]{25}[aeimquy4]([:.~][A-Za-z0-9_.:~-]*)?)$`,
 );
 ```
 
@@ -5425,6 +5867,86 @@ const ID_VALUE = new RegExp(
     expect(id.includes(gone.userId) || (!!gone.handle && id.includes(gone.handle))).toBe(true);
 ```
 
+8. **The tombstone allow-list is tightened (scan F1).** The entry for `public.read_model_state` (`execution_id`, `scope`, `app_key`) tolerated all three columns of any erased row, which is why nothing could notice a tombstone that keeps the user and document UUIDs beside an `h_<handle>` id. Replace it with (a new-format tombstone had `scope` and `app_key` scrubbed by Task 3, so only an old-format `u_` row may still hold them; the `execution_id` column of an `h_` row names the handle alone):
+
+```ts
+  ...["execution_id", "scope", "app_key"].map((column) => ({
+    table: "public.read_model_state",
+    column,
+    reason:
+      "D7: a read-model tombstone (state NULL, erased) keeps the key of the row it replaced. scope and app_key only on an OLD-format (u_) tombstone: the rows of a new-format run are scrubbed in the `rows` step, so an h_<handle> row never holds a plain id",
+    ok: (row: Row, who: Who) =>
+      row.state === null &&
+      row.erased === true &&
+      noContent(row, who) &&
+      (column === "execution_id" ||
+        (typeof row.execution_id === "string" && row.execution_id.startsWith(`u_${who.userId}`))),
+  })),
+```
+
+9. **The handle subject in the two other allow-list entries (scan F11).** A parked `h_<handle>` shred writes `ERASURE_PENDING { subjectId: "h_<handle>" }` to `__loom_erasure__` and the key tombstone is `data_keys.subject_id = h_<handle>`; both entries compared with the user UUID only. Add above `ALLOWED`:
+
+```ts
+/** The user's two Loom subjects: the user UUID (old-format runs) and `h_<handle>` (new-format runs). */
+const isUserSubject = (subject: unknown, who: Who) =>
+  subject === who.userId || (!!who.handle && subject === `h_${who.handle}`);
+```
+
+and use it in both: the `__loom_erasure__` entry's `(row.payload as { subjectId?: unknown } | null)?.subjectId === who.userId` becomes `isUserSubject((row.payload as { subjectId?: unknown } | null)?.subjectId, who)`, the `public.data_keys` entry's `row.subject_id === who.userId` becomes `isUserSubject(row.subject_id, who)` (both keep their `wrapped_dek === null && destroyed_at !== null` or `noContent` conditions), and `intentRows` gains a third parameter `handle?: string | null` and keeps an intent whose `subjectId` is the user UUID or, when a handle is given, `h_` followed by the handle (its one caller, `erasure.resume.e2e.pg.test.ts:219`, passes `fay.handle`).
+
+10. **The handle is a needle.** In `needlesOf` add `...(gone.handle ? [gone.handle] : []),` after `gone.chatId,`. The "before" view (`namingColumns`) then finds the columns that name the handle (`users.id_handle`, the h_ execution ids, the key tombstone's subject), and the after-erasure scan judges every one of them against the allow-list.
+
+11. **No row links the handle to a plain id (scan F1, spec sections 1 and 6).** Add to `e2eSupport.ts`:
+
+```ts
+/**
+ * The tables with a row that holds the handle AND any of the given plain ids (the user's, the document's, the chat's): the link that
+ * opaque ids exist to remove. Each row is searched as one JSON text (so a row linking them across columns is found, which the
+ * per-column scan cannot see; bytea columns are covered by `scanTables`). Run as the superuser of the test URL, like `scanTables`.
+ */
+export async function rowsLinkingHandleToIds(
+  owner: Pool,
+  handle: string,
+  ids: readonly string[],
+): Promise<string[]> {
+  const { rows: tables } = await owner.query(
+    `SELECT table_schema AS s, table_name AS t FROM information_schema.tables
+      WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')
+        AND table_schema NOT LIKE 'pg\_toast%' AND table_schema NOT LIKE 'pg\_temp%'
+      ORDER BY 1, 2`,
+  );
+  const linked: string[] = [];
+  for (const { s, t } of tables as { s: string; t: string }[]) {
+    const { rows } = await owner.query(
+      `SELECT count(*)::int AS n FROM ${quote(s)}.${quote(t)} x
+        WHERE strpos(lower(to_jsonb(x)::text), lower($1)) > 0
+          AND EXISTS (SELECT 1 FROM unnest($2::text[]) AS n WHERE strpos(lower(to_jsonb(x)::text), lower(n)) > 0)`,
+      [handle, ids],
+    );
+    if (rows[0].n > 0) linked.push(`${s}.${t}`);
+  }
+  return linked;
+}
+```
+
+and in `assertErased`, after step 3b (the handle's key):
+
+```ts
+  // 3c. No row of any table holds the handle together with a plain id of the user, a document or a chat (spec section 1), and the
+  //     read-model tombstones under h_<handle> exist (so this is not vacuous) with scope and app_key scrubbed.
+  if (user.handle) {
+    expect(
+      await rowsLinkingHandleToIds(db.owner, user.handle, [user.userId, user.documentId, user.chatId]),
+    ).toEqual([]);
+    const tombs = await db.owner.query(
+      "SELECT scope, app_key, erased FROM read_model_state WHERE starts_with(execution_id, $1)",
+      [`h_${user.handle}`],
+    );
+    expect(tombs.rowCount).toBeGreaterThan(0);
+    for (const row of tombs.rows) expect(row).toEqual({ scope: null, app_key: null, erased: true });
+  }
+```
+
 `apps/server/app/erasure/suggestTags.restart.e2e.pg.test.ts` and `apps/server/app/documents/tags.e2e.pg.test.ts` read a run the real starter began: Task 5 step 6 moves them to `st.runIds.suggestTags(...)` (`second.runIds.suggestTags({ tenantId, userId }, documentId, 1)` there).
 
 - [ ] **Step 2: Write the end-to-end test**
@@ -5437,7 +5959,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { opaqueIds } from "../opaqueIds";
-import { assertErased, eraseMe, seedUser, waitErased } from "./e2eSupport";
+import { assertErased, eraseMe, rowsLinkingHandleToIds, seedUser, waitErased } from "./e2eSupport";
 
 const WAIT = 240_000;
 const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -5466,7 +5988,7 @@ describe.skipIf(!PG_URL)("opaque execution ids, end to end (needs DOCMIND_TEST_P
       const user = await seedUser(st, login, "opaque@example.com");
 
       // The control: the new format is really in the log, and the old format (the chat, until phase 2) is too, so the scan has both to judge.
-      expect(user.handle).toMatch(/^[a-z2-7]{26}$/);
+      expect(user.handle).toMatch(/^[a-z2-7]{25}[aeimquy4]$/);
       const fresh = user.executions.filter((id) => id.startsWith(`h_${user.handle}`));
       expect(fresh.some((id) => id.includes(":ingest-"))).toBe(true);
       for (const id of fresh) {
@@ -5474,6 +5996,11 @@ describe.skipIf(!PG_URL)("opaque execution ids, end to end (needs DOCMIND_TEST_P
         for (const plain of [user.userId, user.documentId, user.chatId]) expect(id).not.toContain(plain);
       }
       expect(user.executions.some((id) => id.startsWith(`u_${user.userId}`))).toBe(true);
+      // The control for "no row links the handle to an id": before the erasure the status row of the new-format ingest does exactly that
+      // (`h_<handle>` execution id, the user as scope, the document as app_key), so the helper is not blind.
+      expect(
+        await rowsLinkingHandleToIds(st.db.owner, user.handle as string, [user.userId, user.documentId]),
+      ).toContain("public.read_model_state");
       // The document's recorded ids are the ones that ran: the sweeps and the connections reader compare them.
       const row = await st.db.owner.query(
         "SELECT ingest_execution_id AS i FROM documents WHERE id = $1",
@@ -5486,8 +6013,23 @@ describe.skipIf(!PG_URL)("opaque execution ids, end to end (needs DOCMIND_TEST_P
 
       expect((await eraseMe(st, login.cookie)).status).toBe(202);
       await waitErased(st, user.userId, 120_000);
-      await assertErased(st, user, { tenantGone: true });
+      await assertErased(st, user, { tenantGone: true }); // includes 3c: no row holds the handle with a plain id; h_ tombstones have NULL scope and app_key
       expect(opaqueIds.parse(ingestId)).toBeNull(); // the handle and the key are gone: the id names nothing
+
+      // A restart over the same database must not bring the link back (a catch-up that re-folded a tombstone would rewrite scope and app_key).
+      await st.close({ keepDb: true });
+      stacks.splice(stacks.indexOf(st), 1);
+      const again = track(
+        await startIngestStack({ chat: true, resume: { db: st.db, kek: st.kek, root: st.root } }),
+      );
+      expect(
+        await rowsLinkingHandleToIds(again.db.owner, user.handle as string, [user.userId, user.documentId, user.chatId]),
+      ).toEqual([]);
+      const tombs = await again.db.owner.query(
+        "SELECT scope, app_key FROM read_model_state WHERE starts_with(execution_id, $1)",
+        [`h_${user.handle}`],
+      );
+      for (const row of tombs.rows) expect(row).toEqual({ scope: null, app_key: null });
     },
     WAIT,
   );
@@ -5542,18 +6084,26 @@ Loom stores execution ids and lineage ids in plaintext and they outlive an erasu
 - **One module.** `opaqueIds` builds and parses every id family in both formats; `executionIds.test.ts` fails any other file that names an id's shape. The erasure subject of an execution is read from the id alone (`subjectOfExecution`): the user UUID for an old-format id, `h_<H>` for a new one. Loom therefore keeps two keys per user, and erasure calls `eraseSubject` for both, destroys the user's data key and `h_<H>`'s key, deletes `users.id_handle` with the user row and evicts the cached id key.
 - **The key cache.** A synchronous parser reads an in-memory map from handle to user and id key. Boot warms it (every user with a handle) before the status model; a start awaits `ensureUser`; a reader awaits `load` (it never mints a key); a live event of a cold user goes through `status/ensureGate.ts`, which keeps log order and folds only after the cache is filled. Classification, the ingest generation, recovery ownership and the subject need no key.
 - **SQL does not build ids.** `documents.ingest_execution_id` and `visualize_execution_id` hold the current generation's ids (recorded by the application before it starts an execution, cleared with a generation bump, backfilled for runs from before the deploy), and the five boot and sweep functions and the connections reader compare them with the status rows.
-- **Residual.** Old-format ids stay readable after an erasure. Run counts and timing remain as records. The `data_keys` tombstones of the user's UUID and of `h_<H>` carry near-equal `destroyed_at`, so a reader of the table could pair them by time. `read_model_state` (a DocMind table) keeps `app_key` and `scope` as plain ids until the erasure tombstones them, as before.
+- **Residual.** Old-format ids stay readable after an erasure. Run counts and timing remain as records. `read_model_state` (a DocMind table) tombstones keep `scope` (the user UUID) and `app_key` (the document or chat UUID) beside the execution id; for a new-format run the erasure's `rows` step sets both to NULL on the erased `h_<H>` rows before the handle is deleted, so no row links the handle to a plain id (an old-format `u_` tombstone keeps them: its id already names the user). The `data_keys` tombstones of the user's UUID and of `h_<H>` carry near-equal `destroyed_at`, so a reader of the table could pair them by time. If an erasure was parked (a turn was running), Loom's plaintext `__loom_erasure__` control stream also keeps `ERASURE_PENDING` for both `h_<H>` and the user UUID, which pairs them. A second replica that cached the user's key keeps parsing `h_` ids for that user until its next boot or `load` miss (it cannot write under the destroyed subject key, so nothing new is stored).
 ```
 
 `docs/operations/cloud-deploy.md`: add, after the tags-release bullet, a bullet:
 
 ```markdown
-- **Do not roll back past the opaque-ids release (migration 0038, phase 1) once any `h_` run exists.** Older code cannot parse a new-format id: it would fold such an ingest as no document, never start its visuals, and read its events under no subject. Migration 0038 itself is additive and safe under old code, but the `documents.ingest_execution_id` and `visualize_execution_id` columns are then ignored, so the old sweeps would list every new-format document as unstarted. Roll forward. After the release, the first start of a user creates their id key and handle (`users.id_handle`); a key-store outage fails that start and is retried like any other.
+- **Roll forward only once migration 0038 (opaque ids, phase 1) is applied; do not roll back past it.** The migration is additive for the tables but it REPLACES five sweep functions (`docmind_stale_uploads_v2`, `docmind_ready_documents`, `docmind_visual_retry_documents`, `docmind_visual_stale_format_documents`, `docmind_visual_unrecorded_documents`) with versions that compare the new columns `documents.ingest_execution_id` and `visualize_execution_id`. Old pods never write those columns, so an old pod running on the migrated schema ingests a document, finds its stored id missing, and its stale-upload sweep starts a second ingest while its ready and visuals sweeps skip it: it is not safe under old code, and a rollback after the migration is not supported. Run the migration with the old pods drained, or accept the overlap: every new pod runs `repairStoredExecutionIds` at boot (after the status model catches up, before recovery and the sweeps), an idempotent fill of the NULL columns from the old-format status rows, so documents an old pod ingested during the rollout are repaired. Once any `h_` run exists, older code also cannot parse the new ids (it would fold such an ingest as no document, never start its visuals, and read its events under no subject). After the release, a user's first start creates their id key and handle (`users.id_handle`); a key-store outage fails that start and is retried like any other.
 ```
 
 `docs/codebase-guide.md`: add the row `| apps/server/app/opaqueIds/ | Opaque execution and lineage ids (R14): the id module, the per-user key cache, the handle store |` beside the `erasure/` row, and change "Ordered SQL migrations 0001–0036" to "0001–0038".
 
 - [ ] **Step 5: Verify the plan's own hygiene, typecheck, lint, build, commit**
+
+Run the fence state check on this plan (it fails on a fence with a language tag that opens inside an open fence, which a parity count cannot see, and on a fence left open):
+
+```bash
+awk '/^```/ { if (open) { if ($0 != "```") { print FILENAME ":" NR ": a tagged fence inside an open fence"; bad = 1 } open = 0 } else { open = 1 } } END { if (open) { print FILENAME ": a fence is left open"; bad = 1 } exit bad }' docs/superpowers/plans/2026-11-10-opaque-ids-phase1.md
+```
+
+Expected: no output, exit status 0.
 
 Run: `pnpm exec biome check --write apps/server/app && pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm build`
 Expected: no errors.
@@ -5598,7 +6148,7 @@ Phase 1 leaves exactly these for phase 2, all builder-side (every parser already
 | 3 id shapes (all eight families, both formats) | Task 1 (`ids.ts`, `opaqueIds.test.ts`) |
 | 4 parse and the key cache; the parsers that move; the prefix walks; SQL | Tasks 1, 3, 4, 6 (and the five sweep functions in Task 2) |
 | 5 failures: key outage, handle race, erased id parses null | Tasks 1, 2, 5 (`HandleMismatchError`, `claim`, `ensureUser` throws, `ensureGate`) |
-| 6 privacy and erasure, the residual, the rollback note | Tasks 3, 6 (the flow inputs' plain ids, F11, are sealed so no plain UUID is left in a new run's log), 8 (docs) |
+| 6 privacy and erasure, the residual, the rollback note | Tasks 3 (the tombstone scrub in the `rows` step), 6 (the flow inputs' plain ids, F11, are sealed so no plain UUID is left in a new run's log), 8 (the no-row-links-handle-to-id assertion, docs) |
 | 8 unit tests, ratchet, Postgres tests, recovery, mixed history, end to end | Tasks 1 to 8; mixed history is covered per piece (fold in Task 4, starters and cancels in Task 5, sweeps in Task 2, connections in Task 6) rather than by one e2e, because the upload route cannot be made to start an old-format run |
 
 **2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N" remains. Code that is mechanical across many test files (Task 5 step 5) is given as a script plus the five error kinds the compiler reports, not as a list of lines, because the lines are the compiler's.
