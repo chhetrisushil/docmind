@@ -415,4 +415,23 @@ describe("IngestStatus with new-format ids", () => {
     await next.boot();
     expect((await next.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({ status: "ready" });
   });
+
+  it("forPage and forgetDocument load the user themselves on a cold cache, and find the h_ row", async () => {
+    const t = testOpaqueIds();
+    t.store.add(U, T);
+    const user = await t.ids.ensureUser({ tenantId: T, userId: U });
+    opaqueIds.install(t.ids); // warm: the fold resolves the row's key and scope
+    const { status, feed, store } = setup();
+    await status.boot();
+    feed(...withTenant(ingestRun(user.ingest(D1, 2), "ready")));
+    await status.close();
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // a process that has not cached this user
+    expect(opaqueIds.known(user.handle)).toBe(false);
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toMatchObject({ status: "ready" });
+    opaqueIds.install(new OpaqueIds(t.keys, t.store)); // cold again
+    await status.forgetDocument(ALICE, D1);
+    const rows = await store.getFoldedByKey?.(INGEST_STATUS_MODEL, [D1]);
+    expect(rows?.every((r) => r.state === null)).toBe(true);
+    expect((await status.forPage(ALICE, atDefault(D1))).get(D1)).toBeUndefined();
+  });
 });
