@@ -497,6 +497,51 @@ describe("dm-documents-page tag filter", () => {
     await vi.waitFor(() => expect(t.api.listTags).toHaveBeenCalledTimes(2));
   });
 
+  const manageChanged = (p: Element) =>
+    p.shadowRoot
+      ?.querySelector("dm-tag-manage")
+      ?.dispatchEvent(new CustomEvent("tags-changed", { bubbles: true, composed: true }));
+  const openManage = async (p: Element) => {
+    await vi.waitFor(() => expect(bar(p)).not.toBeNull());
+    (bar(p)?.shadowRoot?.querySelector("[data-manage]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(p.shadowRoot?.querySelector("dm-tag-manage")).not.toBeNull());
+  };
+
+  it("after a rename in Manage tags, the row chips show the new name without a reload", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(rowChips(t.page, fin)).toHaveLength(2));
+    await openManage(t.page);
+    const money = { ...fin, name: "Money" };
+    t.live.tagList = [money, leg];
+    t.live.items = t.live.items.map((d) => ({
+      ...d,
+      tags: d.tags.map((x) => (x.id === fin.id ? { id: x.id, name: "Money" } : x)),
+    }));
+    manageChanged(t.page);
+    await vi.waitFor(() =>
+      expect(rowChips(t.page, fin).map((b) => b.textContent?.trim())).toEqual(["Money", "Money"]),
+    );
+  });
+
+  it("after a delete in Manage tags, the row chips and the filter drop the tag", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${leg.id}`);
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(1));
+    await openManage(t.page);
+    t.live.tagList = [fin];
+    t.live.items = t.live.items.map((d) => ({ ...d, tags: d.tags.filter((x) => x.id !== leg.id) }));
+    manageChanged(t.page);
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(0));
+    await vi.waitFor(() => expect(window.location.search).toBe(""));
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+  });
+
+  it("deselecting down to one tag drops match=all from the address", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
+    await vi.waitFor(() => expect(chip(t.page, leg)?.getAttribute("aria-pressed")).toBe("true"));
+    chip(t.page, leg).click();
+    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id}`));
+  });
+
   it("leaves no control without an accessible name", async () => {
     const t = await setup(items(), [fin, leg]);
     await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());

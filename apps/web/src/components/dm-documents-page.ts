@@ -20,6 +20,8 @@ import "./dm-view";
 const HANDLES = ["documents", "doc-total", "doc-ready", "ingest"] as const;
 /** The Tags column of the library table (see the reshaper). */
 const TAGS_COLUMN = 1;
+/** The rows one library page holds at most (experiences `LIST_CAP`; the web may not import that package at runtime). */
+const LIST_CAP = 200;
 const STREAM_ENDED = "Live updates stopped. Reload the page to see new progress.";
 
 /** The library: one upload zone (compact in the header, or the big one when the library is empty) over the `library` experience (or `library-empty`). It draws no data; it performs intents. */
@@ -172,7 +174,7 @@ export class DmDocumentsPage extends LitElement {
         name: "documents",
         ...(kept.length > 0 && {
           tags: kept,
-          ...(sel.match === "all" && { match: "all" as const }),
+          ...(kept.length > 1 && sel.match === "all" && { match: "all" as const }),
         }),
       },
       { replace: true },
@@ -182,9 +184,17 @@ export class DmDocumentsPage extends LitElement {
     const { tags, match } = (e as CustomEvent<TagSelectionDetail>).detail;
     this.ctx.services?.router.navigate({
       name: "documents",
-      ...(tags.length > 0 && { tags, ...(match === "all" && { match: "all" as const }) }),
+      ...(tags.length > 0 && {
+        tags,
+        ...(tags.length > 1 && match === "all" && { match: "all" as const }),
+      }),
     });
   };
+  /** A rename or delete in Manage tags: reload the bar and the rows, so the row chips never keep an old name or a deleted tag. */
+  private onTagsChanged(): void {
+    void this.loadTags();
+    this.session?.invalidate("documents");
+  }
   private clear(): void {
     this.ctx.services?.router.navigate({ name: "documents" });
   }
@@ -218,8 +228,11 @@ export class DmDocumentsPage extends LitElement {
       const total = session.valueOf("doc-total") as { value?: number } | undefined;
       if (session.statusOf("doc-total") === "ready" && total?.value === 0) this.empty = true;
       const rows = session.valueOf("documents") as { rowKeys?: unknown } | undefined;
+      // A page at the cap may hold only part of the matches: no number is better than a wrong one.
       this.count =
-        session.statusOf("documents") === "ready" && Array.isArray(rows?.rowKeys)
+        session.statusOf("documents") === "ready" &&
+        Array.isArray(rows?.rowKeys) &&
+        rows.rowKeys.length < LIST_CAP
           ? rows.rowKeys.length
           : null;
     };
@@ -273,7 +286,7 @@ export class DmDocumentsPage extends LitElement {
           ? html`<dm-tag-bar .tags=${this.tags} .selected=${sel.tags} .match=${sel.match} .count=${this.count} .managing=${this.managing} @tag-selection=${this.onSelect} @manage-toggle=${() => {
               this.managing = !this.managing;
             }}></dm-tag-bar>
-            ${this.managing ? html`<dm-tag-manage .tags=${this.tags} @tags-changed=${() => void this.loadTags()}></dm-tag-manage>` : null}`
+            ${this.managing ? html`<dm-tag-manage .tags=${this.tags} @tags-changed=${() => this.onTagsChanged()}></dm-tag-manage>` : null}`
           : null
       }
       ${

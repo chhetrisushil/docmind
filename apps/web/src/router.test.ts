@@ -72,6 +72,13 @@ describe("the library route's tag filter in the address", () => {
     );
     expect(hrefOf({ name: "documents", tags: [], match: "all" })).toBe("/documents");
   });
+  it("ignores match=all for a single tag and does not write it", () => {
+    expect(parseRoute("/documents", `?tags=${ID}&match=all`)).toEqual({
+      name: "documents",
+      tags: [ID],
+    });
+    expect(hrefOf({ name: "documents", tags: [ID], match: "all" })).toBe(`/documents?tags=${ID}`);
+  });
   it("keeps at most 10 distinct valid ids", () => {
     const ids = Array.from(
       { length: 12 },
