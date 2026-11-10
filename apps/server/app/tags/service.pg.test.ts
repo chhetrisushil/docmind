@@ -262,24 +262,27 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
     for (const r of adds)
       if (r.status === "rejected") expect(r.reason).toMatchObject({ limit: "document" });
 
+    // Pad the owner with filler rows up to ROOM short of the cap, then race ROOM + 5 creates for the last ROOM places.
+    const ROOM = 10;
+    const existing = await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1]);
     await fx.db.owner.query(
       `INSERT INTO tags (id, tenant_id, owner_id, name_enc, name_bind)
        SELECT gen_random_uuid(), $1, $2, '{}', decode(md5(g::text) || md5(g::text || 'y'), 'hex')
          FROM generate_series(1, $3) g`,
-      [T1, U1, MAX_TAGS_PER_USER - 30 - 1 - 0],
+      [T1, U1, MAX_TAGS_PER_USER - existing - ROOM],
     );
     const have = await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1]);
-    const room = MAX_TAGS_PER_USER - have;
+    expect(have).toBe(MAX_TAGS_PER_USER - ROOM);
     const more = await Promise.allSettled(
-      Array.from({ length: room + 5 }, (_, i) => svc.create(A, `extra${i}`)),
+      Array.from({ length: ROOM + 5 }, (_, i) => svc.create(A, `extra${i}`)),
     );
-    expect(more.filter((r) => r.status === "fulfilled")).toHaveLength(room);
+    expect(more.filter((r) => r.status === "fulfilled")).toHaveLength(ROOM);
     expect(await count("SELECT count(*)::int AS n FROM tags WHERE owner_id = $1", [U1])).toBe(
       MAX_TAGS_PER_USER,
     );
   });
 
-  it("answers a tag deleted under a link, and a document deleted under a suggestion write, as domain results", async () => {
+  it("never leaks a raw 23503 when a tag is deleted under a link or a document under a suggestion write", async () => {
     const d = await doc();
     const t = (await svc.create(A, "gone")).tag;
     await Promise.allSettled([svc.remove(A, t.id), svc.setForDocument(A, d, [t.id])]);
@@ -312,5 +315,15 @@ describe.skipIf(!PG_URL)("TagService (needs DOCMIND_TEST_PG_URL)", () => {
       "\u0000x",
     ]);
     expect((await svc.detail(A, d))?.suggestedTags).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("fails the whole read loudly when one stored name cannot be opened (deliberate)", async () => {
+    const a = (await svc.create(A, "first")).tag;
+    const b = (await svc.create(A, "second")).tag;
+    await fx.db.owner.query(
+      "UPDATE tags SET name_enc = (SELECT name_enc FROM tags WHERE id = $1) WHERE id = $2",
+      [a.id, b.id], // a's envelope under b's id: the bind no longer matches
+    );
+    await expect(svc.list(A)).rejects.toThrow();
   });
 });
