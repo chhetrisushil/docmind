@@ -56,6 +56,102 @@ export interface RecoverOptions {
   owns?: (executionId: string) => boolean;
   /** Once true (recovery was stopped), a failing re-drive is expected (leases and pools are closing) and not logged. */
   stopped?: () => boolean;
+  /**
+   * The executions of an erased subject, which the pass must never be handed. Loom folds every listed execution
+   * (`loadState`) before any predicate is asked, and a shredded log throws `PayloadShreddedError` there, which
+   * aborts the WHOLE pass: every execution listed after it (ids are listed in code-point order, so one erased
+   * `h_` subject hides every `u_` execution) is never re-driven, a chat turn a restart interrupted stays
+   * `running` for good, and an erasure parked behind it never completes. Absent: nothing is skipped.
+   */
+  erased?: ErasedSubjects;
+}
+
+/** How a pass tells an erased subject's executions apart. */
+export interface ErasedSubjects {
+  /** The erasure subject of an execution, or undefined when no user owns it (it is never erased). */
+  subjectOf(executionId: string): string | undefined;
+  /** Whether the subject's key was destroyed (the key store's durable proof). */
+  destroyed(subject: string): Promise<boolean>;
+}
+
+/** Key-store lookups a pass runs at once: a page can hold thousands of executions across many subjects. */
+const ERASED_LOOKUP_BATCH = 16;
+
+/**
+ * `ids` without the executions of an erased subject. One key-store lookup per subject per pass, at most
+ * `ERASED_LOOKUP_BATCH` at once. A lookup that fails keeps the execution (as before the filter): it hides nothing
+ * that might still need a re-drive. The failure is logged once per pass, by error class only.
+ */
+function withoutErased(erased: ErasedSubjects) {
+  const known = new Map<string, boolean>();
+  let warned = false;
+  const lookup = async (subject: string) => {
+    try {
+      known.set(subject, await erased.destroyed(subject));
+    } catch (err) {
+      known.set(subject, false);
+      if (!warned) {
+        warned = true;
+        console.warn("recovery erased-check failed", errorClass(err));
+      }
+    }
+  };
+  return async <T>(items: readonly T[], idOf: (item: T) => string): Promise<T[]> => {
+    const subjects = items.map((item) => erased.subjectOf(idOf(item)));
+    const todo = [
+      ...new Set(subjects.filter((s): s is string => s !== undefined && !known.has(s))),
+    ];
+    for (let i = 0; i < todo.length; i += ERASED_LOOKUP_BATCH)
+      await Promise.all(todo.slice(i, i + ERASED_LOOKUP_BATCH).map(lookup));
+    return items.filter((_, i) => {
+      const subject = subjects[i];
+      return subject === undefined || known.get(subject) !== true;
+    });
+  };
+}
+
+/** The enumeration surface of `source`, without the executions of an erased subject. */
+function sourceWithoutErased(
+  source: ExecutionEnumerable,
+  filter: ReturnType<typeof withoutErased>,
+): ExecutionEnumerable {
+  const ids = (list: string[]) => filter(list, (id) => id);
+  return {
+    ...(source.listExecutionsPage && {
+      listExecutionsPage: async (opts) => {
+        const page = await (
+          source.listExecutionsPage as NonNullable<ExecutionEnumerable["listExecutionsPage"]>
+        )(opts);
+        // The cursor is the store's: a page this filter empties still carries it, so the walk goes on.
+        return { ...page, executionIds: await ids(page.executionIds) };
+      },
+    }),
+    ...(source.listExecutions && {
+      listExecutions: async () =>
+        ids(await (source.listExecutions as NonNullable<ExecutionEnumerable["listExecutions"]>)()),
+    }),
+  };
+}
+
+/**
+ * `store`, whose expired leases leave out the executions of an erased subject (every other call goes to `store`).
+ * Erased leases cannot pile up and starve the expired window: erasure deletes the subject's `loom.leases` rows under
+ * both the `u_<uuid>` and the `h_<handle>` prefixes (`pgSteps.ts` `rows`), so the filter only covers the gap before that step.
+ */
+function leasesWithoutErased(
+  store: LeaseStore,
+  filter: ReturnType<typeof withoutErased>,
+): LeaseStore {
+  return new Proxy(store, {
+    get(target, prop) {
+      if (prop === "expired") {
+        return async (...args: Parameters<LeaseStore["expired"]>) =>
+          filter(await target.expired(...args), (lease) => lease.executionId);
+      }
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 /**
@@ -83,8 +179,17 @@ export async function recoverIngest(
     leases,
     owns = isIngestExecution,
     stopped,
+    erased,
   }: RecoverOptions,
 ) {
+  const filter = erased && withoutErased(erased);
+  const scan = filter
+    ? leases
+      ? { leases: { ...leases, store: leasesWithoutErased(leases.store, filter) } }
+      : { source: sourceWithoutErased(source, filter) }
+    : leases
+      ? { leases }
+      : { source };
   if (!leases) {
     // A full scan also clears ghost leases (a crash between taking a lease and the first append): they
     // have no stream, so no pass would ever re-drive or remove them, and lease mode lists them forever.
@@ -119,7 +224,7 @@ export async function recoverIngest(
       ? console.error("recovery left a chat on an old flow version", errorClass(err))
       : giveUp(id, FLOW_MISMATCH_REASON);
   const summary = await recoverAbandoned(runtime, {
-    ...(leases ? { leases } : { source }),
+    ...scan,
     maxRecoveries,
     isAbandoned: (c) => owns(c.executionId) && now() - c.updatedAt >= graceMs,
     onExhausted: (id) => giveUp(id, RECOVERY_EXHAUSTED_REASON),
@@ -154,11 +259,13 @@ export function startRecovery(
     now,
     leases,
     owns,
+    erased,
   }: {
     intervalMs?: number;
     now?: () => number;
     leases?: RecoverOptions["leases"];
     owns?: RecoverOptions["owns"];
+    erased?: RecoverOptions["erased"];
   } = {},
 ): Recovery {
   let running: Promise<void> | undefined;
@@ -171,6 +278,7 @@ export function startRecovery(
       ...(now && { now }),
       ...(scan && { leases: scan }),
       ...(owns && { owns }),
+      ...(erased && { erased }),
       stopped: () => stopped,
     })
       .then(() => undefined)

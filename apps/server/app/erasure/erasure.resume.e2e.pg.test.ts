@@ -172,12 +172,13 @@ describe.skipIf(!PG_URL)(
     const parkedErasure = async (email: string, restartWhileParked: boolean) => {
       const outcomes: string[] = [];
       // Make the park deterministic: the first stop signal is swallowed, so the held turn is still running when the
-      // eraser first asks Loom to shred (outcome "parked"); the stop it sends after that park is the real one.
+      // eraser first asks Loom to shred (outcome "parked"); the stop it sends after that park is the real one. With a restart, that stop never
+      // lands either (the process dies first): the turn is still mid-stream when the process stops, so the next boot finds it `running`.
       let swallowed = false;
       const wrap = (deps: ErasureDeps): ErasureDeps => ({
         ...deps,
         stopChat: async (identity, chatId) => {
-          if (!swallowed) {
+          if (!swallowed || (restartWhileParked && outcomes.includes("parked"))) {
             swallowed = true;
             return;
           }
@@ -227,7 +228,8 @@ describe.skipIf(!PG_URL)(
             interval: 50,
           });
           expect(await st.keys.wasDestroyed(`h_${handle}`)).toBe(true); // the handle is shredded, the user is parked
-          gate.release();
+          // The turn is never released in this process: the shutdown interrupts it mid-stream, and only the next boot's recovery can move it.
+          // That boot's recovery pass meets the shredded `h_` executions first (ids list in code-point order), and must not end there.
           await st.close({ keepDb: true });
           stacks.splice(stacks.indexOf(st), 1);
           finishing = track(
