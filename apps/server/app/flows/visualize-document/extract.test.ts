@@ -668,6 +668,33 @@ describe("fix round 1: a lenient answer and a slow model", () => {
     expect(await run(s)).toMatchObject({ aggregates: 1 });
   });
 
+  it("keeps the share fair for many windows: eleven flooded windows leave room for the twelfth's events", async () => {
+    const ids = Array.from({ length: 12 }, () => randomUUID());
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(EXTRACT_WINDOW_CHARS)]));
+    const flood = (w: number) =>
+      Array.from({ length: 200 }, (_, i) => ({
+        when: "x",
+        date: "bad",
+        label: `j${w}-${i}`,
+        chunkIds: [ids[w]],
+      }));
+    const good = ["2024", "2025", "2026"].map((y) => ({
+      when: y,
+      date: y,
+      label: `e${y}`,
+      chunkIds: [ids[11]],
+    }));
+    const answers = [
+      ...Array.from({ length: 11 }, (_, w) => ({ facts: [], timeline: { events: flood(w) } })),
+      { facts: [], timeline: { events: good } },
+    ];
+    let n = 0;
+    const { llm, requests } = scripted(() => JSON.stringify(answers[n++]));
+    const s = setup({ llm, texts });
+    expect(await run(s)).toMatchObject({ aggregates: 1 });
+    expect(requests).toHaveLength(12);
+  });
+
   it("M1: only the document flow's deps carry the extraction provider, never chat's or the planner's", () => {
     const src = readFileSync(join(__dirname, "../../compose.ts"), "utf8");
     expect(src.match(/extractLlm/g)).toHaveLength(1);
