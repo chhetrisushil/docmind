@@ -70,6 +70,34 @@ describe("the starter", () => {
     };
   };
 
+  const recorder = (log: string[], fail = false) => ({
+    recordIngest: async () => {},
+    recordVisualize: async (_w: unknown, _d: string, g: number, id: string) => {
+      log.push(`record:${g}:${id}`);
+      if (fail) throw new Error("record failed");
+    },
+  });
+
+  it("records the run-0 id BEFORE runtime.start, never a re-run's, and a failed record stops the start", async () => {
+    const log: string[] = [];
+    const f = fake();
+    f.calls.mockImplementation(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+      log.push("start");
+      return { executionId: o.executionId } as never;
+    });
+    const starter = loomVisualsStarter(f.runtime, flow, { executions: recorder(log) });
+    const r = ref();
+    await starter.start(r, 2);
+    expect(log).toEqual([`record:2:${visualizeExecutionId(r.userId, r.documentId, 2)}`, "start"]);
+    log.length = 0;
+    await starter.rerun(r, 2);
+    expect(log).toEqual(["start"]); // a re-run is started but never recorded
+    const g = fake();
+    const failing = loomVisualsStarter(g.runtime, flow, { executions: recorder([], true) });
+    await expect(failing.start(ref(), 2)).rejects.toThrow("record failed");
+    expect(g.calls).not.toHaveBeenCalled();
+  });
+
   it("starts once per (document, generation); a repeat is null, a new generation starts again", async () => {
     const { runtime, started } = fake();
     const starter = loomVisualsStarter(runtime, flow);

@@ -47,6 +47,7 @@ import { TagService } from "../tags/service";
 import { suggestRoutes } from "../tags/suggestRoutes";
 import { uiRoutes } from "../ui/routes";
 import { documentEventRoutes } from "./events";
+import { PgExecutionRecorder } from "./executionIds";
 import { InFlight } from "./inFlight";
 import { type IngestPort, loomIngest } from "./ingest";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
@@ -260,7 +261,7 @@ function makeIngest(
     bus,
     onError: () => {},
   });
-  const inner = loomIngest(loom.runtime);
+  const inner = loomIngest(loom.runtime, new PgExecutionRecorder(app));
   const failures = { start: 0, cancel: 0 };
   const probe: IngestProbe = {
     handles: new Map(),

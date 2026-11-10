@@ -11,8 +11,8 @@
 --    both when it starts the execution (documents/executionIds.ts) and `bumpGeneration` clears both with the generation.
 --    Backfill (`docmind_repair_execution_ids`): a document whose current generation already has an old-format status row keeps that
 --    exact old id, so a run that started before the deploy stays found; any other document stays NULL and the next start records its
---    (new-format) id. It only ever fills a NULL column, so it can run again: the migration runs it once, and the server runs it at
---    every boot, so a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is repaired before the
+--    (new-format) id. It only ever fills a NULL column, so it can run again: the migration runs it once, unbounded, and the server runs it at
+--    every boot (bounded to documents updated in the last 7 days: the `p_within` argument), so a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is repaired before the
 --    sweeps start. Rolling BACK after this migration is not supported (see docs/operations/cloud-deploy.md).
 -- 4. The five SECURITY DEFINER functions that built ids (0024's `docmind_stale_uploads_v2`, 0028's `docmind_ready_documents`,
 --    0030's `docmind_visual_retry_documents`, 0032's `docmind_visual_stale_format_documents`, 0034's
@@ -26,17 +26,21 @@ ALTER TABLE documents
   ADD COLUMN ingest_execution_id text CHECK (ingest_execution_id IS NULL OR length(ingest_execution_id) <= 1024),
   ADD COLUMN visualize_execution_id text CHECK (visualize_execution_id IS NULL OR length(visualize_execution_id) <= 1024);
 
-CREATE FUNCTION public.docmind_repair_execution_ids()
+CREATE FUNCTION public.docmind_repair_execution_ids(p_within interval DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   ingest_set integer;
   visualize_set integer;
 BEGIN
+  -- Serializes concurrent repairs (two pods booting together would otherwise lock the same rows in different orders and deadlock).
+  -- The key is fixed: 7038001 = migration 0038, lock 1. The IS NULL guards make the second run a cheap no-op.
+  PERFORM pg_catalog.pg_advisory_xact_lock(7038001);
   UPDATE public.documents d
      SET ingest_execution_id = 'u_' || d.owner_id::text || ':ingest-' || d.id::text
            || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
    WHERE d.ingest_execution_id IS NULL
+     AND (p_within IS NULL OR d.updated_at > pg_catalog.now() - p_within)
      AND EXISTS (
        SELECT 1 FROM public.read_model_state s
         WHERE s.model_id = 'ingest-status'
@@ -47,6 +51,7 @@ BEGIN
      SET visualize_execution_id = 'u_' || d.owner_id::text || ':visualize-' || d.id::text
            || CASE WHEN d.ingest_generation = 1 THEN '' ELSE '.' || d.ingest_generation::text END
    WHERE d.visualize_execution_id IS NULL
+     AND (p_within IS NULL OR d.updated_at > pg_catalog.now() - p_within)
      AND EXISTS (
        SELECT 1 FROM public.read_model_state s
         WHERE s.model_id = 'ingest-status'
@@ -56,8 +61,8 @@ BEGIN
   RETURN ingest_set + visualize_set;
 END
 $$;
-REVOKE ALL ON FUNCTION public.docmind_repair_execution_ids() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.docmind_repair_execution_ids() TO docmind_app;
+REVOKE ALL ON FUNCTION public.docmind_repair_execution_ids(interval) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.docmind_repair_execution_ids(interval) TO docmind_app;
 -- Once, now: a run that started before the deploy stays found. The server calls it again at every boot (repairStoredExecutionIds).
 SELECT public.docmind_repair_execution_ids();
 

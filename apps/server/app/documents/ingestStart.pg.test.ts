@@ -166,6 +166,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
 
   it("gives the execution only ids: the start input has no filename, title or content", async () => {
     const { body } = await created("Quarterly report.txt", TEXT("ids only"));
+    await h.starts.idle(); // the start records its id first (a database round trip)
     const handle = h.ingest.handles.get(body.document.id);
     const state = JSON.stringify(handle?.getState());
     expect(state).not.toContain("Quarterly");

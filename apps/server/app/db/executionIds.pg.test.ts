@@ -19,6 +19,8 @@ import { migrate, setAppRolePassword } from "./migrate";
 import { withTenant } from "./tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "./testSupport";
 
+// The advisory lock docmind_repair_execution_ids takes (0038).
+const REPAIR_LOCK_KEY = 7038001;
 const NIL = "00000000-0000-0000-0000-000000000000";
 const READY = '{"status":"ready","step":"finalize","code":null}';
 // What the application records for a new-format start: any opaque text; the SQL only compares it.
@@ -116,6 +118,44 @@ describe.skipIf(!PG_URL)(
       expect((await column(id)).i).toBe(legacyIds.ingest(U1, id, 2));
       expect(await stale()).not.toContain(id);
       expect(await repairStoredExecutionIds(app)).toBe(0); // idempotent
+    });
+
+    it("two repairs never run at once: the second waits for the first (advisory lock)", async () => {
+      const holder = await owner.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT pg_advisory_xact_lock($1)", [REPAIR_LOCK_KEY]);
+        let done = false;
+        const run = repairStoredExecutionIds(app).then(() => {
+          done = true;
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        expect(done).toBe(false);
+        await holder.query("COMMIT");
+        await run;
+        expect(done).toBe(true);
+      } finally {
+        holder.release();
+      }
+    });
+
+    it("the boot repair is bounded to recently updated documents; the unbounded call (the migration's) is not", async () => {
+      const old = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+      const recent = await seedDoc(owner, app, fields, ALICE, fp(), 600);
+      for (const id of [old, recent])
+        await owner.query(
+          "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, $2, $3, 0, $4)",
+          [legacyIds.ingest(U1, id, 2), id, U1, READY],
+        );
+      await owner.query(
+        "UPDATE documents SET updated_at = now() - interval '30 days' WHERE id = $1",
+        [old],
+      );
+      expect(await repairStoredExecutionIds(app)).toBeGreaterThanOrEqual(1);
+      expect((await column(recent)).i).toBe(legacyIds.ingest(U1, recent, 2));
+      expect((await column(old)).i).toBeNull(); // outside the boot window
+      await backfillExecutionIds(owner); // unbounded
+      expect((await column(old)).i).toBe(legacyIds.ingest(U1, old, 2));
     });
 
     it("docmind_ready_documents compares the stored ids: old and new format both match, a NULL never does", async () => {

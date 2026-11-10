@@ -297,6 +297,19 @@ describe("the cache: ensureUser, ensureHandle, warm, forget", () => {
     );
   });
 
+  it("key errors from the handle store pass through guarded unchanged (not a retryable store outage)", async () => {
+    for (const make of [() => new FieldKeyUnavailableError(), () => new FieldKeyStoreError()]) {
+      const t = testOpaqueIds();
+      t.store.add(U, T);
+      t.store.claim = async () => {
+        throw make();
+      };
+      await expect(t.ids.ensureUser({ tenantId: T, userId: U })).rejects.toBeInstanceOf(
+        make().constructor as new () => Error,
+      );
+    }
+  });
+
   it("ensureHandle fills a cold cache from the store and never mints a key", async () => {
     const warm = await userIds();
     const cold = new OpaqueIds(warm.keys, warm.store);
