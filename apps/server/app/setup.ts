@@ -8,6 +8,7 @@ import { MigrationChecksumError, verifyMigrationChecksums } from "./db/migrate";
 import { createAppPool, loadPoolMax } from "./db/pool";
 import { loadDeployment } from "./deployment";
 import { loadBlobRoot, loadLimits } from "./documents/limits";
+import { erasureControlKeys } from "./erasure/controlKey";
 import { createTitleLlm } from "./flows/chat-title/llm";
 import { createIngestWiring } from "./flows/ingest-document/limits";
 import { loadPlannerDecisionKey } from "./flows/visualize-document/planner";
@@ -134,7 +135,11 @@ export async function setupServer() {
     keys,
     storage: durable.storage,
     crypto: durable.crypto,
-    erasure: { raw: durable.raw, loomPool: durable.pool },
+    erasure: {
+      raw: durable.raw,
+      loomPool: durable.pool,
+      controlStreamKeys: erasureControlKeys(keks),
+    },
     limits,
     blobRoot,
     secureCookies: process.env.DOCMIND_COOKIE_SECURE === "true",

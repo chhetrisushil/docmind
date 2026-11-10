@@ -15,6 +15,7 @@ import { buildServer } from "../compose";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, type TestDb, createTestDb } from "../db/testSupport";
+import { erasureControlKeys } from "../erasure/controlKey";
 import { type Eraser, type ErasureDeps, abortableSleep } from "../erasure/eraser";
 import { createTitleLlm } from "../flows/chat-title/llm";
 import { closeIngest, createIngestWiring } from "../flows/ingest-document/limits";
@@ -209,6 +210,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       erasure: {
         raw: durable.raw,
         loomPool: durable.pool,
+        controlStreamKeys: erasureControlKeys([{ id: "kek-1", key: kek }]),
         // The backoff is capped at 50 ms: a shred that waits on a running turn is retried quickly, never slept on.
         sleep: (ms, signal) => abortableSleep(Math.min(ms, 50), signal),
         ...(options.wrapErasure && { wrap: options.wrapErasure }),

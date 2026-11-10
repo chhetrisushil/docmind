@@ -42,6 +42,19 @@ Rotate on a schedule, when someone with access to the KEK leaves, and at once if
 7. **Retire the old KEK last.** Keep the old KEK (offline, in your secret store) until backups taken before
    step 3 have expired (30 days by default, spec §4.4), then destroy it. Restoring such a backup needs it.
 
+## The erasure control-stream key follows the KEK
+
+Loom's erasure control stream (`__loom_erasure__`) is plaintext and never cleared, so its rows name a subject by a keyed digest
+(`subjectRef`), not by id. DocMind derives that key from the KEK (HKDF-SHA256, info `docmind-erasure-control-v1`; nothing is
+configured and no extra secret exists). Treat it like the KEK: it must stay secret, because with it a guessed id can be tested
+against a `subjectRef`.
+
+A rotation changes the derived key. While `DOCMIND_KEK_PREVIOUS` is set the server passes the previous KEK's derived key as
+`previousControlStreamKeys`, so a row written before the rotation is still recognised. An erasure that is *open* (its intent
+written, not finished) under a key the server no longer holds makes `eraseSubject` throw `ControlStreamKeyError`, which names the
+`keyId` and the intent: keep `DOCMIND_KEK_PREVIOUS` set (step 6 postponed) until no erasure is pending, then remove it. Finished
+rows under the old key need nothing.
+
 ## Destroying a user's key, and what it does not erase
 
 Destroying a user's key overwrites the live row with a tombstone. It does **not** erase older copies of

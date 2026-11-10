@@ -8,10 +8,10 @@ import {
   SECRETS,
   assertErased,
   captureConsole,
+  controlRows,
   eraseMe,
   eventColumnProblems,
   handleOfExecutions,
-  intentRows,
   loginAs,
   seedUser,
   waitErased,
@@ -258,16 +258,13 @@ describe.skipIf(!PG_URL)(
             outcomes,
           } = await parkedErasure("fay@example.com", false);
           await assertErased(st, fay, { tenantGone: true }, [asked, answered]);
-          // F26: the shred parked behind the running turn, so Loom wrote its plaintext intent. It names the user and
-          // nothing else, and the scan's allowance for it was exercised.
-          const intents = await intentRows(st, fay.userId);
+          // The shred parked behind the running turn, and `record: false` kept the park off Loom's plaintext control stream: nothing
+          // there names the user.
           expect(outcomes).toContain("parked");
-          expect(intents.length).toBeGreaterThanOrEqual(1);
-          for (const intent of intents) {
-            expect(intent.workflowId).toBe("__loom_erasure__");
-            expect(intent.executionId).toBe("__loom_erasure__");
-            expect(Object.keys(intent.payload as object)).toEqual(["subjectId"]);
-            expect(eventColumnProblems(intent)).toEqual([]);
+          for (const row of await controlRows(st)) {
+            expect(eventColumnProblems(row)).toEqual([]);
+            expect(JSON.stringify(row)).not.toContain(fay.userId);
+            expect(JSON.stringify(row)).not.toContain(handle);
           }
           // The stop repeated after the park cancels only under subjects whose key is alive: Loom never refused a cancel on the
           // shredded h_ stream, so it appended no denial naming the user.

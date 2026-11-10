@@ -10,6 +10,7 @@ import {
   UUID_ANY_PATTERN,
 } from "../opaqueIds";
 import { subjectOfExecution } from "../subject";
+import type { ControlStreamKeys } from "./controlKey";
 
 /** What erasure needs from the storage layer: the key store, and the raw (unwrapped) event and snapshot stores. */
 export interface ErasureWiring {
@@ -18,6 +19,8 @@ export interface ErasureWiring {
     eventStore: EventStore;
     snapshotStore: NonNullable<ShredOptions["snapshotStore"]>;
   };
+  /** The keys of Loom's erasure control stream (`controlStreamKey`, `previousControlStreamKeys`; see `controlKey.ts`). Absent: plaintext subject ids on that stream. */
+  controlStreamKeys?: ControlStreamKeys;
 }
 
 /**
@@ -56,13 +59,19 @@ export function userShredder({ keys, raw }: ErasureWiring): Shredder {
  * `wasDestroyed`. No `tenantOf`: user ids are UUIDs, unique across tenants, so one partition is enough
  * and `eraseSubject` is called without a tenant.
  */
-export function complianceConfig({ keys, raw }: ErasureWiring) {
+export function complianceConfig({ keys, raw, controlStreamKeys }: ErasureWiring) {
   const proof = keys.wasDestroyed?.bind(keys);
   return {
     subjectOf: userSubjectOf,
     erase: {
       shred: userShredder({ keys, raw }),
       ...(proof && { destroyed: proof }),
+      ...(controlStreamKeys && {
+        controlStreamKey: controlStreamKeys.current,
+        ...(controlStreamKeys.previous.length > 0 && {
+          previousControlStreamKeys: controlStreamKeys.previous,
+        }),
+      }),
     },
   };
 }

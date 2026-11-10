@@ -40,6 +40,7 @@ import { documentRoutes } from "./documents/routes";
 import { StartScheduler } from "./documents/startScheduler";
 import { pgAccountErasure } from "./erasure/account";
 import type { ErasureWiring } from "./erasure/compliance";
+import type { ControlStreamKeys } from "./erasure/controlKey";
 import { ERASURE_CONCURRENCY, Eraser, type ErasureDeps } from "./erasure/eraser";
 import { pgErasureSql } from "./erasure/pgSteps";
 import { PgErasureStore } from "./erasure/pgStore";
@@ -115,6 +116,8 @@ export interface ComposeOptions {
    */
   erasure?: {
     raw: ErasureWiring["raw"];
+    /** The keys of Loom's erasure control stream, derived from the KEKs (`controlKey.ts`): rows there carry a keyed digest, never a subject id. */
+    controlStreamKeys: ControlStreamKeys;
     loomPool: Pool;
     wrap?: (deps: ErasureDeps) => ErasureDeps;
     sleep?: ErasureDeps["sleep"];
@@ -334,7 +337,13 @@ export function buildServer(options: ComposeOptions) {
       bus: options.ingest.bus,
       ...(options.ingest.llm.summary && { llm: options.ingest.llm.summary }),
     },
-    ...(options.erasure && { erasure: { keys, raw: options.erasure.raw } }),
+    ...(options.erasure && {
+      erasure: {
+        keys,
+        raw: options.erasure.raw,
+        controlStreamKeys: options.erasure.controlStreamKeys,
+      },
+    }),
     onEvent: (event) => {
       for (const sink of feed.sinks) {
         try {
