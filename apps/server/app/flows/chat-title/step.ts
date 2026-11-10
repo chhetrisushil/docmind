@@ -13,6 +13,7 @@ import { chatConversationId } from "../../chats/ids";
 import { chatTitleBind, getChat, setTitle } from "../../chats/sessions";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
+import { defaultSleep } from "../sleep";
 import { CHAT_TITLE_RETRY, type ChatTitleInput, type ChatTitleOutput } from "./flow";
 import { cleanTitle, titleRequest } from "./title";
 
@@ -28,21 +29,6 @@ export interface ChatTitleDeps {
 }
 
 const SKIPPED: ChatTitleOutput = { outcome: "skipped" };
-/** Waits `ms`, or rejects at once when the signal aborts. */
-const defaultSleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 /** The chat's first user message that was not rejected, or null when none is recorded yet. */
 async function firstQuestion(
   reader: ChatTitleDeps["reader"],

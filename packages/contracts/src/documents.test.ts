@@ -213,3 +213,30 @@ describe("document tags in the contracts", () => {
     expect(ListDocumentsQuery.safeParse({ match: "some" }).success).toBe(false);
   });
 });
+
+describe("a tags progress event", () => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  it("is a ready, finalize event with tags suggested or failed", () => {
+    for (const tags of ["suggested", "failed"])
+      expect(
+        DocumentProgressEvent.safeParse({ documentId: id, status: "ready", step: "finalize", tags })
+          .success,
+      ).toBe(true);
+    expect(
+      DocumentProgressEvent.safeParse({
+        documentId: id,
+        status: "ready",
+        step: "finalize",
+        tags: "x",
+      }).success,
+    ).toBe(false);
+    expect(
+      DocumentProgressEvent.safeParse({
+        documentId: id,
+        status: "parsing",
+        step: "parse",
+        tags: "suggested",
+      }).success,
+    ).toBe(false);
+  });
+});

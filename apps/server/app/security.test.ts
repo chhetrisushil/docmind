@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TITLE_FLOW_ID } from "./chats/ids";
+import { SUGGEST_TAGS_FLOW_ID } from "./flows/suggest-tags/flow";
 import { authorizer, executionAuthorizer } from "./security";
 
 const request = (workflowId: string, toolId: string) => ({
@@ -66,6 +67,14 @@ describe("the effect grants", () => {
     expect(authorizer.authorize(request("visualize-turn", "visualize-structure")).allowed).toBe(
       false,
     );
+  });
+
+  it("lets suggest-tags run its one step and nothing else", () => {
+    expect(authorizer.authorize(request(SUGGEST_TAGS_FLOW_ID, "suggest-tags")).allowed).toBe(true);
+    expect(authorizer.authorize(request(SUGGEST_TAGS_FLOW_ID, "ingest-summarize")).allowed).toBe(
+      false,
+    );
+    expect(authorizer.authorize(request("ingest-document", "suggest-tags")).allowed).toBe(false);
   });
 
   it("lets chat-title run its one step and no chat tool", () => {

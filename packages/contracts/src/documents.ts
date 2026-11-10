@@ -134,12 +134,20 @@ export const DocumentProgressEvent = z
      * failed (`failed`: the page offers a retry).
      */
     visuals: z.enum(["ready", "failed"]).optional(),
+    /**
+     * The document's tag suggestions were refreshed (`suggested`: an open detail page reads them again) or the on-demand run
+     * failed (`failed`: the page offers a retry).
+     */
+    tags: z.enum(["suggested", "failed"]).optional(),
   })
   .refine((e) => e.step !== undefined || e.status === "failed", {
     message: "an event without a step must be failed",
   })
   .refine((e) => e.visuals === undefined || (e.status === "ready" && e.step === "finalize"), {
     message: "a visuals event must be ready at finalize",
+  })
+  .refine((e) => e.tags === undefined || (e.status === "ready" && e.step === "finalize"), {
+    message: "a tags event must be ready at finalize",
   });
 export type DocumentProgressEvent = z.infer<typeof DocumentProgressEvent>;
 

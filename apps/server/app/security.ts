@@ -7,6 +7,7 @@ import {
   signedResumeAuthenticator,
 } from "@loom/workflow-runtime";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TITLE_FLOW_ID } from "./chats/ids";
+import { SUGGEST_TAGS_FLOW_ID } from "./flows/suggest-tags/flow";
 
 // What `security.strict` refuses to start without. The table is keyed by workflow id; every flow
 // added later lists its step ids here (a step id doubles as its tool id).
@@ -34,6 +35,8 @@ export const authorizer = new GrantTable({
   [CHAT_GK_FLOW_ID]: CHAT_EFFECT_IDS,
   // The one-step title flow (Task 154); the step id is its tool id.
   [CHAT_TITLE_FLOW_ID]: ["chat-title"],
+  // The on-demand tag suggestions flow (one step; the step id is its tool id).
+  [SUGGEST_TAGS_FLOW_ID]: ["suggest-tags"],
 });
 
 // The actor that starts an execution owns it; only that actor, in the same tenant, may resume,

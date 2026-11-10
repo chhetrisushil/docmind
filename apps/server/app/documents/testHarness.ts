@@ -30,6 +30,7 @@ import {
   createIngestWiring,
 } from "../flows/ingest-document/limits";
 import { pgIngestDeps } from "../flows/ingest-document/pgDeps";
+import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import {
@@ -43,6 +44,7 @@ import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
 import { tagRoutes } from "../tags/routes";
 import { TagService } from "../tags/service";
+import { suggestRoutes } from "../tags/suggestRoutes";
 import { uiRoutes } from "../ui/routes";
 import { documentEventRoutes } from "./events";
 import { InFlight } from "./inFlight";
@@ -359,6 +361,11 @@ export async function startDocumentServer(
     llm?: boolean | "ollama";
     /** With `llm: "ollama"`: no Gemini key, so scanned PDF pages cannot be read. */
     withoutGeminiKey?: boolean;
+    /** Test seam: the suggest-tags starter and limiter the refresh route uses (default: the role is off). */
+    suggest?: {
+      starter: Pick<SuggestTagsStarter, "start">;
+      limiter: { tryAcquire(userId: string): boolean };
+    };
   } = {},
 ): Promise<DocumentHarness> {
   const db = await createTestDb();
@@ -448,6 +455,15 @@ export async function startDocumentServer(
     const server = createHttpServer({
       ...documentRoutes({ ...wrapped, starts }),
       ...tagRoutes({ authenticator: testAuthenticator, tags: wrapped.tags }),
+      ...suggestRoutes({
+        pool: app,
+        authenticator: testAuthenticator,
+        tags: wrapped.tags,
+        starter: overrides.suggest?.starter ?? {
+          start: async () => ({ kind: "disabled" as const }),
+        },
+        limiter: overrides.suggest?.limiter ?? { tryAcquire: () => true },
+      }),
       ...uiRoutes({
         authenticator: testAuthenticator,
         views,
