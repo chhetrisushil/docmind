@@ -382,10 +382,10 @@ export class DmDocDetail extends LitElement {
         class="btn secondary"
         data-visuals-refresh
         ?disabled=${busy}
-        aria-label=${busy ? "Refreshing visuals" : "Refresh visuals"}
-        title="Re-makes the visuals. May re-read the document once to add new diagram types."
+        aria-describedby="visuals-refresh-help"
         @click=${() => this.retryVisuals()}
       >${busy ? "Refreshing…" : "Refresh visuals"}</button>
+      <span id="visuals-refresh-help" data-visuals-refresh-help>A refresh may re-read the document once (one model call) if it is an older one, and is otherwise a re-plan.</span>
       ${this.retryNote ? html`<span data-visuals-note role="status">${this.retryNote}</span>` : null}</p>`;
   }
 

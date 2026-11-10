@@ -1009,4 +1009,20 @@ describe("c2 relations: the ask, the accepted shapes and the count log", () => {
     );
     info.mockRestore();
   });
+
+  it("logs a positive kept count for events, and a lower kept than received", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const events = [
+      { when: "2024", date: "2024", label: "One", chunkIds: [A] },
+      { when: "2025", date: "2025", label: "Two", chunkIds: [A] },
+      { when: "2026", date: "2026", label: "Three", chunkIds: [B] },
+      { when: "2027", date: "2027", label: "Four", chunkIds: [randomUUID()] },
+    ];
+    const { llm } = scripted(() => JSON.stringify({ facts: [], timeline: { events } }));
+    await run(setup({ llm, texts }));
+    const line = info.mock.calls.find((c) => c[0] === "visualize-extract aggregates");
+    expect(line?.[1]).toEqual({ events: "4/3", links: "0/0" });
+    expect(JSON.stringify(line)).not.toMatch(/One|Two|Three|Four/);
+    info.mockRestore();
+  });
 });
