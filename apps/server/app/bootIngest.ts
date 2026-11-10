@@ -10,6 +10,7 @@ import { hydrateSubjectIndex } from "./erasure/compliance";
 import { type IngestWiring, closeIngest } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
+import { isSuggestTagsExecution } from "./flows/suggest-tags/start";
 import { isTurnVisualizeExecution } from "./flows/visualize-turn/ids";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
 import { snapshotPruneDeps } from "./snapshots/pgPruner";
@@ -22,12 +23,13 @@ import { lineageGcDeps } from "./storage/pgLineageGc";
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** The executions boot recovery re-drives: ingest, the visuals flows (document and turn), and the chat's conversations and titles. */
+/** The executions boot recovery re-drives: ingest, the visuals flows (document and turn), the chat's conversations and titles, and the on-demand tag suggestions. */
 export const recoveryOwns = (id: string): boolean =>
   isIngestExecution(id) ||
   isVisualizeExecution(id) ||
   isTurnVisualizeExecution(id) ||
-  isRecoverableChatExecution(id);
+  isRecoverableChatExecution(id) ||
+  isSuggestTagsExecution(id);
 
 export interface BootIngestParts {
   built: ReturnType<typeof buildServer>;

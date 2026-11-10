@@ -15,18 +15,28 @@ import { PgDocumentResults } from "../flows/ingest-document/pgResults";
 import type { SuggestTagsStart } from "../flows/suggest-tags/start";
 
 describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", () => {
-  const state = { answer: { kind: "started", run: 1 } as SuggestTagsStart, allow: true };
+  const state = {
+    answer: { kind: "started", run: 1 } as SuggestTagsStart,
+    allow: true,
+    busy: false,
+  };
   const start = vi.fn(async () => state.answer);
+  const acquired = vi.fn(() => state.allow);
   let h: DocumentHarness;
   beforeAll(async () => {
     h = await startDocumentServer({
-      suggest: { starter: { start }, limiter: { tryAcquire: () => state.allow } },
+      suggest: {
+        starter: { start, inFlight: () => state.busy },
+        limiter: { tryAcquire: acquired },
+      },
     });
   });
   afterAll(async () => void (await h?.close()));
   beforeEach(async () => {
     state.answer = { kind: "started", run: 1 };
     state.allow = true;
+    state.busy = false;
+    acquired.mockClear();
     start.mockClear();
     await h.owner.query("DELETE FROM tags");
     await h.owner.query("DELETE FROM documents");
@@ -106,6 +116,14 @@ describe.skipIf(!PG_URL)("tag suggestion routes (needs DOCMIND_TEST_PG_URL)", ()
       userId: ALICE.userId,
       documentId: d,
     });
+  });
+
+  it("refresh answers suggest_running without spending a rate-limit token while a run is in flight", async () => {
+    const d = await seed();
+    state.busy = true;
+    const res = await post("alice", `/api/documents/${d}/tag-suggestions/refresh`);
+    expect([res.status, await code(res)]).toEqual([409, "suggest_running"]);
+    expect([start.mock.calls.length, acquired.mock.calls.length]).toEqual([0, 0]);
   });
 
   it("refresh answers 404 (not yours, malformed), 409 no_summary, 409 suggest_running, 409 suggest_unavailable and 429", async () => {

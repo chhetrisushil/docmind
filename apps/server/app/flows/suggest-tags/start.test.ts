@@ -102,7 +102,8 @@ describe("settle and cancel (erasure)", () => {
     const r = ref();
     const first = suggestTagsExecutionId(r.userId, r.documentId, 1);
     const cancel = vi.fn(async (id: string, _reason: string) => {
-      if (id === first) throw new Error(`No execution found for id: ${id}`);
+      if (id === first || id === suggestTagsExecutionId(r.userId, r.documentId, 3))
+        throw new Error(`No execution found for id: ${id}`);
       return true;
     });
     const finished = { waitForCompletion: () => Promise.resolve() } as unknown as ExecutionHandle;
@@ -115,8 +116,45 @@ describe("settle and cancel (erasure)", () => {
     expect(cancel.mock.calls.map((c) => c[0])).toEqual([
       first,
       suggestTagsExecutionId(r.userId, r.documentId, 2),
+      suggestTagsExecutionId(r.userId, r.documentId, 3), // the first one Loom does not hold ends the walk
     ]);
-    expect(cancel.mock.calls.map((c) => c[1])).toEqual(["erased", "erased"]);
+    expect(cancel.mock.calls.map((c) => c[1])).toEqual(["erased", "erased", "erased"]);
+  });
+
+  it("cancel finds the runs of an earlier process from Loom, not from this process's counter", async () => {
+    const r = ref();
+    const held = new Set([1, 2, 3].map((n) => suggestTagsExecutionId(r.userId, r.documentId, n)));
+    const cancel = vi.fn(async (id: string) => {
+      if (!held.has(id as never)) throw new Error(`No execution found for id: ${id}`);
+      return true;
+    });
+    const starter = loomSuggestTagsStarter({ start: vi.fn(), cancel } as never); // a fresh process: counter at 0
+    await starter.cancel(r, r.documentId, "erased");
+    expect(cancel.mock.calls.map((c) => c[0])).toEqual(
+      [1, 2, 3, 4].map((n) => suggestTagsExecutionId(r.userId, r.documentId, n)),
+    );
+  });
+
+  it("a start that lands after one cancel is caught by the next (the park-then-cancel retry)", async () => {
+    const r = ref();
+    const held = new Set<string>();
+    const cancel = vi.fn(async (id: string) => {
+      if (!held.has(id)) throw new Error(`No execution found for id: ${id}`);
+      return true;
+    });
+    const start = vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+      held.add(o.executionId);
+      return never;
+    });
+    const starter = loomSuggestTagsStarter({ start, cancel } as never);
+    await starter.cancel(r, r.documentId, "erased"); // nothing yet
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await starter.start(r); // lands late
+    await starter.cancel(r, r.documentId, "erased");
+    expect(cancel.mock.calls.map((c) => c[0]).slice(1)).toContain(
+      suggestTagsExecutionId(r.userId, r.documentId, 1),
+    );
+    expect(await starter.inFlight(r)).toBe(true);
   });
 
   it("cancel rethrows any other failure, so the erasure step is retried", async () => {

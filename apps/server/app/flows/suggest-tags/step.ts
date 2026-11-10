@@ -110,7 +110,6 @@ export function suggestTagsEffect(
                 (SUGGEST_TAGS_RETRY.backoffMultiplier ?? 1) ** (attempt - 1),
               signal,
             );
-            signal?.throwIfAborted();
           }
         }
         const names = normaliseSuggestions(raw, existing);

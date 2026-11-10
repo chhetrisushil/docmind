@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
+import type { LlmProvider } from "@loom/llm";
 import { Pool } from "pg";
 import { bootIngest } from "../bootIngest";
 import { createChatLlm } from "../chats/llm";
@@ -47,6 +48,8 @@ export interface IngestStackOptions {
   chatRotateEveryTurns?: number;
   /** Turns the `visuals` role on over a FakeAnthropic (`visualsClaude`), with a planner decision key. Every other role stays off. */
   visuals?: boolean;
+  /** The model behind the `summary` role, set after the wiring is built (the on-demand suggest-tags flow reads it; ingest stays keyless unless the test uploads). */
+  suggestLlm?: LlmProvider;
   /** Wraps the eraser's ports: the crash test makes one step fail until it is released. */
   wrapErasure?: (deps: ErasureDeps) => ErasureDeps;
 }
@@ -140,6 +143,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
     });
     // The retry policy's backoff is the one timer a test must not wait on: attempts still run, back to back.
     wiring.sleep = async () => {};
+    if (options.suggestLlm) wiring.llm.summary = options.suggestLlm;
     cleanups.unshift(() => closeIngest(wiring));
     const chatEnv = claude
       ? {
