@@ -9,6 +9,18 @@ describe("cleanText", () => {
     expect(cleanText("line\u2028break\u2029here", 80)).toBe("line break here");
   });
 
+  it("drops invisible fillers outside the format class, and bidi controls", () => {
+    expect(cleanText("\u115f\u1160\u3164\uffa0\u2800", 80)).toBe("");
+    expect(cleanText("A\u3164B", 80)).toBe("AB");
+    expect(cleanText("a\u202eb\u2066c\u2069d\u200ee\u200ff", 80)).toBe("abcdef");
+  });
+
+  it("replaces lone surrogates with a space and keeps real pairs", () => {
+    expect(cleanText("a\ud800b", 80)).toBe("a b");
+    expect(cleanText("a\udc00b", 80)).toBe("a b");
+    expect(cleanText("x\u{1F600}y", 80)).toBe("x\u{1F600}y");
+  });
+
   it("clips at the limit, never inside a surrogate pair, and trims after clipping", () => {
     expect(cleanText("abcdef", 3)).toBe("abc");
     expect(cleanText("ab cdef", 3)).toBe("ab");
