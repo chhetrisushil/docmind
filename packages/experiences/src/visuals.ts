@@ -46,6 +46,14 @@ export interface TimelineFact {
   chunkIds: string[];
   ordinal: number;
 }
+/** The most links a relations fact keeps, and the most parties they can name (two each); the server's normaliser and stored schema import these. */
+export const MAX_RELATION_LINKS = 30;
+export const MAX_RELATION_ENTITIES = MAX_RELATION_LINKS * 2;
+
+/** What two spellings of one name share: NFKC, lower case, one inner space. The dedupe key of events, links and parties. */
+export const nameKey = (raw: string): string =>
+  raw.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+
 export interface RelationsFact {
   kind: "relations";
   entities: string[];

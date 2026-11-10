@@ -159,6 +159,49 @@ describe("dropUnfittingOps", () => {
           : undefined;
     expect(inserted(dropUnfittingOps(p.ops, lookup).ops)).toEqual(["b"]);
   });
+
+  it("keeps a DocumentTimeline and a Relationships bound to their own facts, and drops each on the wrong or a missing fact", async () => {
+    const { timeline, relations } = aggregateFacts(CHUNK);
+    const widget = (id: string, type: string, capability: string, path: string) => ({
+      ...node(id, type, capability),
+      span: 12,
+      binding: { capability, arguments: {}, path, priority: "P1" },
+    });
+    const p = await planVisuals(
+      new ReferencePlanner({
+        model: scriptedPlannerModel([
+          JSON.stringify({
+            summary: "s",
+            nodes: [
+              widget("timeline", "DocumentTimeline", "fact-18", "nodes"),
+              widget("relations", "Relationships", "fact-19", "edges"),
+            ],
+          }),
+        ]),
+        modelId: "t",
+      }),
+      [FIGURE, timeline, relations],
+      recording(),
+    );
+    expect(p.findings.filter((f) => f.severity === "error")).toEqual([]);
+    const kept = dropUnfittingOps(p.ops, lookupOf([FIGURE, timeline, relations]));
+    expect(inserted(kept.ops)).toEqual(["timeline", "relations"]);
+    expect(kept.dropped).toEqual([]);
+    // each ordinal holds the other aggregate: neither widget fits
+    const swapped = dropUnfittingOps(
+      p.ops,
+      lookupOf([FIGURE, { ...relations, ordinal: 18 }, { ...timeline, ordinal: 19 }]),
+    );
+    expect(inserted(swapped.ops)).toEqual([]);
+    expect(swapped.dropped).toEqual(["DocumentTimeline", "Relationships"]);
+    // a chart at 18 fits neither, and a fact that is gone fits nothing
+    expect(
+      inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE, { ...FIGURE, ordinal: 18 }])).ops),
+    ).toEqual([]);
+    expect(inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE, timeline])).ops)).toEqual([
+      "timeline",
+    ]);
+  });
 });
 
 describe("fittedSummary", () => {
@@ -210,48 +253,5 @@ describe("fittedSummary", () => {
     const out = fittedSummary(q, same);
     expect(out.summary).toBe(q.summary);
     expect(out.report).toBe(q.report);
-  });
-
-  it("keeps a DocumentTimeline and a Relationships bound to their own facts, and drops each on the wrong or a missing fact", async () => {
-    const { timeline, relations } = aggregateFacts(CHUNK);
-    const widget = (id: string, type: string, capability: string, path: string) => ({
-      ...node(id, type, capability),
-      span: 12,
-      binding: { capability, arguments: {}, path, priority: "P1" },
-    });
-    const p = await planVisuals(
-      new ReferencePlanner({
-        model: scriptedPlannerModel([
-          JSON.stringify({
-            summary: "s",
-            nodes: [
-              widget("timeline", "DocumentTimeline", "fact-18", "nodes"),
-              widget("relations", "Relationships", "fact-19", "edges"),
-            ],
-          }),
-        ]),
-        modelId: "t",
-      }),
-      [FIGURE, timeline, relations],
-      recording(),
-    );
-    expect(p.findings.filter((f) => f.severity === "error")).toEqual([]);
-    const kept = dropUnfittingOps(p.ops, lookupOf([FIGURE, timeline, relations]));
-    expect(inserted(kept.ops)).toEqual(["timeline", "relations"]);
-    expect(kept.dropped).toEqual([]);
-    // each ordinal holds the other aggregate: neither widget fits
-    const swapped = dropUnfittingOps(
-      p.ops,
-      lookupOf([FIGURE, { ...relations, ordinal: 18 }, { ...timeline, ordinal: 19 }]),
-    );
-    expect(inserted(swapped.ops)).toEqual([]);
-    expect(swapped.dropped).toEqual(["DocumentTimeline", "Relationships"]);
-    // a chart at 18 fits neither, and a fact that is gone fits nothing
-    expect(
-      inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE, { ...FIGURE, ordinal: 18 }])).ops),
-    ).toEqual([]);
-    expect(inserted(dropUnfittingOps(p.ops, lookupOf([FIGURE, timeline])).ops)).toEqual([
-      "timeline",
-    ]);
   });
 });

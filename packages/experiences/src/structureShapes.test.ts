@@ -6,6 +6,7 @@ import {
   relationshipsDiagram,
   timelineDiagram,
 } from "./structureShapes";
+import { MAX_RELATION_ENTITIES } from "./visuals";
 import type { EntityMapFact, OutlineFact, RelationsFact, TimelineFact } from "./visuals";
 
 const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -259,10 +260,19 @@ describe("relationshipsDiagram", () => {
     expect(relationshipsDiagram({ ...RELATIONS, links: [{ ...L0, to: 9 }] })).toBeNull();
     const parties = (n: number) => Array.from({ length: n }, (_, i) => `P${i}`);
     expect(
-      relationshipsDiagram({ ...RELATIONS, entities: parties(MAX_DIAGRAM_NODES) }),
+      relationshipsDiagram({ ...RELATIONS, entities: parties(MAX_RELATION_ENTITIES) }),
     ).not.toBeNull();
     expect(
-      relationshipsDiagram({ ...RELATIONS, entities: parties(MAX_DIAGRAM_NODES + 1) }),
+      relationshipsDiagram({ ...RELATIONS, entities: parties(MAX_RELATION_ENTITIES + 1) }),
     ).toBeNull();
+    expect(MAX_RELATION_ENTITIES).toBeLessThan(MAX_DIAGRAM_NODES);
+  });
+
+  it("is null when two parties are one name once normalised, however they are spelled, and keeps distinct names", () => {
+    const dup = (b: string) => ({ ...RELATIONS, entities: ["Acme", b, "Cora", "Project X"] });
+    expect(relationshipsDiagram(dup("acme"))).toBeNull();
+    expect(relationshipsDiagram(dup("  ACME "))).toBeNull();
+    expect(relationshipsDiagram(dup("\uff21cme"))).toBeNull();
+    expect(relationshipsDiagram(dup("Acme  Two"))).not.toBeNull();
   });
 });

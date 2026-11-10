@@ -1,3 +1,4 @@
+import { MAX_RELATION_ENTITIES, MAX_RELATION_LINKS } from "@docmind/experiences";
 import {
   MAX_RAW_ITEMS,
   MAX_STRUCTURE_LABEL,
@@ -7,13 +8,13 @@ import {
   nameKey,
 } from "./structureText";
 
-export const MAX_LINKS = 30;
+export const MAX_LINKS = MAX_RELATION_LINKS;
 export const MIN_LINKS = 3;
 /** The longest party name; at most 30 links name at most 60 parties. */
 export const MAX_PARTY = MAX_STRUCTURE_LABEL;
 export const MAX_REL = 40;
 /** At most 30 links name at most 2 parties each; the stored schema (`facts.ts`) imports this, never repeats it. */
-export const MAX_ENTITIES = MAX_LINKS * 2;
+export const MAX_ENTITIES = MAX_RELATION_ENTITIES;
 
 export interface RelationLink {
   /** Indexes into `RelationsDraft.entities`; the link is directed from to to. */
