@@ -63,6 +63,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `apps/server/app/tags/` | The tag service (sealed names, links, suggestions), the tag and suggestion routes, `suggestions.ts` (the normaliser) |
 | `apps/server/app/chats/` | Chat sessions, the `doc-chat` agent, tools (`tools/`), retrieval (`retrieval/`), SSE stream, citations, reasoning, the rolling summary (`summaryChoice.ts` seals Loom's summary decision, which would otherwise land in the log in the clear; `summarizer.ts` keeps a failing summarizer from ending a chat) |
 | `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers (`connections.ts`: a document's related documents and shared entities) |
+| `apps/server/app/opaqueIds/` | Opaque execution and lineage ids (R14): the id module, the per-user key cache, the handle store |
 | `apps/server/app/erasure/`, `keys/`, `crypto/` | Account erasure (`DELETE /api/me`), key-encryption keys, field crypto |
 | `apps/server/app/llm/` | Builds one LLM provider per role (chat, title, summary, visuals, vision) |
 | `apps/server/app/db/` | Migration runner (`migrate.ts`) and `withTenant` (`tenant.ts`); SQL lives in `infra/migrations` |
@@ -76,7 +77,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `packages/blob-store` | Encrypted filesystem `ContentStore` (per-user envelopes) |
 | `packages/keystore-pg` | `PostgresKeyStore`: per-user data keys wrapped by a master key |
 | `packages/llm-anthropic` | Claude provider for Loom's `LlmProvider` |
-| `infra/migrations` | Ordered SQL migrations 0001–0036: roles, tenancy, auth, keys, documents, chunks, chats, erasure, tags |
+| `infra/migrations` | Ordered SQL migrations 0001–0038: roles, tenancy, auth, keys, documents, chunks, chats, erasure, tags |
 | `infra/local-db.sh` | `pnpm db:start`, `db:stop`, `db:status` for a local Postgres outside `/tmp` |
 | `docs/` | Design spec, design notes, operations runbooks, implementation plans |
 

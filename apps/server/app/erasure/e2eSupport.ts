@@ -299,6 +299,35 @@ export const waitErased = (st: IngestStack, userId: string, timeout = 90_000) =>
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const MIN_NEEDLE = 8; // a shorter needle proves nothing and can occur by chance (an empty one matches everything)
 
+/**
+ * The tables with a row that holds the handle AND any of the given plain ids (the user's, the document's, the chat's): the link that
+ * opaque ids exist to remove. Each row is searched as one JSON text (so a row linking them across columns is found, which the
+ * per-column scan cannot see; bytea columns are covered by `scanTables`). Run as the superuser of the test URL, like `scanTables`.
+ */
+export async function rowsLinkingHandleToIds(
+  owner: Pool,
+  handle: string,
+  ids: readonly string[],
+): Promise<string[]> {
+  const { rows: tables } = await owner.query(
+    `SELECT table_schema AS s, table_name AS t FROM information_schema.tables
+      WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')
+        AND table_schema NOT LIKE 'pg\\_toast%' AND table_schema NOT LIKE 'pg\\_temp%'
+      ORDER BY 1, 2`,
+  );
+  const linked: string[] = [];
+  for (const { s, t } of tables as { s: string; t: string }[]) {
+    const { rows } = await owner.query(
+      `SELECT count(*)::int AS n FROM ${quote(s)}.${quote(t)} x
+        WHERE strpos(lower(to_jsonb(x)::text), lower($1)) > 0
+          AND EXISTS (SELECT 1 FROM unnest($2::text[]) AS n WHERE strpos(lower(to_jsonb(x)::text), lower(n)) > 0)`,
+      [handle, ids],
+    );
+    if (rows[0].n > 0) linked.push(`${s}.${t}`);
+  }
+  return linked;
+}
+
 export interface Hit {
   /** `schema.table` */
   table: string;
@@ -457,17 +486,23 @@ const TOOLS = CHAT_TOOL_DEFS as readonly { name: string; description: string }[]
  */
 const PAYLOAD_STRINGS: Record<string, Check> = {
   flowHash: /^fnv1a:[0-9a-f]{8}$/,
-  stepId: /^(ingest-[a-z]+|chat-title|conv#[a-z0-9#:]+)$/,
-  decisionId: /^conv#[a-z0-9#:]+$/,
+  stepId:
+    /^(ingest-[a-z]+|suggest-tags|visualize-(extract|structure|load|commit)|chat-title|conv#[a-z0-9#:]+)$/,
+  decisionId: /^(conv#[a-z0-9#:]+|plan:compose:k:[0-9a-f]{32})$/,
+  // the visualize flow's recorded planner decision: fixed ids of the planner, its catalog and a hash of the plan key
+  summaryClass: oneOf("sensitive"),
+  version: /^\d+\.\d+\.\d+$/,
+  catalogId: /^docmind\.visuals\.v\d+$/,
   innerSteps: /^conv#[a-z0-9#:]+$/,
   topic: /^conversation:turn$/,
   waitId: /^#\d+$/,
   messageId: /^([0-9a-f]{32,64}|[0-9a-f-]{36})$/,
-  outcome: oneOf("done", "failed", "titled", "skipped"),
+  outcome: oneOf("done", "failed", "titled", "skipped", "suggested", "empty"),
   on: oneOf("__loom_waits__"),
-  kind: oneOf("inbox", "closed", "dropped"),
+  kind: oneOf("inbox", "closed", "dropped", "compose"),
   reason: oneOf("erased"), // the fixed cancel reason of the eraser (wire.ts)
   source: oneOf(
+    "loom-ui.planner.reference",
     "conversation-access",
     "conversation-budget",
     "conversation-record",
@@ -479,7 +514,7 @@ const PAYLOAD_STRINGS: Record<string, Check> = {
   stopReason: oneOf("tool_use", "end_turn", "max_tokens", "stop_sequence"),
   provider: oneOf("anthropic"),
   model: /^(claude-[a-z0-9.-]+|ollama\/[a-z0-9.:-]+|none)$/,
-  id: /^toolu_\d+$/,
+  id: /^(toolu_\d+|loom-ui\.reference-planner)$/,
   origin: oneOf("document"),
   // the tool definitions of the model call (from CHAT_TOOL_DEFS) and their JSON schema vocabulary
   name: exactly(TOOLS.map((t) => t.name)),
@@ -539,6 +574,8 @@ const METADATA: Record<string, (v: unknown) => boolean> = {
   kernel: (v) => v === true,
   fence: (v) => Number.isSafeInteger(v) && (v as number) >= 0,
   computeTarget: (v) => typeof v === "string" && COLUMN_TOKEN.test(v),
+  // The commit time a lineage event (EXPERIENCE_COMPOSED) carries: an ISO instant, nothing of the user.
+  at: (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(v),
   // The seal marker (`SealMarker`): `{ v: 1, cipher, covers }`, the cipher id and the `EVENT_TYPE.field.path` entries it sealed.
   seal: (v) => {
     if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
@@ -629,6 +666,20 @@ const ALLOWED: Allowed[] = [
         isOpaqueExecution(row.execution_id, who.handle),
       ),
   },
+  // Phase 1 residual (spec section 6, handoff to phase 2): a chat turn's visuals lineage line is still old-format
+  // (`__loom_ui_lineage__:turnvisuals-<user>-<chat>-<ord>`), so its plaintext id names the user and the chat. Its content is
+  // sealed under the destroyed key; here only that the row is the user's own line, with a sealed author and no content.
+  ...["id", "execution_id", "payload"].map((column) => ({
+    table: "loom.events",
+    column,
+    reason:
+      "phase 1: the old-format id of the user's own chat-turn visuals lineage (a chat builder moves in phase 2); author sealed, no content",
+    ok: (row: Row, who: Who) =>
+      typeof row.execution_id === "string" &&
+      row.execution_id.startsWith(`__loom_ui_lineage__:turnvisuals-${who.userId}-`) &&
+      sealed((row.payload as { by?: unknown } | null)?.by) &&
+      noContent(row, who),
+  })),
   {
     table: "loom.events",
     column: "payload",
@@ -967,6 +1018,35 @@ export async function assertErased(
     [user.userId],
   );
   expect(key.rows).toEqual([{ no_key: true, gone: true }]);
+
+  // 3b. The handle's subject key is destroyed too, remembered as destroyed, and its tombstone holds no key material; the handle went
+  //     with the user row, and the cached id key went with the key.
+  if (who.handle !== undefined) {
+    const subject = `h_${who.handle}`;
+    expect(await keys.wasDestroyed(subject)).toBe(true);
+    expect(await keys.get(subject)).toBeNull();
+    const handleKey = await db.owner.query(
+      "SELECT wrapped_dek IS NULL AS no_key, destroyed_at IS NOT NULL AS gone FROM data_keys WHERE subject_id = $1",
+      [subject],
+    );
+    expect(handleKey.rows).toEqual([{ no_key: true, gone: true }]);
+    expect(
+      (
+        await db.owner.query("SELECT count(*)::int AS n FROM users WHERE id_handle = $1", [
+          who.handle,
+        ])
+      ).rows[0].n,
+    ).toBe(0);
+    expect(st.composed.ids.knows(who.handle)).toBe(false);
+    // 3c. No row of any table holds the handle together with a plain id of the user, a document or a chat (spec section 1).
+    expect(
+      await rowsLinkingHandleToIds(db.owner, who.handle, [
+        user.userId,
+        user.documentId,
+        user.chatId,
+      ]),
+    ).toEqual([]);
+  }
 
   // 4. The whole blob root.
   assertBlobsGone(st, user, opts.tenantGone);
