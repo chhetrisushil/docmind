@@ -24,7 +24,7 @@ const APP_EXECUTABLE = [
   "docmind_orphan_statuses(integer)",
   "docmind_ready_documents(uuid,integer)",
   "docmind_record_visual_run(uuid,uuid,integer,integer,text,text,text)",
-  "docmind_repair_execution_ids()",
+  "docmind_repair_execution_ids(interval)",
   "docmind_stale_uploads_v2(interval,interval,integer)",
   "docmind_user_handles(uuid,integer)",
   "docmind_user_of_handle(text)",

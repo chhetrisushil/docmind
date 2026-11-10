@@ -46,12 +46,14 @@ export class HandleStoreError extends Error {
 const isUniqueViolation = (err: unknown): boolean =>
   typeof err === "object" && err !== null && (err as { code?: unknown }).code === "23505";
 
-/** Runs a store call, replacing any error with a `HandleStoreError` (and a unique-key collision with `HandleMismatchError`). */
+/** Runs a store call, replacing any error except the key errors with a `HandleStoreError` (and a unique-key collision with `HandleMismatchError`). */
 async function guarded<T>(call: () => Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (err) {
     if (err instanceof HandleMismatchError) throw err;
+    // The key is gone or the key store is down: not a handle store outage, and callers classify these two differently.
+    if (err instanceof FieldKeyUnavailableError || err instanceof FieldKeyStoreError) throw err;
     throw isUniqueViolation(err) ? new HandleMismatchError() : new HandleStoreError();
   }
 }

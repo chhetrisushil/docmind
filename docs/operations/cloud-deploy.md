@@ -102,6 +102,11 @@ docker run --rm \
   **before** starting the new server and make its failure stop the deploy: ECS, a one-off task or a
   `RunTask` step; Cloud Run, a Cloud Run job; Kubernetes, a `Job` or a Helm hook.
 - The migration connection must be direct or session-mode, not a transaction pooler (cloud-scaling.md S8).
+- Migration `0038` (opaque ids) adds columns and a unique index to `users` and `documents` and then fills one stored execution
+  id per ingested document, all in one transaction under `ACCESS EXCLUSIVE` locks. Every read and write of those two tables,
+  logins included, waits until it commits, for a time proportional to the number of documents. Drain the old pods before running
+  it. The server repeats the fill at boot, for documents updated in the last 7 days, to repair a document an old pod ingested
+  during a rolling deploy. Rolling back after `0038` is not supported.
 - Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
   role on, the first boot after it re-plans every visualized document once (one planner call each over its stored facts, at
   most 2 at a time, no extraction) to add the Connections section; it is stamped when it completes, so later boots do not repeat it (a re-plan whose end is lost to a crash is re-planned once more).

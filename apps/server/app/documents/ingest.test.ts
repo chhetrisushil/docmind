@@ -6,6 +6,7 @@ import { buildApp } from "../config";
 import { DocumentGoneError } from "../flows/ingest-document/errors";
 import { fakeIngestDeps } from "../flows/ingest-document/testing";
 import { generationOf, ingestKeyOf, ingestScopeOf } from "../status/model";
+import type { ExecutionRecorder } from "./executionIds";
 import { INGEST_GENERATION, ingestExecutionId, ingestStartInput, loomIngest } from "./ingest";
 
 const identity = () => ({ tenantId: randomUUID(), userId: randomUUID() });
@@ -132,6 +133,38 @@ function fakeRuntime(opts: { unknown?: string[]; failWith?: Error } = {}) {
   } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
   return { runtime, calls };
 }
+
+describe("loomIngest records the id", () => {
+  const rec = (log: string[], fail = false): ExecutionRecorder => ({
+    recordIngest: async (_who, _d, g, id) => {
+      log.push(`record:${g}:${id}`);
+      if (fail) throw new Error("record failed");
+    },
+    recordVisualize: async () => {},
+  });
+
+  it("records the id it starts BEFORE runtime.start", async () => {
+    const log: string[] = [];
+    const { runtime } = fakeRuntime();
+    const spy = {
+      start: async (...a: Parameters<typeof runtime.start>) => {
+        log.push("start");
+        return runtime.start(...a);
+      },
+      cancel: runtime.cancel,
+    } as typeof runtime;
+    await loomIngest(spy, rec(log)).start(IDENTITY, DOC, 2);
+    expect(log).toEqual([`record:2:${ingestExecutionId(IDENTITY.userId, DOC, 2)}`, "start"]);
+  });
+
+  it("a failed record stops the start", async () => {
+    const { runtime, calls } = fakeRuntime();
+    await expect(loomIngest(runtime, rec([], true)).start(IDENTITY, DOC, 2)).rejects.toThrow(
+      "record failed",
+    );
+    expect(calls.starts).toEqual([]);
+  });
+});
 
 describe("execution id generations", () => {
   it("names generation 1 as the bare id, never .1, and later generations with a counter", () => {

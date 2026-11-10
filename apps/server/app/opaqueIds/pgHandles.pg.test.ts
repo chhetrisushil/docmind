@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword } from "../db/migrate";
+import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { ALICE, ALICE2, BOB, T1, U1, U1B, U2, seedUsers } from "../documents/testHarness";
 import { PgHandleStore } from "./pgHandles";
@@ -63,6 +64,25 @@ describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG
   it("row-level security keeps a claim inside its tenant", async () => {
     await expect(store.claim({ tenantId: T1, userId: U2 }, "m".repeat(26))).rejects.toThrow();
     expect(await store.read({ tenantId: T1, userId: U2 })).toBeNull();
+    // The policy itself, not the store's own tenant predicate: raw statements as tenant T1 against tenant 2's user see nothing.
+    await withTenant(app, T1, async (tx) => {
+      const upd = await tx.query("UPDATE users SET id_handle = $1 WHERE id = $2", [
+        "m".repeat(26),
+        U2,
+      ]);
+      expect(upd.rowCount).toBe(0);
+      const sel = await tx.query("SELECT id_handle FROM users WHERE id = $1", [U2]);
+      expect(sel.rows).toEqual([]);
+    });
+  });
+
+  it("a store failure carries a fixed message and the pg code, never the handle", async () => {
+    const err = await store.claim(BOB, H1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("the id handle store failed");
+    expect((err as { code?: string }).code).toBe("23505");
+    expect(JSON.stringify(err, Object.getOwnPropertyNames(err))).not.toContain(H1);
+    expect((err as { detail?: string }).detail).toBeUndefined();
   });
 
   it("an erasing user cannot claim a handle", async () => {

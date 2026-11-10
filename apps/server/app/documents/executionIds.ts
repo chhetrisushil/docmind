@@ -23,6 +23,9 @@ export interface ExecutionRecorder {
   ): Promise<void>;
 }
 
+/** An old pod only ingests documents that were just uploaded or retried, so the boot repair looks back one week. */
+export const BOOT_REPAIR_WINDOW_SECONDS = 7 * 24 * 3600;
+
 const COLUMN = { ingest: "ingest_execution_id", visualize: "visualize_execution_id" } as const;
 
 /**
@@ -31,9 +34,14 @@ const COLUMN = { ingest: "ingest_execution_id", visualize: "visualize_execution_
  * how a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is found by the sweeps. It never overwrites
  * a stored id. `bootIngest` calls it before the sweeps start (Task 6).
  */
-export async function repairStoredExecutionIds(pool: Pick<Pool, "query">): Promise<number> {
+export async function repairStoredExecutionIds(
+  pool: Pick<Pool, "query">,
+  /** Only documents updated within this many seconds are repaired (the boot call: 7 days). `undefined` is unbounded, as the migration's own call is. */
+  withinSeconds: number | undefined = BOOT_REPAIR_WINDOW_SECONDS,
+): Promise<number> {
   const { rows } = await pool.query<{ n: number }>(
-    "SELECT public.docmind_repair_execution_ids() AS n",
+    "SELECT public.docmind_repair_execution_ids(CASE WHEN $1::float8 IS NULL THEN NULL ELSE make_interval(secs => $1::float8) END) AS n",
+    [withinSeconds ?? null],
   );
   return rows[0]?.n ?? 0;
 }

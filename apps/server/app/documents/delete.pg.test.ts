@@ -57,6 +57,7 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
     const second = ((await res.json()) as { document: DocumentDto }).document;
     expect(second.id).not.toBe(first.id);
     expect(existsSync(await blobPath(bytes))).toBe(true);
+    await h.starts.idle(); // the start records its id first (a database round trip)
     expect(h.ingest.handles.has(second.id)).toBe(true);
   });
 
@@ -64,6 +65,7 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
     h.ingest.hold(); // the parse step waits before it looks the document up
     const bytes = TEXT("in flight");
     const doc = await create("busy.txt", bytes);
+    await h.starts.idle(); // the start records its id first (a database round trip)
     const handle = h.ingest.handles.get(doc.id);
     expect(handle).toBeDefined();
     try {
@@ -111,6 +113,7 @@ describe.skipIf(!PG_URL)("DELETE /api/documents/:id (needs DOCMIND_TEST_PG_URL)"
     h.ingest.hold();
     const bytes = TEXT("upper case id");
     const doc = await create("upper.txt", bytes);
+    await h.starts.idle(); // the start records its id first (a database round trip)
     const handle = h.ingest.handles.get(doc.id);
     try {
       expect((await del(doc.id.toUpperCase())).status).toBe(204);
