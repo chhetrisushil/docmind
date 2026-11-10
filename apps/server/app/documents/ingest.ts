@@ -9,7 +9,7 @@ import {
   IngestStartInput as IngestStartInputSchema,
   ingestDocumentFlow,
 } from "../flows/ingest-document/flow";
-import { type UserExecutionId, executionIdFor } from "../subject";
+import { type UserIdSource, existingUser, ingestCandidates } from "./executionCandidates";
 import type { ExecutionRecorder } from "./executionIds";
 
 /**
@@ -34,17 +34,6 @@ const checkGeneration = (generation: number): number => {
   return generation;
 };
 
-/** The execution that ingests one document. `name` is a fixed prefix plus a UUID: no content. */
-export const ingestExecutionId = (
-  userId: string,
-  documentId: string,
-  generation = INGEST_GENERATION,
-): UserExecutionId => {
-  const id = documentId.toLowerCase();
-  // Generation 1 is the bare name (the status model's parser never sees `.1`).
-  return executionIdFor(userId, generation === 1 ? `ingest-${id}` : `ingest-${id}.${generation}`);
-};
-
 /** What the document routes need from the flow engine. */
 export interface IngestPort {
   /** Starts this generation of the document's ingest. `null`: it already exists (start-once). */
@@ -65,7 +54,7 @@ const target = (identity: Identity, documentId: string, generation: number) => {
   const ref = ingestStartInput(identity, documentId);
   return {
     ref,
-    executionId: ingestExecutionId(ref.userId, ref.documentId, checkGeneration(generation)),
+    generation: checkGeneration(generation),
     principal: { tenant: ref.tenantId, actor: ref.userId },
   };
 };
@@ -73,19 +62,28 @@ const target = (identity: Identity, documentId: string, generation: number) => {
 // A fixed reason: the cancel reason is recorded in the log, so it never names the document.
 const CANCEL_REASON = "document-deleted";
 
+export interface LoomIngestOptions {
+  /** The id cache: a start builds the new-format id with the user's key; a cancel also tries the old format. */
+  ids: UserIdSource;
+  /** Records the id of the generation's execution on the document before it starts (migration 0038); absent in tests that need no sweep. */
+  executions?: ExecutionRecorder;
+}
+
 export function loomIngest(
   runtime: Pick<WorkflowRuntime, "start" | "cancel">,
-  /** Records the id of the generation's execution on the document before it starts (migration 0038); absent in tests that need no sweep. */
-  executions?: ExecutionRecorder,
+  o: LoomIngestOptions,
 ): IngestPort {
   return {
     async start(identity, documentId, generation) {
-      const { ref, executionId, principal } = target(identity, documentId, generation);
+      const { ref, principal, generation: g } = target(identity, documentId, generation);
+      // A key-store outage throws here, before Loom sees anything: a start never falls back to an id with the plain UUIDs.
+      const user = await o.ids.ensureUser({ tenantId: ref.tenantId, userId: ref.userId });
+      const executionId = user.ingest(ref.documentId, g);
       // Recorded BEFORE the start: a crash in between leaves an id with no status row, which the stale-upload sweep lists and starts again.
-      await executions?.recordIngest(
+      await o.executions?.recordIngest(
         { tenantId: ref.tenantId, userId: ref.userId },
         ref.documentId,
-        generation,
+        g,
         executionId,
       );
       try {
@@ -96,18 +94,21 @@ export function loomIngest(
       }
     },
     async cancel(identity, documentId, generation) {
-      const { ref, principal } = target(identity, documentId, generation);
-      for (let g = Math.max(1, generation - 1); g <= generation; g++) {
-        const executionId = ingestExecutionId(ref.userId, ref.documentId, g);
-        try {
-          await runtime.cancel(executionId, CANCEL_REASON, { principal });
-        } catch (err) {
-          // Loom throws a plain Error (no class or code) for an execution that never existed in
-          // this generation; match its exact message for this id and nothing else.
-          if (
-            !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
-          ) {
-            throw err;
+      const { ref, principal, generation: top } = target(identity, documentId, generation);
+      // Old-format runs (from before the deploy) and new-format runs may both exist: cancel every candidate that does.
+      const user = await existingUser(o.ids, identity);
+      for (let g = Math.max(1, top - 1); g <= top; g++) {
+        for (const executionId of ingestCandidates(ref.userId, ref.documentId, g, user)) {
+          try {
+            await runtime.cancel(executionId, CANCEL_REASON, { principal });
+          } catch (err) {
+            // Loom throws a plain Error (no class or code) for an execution that never existed in
+            // this generation; match its exact message for this id and nothing else.
+            if (
+              !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
+            ) {
+              throw err;
+            }
           }
         }
       }

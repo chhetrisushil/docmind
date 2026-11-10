@@ -2,7 +2,7 @@ import type { Pool } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
-import { ingestExecutionId } from "./ingest";
+import { deterministicUser } from "../opaqueIds/testing";
 import { StartScheduler } from "./startScheduler";
 import { sweepStaleUploads } from "./sweep";
 import { ALICE, BOB, seedDoc, startDocumentServer } from "./testHarness";
@@ -55,7 +55,9 @@ describe.skipIf(!PG_URL)("sweepStaleUploads generations (needs DOCMIND_TEST_PG_U
       };
       expect(await sweepStaleUploads(args)).toBe(1);
       await h.starts.idle();
-      expect(h.ingest.handles.get(doc)?.executionId).toBe(ingestExecutionId(ALICE.userId, doc, 5));
+      expect(h.ingest.handles.get(doc)?.executionId).toBe(
+        deterministicUser(ALICE.userId).ingest(doc, 5),
+      );
     } finally {
       await h.close();
     }

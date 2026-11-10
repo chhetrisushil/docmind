@@ -2,6 +2,7 @@ import type { Operation } from "@loom-ui/core";
 import { LineErasedError, LineUnreadableError, type Lineage } from "@loom-ui/lineage";
 import type { PlanReport, PlanResult } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
+import type { UserIdSource } from "../../documents/executionCandidates";
 import type { ProgressBus } from "../../documents/progress";
 import { DocumentGoneError, VisualsLineageError } from "../ingest-document/errors";
 import {
@@ -47,14 +48,20 @@ export async function committing<T>(
  * fails is reported (class only) and never fails the step.
  */
 export function commitEffect(
-  deps: { guard: StepGuard; lineage: Lineage; now: () => string; bus: ProgressBus } & StepSeams,
+  deps: {
+    guard: StepGuard;
+    lineage: Lineage;
+    ids: Pick<UserIdSource, "ensureUser">;
+    now: () => string;
+    bus: ProgressBus;
+  } & StepSeams,
 ): Effect<CommitInput, StepResult> {
   return stepEffectOf(
     "visualize-commit",
     deps.guard,
     async (ref) => {
       const input = ref as CommitInput;
-      await committing(() => commitPlan(deps.lineage, input, input, deps.now));
+      await committing(() => commitPlan(deps.lineage, deps.ids, input, input, deps.now));
       try {
         deps.bus.publish(
           { userId: input.userId },

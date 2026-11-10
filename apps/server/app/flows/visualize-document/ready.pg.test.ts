@@ -4,7 +4,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
-import { ingestExecutionId } from "../../documents/ingest";
 import {
   ALICE,
   BOB,
@@ -15,7 +14,8 @@ import {
   seedRow,
   seedUsers,
 } from "../../documents/testHarness";
-import { pgReadyDocuments, visualizeExecutionId } from "./start";
+import { legacyIngestId, legacyVisualizeId } from "../../opaqueIds/testing";
+import { pgReadyDocuments } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
 
@@ -57,30 +57,30 @@ describe.skipIf(!PG_URL)("docmind_ready_documents (needs DOCMIND_TEST_PG_URL)", 
     const failed = await seedDoc(owner, app, fields, ALICE, fp(), 600); // failed ingest
     const old = await seedDoc(owner, app, fields, ALICE, fp(), 600); // ready at an older generation only
     const g = async (id: string) => generationOf(id);
-    await seedRow(owner, ingestExecutionId(U1, mine, await g(mine)), mine, U1, ready);
-    await seedRow(owner, ingestExecutionId(U2, theirs, await g(theirs)), theirs, U2, ready);
-    await seedRow(owner, ingestExecutionId(U1, done, await g(done)), done, U1, ready);
+    await seedRow(owner, legacyIngestId(U1, mine, await g(mine)), mine, U1, ready);
+    await seedRow(owner, legacyIngestId(U2, theirs, await g(theirs)), theirs, U2, ready);
+    await seedRow(owner, legacyIngestId(U1, done, await g(done)), done, U1, ready);
     // Loom writes a (neutral, key-less) row for the visualize execution itself.
     await owner.query(
       "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')",
-      [visualizeExecutionId(U1, done, await g(done))],
+      [legacyVisualizeId(U1, done, await g(done))],
     );
     await backfillExecutionIds(owner);
     await seedRow(
       owner,
-      ingestExecutionId(U1, running, await g(running)),
+      legacyIngestId(U1, running, await g(running)),
       running,
       U1,
       '{"status":"embedding","step":"embed","code":null}',
     );
     await seedRow(
       owner,
-      ingestExecutionId(U1, failed, await g(failed)),
+      legacyIngestId(U1, failed, await g(failed)),
       failed,
       U1,
       '{"status":"failed","step":"parse","code":"internal"}',
     );
-    await seedRow(owner, ingestExecutionId(U1, old, (await g(old)) - 1), old, U1, ready);
+    await seedRow(owner, legacyIngestId(U1, old, (await g(old)) - 1), old, U1, ready);
     const list = pgReadyDocuments(app);
     const all = await list(NIL, 100);
     expect(all.map((d) => d.documentId)).toEqual([mine, theirs].sort());
@@ -101,7 +101,7 @@ describe.skipIf(!PG_URL)("docmind_ready_documents (needs DOCMIND_TEST_PG_URL)", 
   it("skips a user being erased and answers nothing to a null argument (STRICT)", async () => {
     await owner.query("DELETE FROM documents");
     const doc = await seedDoc(owner, app, fields, ALICE, fp(), 600);
-    await seedRow(owner, ingestExecutionId(U1, doc, await generationOf(doc)), doc, U1, ready);
+    await seedRow(owner, legacyIngestId(U1, doc, await generationOf(doc)), doc, U1, ready);
     expect(await pgReadyDocuments(app)(NIL, 10)).toHaveLength(1);
     expect((await app.query("SELECT * FROM docmind_ready_documents(NULL, 10)")).rows).toEqual([]);
     expect(

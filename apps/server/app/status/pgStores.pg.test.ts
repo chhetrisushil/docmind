@@ -4,9 +4,9 @@ import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
-import { ingestExecutionId } from "../documents/ingest";
 import { InMemoryProgressBus } from "../documents/progress";
 import { ALICE, ALICE2, BOB, T1, U1, U1B, U2, seedUsers } from "../documents/testHarness";
+import { legacyIngestId } from "../opaqueIds/testing";
 import { IngestStatus } from "./ingestStatus";
 import { INGEST_STATUS_MODEL } from "./model";
 import { pgStatusReaderFor, pgStatusWriter } from "./pgStores";
@@ -20,7 +20,7 @@ describe.skipIf(!PG_URL)(
     let loom: Pool;
     let status: IngestStatus;
     const [D1, D2, D3] = [randomUUID(), randomUUID(), randomUUID()];
-    const exec = (user: string, doc: string) => ingestExecutionId(user, doc);
+    const exec = (user: string, doc: string) => legacyIngestId(user, doc);
     const statements: string[] = [];
     const D4 = randomUUID();
 

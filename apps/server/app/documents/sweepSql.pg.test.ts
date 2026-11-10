@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
-import { ingestExecutionId } from "./ingest";
+import { legacyIngestId } from "../opaqueIds/testing";
 import { ALICE, BOB, T1, T2, U1, U2, seedDoc, seedRow, seedUsers } from "./testHarness";
 
 const DEFINERS = [
@@ -59,8 +59,8 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     const started = await seedDoc(owner, app, fields, ALICE, fp(), 800);
     await seedDoc(owner, app, fields, ALICE, fp(), 5); // fresh: inside the grace period
     await seedDoc(owner, app, fields, ALICE, fp(), 8 * 24 * 3600); // older than the lookback
-    await seedRow(owner, ingestExecutionId(U1, stubOnly, 1), stubOnly, U1); // the M2 stub's execution does not count
-    await seedRow(owner, ingestExecutionId(U1, started), started, U1); // the current generation: started, whatever its state
+    await seedRow(owner, legacyIngestId(U1, stubOnly, 1), stubOnly, U1); // the M2 stub's execution does not count
+    await seedRow(owner, legacyIngestId(U1, started), started, U1); // the current generation: started, whatever its state
     const all = (await app.query(`SELECT * FROM ${fn()}`)).rows;
     expect(all.map((r) => r.id)).toEqual([aliceOld, stubOnly, bobOlder]);
     expect(all[2]).toEqual({ tenant_id: T2, owner_id: U2, id: bobOlder, generation: 2 });
@@ -89,7 +89,7 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
   it("returns each stray's current generation, and finds a retried document whose new generation never started", async () => {
     await owner.query("DELETE FROM documents");
     const doc = await seedDoc(owner, app, fields, ALICE, fp(), 600);
-    await seedRow(owner, ingestExecutionId(U1, doc, 2), doc, U1); // generation 2 ran
+    await seedRow(owner, legacyIngestId(U1, doc, 2), doc, U1); // generation 2 ran
     expect((await app.query(`SELECT id FROM ${fn()}`)).rows).toEqual([]);
     await owner.query(
       "UPDATE documents SET ingest_generation = 3, updated_at = now() - interval '10 minutes', ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
@@ -98,7 +98,7 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     expect((await app.query(`SELECT id, generation FROM ${fn()}`)).rows).toEqual([
       { id: doc, generation: 3 },
     ]);
-    await seedRow(owner, ingestExecutionId(U1, doc, 3), doc, U1);
+    await seedRow(owner, legacyIngestId(U1, doc, 3), doc, U1);
     expect((await app.query(`SELECT id FROM ${fn()}`)).rows).toEqual([]);
   });
 
@@ -123,7 +123,7 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
   it("a document recovery cancelled has a failed row and is not listed", async () => {
     await owner.query("DELETE FROM documents");
     const doc = await seedDoc(owner, app, fields, ALICE, fp(), 600);
-    await seedRow(owner, ingestExecutionId(U1, doc), doc, U1, '{"failed":"internal"}');
+    await seedRow(owner, legacyIngestId(U1, doc), doc, U1, '{"failed":"internal"}');
     expect((await app.query(`SELECT * FROM ${fn()}`)).rows).toEqual([]);
   });
 
@@ -173,22 +173,18 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     const kept = await seedDoc(owner, app, fields, ALICE, fp(), 600);
     const gone = randomUUID();
     const tombstoned = randomUUID();
-    await seedRow(owner, ingestExecutionId(U1, kept), kept, U1);
-    await seedRow(owner, ingestExecutionId(U2, kept), kept, U2); // the document exists, but not for this owner
-    await seedRow(owner, ingestExecutionId(U1, gone), gone, U1);
-    await seedRow(owner, ingestExecutionId(U1, gone, 3), gone, U1);
-    await seedRow(owner, ingestExecutionId(U2, tombstoned), tombstoned, U2);
+    await seedRow(owner, legacyIngestId(U1, kept), kept, U1);
+    await seedRow(owner, legacyIngestId(U2, kept), kept, U2); // the document exists, but not for this owner
+    await seedRow(owner, legacyIngestId(U1, gone), gone, U1);
+    await seedRow(owner, legacyIngestId(U1, gone, 3), gone, U1);
+    await seedRow(owner, legacyIngestId(U2, tombstoned), tombstoned, U2);
     await owner.query(
       "UPDATE read_model_state SET erased = true, state = NULL WHERE app_key = $1",
       [tombstoned],
     );
     const rows = (await app.query("SELECT * FROM docmind_orphan_statuses(10)")).rows;
     expect(rows.map((r) => r.execution_id)).toEqual(
-      [
-        ingestExecutionId(U2, kept),
-        ingestExecutionId(U1, gone),
-        ingestExecutionId(U1, gone, 3),
-      ].sort(),
+      [legacyIngestId(U2, kept), legacyIngestId(U1, gone), legacyIngestId(U1, gone, 3)].sort(),
     );
     expect((await app.query("SELECT * FROM docmind_orphan_statuses(1)")).rows).toHaveLength(1);
   });

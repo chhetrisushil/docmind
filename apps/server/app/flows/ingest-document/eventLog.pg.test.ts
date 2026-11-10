@@ -14,9 +14,10 @@ import { buildApp } from "../../config";
 import { setRolePassword } from "../../db/migrate";
 import { withTenant } from "../../db/tenant";
 import { LOOM_PASSWORD, PG_URL } from "../../db/testSupport";
-import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, loomIngest } from "../../documents/ingest";
 import { filenameBind, insertDocument, titleBind } from "../../documents/repo";
 import { T1, U1, newDocument, twinOverPgChunks, twoPagePdf } from "../../documents/testHarness";
+import { legacyIngestId, testIdSource } from "../../opaqueIds/testing";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import type { IngestDeps } from "./deps";
@@ -142,11 +143,11 @@ describe.skipIf(!PG_URL)(
     }
     const start = (ref: IngestStartInput) =>
       app.runtime.start(ingestDocumentFlow, ref, {
-        executionId: ingestExecutionId(ref.userId, ref.documentId),
+        executionId: legacyIngestId(ref.userId, ref.documentId),
         principal: { tenant: ref.tenantId, actor: ref.userId },
       });
     const log = (ref: IngestStartInput) =>
-      durable.raw.eventStore.read(ingestExecutionId(ref.userId, ref.documentId));
+      durable.raw.eventStore.read(legacyIngestId(ref.userId, ref.documentId));
     const run = async (ref: IngestStartInput) => {
       await start(ref).then((h) => h.waitForCompletion().catch(() => undefined));
       return log(ref);
@@ -162,7 +163,7 @@ describe.skipIf(!PG_URL)(
     };
     /** The same log read through the decrypting store: what a failure's sealed text really says. */
     const decrypted = (ref: IngestStartInput) =>
-      durable.sealed.eventStore.read(ingestExecutionId(ref.userId, ref.documentId));
+      durable.sealed.eventStore.read(legacyIngestId(ref.userId, ref.documentId));
     const types = (raw: { eventType: string }[]) => raw.map((e) => e.eventType);
 
     it("a successful run to ready: ids, an outcome and a count only; the text is only in the sealed chunks", async () => {
@@ -394,7 +395,7 @@ describe.skipIf(!PG_URL)(
       const ref = await seedTxt("1".repeat(64));
       await start(ref);
       await entered;
-      await loomIngest(app.runtime).cancel(
+      await loomIngest(app.runtime, { ids: testIdSource() }).cancel(
         { tenantId: T1, userId: U1 },
         ref.documentId,
         INGEST_GENERATION,
@@ -446,7 +447,7 @@ describe.skipIf(!PG_URL)(
       });
       origin.app.runtime.registerFlow(flow.definition, flow.runner);
       await origin.app.runtime.start(flow, ref, {
-        executionId: ingestExecutionId(ref.userId, ref.documentId),
+        executionId: legacyIngestId(ref.userId, ref.documentId),
         principal: { tenant: ref.tenantId, actor: ref.userId },
       });
       await entered;
@@ -594,7 +595,7 @@ describe.skipIf(!PG_URL)(
         { shutdown: shutdown.signal },
       );
       await origin.app.runtime.start(ingestDocumentFlow, ref, {
-        executionId: ingestExecutionId(ref.userId, ref.documentId),
+        executionId: legacyIngestId(ref.userId, ref.documentId),
         principal: { tenant: ref.tenantId, actor: ref.userId },
       });
       await entered;
@@ -611,7 +612,7 @@ describe.skipIf(!PG_URL)(
     it("a cancel by another user is denied and recorded with fixed text only", async () => {
       const ref = await seedTxt("6".repeat(64));
       await crashed(ref); // a live-looking execution to aim at
-      const executionId = ingestExecutionId(ref.userId, ref.documentId);
+      const executionId = legacyIngestId(ref.userId, ref.documentId);
       await app.runtime
         .cancel(executionId, "user asked for it: Q3 report.pdf", {
           principal: { tenant: ref.tenantId, actor: "b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1" },
@@ -742,13 +743,11 @@ describe.skipIf(!PG_URL)(
       ];
       for (const ref of refs) {
         const handle = await app.runtime.start(ingestDocumentFlow, ref, {
-          executionId: ingestExecutionId(ref.userId, ref.documentId),
+          executionId: legacyIngestId(ref.userId, ref.documentId),
           principal: { tenant: ref.tenantId, actor: ref.userId },
         });
         await handle.waitForCompletion();
-        const raw = await durable.raw.eventStore.read(
-          ingestExecutionId(ref.userId, ref.documentId),
-        );
+        const raw = await durable.raw.eventStore.read(legacyIngestId(ref.userId, ref.documentId));
         assertEventsAreContentFree(raw as RawEvent[], ref, models);
         expect(foldIngestStatus(raw)).toEqual({ status: "ready", step: "finalize", code: null });
         const json = JSON.stringify(raw);

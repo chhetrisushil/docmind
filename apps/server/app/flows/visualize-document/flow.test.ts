@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { FieldKeyStoreError } from "../../crypto/fields";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { legacyVisualizeId } from "../../opaqueIds/testing";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { isIngestExecution, isVisualizeExecution } from "../../status/model";
 import { foldIngestStatus } from "../../status/model";
@@ -36,11 +37,10 @@ import {
   visualizeLoadStep,
   visualizeStructureStep,
 } from "./flow";
-import { experienceIdOf } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { visualsPlanner } from "./planner";
-import { visualizeExecutionId } from "./start";
 import type { StructureReader } from "./structure";
+import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { aggregateFacts, childrenOf, noStructure } from "./testing";
 
 const LABEL = "Zebra-Secret-Revenue";
@@ -162,6 +162,7 @@ function stack(
     summaryMaxChars: 400_000,
     bus,
     lineage,
+    ids: lineageTestIds,
     now: () => "2026-11-08T10:00:00.000Z",
     sleep: async () => {},
     ...(model && { llm: model.llm }),
@@ -184,7 +185,7 @@ function stack(
     userId: randomUUID(),
     documentId: randomUUID(),
   };
-  const executionId = o.executionId ?? visualizeExecutionId(ref.userId, ref.documentId, 2);
+  const executionId = o.executionId ?? legacyVisualizeId(ref.userId, ref.documentId, 2);
   const run = async (id: string = executionId) => {
     const handle = await app.runtime.start(o.legacy ? legacy() : current(), ref, {
       executionId: id as typeof executionId,
@@ -231,7 +232,7 @@ describe("visualize-document flow", () => {
   it("extracts, plans and commits: done, with the plan as the document's visuals", async () => {
     const s = stack([FACTS, PLAN]);
     expect(await s.run()).toEqual({ outcome: "done" });
-    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    const latest = await s.lineage.resolveLatest(await experienceIdOf(s.ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
     expect(s.model?.requests).toHaveLength(2); // one extract window, one planner call
   });
@@ -258,7 +259,7 @@ describe("visualize-document flow", () => {
     const s = stack([JSON.stringify({ facts: [] }), CONNECTIONS_PLAN]);
     expect(await s.run()).toEqual({ outcome: "done" });
     expect(s.model?.requests).toHaveLength(2); // one extraction, one planner call
-    const head = await s.lineage.head(experienceIdOf(s.ref));
+    const head = await s.lineage.head(await experienceIdOf(s.ref));
     expect(head.ok && head.value).toBeTruthy();
     expect(JSON.stringify(await s.sealed.read(s.executionId))).toContain("RelatedDocuments");
   });
@@ -266,7 +267,7 @@ describe("visualize-document flow", () => {
   it("is empty when there are no facts and the planner emits nothing: nothing is committed", async () => {
     const s = stack([JSON.stringify({ facts: [] }), EMPTY_PLAN]);
     expect(await s.run()).toEqual({ outcome: "empty" });
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   it("is still failed when there are no facts and the model is unreachable for the plan", async () => {
@@ -295,7 +296,7 @@ describe("visualize-document flow", () => {
   it("fails when the planner answers with no nodes (the planner refuses an empty plan), committing nothing", async () => {
     const s = stack([FACTS, EMPTY_PLAN]);
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   it("drops the widgets whose fact does not fit them before committing, logging the entry name only", async () => {
@@ -330,7 +331,7 @@ describe("visualize-document flow", () => {
     });
     const s = stack([two, planned]);
     expect(await s.run()).toEqual({ outcome: "done" });
-    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    const latest = await s.lineage.resolveLatest(await experienceIdOf(s.ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).toContain("FigureTrend");
@@ -359,7 +360,7 @@ describe("visualize-document flow", () => {
     });
     const s = stack([series, planned]);
     expect(await s.run()).toEqual({ outcome: "empty" });
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
     vi.restoreAllMocks();
   });
 
@@ -371,7 +372,7 @@ describe("visualize-document flow", () => {
   it("fails with a fixed code when the planner's plan is invalid, committing nothing", async () => {
     const s = stack([FACTS, "this is not json", "still not json"]);
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-plan-invalid" });
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   const STRUCTURE_READER: StructureReader = {
@@ -404,7 +405,7 @@ describe("visualize-document flow", () => {
       structure: STRUCTURE_READER,
     });
     expect(await s.run()).toEqual({ outcome: "done" });
-    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    const latest = await s.lineage.resolveLatest(await experienceIdOf(s.ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual([
       "revenue",
       "outline",
@@ -415,7 +416,7 @@ describe("visualize-document flow", () => {
     const s = stack([JSON.stringify({ facts: [] }), OUTLINE_PLAN], { structure: STRUCTURE_READER });
     expect(await s.run()).toEqual({ outcome: "done" });
     expect(s.held()).toEqual([]);
-    const latest = await s.lineage.resolveLatest(experienceIdOf(s.ref));
+    const latest = await s.lineage.resolveLatest(await experienceIdOf(s.ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["outline"]);
   });
 
@@ -433,7 +434,7 @@ describe("visualize-document flow", () => {
   it("re-derives and replaces the structure facts on a re-run that skips extraction", async () => {
     const s = stack([PLAN], { structure: STRUCTURE_READER });
     s.hold(JSON.parse(FACTS).facts.map((f: object, i: number) => ({ ...f, ordinal: i })) as Fact[]);
-    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    const rerun = legacyVisualizeId(s.ref.userId, s.ref.documentId, 2, 1);
     expect(await s.run(rerun)).toEqual({ outcome: "done" });
     expect(s.model?.requests).toHaveLength(1); // the planner only: no extraction
     expect(s.structured().map((f) => f.ordinal)).toEqual([16]); // re-derived on the re-plan path
@@ -450,7 +451,7 @@ describe("visualize-document flow", () => {
     expect(await s.run()).toEqual({ outcome: "empty" });
     expect(s.held()).toEqual([]);
     expect(s.structured().map((f) => f.ordinal)).toEqual([16]); // the structure facts exist, only the plan is empty
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   it("keeps a genuinely invalid plan failed when the document has extracted facts and structure", async () => {
@@ -555,7 +556,7 @@ describe("visualize-document flow: the model is unavailable", () => {
     const s = stack(null, { provider });
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
     expect(provider.requests).toHaveLength(LLM_RETRY.maxAttempts);
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   it("ends failed with visuals-model-unavailable when the planner's model stays down (facts are stored first)", async () => {
@@ -563,7 +564,7 @@ describe("visualize-document flow: the model is unavailable", () => {
     const s = stack(null, { provider });
     expect(await s.run()).toEqual({ outcome: "failed", code: "visuals-model-unavailable" });
     expect(s.held()).toHaveLength(1); // the facts survive for the re-run
-    expect(await s.lineage.head(experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
+    expect(await s.lineage.head(await experienceIdOf(s.ref))).toEqual({ ok: true, value: null });
   });
 
   it("a permanent model error is not 'unavailable': the execution still fails", async () => {
@@ -592,7 +593,7 @@ describe("visualize-document flow: the model is unavailable", () => {
 
 describe("visualize-document flow: a re-run", () => {
   const rerunId = (s: ReturnType<typeof stack>) =>
-    visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    legacyVisualizeId(s.ref.userId, s.ref.documentId, 2, 1);
 
   it("re-plans over the stored facts without asking the model for facts again", async () => {
     const s = stack([FACTS, PLAN]);
@@ -635,15 +636,11 @@ describe("a visualize execution is not an ingest one", () => {
     const s = stack(null);
     expect(isIngestExecution(s.executionId)).toBe(false);
     expect(isVisualizeExecution(s.executionId)).toBe(true);
-    expect(isVisualizeExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1))).toBe(
+    expect(isVisualizeExecution(legacyVisualizeId(s.ref.userId, s.ref.documentId, 1))).toBe(true);
+    expect(isVisualizeExecution(legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(
       true,
     );
-    expect(isVisualizeExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(
-      true,
-    );
-    expect(isIngestExecution(visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(
-      false,
-    );
+    expect(isIngestExecution(legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, 3))).toBe(false);
     // A failed visualize execution's events leave the ingest status model at its initial state (the neutral row).
     const failed = {
       id: `${s.executionId}-1`,
@@ -732,7 +729,7 @@ describe("visualize-document flow: timeline and relations", () => {
       timeline,
       relations,
     ]);
-    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    const rerun = legacyVisualizeId(s.ref.userId, s.ref.documentId, 2, 1);
     expect(await s.run(rerun)).toEqual({ outcome: "done" });
     expect(s.model?.requests).toHaveLength(1); // the planner only
     expect(s.held().map((f) => f.ordinal)).toEqual([0, 18, 19]); // nothing replaced
@@ -743,7 +740,7 @@ describe("visualize-document flow: timeline and relations", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const s = stack([EMPTY_PLAN]);
     s.hold([aggregateFacts(CHUNK).timeline]);
-    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    const rerun = legacyVisualizeId(s.ref.userId, s.ref.documentId, 2, 1);
     expect(await s.run(rerun)).toEqual({ outcome: "empty" });
     // No extraction: the planner retries an empty plan, so count requests by what they ask, not how many there are.
     const requests = (s.model?.requests ?? []).map((r) => JSON.stringify(r));

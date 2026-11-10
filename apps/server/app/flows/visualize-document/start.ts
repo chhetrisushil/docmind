@@ -8,39 +8,21 @@ import {
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
 import type { Pool } from "pg";
+import {
+  type UserIdSource,
+  documentLineageCandidates,
+  existingUser,
+  visualizeCandidates,
+} from "../../documents/executionCandidates";
 import type { ExecutionRecorder } from "../../documents/executionIds";
-import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS } from "../rerunTracker";
 import { rerunTracker } from "../rerunTracker";
 import { VisualizeInput } from "./flow";
-import { LineageRefusedError, experienceIdOf } from "./lineage";
+import { LineageRefusedError } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";
 import { type VisualRun, type VisualRuns, outcomeOfState } from "./runs";
 
-const MAX_GENERATION = 999_999_999; // the execution-id pattern (status/model.ts) allows 9 digits
 export { MAX_RERUNS } from "../rerunTracker";
-
-/**
- * The visualize execution of one ingest generation: `visualize-<doc>` for generation 1, `visualize-<doc>.<gen>`
- * otherwise (mirrors `ingestExecutionId`). The generation is the INGEST generation that turned ready. `rerun` makes
- * `<that id>-r<n>`, an on-demand re-run of the same generation (n from 1 to 999).
- */
-export function visualizeExecutionId(
-  userId: string,
-  documentId: string,
-  generation: number,
-  rerun?: number,
-): UserExecutionId {
-  if (!Number.isSafeInteger(generation) || generation < 1 || generation > MAX_GENERATION)
-    throw new RangeError("generation must be an integer from 1 to 999999999");
-  if (rerun !== undefined && (!Number.isSafeInteger(rerun) || rerun < 1 || rerun > MAX_RERUNS))
-    throw new RangeError("rerun must be an integer from 1 to 999");
-  const id = documentId.toLowerCase();
-  return executionIdFor(
-    userId,
-    `${generation === 1 ? `visualize-${id}` : `visualize-${id}.${generation}`}${rerun === undefined ? "" : `-r${rerun}`}`,
-  );
-}
 
 /** A page of ready documents with no visualize execution yet (the boot sweep's source). */
 export interface ReadyDocument extends VisualizeRef {
@@ -111,23 +93,30 @@ export const pgStaleFormatDocuments =
 export const pgUnrecordedDocuments = readyFrom("docmind_visual_unrecorded_documents");
 
 /**
- * True when the document's visuals line has a head (it was visualized with visuals). A confirmed-erased line is "no head".
- * Any other refusal or an unreadable line throws (the caller logs the class and skips the document).
+ * True when the document's visuals line has a head (it was visualized with visuals), on its new-format line or, for a document visualized before the
+ * deploy, its old one. A confirmed-erased line is "no head". Any other refusal or an unreadable line throws (the caller logs the class and skips the document).
  */
 export const hasVisualsHead =
-  (lineage: Pick<Lineage, "head">) =>
+  (lineage: Pick<Lineage, "head">, ids: Pick<UserIdSource, "load" | "cached">) =>
   async (ref: VisualizeRef): Promise<boolean> => {
-    try {
-      const head = await lineage.head(experienceIdOf(ref));
-      if (head.ok) return head.value !== null;
-      const { refusal } = head;
-      const code = refusal.kind === "refused" ? refusal.finding.code : refusal.kind;
-      if (code === "line-erased") return false;
-      throw new LineageRefusedError(code);
-    } catch (err) {
-      if (err instanceof LineErasedError) return false;
-      throw err;
+    const user = await existingUser(ids, ref);
+    for (const experienceId of documentLineageCandidates(ref.userId, ref.documentId, user)) {
+      try {
+        const head = await lineage.head(experienceId);
+        if (head.ok) {
+          if (head.value !== null) return true;
+          continue;
+        }
+        const { refusal } = head;
+        const code = refusal.kind === "refused" ? refusal.finding.code : refusal.kind;
+        if (code === "line-erased") continue;
+        throw new LineageRefusedError(code);
+      } catch (err) {
+        if (err instanceof LineErasedError) continue;
+        throw err;
+      }
     }
+    return false;
   };
 
 /** A run recorded as `running` (the boot reconcile's source). */
@@ -206,6 +195,8 @@ const logClass = (what: string) => (err: unknown) =>
   console.error(what, err instanceof Error ? err.constructor.name : typeof err);
 
 export interface VisualsStarterOptions {
+  /** The id cache: a start builds the new-format id with the user's key; a read or a cancel also tries the old format. Required: there is no id without it. */
+  ids: UserIdSource;
   /** Records the automatic run's id on the document before it starts (migration 0038), so the boot sweeps can compare it with the status rows. */
   executions?: ExecutionRecorder;
   /** The boot sweep's source; absent: the sweep does nothing. */
@@ -253,9 +244,10 @@ export interface VisualsStarterOptions {
 export function loomVisualsStarter(
   runtime: Pick<WorkflowRuntime, "start" | "cancel"> & Partial<Pick<WorkflowRuntime, "loadState">>,
   flow: RegisteredFlow,
-  options: VisualsStarterOptions = {},
+  options: VisualsStarterOptions,
 ): VisualsStarter {
   const {
+    ids,
     executions,
     ready,
     retry,
@@ -289,7 +281,9 @@ export function loomVisualsStarter(
       userId: ref.userId,
       documentId: ref.documentId.toLowerCase(),
     });
-    const executionId = visualizeExecutionId(input.userId, input.documentId, generation, rerun);
+    // A key-store outage throws here, before Loom sees anything: a start never falls back to an id with the plain UUIDs.
+    const user = await ids.ensureUser({ tenantId: input.tenantId, userId: input.userId });
+    const executionId = user.visualize(input.documentId, generation, rerun);
     // The automatic run's id goes on the document BEFORE the start (the boot sweeps compare it with the status rows); a re-run is never swept.
     if (rerun === undefined)
       await executions?.recordVisualize(
@@ -332,6 +326,24 @@ export function loomVisualsStarter(
   const isRunning = (ref: Pick<VisualizeRef, "userId" | "documentId">, generation: number) =>
     tracker.running(genKey(ref.userId, ref.documentId, generation));
 
+  /** The state of a run under whichever id format it started with (the old-format id first), or null when neither exists. */
+  const stateOf = async (ref: VisualizeRef, generation: number, rerun: number | undefined) => {
+    const user = await existingUser(ids, ref);
+    for (const executionId of visualizeCandidates(
+      ref.userId,
+      ref.documentId,
+      generation,
+      rerun,
+      user,
+    )) {
+      const state = await runtime.loadState?.(executionId, {
+        principal: { tenant: ref.tenantId, actor: ref.userId },
+      });
+      if (state) return state;
+    }
+    return null;
+  };
+
   const reconcile = async (
     ref: VisualizeRef,
     generation: number,
@@ -340,15 +352,7 @@ export function loomVisualsStarter(
     if (last.state !== "running" || isRunning(ref, generation)) return last; // this process is on it
     if (typeof runtime.loadState !== "function") return last;
     try {
-      const executionId = visualizeExecutionId(
-        ref.userId,
-        ref.documentId,
-        generation,
-        last.run === 0 ? undefined : last.run,
-      );
-      const state = await runtime.loadState(executionId, {
-        principal: { tenant: ref.tenantId, actor: ref.userId },
-      });
+      const state = await stateOf(ref, generation, last.run === 0 ? undefined : last.run);
       const end = state ? outcomeOfState(state) : null;
       if (!end) return last; // not started, or still going: recovery or the live feed will finish it
       await runs?.record(
@@ -367,10 +371,7 @@ export function loomVisualsStarter(
   const recordUnvisualized = async (d: ReadyDocument): Promise<void> => {
     try {
       if (typeof runtime.loadState !== "function" || !runs) return;
-      const state = await runtime.loadState(
-        visualizeExecutionId(d.userId, d.documentId, d.generation),
-        { principal: { tenant: d.tenantId, actor: d.userId } },
-      );
+      const state = await stateOf(d, d.generation, undefined);
       const end = state ? outcomeOfState(state) : null;
       if (!end) return;
       await runs.record(
@@ -390,6 +391,7 @@ export function loomVisualsStarter(
     byUser = false,
   ): Promise<VisualsRerun & { handle?: ExecutionHandle }> => {
     if (!enabled) return { kind: "disabled" };
+    const user = await ids.ensureUser(ref);
     const key = genKey(ref.userId, ref.documentId, generation);
     // One re-run request at a time per document and generation: the checks, the probe and the start are one step.
     return tracker.exclusive(key, async () => {
@@ -402,7 +404,7 @@ export function loomVisualsStarter(
       const out = await tracker.probe(key, last?.run ?? 0, (n) => {
         if (wasDone && afterDone) {
           if (afterDone.size >= 1000) afterDone.clear(); // ids only; a lost note just means one extraction
-          afterDone.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
+          afterDone.add(user.visualize(ref.documentId, generation, n));
         }
         if (byUser && reextract) {
           // ids only; at the bound the OLDEST notes are evicted (insertion order), never the pending ones wholesale
@@ -411,7 +413,7 @@ export function loomVisualsStarter(
             if (oldest === undefined) break;
             reextract.delete(oldest);
           }
-          reextract.add(visualizeExecutionId(ref.userId, ref.documentId, generation, n));
+          reextract.add(user.visualize(ref.documentId, generation, n));
         }
         return startOne(ref, generation, n);
       });
@@ -613,15 +615,20 @@ export function loomVisualsStarter(
           return false;
         }
       };
+      // A run may be under the old id format (from before the deploy) or the new one: cancel every candidate that exists.
+      const user = await existingUser(ids, identity);
+      const doc = documentId.toLowerCase(); // ids are lower-case; a caller's spelling may not be
+      const candidates = (g: number, rerun?: number) =>
+        visualizeCandidates(identity.userId, doc, g, rerun, user);
       for (let g = Math.max(1, generation - 1); g <= generation; g++) {
-        await cancelOne(visualizeExecutionId(identity.userId, documentId, g));
+        for (const executionId of candidates(g)) await cancelOne(executionId);
         // The re-runs: numbers are taken in order, up to the highest one this process started or the table recorded.
         const top = Math.max(
           tracker.last(genKey(identity.userId, documentId, g)),
           (await runs?.last(identity, documentId, g))?.run ?? 0,
         );
         for (let n = 1; n <= Math.min(top, MAX_RERUNS); n++)
-          await cancelOne(visualizeExecutionId(identity.userId, documentId, g, n));
+          for (const executionId of candidates(g, n)) await cancelOne(executionId);
       }
     },
   };

@@ -12,7 +12,7 @@ import {
 import { EmbeddingError } from "@loom/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../../crypto/fields";
-import { ingestExecutionId } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import {
   DOCUMENT_FKEY_CONSTRAINTS,
   DocumentGoneError,
@@ -643,7 +643,7 @@ describe("stepEffect generation", () => {
     const port: StepGuard = { begin: async (_r, _s, g) => void seen.push(g) };
     const r = ref();
     const effect = stepEffect("parse", port, async () => ({ count: 1 }));
-    await effect.execute(r, { executionId: ingestExecutionId(r.userId, r.documentId, 3) } as never);
+    await effect.execute(r, { executionId: legacyIngestId(r.userId, r.documentId, 3) } as never);
     await effect.execute(r, {} as never);
     expect(seen).toEqual([3, undefined]);
   });
@@ -669,7 +669,7 @@ describe("stepEffect generation", () => {
     };
     const r = ref();
     const out = await stepEffect("chunk", port, async () => ({ count: 1 })).execute(r, {
-      executionId: ingestExecutionId(r.userId, r.documentId, 2),
+      executionId: legacyIngestId(r.userId, r.documentId, 2),
     } as never);
     expect(out).toEqual({ outcome: "document_gone" });
   });

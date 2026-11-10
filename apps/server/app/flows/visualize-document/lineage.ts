@@ -11,17 +11,12 @@ import { type PlanResult, plannerProvenance } from "@loom-ui/planner";
 import type { EventStore } from "@loom/event-runtime";
 import type { ContentStore } from "@loom/plugin-content";
 import type { KeyStore } from "@loom/plugin-crypto";
+import type { UserIdSource } from "../../documents/executionCandidates";
 import type { VisualizeRef } from "./pgFacts";
 import { VISUALS_INTENT } from "./plan";
 
 /** The planner's id in the provenance of the ops it composed. */
 export const VISUALIZER_AGENT_ID = "docmind-visualizer";
-
-/**
- * The lineage line of a document's visuals. Ids only: the id is stored in plaintext and survives erasure
- * (S/subject.ts parses it back to the owner, so the shape is part of the erasure contract).
- */
-export const experienceIdOf = (ref: VisualizeRef) => `visuals-${ref.userId}-${ref.documentId}`;
 
 /** What a commit needs of a plan: the ops and what the planner said about them. */
 export type CommitPlan = Pick<PlanResult, "ops" | "report" | "summary" | "summaryClass">;
@@ -157,15 +152,26 @@ export async function commitPlanTo(
   throw new HeadMovedError();
 }
 
-export const commitPlan = (
+/**
+ * Commits the plan to the document's NEW-format line (`visuals-<H>-<D>`; the old line, if the document was visualized before the deploy, is left
+ * as it is and superseded: a read tries the new line first). Needs the user's key to build the id, so it takes the id cache.
+ */
+export const commitPlan = async (
   lineage: Lineage,
+  ids: Pick<UserIdSource, "ensureUser">,
   ref: VisualizeRef,
   plan: CommitPlan,
   now: () => string,
-) =>
-  commitPlanTo(
+) => {
+  const user = await ids.ensureUser(ref);
+  return commitPlanTo(
     lineage,
-    { experienceId: experienceIdOf(ref), intent: VISUALS_INTENT, sourceKind: "document-visuals" },
+    {
+      experienceId: user.documentLineage(ref.documentId),
+      intent: VISUALS_INTENT,
+      sourceKind: "document-visuals",
+    },
     plan,
     now,
   );
+};

@@ -12,8 +12,12 @@ import type { Experience } from "@loom-ui/core";
 import type { Lineage } from "@loom-ui/lineage";
 import { getChat } from "../chats/sessions";
 import { withTenant } from "../db/tenant";
+import {
+  type UserIdSource,
+  documentLineageCandidates,
+  existingUser,
+} from "../documents/executionCandidates";
 import { getDocument } from "../documents/repo";
-import { experienceIdOf } from "../flows/visualize-document/lineage";
 import type { VisualsStateReader } from "../flows/visualize-document/state";
 import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { readJson } from "../http/body";
@@ -27,6 +31,8 @@ export interface UiRouteDeps {
   readers: UiReaderDeps;
   /** The visuals lineage (the one the visualize flow commits to): its head is the document's visuals. */
   lineage: Lineage;
+  /** The document's line is looked up under both id formats, the new one first. */
+  ids: Pick<UserIdSource, "load" | "cached">;
   /** Where the document's visuals stand (`visuals: { state }` on its detail). Absent: the detail carries none (a deployment without the visuals flow). */
   visualsState?: VisualsStateReader;
   /** Test seam: replaces the owner check (default: the document is the caller's, tenant-scoped, as `GET /api/documents/:id`). */
@@ -78,10 +84,13 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
   /** The document's visuals head, or null when there is none (empty, erased or unreadable lines all serve the static detail). */
   const headOf = async (identity: Identity, documentId: string): Promise<Experience | null> => {
     try {
-      const latest = await deps.lineage.resolveLatest(
-        experienceIdOf({ tenantId: identity.tenantId, userId: identity.userId, documentId }),
-      );
-      return latest.ok ? latest.value : null;
+      // The new-format line first; a document visualized before the deploy still has its old-format line.
+      const user = await existingUser(deps.ids, identity);
+      for (const experienceId of documentLineageCandidates(identity.userId, documentId, user)) {
+        const latest = await deps.lineage.resolveLatest(experienceId);
+        if (latest.ok) return latest.value;
+      }
+      return null;
     } catch (err) {
       console.error(
         "visuals head unavailable",

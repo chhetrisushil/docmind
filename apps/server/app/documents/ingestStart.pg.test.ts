@@ -1,8 +1,9 @@
 import type { DocumentDto, UploadDocumentResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
+import { deterministicUser } from "../opaqueIds/testing";
 import { STATUS_MESSAGES } from "../status/model";
-import { INGEST_GENERATION, ingestExecutionId } from "./ingest";
+import { INGEST_GENERATION } from "./ingest";
 import { ALICE, type DocumentHarness, PDF, TEXT, U1, startDocumentServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_URL)", () => {
@@ -26,7 +27,7 @@ describe.skipIf(!PG_URL)("upload starts the ingest flow (needs DOCMIND_TEST_PG_U
     const id = body.document.id;
     expect(h.ingest.calls.filter((c) => c === `start:${id}`)).toHaveLength(1);
     const handle = h.ingest.handles.get(id);
-    expect(handle?.executionId).toBe(ingestExecutionId(U1, id));
+    expect(handle?.executionId).toBe(deterministicUser(U1).ingest(id, INGEST_GENERATION));
     const state = await handle?.waitForCompletion();
     expect(state?.status).toBe("completed");
     expect(state?.variables._output).toEqual({ outcome: "done" });

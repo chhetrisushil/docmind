@@ -13,7 +13,7 @@ import {
   type TestDb,
   createTestDb,
 } from "../../db/testSupport";
-import { ingestExecutionId } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import { foldIngestStatus } from "../../status/model";
 import { openDurableStorage } from "../../storage";
 import { ingestDocumentFlow } from "./flow";
@@ -58,7 +58,7 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
   it("a live driver's lease vetoes recovery; the shutdown path releases it; the next boot then completes the step with no user action", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const ids = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
-    const executionId = ingestExecutionId(ids.userId, ids.documentId);
+    const executionId = legacyIngestId(ids.userId, ids.documentId);
 
     // Process 1: a parse that is running when the shutdown comes. Like ParseRunner.close(), the runner aborts it.
     let inParse: () => void = () => {};
@@ -124,7 +124,7 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
   it("a crashed process (leases never released) is recovered by a lease-mode pass once its lease expires; a live lease elsewhere is left alone", async () => {
     const mk = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() });
     const [crashed, live] = [mk(), mk()];
-    const idOf = (i: typeof crashed) => ingestExecutionId(i.userId, i.documentId);
+    const idOf = (i: typeof crashed) => legacyIngestId(i.userId, i.documentId);
     // Process 1 drives both and is then abandoned: no closeIngest, no closeHeartbeat.
     let inStep = 0;
     let bothIn: () => void = () => {};
@@ -170,8 +170,8 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
   });
 
   it("a full pass deletes an expired lease that has no stream (a ghost) and leaves a live lease untouched", async () => {
-    const ghost = ingestExecutionId(randomUUID(), randomUUID());
-    const live = ingestExecutionId(randomUUID(), randomUUID());
+    const ghost = legacyIngestId(randomUUID(), randomUUID());
+    const live = legacyIngestId(randomUUID(), randomUUID());
     const one = await boot();
     const store = one.durable.storage.leaseStore as LeaseStore;
     // A crash between taking the lease and the first append leaves rows with no stream.
@@ -193,7 +193,7 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
     const orphans: string[] = [];
     for (let i = 0; i < 105; i++) {
       const ids = mk();
-      const executionId = ingestExecutionId(ids.userId, ids.documentId);
+      const executionId = legacyIngestId(ids.userId, ids.documentId);
       orphans.push(executionId);
       await one.app.runtime.start(ingestDocumentFlow, ids, {
         executionId,
@@ -201,8 +201,8 @@ describe.skipIf(!PG_URL)("recovery over the real stores (needs DOCMIND_TEST_PG_U
       });
     }
     const ghosts = [
-      ingestExecutionId(randomUUID(), randomUUID()),
-      ingestExecutionId(randomUUID(), randomUUID()),
+      legacyIngestId(randomUUID(), randomUUID()),
+      legacyIngestId(randomUUID(), randomUUID()),
     ];
     const two = await boot();
     const store = two.durable.storage.leaseStore as LeaseStore;

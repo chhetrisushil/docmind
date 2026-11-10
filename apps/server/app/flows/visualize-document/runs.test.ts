@@ -6,8 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { OpaqueIds, opaqueIds } from "../../opaqueIds";
 import { testOpaqueIds } from "../../opaqueIds/testing";
+import { legacyVisualizeId } from "../../opaqueIds/testing";
 import { type VisualRuns, visualRunRecorder } from "./runs";
-import { visualizeExecutionId } from "./start";
 
 const ids = () => ({ userId: randomUUID(), documentId: randomUUID() });
 const event = (executionId: string, eventType: string, payload: unknown = {}): EventEnvelope =>
@@ -35,7 +35,7 @@ function setup() {
 describe("visualRunRecorder", () => {
   it("records a completed run's outcome and code, with the generation and run number from the execution id", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 3, 2);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 3, 2);
     s.rec.onEvent(
       event(id, "EXECUTION_COMPLETED", {
         output: { outcome: "failed", code: "visuals-model-unavailable" },
@@ -51,7 +51,7 @@ describe("visualRunRecorder", () => {
 
   it("stamps the current fact format on a run that ends done, and on no other outcome", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
     await s.rec.idle();
     expect(s.record).toHaveBeenLastCalledWith(
@@ -77,14 +77,14 @@ describe("visualRunRecorder", () => {
     const record = vi.fn<VisualRuns["record"]>(async () => {});
     const rec = visualRunRecorder({ runs: { record }, bus: new InMemoryProgressBus(), legacyRuns });
     const who = ids();
-    const old = visualizeExecutionId(who.userId, who.documentId, 1);
+    const old = legacyVisualizeId(who.userId, who.documentId, 1);
     legacyRuns.add(old);
     rec.onEvent(event(old, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
     await rec.idle();
     expect(record).toHaveBeenLastCalledWith(expect.anything(), "done", undefined);
     expect(record.mock.calls[0]).toHaveLength(3);
     expect(legacyRuns.size).toBe(0);
-    const fresh = visualizeExecutionId(who.userId, who.documentId, 1, 1);
+    const fresh = legacyVisualizeId(who.userId, who.documentId, 1, 1);
     rec.onEvent(event(fresh, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
     await rec.idle();
     expect(record).toHaveBeenLastCalledWith(
@@ -97,7 +97,7 @@ describe("visualRunRecorder", () => {
 
   it("a failed outcome tells the owner's open pages (visuals: failed); other outcomes do not", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome: "empty" } }));
     s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome: "done" } }));
     await s.rec.idle();
@@ -115,7 +115,7 @@ describe("visualRunRecorder", () => {
 
   it("a thrown failure records failed/internal and notifies; a cancel records but does not notify", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     s.rec.onEvent(event(id, "EXECUTION_FAILED", { error: "sealed text" }));
     await s.rec.idle();
     expect(s.record).toHaveBeenLastCalledWith(expect.anything(), "failed", "internal");
@@ -128,7 +128,7 @@ describe("visualRunRecorder", () => {
 
   it("ignores other events, other executions (ingest, turn visuals) and an output outside the schema", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     s.rec.onEvent(event(id, "STEP_COMPLETED", { output: { outcome: "failed" } }));
     s.rec.onEvent(event(`u_${s.who.userId}:ingest-${s.who.documentId}`, "EXECUTION_FAILED"));
     s.rec.onEvent(event(`u_${s.who.userId}:visualize-turn-${randomUUID()}-4`, "EXECUTION_FAILED"));
@@ -140,7 +140,7 @@ describe("visualRunRecorder", () => {
 
   it("hands the store ids, enums and a code only: no event payload field reaches it or the bus", async () => {
     const s = setup();
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     s.rec.onEvent(
       event(id, "EXECUTION_COMPLETED", {
         output: { outcome: "failed", code: "visuals-model-unavailable" },
@@ -155,7 +155,7 @@ describe("visualRunRecorder", () => {
   it("never throws into the feed: a failing store is reported, later events still record in order", async () => {
     const s = setup();
     s.record.mockRejectedValueOnce(new RangeError("db down"));
-    const id = visualizeExecutionId(s.who.userId, s.who.documentId, 1);
+    const id = legacyVisualizeId(s.who.userId, s.who.documentId, 1);
     expect(() =>
       s.rec.onEvent(event(id, "EXECUTION_COMPLETED", { output: { outcome: "done" } })),
     ).not.toThrow();

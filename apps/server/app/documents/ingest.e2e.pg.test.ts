@@ -13,7 +13,6 @@ import { chunkBind } from "../flows/ingest-document/pgChunks";
 import { assertEventsAreContentFree } from "../flows/ingest-document/testing";
 import { STATUS_MESSAGES } from "../status/model";
 import { FLOW_MISMATCH_REASON } from "../status/model";
-import { ingestExecutionId } from "./ingest";
 import { type IngestStack, startIngestStack } from "./ingestStack";
 import { insertDocument } from "./repo";
 import { sweepStaleUploads } from "./sweep";
@@ -132,9 +131,12 @@ describe.skipIf(!PG_URL)(
 
         // the raw event log of that ingest holds ids, outcomes, counts and the model id only
         assertEventsAreContentFree(
-          await st.durable.raw.eventStore.read(ingestExecutionId(ada.userId, id)),
+          await st.durable.raw.eventStore.read(await st.runIds.ingest(ada, id)),
           { tenantId: ada.tenantId, userId: ada.userId, documentId: id },
           [MODEL],
+          undefined,
+          undefined,
+          await st.runIds.ingest(ada, id),
         );
       },
       WAIT,
@@ -239,11 +241,12 @@ describe.skipIf(!PG_URL)(
     // A failure's sealed text is read back through the decrypting store and must be the fixed one.
     const assertLogContentFree = async (user: { userId: string; tenantId: string }, id: string) =>
       assertEventsAreContentFree(
-        await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id)),
+        await st.durable.raw.eventStore.read(await st.runIds.ingest(user, id)),
         { tenantId: user.tenantId, userId: user.userId, documentId: id },
         [st.composed.ingestWiring.embedder.modelId],
         undefined,
-        await st.durable.sealed.eventStore.read(ingestExecutionId(user.userId, id)),
+        await st.durable.sealed.eventStore.read(await st.runIds.ingest(user, id)),
+        await st.runIds.ingest(user, id),
       );
 
     const filesOf = (userId: string) =>
@@ -393,19 +396,16 @@ describe.skipIf(!PG_URL)(
         // Loom reaches `cancelled` after the step in flight returns and offers no hook to await; the
         // poll is bounded by the test timeout and is a condition, never a sleep.
         await vi.waitFor(async () => {
-          const state = await st.composed.app.runtime.loadState(
-            ingestExecutionId(user.userId, id),
-            {
-              principal: { tenant: user.tenantId, actor: user.userId },
-            },
-          );
+          const state = await st.composed.app.runtime.loadState(await st.runIds.ingest(user, id), {
+            principal: { tenant: user.tenantId, actor: user.userId },
+          });
           expect(state?.status).toBe("cancelled");
         });
         for (const table of ["documents", "chunks", "parsed_documents"])
           expect(await countOf(table, id)).toBe(0);
         expect(filesOf(user.userId)).toEqual([]);
         await expectTombstoned(id);
-        const log = await st.durable.raw.eventStore.read(ingestExecutionId(user.userId, id));
+        const log = await st.durable.raw.eventStore.read(await st.runIds.ingest(user, id));
         expect(log.map((e) => e.eventType)).not.toContain("EXECUTION_COMPLETED"); // never ready
         await assertLogContentFree(user, id);
       },
@@ -532,7 +532,7 @@ describe.skipIf(!PG_URL)(
         // What recovery does to an execution it cannot resume: cancel it with the fixed reason.
         const runtime = st.composed.app.runtime;
         await runtime.cancel(
-          ingestExecutionId(user.userId, id),
+          await st.runIds.ingest(user, id),
           FLOW_MISMATCH_REASON,
           runtime.systemOptions(),
         );

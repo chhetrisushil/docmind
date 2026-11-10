@@ -1,16 +1,13 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
+import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { pgSessionLock } from "../db/sessionLock";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
-import {
-  commitPlan,
-  commitPlanTo,
-  experienceIdOf,
-  visualsLineage,
-} from "../flows/visualize-document/lineage";
+import { commitPlan, commitPlanTo, visualsLineage } from "../flows/visualize-document/lineage";
+import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { aPlan } from "../flows/visualize-document/testing";
 import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { TURN_INTENT } from "../flows/visualize-turn/plan";
@@ -76,9 +73,9 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
   /** A document line with two versions (so more than one blob). */
   async function twoVersions(userId: string, label: string) {
     const r = refOf(userId);
-    await commitPlan(lineage, r, await aPlan("n1", label), () => NOW);
-    await commitPlan(lineage, r, await aPlan("n2", `${label}-2`), () => NOW);
-    return { r, id: experienceIdOf(r) };
+    await commitPlan(lineage, lineageTestIds, r, await aPlan("n1", label), () => NOW);
+    await commitPlan(lineage, lineageTestIds, r, await aPlan("n2", `${label}-2`), () => NOW);
+    return { r, id: await experienceIdOf(r) };
   }
 
   it("keeps live document and chat-turn lines, reclaims an erased user's blobs and an orphan, and a repeat is idempotent", async () => {
@@ -101,6 +98,7 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
     const erased = await twoVersions(erasedUser, "Erased-Label");
     const erasedAddresses = await addressesOf(erased.id);
     await keys.destroy(erasedUser);
+    await keys.destroy(subjectOfExecution({ executionId: `${LINEAGE_STREAM_PREFIX}${erased.id}` })); // the new-format line's owner is the handle's subject
 
     const orphan = (await inner.put(enc(`orphan-${randomUUID()}`))).__loomContent;
 
@@ -181,9 +179,9 @@ describe.skipIf(!PG_URL)("lineage content collector (needs DOCMIND_TEST_PG_URL)"
 
   it("keeps every version of a line with more than 20 versions (keepLast is Infinity, not the default 20)", async () => {
     const r = refOf(randomUUID());
-    const id = experienceIdOf(r);
+    const id = await experienceIdOf(r);
     for (let i = 0; i < 25; i++)
-      await commitPlan(lineage, r, await aPlan(`n${i}`, `Version-${i}`), () => NOW);
+      await commitPlan(lineage, lineageTestIds, r, await aPlan(`n${i}`, `Version-${i}`), () => NOW);
     const addresses = await addressesOf(id);
     expect(new Set(addresses).size).toBeGreaterThan(20);
     clock += 3 * DAY;

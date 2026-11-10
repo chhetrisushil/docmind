@@ -3,7 +3,8 @@ import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
 import { HashingEmbeddingProvider } from "@loom/memory";
 import { isBase64Of } from "../../crypto/fields";
-import { INGEST_GENERATION, ingestExecutionId } from "../../documents/ingest";
+import { INGEST_GENERATION } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import type { IngestDeps } from "./deps";
 import { FAILURE_CODES } from "./errors";
 import { INGEST_STEPS, type IngestStartInput } from "./flow";
@@ -216,9 +217,10 @@ export function assertEventsAreContentFree(
   generation = INGEST_GENERATION,
   /** The same events read through the decrypting store: required when the log holds a failure, to prove its text is the fixed one. */
   decrypted?: readonly RawEvent[],
+  /** The run's id: the old-format one for the document and generation by default; a run the real code started is new-format, so its test passes the id its stack built (`runIds.ingest`). */
+  executionId: string = legacyIngestId(ref.userId, ref.documentId, generation),
 ): void {
   if (events.length === 0) throw new Error("no events to check");
-  const executionId = ingestExecutionId(ref.userId, ref.documentId, generation);
   const types = payloads(ref, models);
   const envelope: Shape = {
     id: (v) =>

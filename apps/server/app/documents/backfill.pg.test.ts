@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { PG_URL } from "../db/testSupport";
+import { deterministicUser } from "../opaqueIds/testing";
 import { runBackfill } from "./backfill";
-import { ingestExecutionId } from "./ingest";
+import { INGEST_GENERATION } from "./ingest";
 import { ALICE, U1, seedDoc, seedRow, startDocumentServer } from "./testHarness";
 
 const DAY = 86_400;
@@ -25,7 +26,7 @@ describe.skipIf(!PG_URL)("runBackfill (needs DOCMIND_TEST_PG_URL)", () => {
       expect(h.ingest.calls).toEqual([`start:${doc}`]);
       await h.starts.finished();
       // The harness's status model is in memory; store the row the real writer would have.
-      await seedRow(h.owner, ingestExecutionId(U1, doc), doc, U1);
+      await seedRow(h.owner, deterministicUser(U1).ingest(doc, INGEST_GENERATION), doc, U1);
       expect(await runBackfill(h.app, h.starts, { lookbackDays: 60 })).toEqual({
         fired: 0,
         incomplete: false,

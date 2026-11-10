@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ingestExecutionId } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import { FULL_SCAN_EVERY, startRecovery } from "./recovery";
 import { boot, hanging, input, keptLog, start } from "./recoveryHarness";
 import { fakeIngestDeps } from "./testing";
@@ -53,7 +53,7 @@ describe("startRecovery", () => {
     const recovery = startRecovery(app.runtime, log.kept, { intervalMs: 3_600_000 });
     await recovery.idle();
     recovery.stop();
-    const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
+    const state = await app.runtime.loadState(legacyIngestId(ids.userId, ids.documentId), {
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });
     expect(state?.status).toBe("completed");

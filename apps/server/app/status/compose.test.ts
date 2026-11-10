@@ -7,13 +7,15 @@ import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { loadChatSettings } from "../chats/settings";
 import { buildServer } from "../compose";
-import { ingestExecutionId, ingestStartInput } from "../documents/ingest";
+import { ingestStartInput } from "../documents/ingest";
 import { loadBlobRoot, loadLimits } from "../documents/limits";
 import { ingestDocumentFlow } from "../flows/ingest-document/flow";
 import { createIngestWiring } from "../flows/ingest-document/limits";
+import { OpaqueIds, opaqueIds } from "../opaqueIds";
+import { AutoHandleStore, legacyIngestId } from "../opaqueIds/testing";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
 import { STATUS_MESSAGES } from "./model";
@@ -21,6 +23,8 @@ import { atDefault } from "./testing";
 
 const root = mkdtempSync(join(tmpdir(), "dm-compose-status-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
+// `buildServer` installs the id cache process-wide and only the boot's stop() removes it: these tests build servers they never boot.
+afterEach(() => opaqueIds.install(undefined));
 
 /** Records the fold version the service registers with. */
 class RecordingStore extends InMemoryReadModelStore {
@@ -41,9 +45,11 @@ function compose(
     subjectOf: subjectOfExecution,
   });
   const store = new RecordingStore();
+  const keys = new InMemoryKeyStore();
   const composed = buildServer({
     pool: {} as Pool, // never reached: the flow fails at its first step
-    keys: new InMemoryKeyStore(),
+    keys,
+    ids: new OpaqueIds(keys, new AutoHandleStore()), // the stub pool cannot back a PgHandleStore
     storage: { kind: "custom", eventStore: events },
     crypto: { events },
     limits: loadLimits({}),
@@ -70,7 +76,7 @@ async function runFailingIngest(composed: ReturnType<typeof compose>["composed"]
     ingestDocumentFlow,
     ingestStartInput(identity, documentId),
     {
-      executionId: ingestExecutionId(identity.userId, documentId),
+      executionId: legacyIngestId(identity.userId, documentId),
       principal: { tenant: identity.tenantId, actor: identity.userId },
     },
   );

@@ -14,7 +14,8 @@ import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { loadBlobRoot, loadLimits } from "../documents/limits";
 import { createIngestWiring } from "../flows/ingest-document/limits";
-import { commitPlan, experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
+import { commitPlan, visualsLineage } from "../flows/visualize-document/lineage";
+import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { aPlan } from "../flows/visualize-document/testing";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { sealedLineageContent } from "../storage";
@@ -123,14 +124,15 @@ describe.skipIf(!PG_URL)("PgContentStore (needs DOCMIND_TEST_PG_URL)", () => {
       const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
       await commitPlan(
         lineage,
+        lineageTestIds,
         ref,
         await aPlan("revenue", SECRET_LABEL, "Zebra-Secret-Summary"),
         () => NOW,
       );
-      const before = await lineage.resolveLatest(experienceIdOf(ref));
+      const before = await lineage.resolveLatest(await experienceIdOf(ref));
       expect(before.ok && JSON.stringify(before.value)).toContain(SECRET_LABEL);
 
-      const state = await lineage.state(experienceIdOf(ref));
+      const state = await lineage.state(await experienceIdOf(ref));
       if (!state.ok) throw new Error("no state");
       const addresses = [...state.value.versions.values()].map(
         (v) => (v.ref as { __loomContent: string }).__loomContent,
@@ -149,6 +151,9 @@ describe.skipIf(!PG_URL)("PgContentStore (needs DOCMIND_TEST_PG_URL)", () => {
 
       // Erase: destroy the key. The blob rows stay, and nothing opens them.
       await keys.destroy(ref.userId);
+      await keys.destroy(
+        subjectOfExecution({ executionId: `${LINEAGE_STREAM_PREFIX}${await experienceIdOf(ref)}` }),
+      ); // the new-format line's owner is the handle's subject
       const { rows: left } = await db.owner.query(
         "SELECT count(*)::int AS n FROM lineage_content WHERE address = ANY($1::text[])",
         [addresses],
@@ -158,12 +163,12 @@ describe.skipIf(!PG_URL)("PgContentStore (needs DOCMIND_TEST_PG_URL)", () => {
         composed.lineageContent.get(
           { __loomContent: addresses[0] as string },
           {
-            executionId: `${LINEAGE_STREAM_PREFIX}${experienceIdOf(ref)}`,
+            executionId: `${LINEAGE_STREAM_PREFIX}${await experienceIdOf(ref)}`,
             workflowId: LINEAGE_WORKFLOW_ID,
           },
         ),
       ).rejects.toThrow();
-      expect(await lineage.resolveLatest(experienceIdOf(ref))).toMatchObject({
+      expect(await lineage.resolveLatest(await experienceIdOf(ref))).toMatchObject({
         ok: false,
         refusal: { kind: "refused", finding: { code: "line-erased" } },
       });

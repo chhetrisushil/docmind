@@ -18,7 +18,8 @@ import { type DurableStorage, createDurableStorage, sealedLineageContent } from 
 import { PgContentStore } from "../../storage/pgContentStore";
 import { subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
-import { commitPlan, experienceIdOf, visualsLineage } from "./lineage";
+import { commitPlan, visualsLineage } from "./lineage";
+import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { aPlan } from "./testing";
 
 const SECRET_LABEL = "Zebra-Secret-Label";
@@ -59,7 +60,8 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
   });
 
   const refOf = (userId: string) => ({ tenantId: randomUUID(), userId, documentId: randomUUID() });
-  const streamOf = (r: ReturnType<typeof refOf>) => `${LINEAGE_STREAM_PREFIX}${experienceIdOf(r)}`;
+  const streamOf = async (r: ReturnType<typeof refOf>) =>
+    `${LINEAGE_STREAM_PREFIX}${await experienceIdOf(r)}`;
 
   it("seals the line under the user's key, and destroying the key erases events and blobs", async () => {
     const u1 = randomUUID();
@@ -67,20 +69,20 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
     const r1 = refOf(u1);
     const r2 = refOf(u2);
     const plan = await aPlan("revenue", SECRET_LABEL, SECRET_SUMMARY);
-    await commitPlan(lineage, r1, plan, () => NOW);
-    await commitPlan(lineage, r2, await aPlan("other", "Other-Label"), () => NOW);
+    await commitPlan(lineage, lineageTestIds, r1, plan, () => NOW);
+    await commitPlan(lineage, lineageTestIds, r2, await aPlan("other", "Other-Label"), () => NOW);
 
     // 1. It reads back while the key exists.
-    const before = await lineage.resolveLatest(experienceIdOf(r1));
+    const before = await lineage.resolveLatest(await experienceIdOf(r1));
     expect(before.ok && JSON.stringify(before.value)).toContain(SECRET_LABEL);
 
     // 2. Raw events and raw blobs hold no secret.
-    const rawEvents = await stores.raw.eventStore.read(streamOf(r1));
+    const rawEvents = await stores.raw.eventStore.read(await streamOf(r1));
     expect(rawEvents.length).toBeGreaterThanOrEqual(2);
     const rawJson = JSON.stringify(rawEvents);
     for (const secret of [SECRET_LABEL, SECRET_SUMMARY, "KeyFigure", "fact-0"])
       expect(rawJson, secret).not.toContain(secret);
-    const state = await lineage.state(experienceIdOf(r1));
+    const state = await lineage.state(await experienceIdOf(r1));
     if (!state.ok) throw new Error("no state");
     const refs = [...state.value.versions.values()].map((v) => v.ref);
     expect(refs.length).toBeGreaterThanOrEqual(2);
@@ -93,7 +95,8 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
 
     // 3. Destroy the user's key (this user has no executions, so no shred is owed).
     await keys.destroy(u1);
-    const after = await lineage.resolveLatest(experienceIdOf(r1));
+    await keys.destroy(subjectOfExecution({ executionId: await streamOf(r1) })); // the new-format line is owned by the handle's subject `h_<H>`
+    const after = await lineage.resolveLatest(await experienceIdOf(r1));
     expect(after).toMatchObject({
       ok: false,
       refusal: { kind: "refused", finding: { code: "line-erased" } },
@@ -101,7 +104,7 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
     // The blob rows outlive the key (only ciphertext remains), but nothing can open them.
     for (const ref of refs) expect(await inner.get(ref as never)).not.toBeNull();
     const sealedContent = sealedLineageContent(inner, keys);
-    const access = { executionId: streamOf(r1), workflowId: LINEAGE_WORKFLOW_ID };
+    const access = { executionId: await streamOf(r1), workflowId: LINEAGE_WORKFLOW_ID };
     const opened = await sealedContent.get(refs[0] as never, access).then(
       () => undefined,
       (err: unknown) => err,
@@ -118,13 +121,14 @@ describe.skipIf(!PG_URL)("visuals lineage erasure (needs DOCMIND_TEST_PG_URL)", 
     const effect = commitEffect({
       guard: { begin: async () => {} },
       lineage,
+      ids: lineageTestIds,
       bus: new InMemoryProgressBus(),
       now: () => NOW,
     });
     expect(await effect.execute(input, undefined as never)).toEqual({ outcome: "document_gone" });
 
     // Another user's line is untouched.
-    const other = await lineage.resolveLatest(experienceIdOf(r2));
+    const other = await lineage.resolveLatest(await experienceIdOf(r2));
     expect(other.ok && JSON.stringify(other.value)).toContain("Other-Label");
   });
 

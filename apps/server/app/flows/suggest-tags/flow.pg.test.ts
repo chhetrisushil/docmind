@@ -7,6 +7,7 @@ import { buildApp } from "../../config";
 import { TagKeys } from "../../crypto/tagKeys";
 import { PG_URL } from "../../db/testSupport";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { testIdSource } from "../../opaqueIds/testing";
 import { TagService } from "../../tags/service";
 import { type PgFixture, startPgFixture } from "../ingest-document/pgFixture";
 import { PgDocumentResults } from "../ingest-document/pgResults";
@@ -52,7 +53,8 @@ describe.skipIf(!PG_URL)("suggest-tags through Loom (needs DOCMIND_TEST_PG_URL)"
       suggestTags: { pool: fx.app, fields: fx.fields, tags, bus, llm },
     });
     try {
-      const starter = loomSuggestTagsStarter(app.runtime);
+      const ids = testIdSource();
+      const starter = loomSuggestTagsStarter(app.runtime, { ids });
       const [a, b] = await Promise.all([starter.start(ref), starter.start(ref)]);
       expect([a.kind, b.kind].sort()).toEqual(["running", "started"]);
       release();
@@ -65,7 +67,7 @@ describe.skipIf(!PG_URL)("suggest-tags through Loom (needs DOCMIND_TEST_PG_URL)"
         step: "finalize",
         tags: "suggested",
       });
-      const id = `u_${ref.userId}:suggest-tags-${ref.documentId}-r1`;
+      const id = (await ids.ensureUser(ref)).suggestTags(ref.documentId, 1);
       await vi.waitFor(async () =>
         expect(JSON.stringify(await log.read(id))).toContain("EXECUTION_COMPLETED"),
       );

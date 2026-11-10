@@ -213,9 +213,11 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     expect(await eventsMentioning(st, "Rolling-summary-sentinel")).toBe(0);
     // the scan is not blind: before the erasure it finds the user
     expect((await scanTables(st.db.owner, [user.userId])).hits.length).toBeGreaterThan(0);
+    const handle = (await st.composed.ids.ensureUser(user)).handle; // the erasure deletes it
     expect((await eraseMe(st, user.cookie, PASSWORD)).status).toBe(202);
     await waitErased(st, user.userId);
     const who = {
+      handle,
       userId: user.userId,
       tenantId: user.tenantId,
       email: "ada@example.com",

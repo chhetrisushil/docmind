@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { withTenant } from "../db/tenant";
-import { ingestExecutionId } from "../documents/ingest";
 import { insertDocument, titleBind } from "../documents/repo";
 import { newDocument, seedRow } from "../documents/testHarness";
 import { chunkIdFor } from "../flows/ingest-document/chunker";
 import { entityNameBind } from "../flows/ingest-document/pgEntities";
 import type { PgFixture } from "../flows/ingest-document/pgFixture";
 import type { LinkKind } from "../flows/ingest-document/pgLinks";
+import { legacyIngestId } from "../opaqueIds/testing";
 
 /** What the status read model holds for a document whose ingest finished (the rule `docmind_ready_documents` applies). */
 export const READY_STATE = '{"status":"ready","step":"finalize","code":null}';
@@ -60,7 +60,7 @@ export function connectionsSeeder(getFixture: () => PgFixture, defaultWho: SeedW
     if (opts.ready !== false)
       await seedRow(
         fixture().db.owner,
-        ingestExecutionId(who.userId, d.id, 2),
+        legacyIngestId(who.userId, d.id, 2),
         d.id,
         who.userId,
         READY_STATE,
