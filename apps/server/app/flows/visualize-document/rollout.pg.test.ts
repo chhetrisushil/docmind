@@ -8,7 +8,7 @@ import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
@@ -229,5 +229,59 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
     expect(await starter.sweep()).toBe(0);
     expect(requests).toHaveLength(1);
     expect(visualizeExecutionId(U1, id, g, 1)).toBeTruthy();
+  });
+
+  it("D5 (timeline and relations): a document planned before c2, stamped with the current fingerprint, is not listed by the stale pass, and a boot sweep re-plans only the one stamped with an older format", async () => {
+    // The literal is the fingerprint on `main` before the c2 release: if a change moves factFormatFingerprint(), this fails.
+    const C1_FORMAT =
+      "docmind:visual.facts@1+docmind:turn.facts@1+docmind:doc.connections@1+docmind.structure@1";
+    expect(factFormatFingerprint()).toBe(C1_FORMAT);
+    const runs = new PgVisualRuns(app);
+    const seed = async (fingerprint: string, age: number, format: string) => {
+      const id = await seedDoc(owner, app, fields, ALICE, fingerprint, age);
+      const g = Number(
+        (await owner.query("SELECT ingest_generation FROM documents WHERE id = $1", [id])).rows[0]
+          .ingest_generation,
+      );
+      await seedRow(
+        owner,
+        ingestExecutionId(U1, id, g),
+        id,
+        U1,
+        '{"status":"ready","step":"finalize","code":null}',
+      );
+      await runs.record(
+        { userId: U1, documentId: id, generation: g, run: 0 },
+        "done",
+        undefined,
+        format,
+      );
+      return { id, g };
+    };
+    const current = await seed("e".repeat(64), 610, C1_FORMAT);
+    const older = await seed(
+      "d".repeat(64),
+      611,
+      "docmind:visual.facts@1+docmind:turn.facts@1+docmind:doc.connections@1", // before c1: the control
+    );
+    const listed = (await pgStaleFormatDocuments(app)(NIL, 50)).map((d) => d.documentId);
+    expect(listed).toContain(older.id); // the control: the pass does list a stale document
+    expect(listed).not.toContain(current.id);
+
+    // A boot sweep over the real stale source re-plans the stale document and nothing for the current one.
+    const start = vi.fn(
+      async (_f: unknown, _i: unknown, o: { executionId: string }) =>
+        ({ executionId: o.executionId, waitForCompletion: async () => {} }) as never,
+    );
+    const starter = loomVisualsStarter(
+      { start, cancel: vi.fn() } as unknown as Pick<WorkflowRuntime, "start" | "cancel">,
+      visualizeDocumentFlow(),
+      { stale: pgStaleFormatDocuments(app), runs },
+    );
+    expect(await starter.sweep()).toBe(1);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect((start.mock.calls[0] as unknown[])[2]).toMatchObject({
+      executionId: visualizeExecutionId(U1, older.id, older.g, 1),
+    });
   });
 });

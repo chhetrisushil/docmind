@@ -1,5 +1,6 @@
 import type { UploadDocumentResponse } from "@docmind/contracts";
 import { UiViewResponse } from "@docmind/contracts";
+import { factFormatFingerprint } from "@docmind/experiences";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertNoPlaintext } from "../chats/eventLogProof";
@@ -11,7 +12,7 @@ import { PgEntityStore } from "../flows/ingest-document/pgEntities";
 import type { PgFixture } from "../flows/ingest-document/pgFixture";
 import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
-import { visualizeExecutionId } from "../flows/visualize-document/start";
+import { pgStaleFormatDocuments, visualizeExecutionId } from "../flows/visualize-document/start";
 import { collectLineageContent } from "../storage/lineageGc";
 import { lineageGcDeps } from "../storage/pgLineageGc";
 import { subjectOfExecution } from "../subject";
@@ -899,4 +900,288 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     expect(left.rowCount).toBe(0);
     expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
   }, 120_000);
+
+  const NARRATIVE = [
+    "Zebra-Chronicle: In January 2024 Acme Holdings acquired Beta Works.",
+    "By Q3 2025 Cora Lindqvist led the integration of Project Orion.",
+    "On 2026-02-14 Acme Holdings opened the Lisbon office.",
+  ].join(" ");
+  const NARRATIVE_SECRETS = [
+    "Acme Holdings acquired Beta Works",
+    "Integration of Project Orion begins",
+    "Lisbon office opens",
+    "Cora Lindqvist",
+    "Project Orion",
+    "January 2024",
+    "14 February 2026",
+  ];
+
+  /**
+   * A visuals model for the narrative documents: it finds no chart facts, and a timeline and relations in a document that
+   * carries `Zebra-Chronicle` while `state.aggregates` is on (it counts its extraction calls), and it plans whatever
+   * aggregate capabilities the prompt offers, plus the connections section when `state.connections` is on.
+   */
+  function stubNarrative(
+    claude: FakeAnthropic,
+    state: { aggregates: boolean; extractions: number; connections?: boolean },
+  ) {
+    claude.reply((body) => {
+      const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
+      const text = JSON.stringify(body.messages);
+      if (system.includes("You extract facts")) {
+        state.extractions++;
+        const chunk = CHUNK_ID.exec(text)?.[1];
+        if (!state.aggregates || !chunk || !text.includes("Zebra-Chronicle"))
+          return { text: '{"facts":[]}' };
+        return {
+          text: JSON.stringify({
+            facts: [],
+            timeline: {
+              events: [
+                {
+                  when: "January 2024",
+                  date: "2024-01",
+                  label: "Acme Holdings acquired Beta Works",
+                  chunkIds: [chunk],
+                },
+                {
+                  when: "Q3 2025",
+                  date: "2025-Q3",
+                  label: "Integration of Project Orion begins",
+                  chunkIds: [chunk],
+                },
+                {
+                  when: "14 February 2026",
+                  date: "2026-02-14",
+                  label: "Lisbon office opens",
+                  chunkIds: [chunk],
+                },
+              ],
+            },
+            relations: {
+              links: [
+                { from: "Acme Holdings", rel: "acquired", to: "Beta Works", chunkIds: [chunk] },
+                { from: "Cora Lindqvist", rel: "leads", to: "Project Orion", chunkIds: [chunk] },
+                { from: "Acme Holdings", rel: "opened", to: "Lisbon office", chunkIds: [chunk] },
+              ],
+            },
+          }),
+        };
+      }
+      const widget = (id: string, type: string, capability: string, path: string) => ({
+        id,
+        type,
+        label: id,
+        span: 12,
+        props: {},
+        binding: { capability, arguments: {}, path, priority: "P1" },
+      });
+      const nodes = [
+        ...(state.connections ? [CONNECTIONS_PLAN_NODE] : []),
+        ...(text.includes("fact-18")
+          ? [widget("timeline", "DocumentTimeline", "fact-18", "nodes")]
+          : []),
+        ...(text.includes("fact-19")
+          ? [widget("relations", "Relationships", "fact-19", "edges")]
+          : []),
+      ];
+      return { text: JSON.stringify({ summary: "The story", nodes }) };
+    });
+  }
+
+  it("a narrative document gets a timeline and relationships from its one extraction call, a citation opens the passage, boot re-plans nothing, and nothing is plaintext", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    const state = { aggregates: true, extractions: 0 };
+    stubNarrative(st.visualsClaude as FakeAnthropic, state);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const id = await upload(st, ada.cookie, NARRATIVE, { visuals: true, name: "chronicle.txt" });
+    expect(await visualizeOutcome(st, ada.userId, id)).toBe("done");
+    expect(state.extractions).toBe(1); // the aggregates cost no second call
+    const ref = { tenantId: ada.tenantId, userId: ada.userId, documentId: id };
+    const facts = new PgVisualFacts(st.app, st.fields);
+    // No headings and no entities (ingest is keyless): only the model's two aggregates exist.
+    expect((await facts.listAll(ref)).map((f) => [f.ordinal, f.kind])).toEqual([
+      [18, "timeline"],
+      [19, "relations"],
+    ]);
+    expect(await facts.list(ref)).toEqual([]); // chat's facts stay extracted-only
+    expect(await facts.aggregateCount(ref)).toBe(2);
+
+    const timeline = (await hydrate(st, ada.cookie, id, "fact-18")) as {
+      state: string;
+      value: {
+        layout: string;
+        timeFormat: unknown;
+        nodes: { label: string; at: string }[];
+        refs: { id: string }[];
+      };
+    };
+    expect(timeline.state).toBe("ready");
+    expect(timeline.value.layout).toBe("timeline");
+    expect(timeline.value.timeFormat).toEqual({ granularity: "day" });
+    expect(timeline.value.nodes.map((n) => [n.label, n.at])).toEqual([
+      ["January 2024 · Acme Holdings acquired Beta Works", "2024-01-01"],
+      ["Q3 2025 · Integration of Project Orion begins", "2025-07-01"],
+      ["Lisbon office opens", "2026-02-14"],
+    ]);
+    const passages = (
+      await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1 ORDER BY ordinal", [id])
+    ).rows.map((r) => r.id as string);
+    const cited = timeline.value.refs.map((r) => r.id.split(":")[1] as string);
+    expect(cited.length).toBeGreaterThan(0);
+    for (const c of cited) expect(passages).toContain(c);
+    const source = await get(st, ada.cookie, `/api/documents/${id}/source?passage=${cited[0]}`);
+    expect(source.status).toBe(200);
+    expect(await source.json()).toMatchObject({ focus: expect.anything() });
+
+    const relations = (await hydrate(st, ada.cookie, id, "fact-19")) as {
+      state: string;
+      value: {
+        layout: string;
+        nodes: { label: string }[];
+        edges: { label: string }[];
+        refs: unknown[];
+      };
+    };
+    expect(relations.state).toBe("ready");
+    expect(relations.value.layout).toBe("network");
+    expect(relations.value.nodes.map((n) => n.label).sort()).toEqual([
+      "Acme Holdings",
+      "Beta Works",
+      "Cora Lindqvist",
+      "Lisbon office",
+      "Project Orion",
+    ]);
+    expect(relations.value.edges.map((e) => e.label).sort()).toEqual([
+      "acquired",
+      "leads",
+      "opened",
+    ]);
+    expect(relations.value.refs.length).toBeGreaterThan(0);
+
+    // D5: the run is stamped with the current fingerprint (unchanged by c2), so the boot stale pass lists nothing
+    const stamped = await st.db.owner.query(
+      "SELECT format FROM visual_runs WHERE document_id = $1",
+      [id],
+    );
+    expect(stamped.rows).toEqual([{ format: factFormatFingerprint() }]);
+    expect(
+      await pgStaleFormatDocuments(st.app)("00000000-0000-0000-0000-000000000000", 10),
+    ).toEqual([]);
+
+    // Nothing sealed is readable: the rows, and every execution's raw event log.
+    const rows = await st.db.owner.query(
+      "SELECT kind, fact_enc::text AS t FROM visual_facts WHERE document_id = $1 ORDER BY ordinal",
+      [id],
+    );
+    expect(rows.rows.map((r) => r.kind)).toEqual(["timeline", "relations"]);
+    for (const r of rows.rows) for (const s of NARRATIVE_SECRETS) expect(r.t).not.toContain(s);
+    const log = await eventLog(st);
+    expect(log.length).toBeGreaterThan(0);
+    assertNoPlaintext(log, NARRATIVE_SECRETS);
+
+    // Lineage (spec 6): the artifact store holds ciphertext only. Not vacuous: it holds this run's blobs.
+    const stored = await st.db.owner.query("SELECT count(*)::int AS n FROM lineage_content");
+    expect(stored.rows[0].n).toBeGreaterThan(0);
+    for (const needle of NARRATIVE_SECRETS) {
+      const found = await st.db.owner.query(
+        "SELECT 1 FROM lineage_content WHERE position(convert_to($1, 'UTF8') in bytes) > 0",
+        [needle],
+      );
+      expect(found.rowCount, `lineage_content has ${needle}`).toBe(0);
+    }
+    // ...and the production collector runs over the aggregate lineage: no refusal, and nothing of this run is reclaimed.
+    const report = await collectLineageContent(
+      lineageGcDeps(st.composed.lineageGc, st.durable.pool, st.app, 86_400_000),
+    );
+    expect(report.refused).toBeUndefined();
+    expect(report.roots).toBeGreaterThan(0);
+    expect(report).toMatchObject({ failed: 0, notDue: false });
+    expect((await st.app.query("SELECT count(*)::int AS n FROM lineage_content")).rows[0].n).toBe(
+      stored.rows[0].n,
+    );
+  }, 180_000);
+
+  it("a flat document gets neither a timeline nor relationships", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    const state = { aggregates: true, extractions: 0 };
+    stubNarrative(st.visualsClaude as FakeAnthropic, state);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const id = await upload(
+      st,
+      ada.cookie,
+      `${NO_FACTS} A short note with no dates and no parties.`,
+      {
+        visuals: false,
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await visualizeOutcome(st, ada.userId, id)).toBe("empty");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(state.extractions).toBe(1);
+    const left = await st.db.owner.query("SELECT 1 FROM visual_facts WHERE document_id = $1", [id]);
+    expect(left.rowCount).toBe(0);
+    expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
+  }, 120_000);
+
+  it("re-extract once: a pre-c2 document gets both diagrams on the user's first re-run; a stamped document, and every later re-run, only re-plan", async () => {
+    const st = await startIngestStack({ visuals: true });
+    stacks.push(st);
+    // The model of before c2 (facts only) and a connections-only plan: the first run ends `done`, so a plain re-run would
+    // re-plan and never extract (the extract step's rule); only the marker lets the user's press extract again.
+    const state = { aggregates: false, extractions: 0, connections: true };
+    stubNarrative(st.visualsClaude as FakeAnthropic, state);
+    const ada = await st.signUpAndLogIn("ada@example.com");
+    const id = await upload(st, ada.cookie, NARRATIVE, { visuals: true, name: "chronicle.txt" });
+    expect(await visualizeOutcome(st, ada.userId, id)).toBe("done");
+    expect(state.extractions).toBe(1);
+    const ref = { tenantId: ada.tenantId, userId: ada.userId, documentId: id };
+    const facts = new PgVisualFacts(st.app, st.fields);
+    expect(await facts.aggregateCount(ref)).toBe(0);
+    // A new upload stamps the extraction format.
+    expect(await facts.extractFormat(ref)).toBe("docmind.extract@2");
+
+    const press = async (rerun: number) => {
+      const events = await st.events(ada.cookie);
+      try {
+        const retry = await fetch(`${st.base}/api/documents/${id}/visuals/retry`, {
+          method: "POST",
+          headers: { cookie: ada.cookie },
+        });
+        expect(retry.status).toBe(202);
+        await st.until(events, id, () => true);
+      } finally {
+        events.close();
+      }
+      expect(await visualizeEnd(st, ada.userId, id, rerun)).toEqual({ outcome: "done" });
+    };
+    state.aggregates = true; // the model now answers with the new fields
+    await press(1); // a document a c2 extraction stamped: a re-plan only
+    expect(state.extractions).toBe(1);
+    expect(await facts.aggregateCount(ref)).toBe(0);
+
+    // Make it a document extracted before c2: no stamp.
+    await st.db.owner.query("UPDATE documents SET visual_extract_format = NULL WHERE id = $1", [
+      id,
+    ]);
+    await press(2); // the first re-run of a pre-c2 document extracts, once
+    expect(state.extractions).toBe(2);
+    expect((await facts.listAll(ref)).map((f) => [f.ordinal, f.kind])).toEqual([
+      [18, "timeline"],
+      [19, "relations"],
+    ]);
+    expect(await facts.extractFormat(ref)).toBe("docmind.extract@2");
+    expect(((await hydrate(st, ada.cookie, id, "fact-18")) as { state: string }).state).toBe(
+      "ready",
+    );
+
+    await press(3); // every later re-run is a re-plan
+    expect(state.extractions).toBe(2);
+    expect(await facts.aggregateCount(ref)).toBe(2);
+  }, 300_000);
 });

@@ -24,6 +24,7 @@ import {
 import { assertNoPlaintext } from "../chats/eventLogProof";
 import { CHAT_TOOL_DEFS } from "../chats/tools";
 import type { IngestStack } from "../documents/ingestStack";
+import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { STEP_ORDER } from "./eraser";
 
 /** The password `startIngestStack().signUpAndLogIn` uses. */
@@ -117,7 +118,7 @@ export async function seedUser(
 ): Promise<Seeded> {
   const claude = st.claude;
   if (!claude) throw new Error("the stack has no fake LLM provider");
-  const [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest] = [
+  const [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest, inEvent, inParty] = [
     `sentinel-doc-${tag()}`,
     `sentinel-file-${tag()}`,
     `sentinel-ask-${tag()}`,
@@ -125,6 +126,8 @@ export async function seedUser(
     `sentinel-title-${tag()}`,
     `sentinel-tag-${tag()}`,
     `sentinel-suggest-${tag()}`,
+    `sentinel-event-${tag()}`,
+    `sentinel-party-${tag()}`,
   ];
   const title = `Title ${inTitle}`;
   const before = new Set(await executionIds(st));
@@ -153,6 +156,58 @@ export async function seedUser(
   const passageId = (
     await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1", [documentId])
   ).rows[0].id as string;
+  // A timeline and relations the model found: sealed under the user's key, so no event label, written date, party name or
+  // relation phrase may be anywhere once the key is gone. The row count proves the scan has something to find the absence of.
+  // The sentinels sit in the labels and the party names only (the longest texts); `when` and `rel` stay short, because a
+  // sentinel and its prefix would leave no slack under their 40-character limits (a longer one would be refused as unexpected).
+  await new PgVisualFacts(st.app, st.fields).replace(ref, [
+    {
+      kind: "timeline",
+      events: [
+        {
+          at: "2024-03-01",
+          precision: "month",
+          when: "March 2024",
+          label: `Launch ${inEvent}`,
+          chunkId: passageId,
+        },
+        {
+          at: "2025-07-01",
+          precision: "quarter",
+          when: "Q3 2025",
+          label: `Review ${inEvent}`,
+          chunkId: passageId,
+        },
+        {
+          at: "2026-02-14",
+          precision: "day",
+          when: "14 February 2026",
+          label: `Close ${inEvent}`,
+          chunkId: passageId,
+        },
+      ],
+      chunkIds: [passageId],
+      ordinal: 18,
+    },
+    {
+      kind: "relations",
+      entities: [`Acme ${inParty}`, `Beta ${inParty}`, "Gamma"],
+      links: [
+        { from: 0, to: 1, rel: "acquired", chunkId: passageId },
+        { from: 1, to: 2, rel: "supplies", chunkId: passageId },
+        { from: 0, to: 2, rel: "owns", chunkId: passageId },
+      ],
+      chunkIds: [passageId],
+      ordinal: 19,
+    },
+  ]);
+  expect(
+    (
+      await st.db.owner.query("SELECT count(*)::int AS n FROM visual_facts WHERE owner_id = $1", [
+        who.userId,
+      ])
+    ).rows[0].n,
+  ).toBe(2);
   claude.reply((body) => {
     if (body.model === "title-model") return { text: title };
     if (!hasToolResult(body)) return searchTurn();
@@ -197,7 +252,7 @@ export async function seedUser(
     documentId,
     passageId,
     chatId: chat.id,
-    sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest],
+    sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest, inEvent, inParty],
     title,
     executions,
   };
@@ -781,6 +836,7 @@ export async function assertErased(
     "loom.fences",
     "public.tags",
     "public.document_tag_suggestions",
+    "public.visual_facts",
   ])
     expect(scanned.some((c) => c.startsWith(`${table}.`))).toBe(true); // the scan is not blind
   expect(unexpected(hits, who)).toEqual([]);
@@ -794,6 +850,13 @@ export async function assertErased(
     );
     expect(left.rows[0].n).toBe(0);
   }
+  // 1c. The visual facts hold nothing of the user: their rows cascade from the document and the user, and the labels were
+  //     sealed under the destroyed key (the scan above found neither sentinel in any column, and none of the user's rows is left).
+  const factsLeft = await db.owner.query(
+    "SELECT count(*)::int AS n FROM visual_facts WHERE owner_id = $1",
+    [user.userId],
+  );
+  expect(factsLeft.rows[0].n).toBe(0);
 
   // 2. The read models: the user's tombstones are really there (rows that name the user are judged by the scan).
   if (opts.tombstones !== false) {

@@ -58,4 +58,15 @@ describe("the structure widgets", () => {
       expect(customElements.get(TAG[kind] as string)).toBeDefined();
     }
   });
+
+  it("the timeline and the relationships are Diagram entries too (loom-ui's lu-diagram draws the timeline and network layouts)", () => {
+    createViewRegistry();
+    for (const name of ["DocumentTimeline", "Relationships"]) {
+      const entry = mergedCatalog().entries.find((e) => e.name === name);
+      expect(entry, name).toBeDefined();
+      const kind = (entry?.surfaces as { web: { kind: string } }).web.kind;
+      expect(kind).toBe("Diagram");
+      expect(customElements.get(TAG[kind] as string)).toBeDefined();
+    }
+  });
 });
