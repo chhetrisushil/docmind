@@ -246,6 +246,8 @@ export const DocumentAnswer = z
     facts: z.array(DraftFact).max(32),
     timeline: z.unknown().optional(),
     relations: z.unknown().optional(),
+    /** An alias the model may use for `relations`; read only when `relations` gave nothing. */
+    relationships: z.unknown().optional(),
   })
   .strip(); // a misnamed or stray top-level key is dropped, never a reason to lose the facts
 

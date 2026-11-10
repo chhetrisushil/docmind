@@ -35,7 +35,8 @@ Rejected:
   - `when` is the date as written.
   - `date` is `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`.
 - `relations: {"links":[{"from","rel","to","chunkIds"}]}`, at most 30 links.
-  - `from` and `to` are entities as written.
+  - The ask is for the relationships between the people, organisations, projects, products and places the document names, each as subject → short verb phrase → object.
+  - `from` and `to` are those names as written.
   - `rel` is a short verb phrase.
 
 The prompt tells the model:
@@ -43,6 +44,12 @@ The prompt tells the model:
 - never infer or compute a date;
 - leave out relative or undated phrases;
 - cite the passages each item comes from.
+
+The prompt does not tell the model to leave a field out for having too few items; the server's minimums (3 events, 3 links) are the only gate.
+
+**Accepted shapes.** The parser is lenient about obvious variants and stays bounded and validated as before (wrong types are dropped, never thrown):
+- a top-level `relationships` is read as `relations` when `relations` gave no links;
+- a bare array under `relations` or `relationships` is read as `links`, and a bare array under `timeline` as `events`.
 
 **Server-side validation.** Each bad item is dropped. A bad item never fails the run or affects other facts.
 - **Dates.** `date` must parse at its precision:
@@ -171,3 +178,5 @@ The prompt tells the model:
 ## As built
 
 - Re-runs happen from "Refresh visuals" (a secondary button on the Visuals tab, shown whenever the document is served and no run is in flight; it reads "Refreshing…" and is disabled until a `visuals` event or 60 s) or from Retry when the visuals failed. Both reuse the existing `POST /api/documents/:id/visuals/retry` path, its refusal notes ("limited", "busy") and its rate limit. Its help text says it may re-read the document once to add new diagram types.
+- The relations ask names "people, organisations, projects, products and places" (subject → short verb phrase → object), not "parties"; it was too narrow, and a model-side "fewer than 3" gate (dropped for the timeline too) gave a second chance to drop the field. The lenient parser accepts a top-level `relationships` alias and a bare array as `links` / `events`.
+- Each document extraction logs counts only: `visualize-extract aggregates {events: "received/kept", links: "received/kept"}`, never a label or a name.

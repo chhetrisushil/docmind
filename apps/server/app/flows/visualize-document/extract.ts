@@ -206,7 +206,10 @@ export async function askForExtraction(
   return {
     drafts: answers.flatMap((a) => a.facts),
     events: answers.flatMap((a) => rawEventsOf(a.timeline).slice(0, share)),
-    links: answers.flatMap((a) => rawLinksOf(a.relations).slice(0, share)),
+    links: answers.flatMap((a) => {
+      const own = rawLinksOf(a.relations);
+      return (own.length > 0 ? own : rawLinksOf(a.relationships)).slice(0, share);
+    }),
   };
 }
 
@@ -292,6 +295,16 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
       // The count only, never a fact's content (spec 5: ungrounded facts are counted).
       console.info("visualize-extract dropped ungrounded facts", dropped);
       const aggregates = aggregatesOf(extraction, ids);
+      // Counts only (received/kept), never a label or a name: it tells a model that sent nothing from a server that dropped it.
+      const kept = (kind: string) => aggregates.find((a) => a.kind === kind);
+      const keptEvents =
+        (kept("timeline") as { events?: unknown[] } | undefined)?.events?.length ?? 0;
+      const keptLinks =
+        (kept("relations") as { links?: unknown[] } | undefined)?.links?.length ?? 0;
+      console.info("visualize-extract aggregates", {
+        events: `${extraction.events.length}/${keptEvents}`,
+        links: `${extraction.links.length}/${keptLinks}`,
+      });
       await deps.facts.replace(ref, [...facts, ...aggregates], signal, generation);
       spend();
       return {

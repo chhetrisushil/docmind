@@ -592,7 +592,7 @@ describe("the timeline and relations of a document extraction", () => {
 describe("fix round 1: a lenient answer and a slow model", () => {
   it("I1: an unknown or misnamed top-level key never costs the facts", async () => {
     const { llm } = scripted(() =>
-      JSON.stringify({ facts: [GOOD], relationships: { links: LINKS }, events: EVENTS, note: "x" }),
+      JSON.stringify({ facts: [GOOD], connections: { links: LINKS }, events: EVENTS, note: "x" }),
     );
     const s = setup({ llm });
     expect(await run(s)).toEqual({ outcome: "done", count: 1, model: "claude-test" });
@@ -668,15 +668,15 @@ describe("fix round 1: a lenient answer and a slow model", () => {
     expect(requests).toHaveLength(8);
     for (const r of requests) {
       expect(r.system).toContain("dated events the document narrates, at most 5,");
-      expect(r.system).toContain("relate to each other, at most 4.");
+      expect(r.system).toContain("→ object, at most 4.");
       expect(r.system).not.toContain("at most 40,");
     }
     // 17 windows: the floor of 3 holds
     expect(extractDocumentSystem(17)).toContain("narrates, at most 3,");
-    expect(extractDocumentSystem(17)).toContain("each other, at most 3.");
+    expect(extractDocumentSystem(17)).toContain("→ object, at most 3.");
     // one window: the whole caps
     expect(extractDocumentSystem(1)).toContain("narrates, at most 40,");
-    expect(extractDocumentSystem(1)).toContain("each other, at most 30.");
+    expect(extractDocumentSystem(1)).toContain("→ object, at most 30.");
     expect(EXTRACT_DOCUMENT_SYSTEM).toBe(extractDocumentSystem(1));
   });
 
@@ -916,5 +916,97 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
         /extractFormat|EXTRACT_FORMAT|visual_extract_format|aggregateCount/,
       );
     }
+  });
+});
+
+describe("c2 relations: the ask, the accepted shapes and the count log", () => {
+  const A = randomUUID();
+  const B = randomUUID();
+  // The RCA's realistic Harbour Lights answer: four stated relationships, two of them ending at a programme.
+  const HARBOUR = {
+    facts: [],
+    timeline: { events: [] },
+    relations: {
+      links: [
+        { from: "Brightline", rel: "acquired", to: "Quayside", chunkIds: [A] },
+        { from: "Maya Okafor", rel: "leads", to: "Harbour Lights programme", chunkIds: [A] },
+        { from: "Northgate Council", rel: "funds", to: "the programme", chunkIds: [B] },
+        {
+          from: "Maya Okafor",
+          rel: "reports to",
+          to: "Northgate Council infrastructure committee",
+          chunkIds: [B],
+        },
+      ],
+    },
+  };
+  const texts = {
+    [A]: "Brightline acquired Quayside. Maya Okafor leads the Harbour Lights programme.",
+    [B]: "Northgate Council funds the programme.",
+  };
+
+  it("asks for relationships between named things, and leaves the minimum to the server", () => {
+    for (const n of [1, 5]) {
+      const p = extractDocumentSystem(n);
+      expect(p).toContain("people, organisations, projects, products and places");
+      expect(p).toContain("subject → short verb phrase → object");
+      expect(p).toContain("exactly as the document writes them");
+      expect(p.slice(p.indexOf("may also carry"))).not.toContain("parties");
+      expect(p).not.toMatch(/fewer than 3/);
+      expect(p).not.toContain('Leave "timeline" out');
+    }
+  });
+
+  it("stores a relations fact with 4 links for the Harbour Lights answer", async () => {
+    const { llm } = scripted(() => JSON.stringify(HARBOUR));
+    const s = setup({ llm, texts });
+    expect(await run(s)).toMatchObject({ outcome: "done", aggregates: 1 });
+    const rel = s.store.writes[0]?.find((f) => f.kind === "relations") as { links: unknown[] };
+    expect(rel.links).toHaveLength(4);
+  });
+
+  it("reads a top-level relationships alias, a bare list under either name, and a bare events list", async () => {
+    const links = HARBOUR.relations.links;
+    const events = [
+      { when: "2024", date: "2024", label: "One", chunkIds: [A] },
+      { when: "2025", date: "2025", label: "Two", chunkIds: [A] },
+      { when: "2026", date: "2026", label: "Three", chunkIds: [B] },
+    ];
+    for (const shape of [
+      { relationships: { links } },
+      { relationships: links },
+      { relations: links },
+    ]) {
+      const { llm } = scripted(() => JSON.stringify({ facts: [], ...shape }));
+      const got = await askForExtraction(llm, [{ id: A, text: "t" }]);
+      expect(got.links).toEqual(links);
+    }
+    const { llm } = scripted(() => JSON.stringify({ facts: [], timeline: events }));
+    expect((await askForExtraction(llm, [{ id: A, text: "t" }])).events).toEqual(events);
+    // relations wins when it has links; wrong types are dropped, never thrown
+    const mixed = scripted(() =>
+      JSON.stringify({ facts: [], relations: { links: [links[0]] }, relationships: links }),
+    );
+    expect((await askForExtraction(mixed.llm, [{ id: A, text: "t" }])).links).toEqual([links[0]]);
+    const bad = scripted(() =>
+      JSON.stringify({ facts: [], relations: 5, relationships: "x", timeline: true }),
+    );
+    expect(await askForExtraction(bad.llm, [{ id: A, text: "t" }])).toEqual({
+      drafts: [],
+      events: [],
+      links: [],
+    });
+  });
+
+  it("logs the raw and kept counts of events and links, and never a name or label", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const { llm } = scripted(() => JSON.stringify(HARBOUR));
+    await run(setup({ llm, texts }));
+    const line = info.mock.calls.find((c) => c[0] === "visualize-extract aggregates");
+    expect(line?.[1]).toEqual({ events: "0/0", links: "4/4" });
+    expect(JSON.stringify(line)).not.toMatch(
+      /Brightline|Quayside|Okafor|Northgate|Harbour|acquired/,
+    );
+    info.mockRestore();
   });
 });
