@@ -108,9 +108,9 @@ export const runVisualize =
         return { outcome: structured.outcome, ...(structured.code && { code: structured.code }) };
       derived = structured.count ?? 0;
     }
-    // No facts at all (none extracted and none derived): there is nothing to load, but the connections are live data, so
+    // No facts at all (none extracted and none derived; the timeline and relations count as stored facts: a document with only those still loads them): there is nothing to load, but the connections are live data, so
     // the planner still runs, offered only the connections capability.
-    const stored = (extracted.count ?? 0) + derived;
+    const stored = (extracted.count ?? 0) + (extracted.aggregates ?? 0) + derived;
     let facts: LoadOutput["facts"] = [];
     if (stored !== 0) {
       const loaded = await ctx.run(visualizeLoadStep, input);

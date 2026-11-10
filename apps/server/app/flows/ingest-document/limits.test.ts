@@ -1,9 +1,14 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { inspect } from "node:util";
-import type { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
+import { type AnthropicMessagesProvider, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { describe, expect, it } from "vitest";
 import { loadLimits } from "../../documents/limits";
+import { startFakeOpenAiCompat } from "../../llm/testing";
 import { StartupConfigError } from "../../startupError";
 import {
+  VISUALS_EXTRACT_MAX_TOKENS,
+  VISUALS_MAX_TOKENS,
   createIngestWiring,
   loadEmbedConfig,
   loadGateLimits,
@@ -293,5 +298,105 @@ describe("loadSummaryMaxChars", () => {
     expect(() => loadSummaryMaxChars({ DOCMIND_SUMMARY_MAX_CHARS: value })).toThrow(
       /DOCMIND_SUMMARY_MAX_CHARS/,
     );
+  });
+});
+
+describe("the visuals role's limits: the planner's and chat's, and the document extraction's own", () => {
+  it("leaves the planner and chat at their cap and gives a document extraction room for its timeline and relations", () => {
+    expect(VISUALS_MAX_TOKENS).toBe(8192); // unchanged: the planner's and chat's answers are short
+    // Worst case of the two new fields alone: 40 events and 30 links, each citing two passages (36-character ids), at about
+    // 3 characters per token. A truncated answer is an LlmOutputError that fails the whole extraction, facts included.
+    const id = "00000000-0000-4000-8000-000000000001";
+    const event = JSON.stringify({
+      when: "w".repeat(40),
+      date: "2026-02-14",
+      label: "l".repeat(80),
+      chunkIds: [id, id],
+    });
+    const link = JSON.stringify({
+      from: "f".repeat(80),
+      rel: "r".repeat(40),
+      to: "t".repeat(80),
+      chunkIds: [id, id],
+    });
+    const extra = Math.ceil((40 * event.length + 30 * link.length) / 3);
+    expect(extra).toBeGreaterThan(5_000); // the control: the new fields alone are most of the old 8192 cap
+    expect(VISUALS_EXTRACT_MAX_TOKENS).toBeGreaterThanOrEqual(8192 + extra);
+  });
+
+  it("reads the extraction timeout: default as long as a vision request's, a ceiling of 600000, and the planner's timeout is not moved by it", () => {
+    expect(loadLlmConfig({})).toMatchObject({
+      timeoutMs: 60_000, // the planner's and chat's, unchanged
+      visualsExtractTimeoutMs: 180_000,
+    });
+    expect(loadLlmConfig({}).visualsExtractTimeoutMs).toBeGreaterThanOrEqual(180_000);
+    expect(
+      loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "600000" }).visualsExtractTimeoutMs,
+    ).toBe(600_000);
+    expect(
+      loadLlmConfig({
+        DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "90000",
+        DOCMIND_LLM_TIMEOUT_MS: "1000",
+      }),
+    ).toMatchObject({ timeoutMs: 1000, visualsExtractTimeoutMs: 90_000 });
+    for (const v of ["0", "600001", "abc"])
+      expect(() => loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: v })).toThrow(
+        /^DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS must be/,
+      );
+  });
+
+  it("wires a second provider on the same role for the extraction, and none when the role is off", () => {
+    const off = createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" });
+    expect(off.llm.visuals).toBeUndefined();
+    expect(off.llm.visualsExtract).toBeUndefined();
+    const on = createIngestWiring({
+      DOCMIND_LLM_PROVIDER: "off",
+      DOCMIND_VISUALS_PROVIDER: "ollama",
+    });
+    expect(on.llm.visuals).toBeDefined();
+    expect(on.llm.visualsExtract).toBeDefined();
+    expect(on.llm.visualsExtract).not.toBe(on.llm.visuals);
+    expect((on.llm.visualsExtract as { model?: string }).model).toBe(
+      (on.llm.visuals as { model?: string }).model,
+    );
+  });
+
+  it("an extraction request outlives the timeout the planner's provider gives up at (an answer of up to 16 000 tokens is slow)", async () => {
+    const fake = await startFakeOpenAiCompat();
+    fake.reply(() => ({ kind: "text", text: "{}" }));
+    // A server that answers after 400 ms: slower than the planner's 100 ms, quicker than the extraction's 5 s.
+    const slow = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        setTimeout(async () => {
+          const r = await fetch(`${fake.url}${req.url ?? ""}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: Buffer.concat(chunks),
+          });
+          res.writeHead(r.status, { "content-type": "application/json" });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        }, 400);
+      });
+    });
+    await new Promise<void>((ok) => slow.listen(0, "127.0.0.1", ok));
+    try {
+      const { port } = slow.address() as AddressInfo;
+      const w = createIngestWiring({
+        DOCMIND_LLM_PROVIDER: "off",
+        DOCMIND_VISUALS_PROVIDER: "ollama",
+        DOCMIND_OLLAMA_URL: `http://127.0.0.1:${port}`,
+        DOCMIND_LLM_TIMEOUT_MS: "100",
+        DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "5000",
+      });
+      const ask = { messages: [{ role: "user" as const, content: "q" }] };
+      await expect(w.llm.visuals?.complete(ask)).rejects.toBeInstanceOf(LlmUnavailableError);
+      expect((await w.llm.visualsExtract?.complete(ask))?.content).toBe("{}");
+    } finally {
+      slow.closeAllConnections();
+      await new Promise<void>((ok) => slow.close(() => ok()));
+      await fake.close();
+    }
   });
 });

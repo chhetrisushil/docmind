@@ -32,6 +32,8 @@ export interface VisualizeDeps extends StepSeams {
   now: () => string;
   /** The `visuals` role's provider; absent when the role is off (the extract step then ends `skipped`). */
   llm?: LlmProvider;
+  /** The `visuals` role sized for a document extraction (longer answer, longer timeout); the extract step prefers it over `llm`, which the planner and chat keep. */
+  extractLlm?: LlmProvider;
   /** The run reader and the starter's note of re-runs after a `done` run: a zero-fact document is re-planned without extraction. */
   runs?: Pick<VisualRuns, "last">;
   afterDone?: Set<string>;

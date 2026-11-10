@@ -246,6 +246,7 @@ Environment variables (names only; see [[file:.env.example][.env.example]] for t
 | =ANTHROPIC_API_KEY=, =ANTHROPIC_BASE_URL=    | Claude, used only by roles set to =anthropic=; a key alone enables nothing |
 | =DOCMIND_LLM_TIMEOUT_MS=                     | Per-request timeout for summaries (default 60000) |
 | =DOCMIND_VISION_TIMEOUT_MS=                  | Per-request timeout for vision (default 180000, max 600000) |
+| =DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS=         | Per-request timeout for a document's visuals extraction, which answers at length (default 180000, max 600000) |
 | =DOCMIND_SUMMARY_MAX_CHARS=                  | Most document text one summary reads (default 400000, at most 5000000) |
 | =DOCMIND_PUBLIC_ORIGIN=                      | Browser-visible origin, exactly =scheme://host[:port]= (punycode, no default port), for a proxy that rewrites Host |
 | =DOCMIND_MAX_CONNECTIONS=                    | Most simultaneous HTTP connections (default 2000, at most 65535) |

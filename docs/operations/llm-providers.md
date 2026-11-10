@@ -38,8 +38,9 @@ Model ids must match `^[a-z0-9][a-z0-9._:\-]{0,99}$`: lowercase letters, digits 
 
 Other variables: `DOCMIND_OLLAMA_URL` (default `http://127.0.0.1:11434`), `GEMINI_API_KEY`,
 `GEMINI_BASE_URL`, `DOCMIND_GEMINI_THINKING_BUDGET` (0 to 24576, default 0), `ANTHROPIC_API_KEY`,
-`ANTHROPIC_BASE_URL`, `DOCMIND_LLM_TIMEOUT_MS` (summaries, default 60000), `DOCMIND_VISION_TIMEOUT_MS`
-(default 180000, at most 600000). Chat requests have a fixed 180 s timeout per attempt. Base URLs must be
+`ANTHROPIC_BASE_URL`, `DOCMIND_LLM_TIMEOUT_MS` (summaries, default 60000), `DOCMIND_VISION_TIMEOUT_MS` and
+`DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (a document's visuals extraction; both default 180000, at most 600000; the `visuals` planner
+and chat keep `DOCMIND_LLM_TIMEOUT_MS`). Chat requests have a fixed 180 s timeout per attempt. Base URLs must be
 http or https, with no credentials, query or fragment.
 
 ## Switching a role

@@ -33,6 +33,8 @@ export interface IngestWiring {
     vision?: LlmProvider;
     visionPdf?: LlmProvider;
     visuals?: LlmProvider;
+    /** The `visuals` role again, with a longer answer cap and timeout, for the document extraction only. */
+    visualsExtract?: LlmProvider;
     roles: LlmRoleSettings;
     config: LlmSettings;
   };
@@ -106,12 +108,20 @@ const MAX_LLM_TIMEOUT_MS = 300_000;
 const MAX_VISION_TIMEOUT_MS = 600_000;
 const SUMMARY_MAX_TOKENS = 2_048;
 export const VISUALS_MAX_TOKENS = 8192;
+/**
+ * The cap of a DOCUMENT extraction's answer (`visualsExtract`, below): it may add up to 40 events and 30 links to its
+ * facts, and a truncated answer is an `LlmOutputError` that fails the whole extraction, facts included. 16 000 as
+ * `VISION_MAX_TOKENS`; `limits.test.ts` measures the worst case.
+ */
+export const VISUALS_EXTRACT_MAX_TOKENS = 16_000;
 const VISION_MAX_TOKENS = 16_000;
 
 /** Timeouts for the LLM steps. It never holds a key (R10): keys live only inside the providers. */
 export interface LlmSettings {
   timeoutMs: number;
   visionTimeoutMs: number;
+  /** One document extraction request (up to `VISUALS_EXTRACT_MAX_TOKENS` of answer): far slower than the planner's, which keeps `timeoutMs`. */
+  visualsExtractTimeoutMs: number;
 }
 
 export { envModelId } from "../../llm/modelId";
@@ -124,6 +134,14 @@ export function loadLlmConfig(
     timeoutMs: positiveInt(env, "DOCMIND_LLM_TIMEOUT_MS", 60_000, MAX_LLM_TIMEOUT_MS),
     // A vision request reads up to VISION_PDF_PAGES_PER_REQUEST dense pages: far slower than a summary.
     visionTimeoutMs: positiveInt(env, "DOCMIND_VISION_TIMEOUT_MS", 180_000, MAX_VISION_TIMEOUT_MS),
+    // The same 16 000-token answer as a vision request, so the same default: at the 60 s of `timeoutMs` a long answer
+    // would end `visuals-model-unavailable` and cost the facts.
+    visualsExtractTimeoutMs: positiveInt(
+      env,
+      "DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS",
+      180_000,
+      MAX_VISION_TIMEOUT_MS,
+    ),
   };
 }
 
@@ -136,6 +154,12 @@ function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
   const vision = make("vision", VISION_MAX_TOKENS, config.visionTimeoutMs);
   const visionPdf = make("visionPdf", VISION_MAX_TOKENS, config.visionTimeoutMs);
   const visuals = make("visuals", VISUALS_MAX_TOKENS, config.timeoutMs);
+  // The same role and model, sized for a document extraction's longer answer; the planner and chat keep `visuals`.
+  const visualsExtract = make(
+    "visuals",
+    VISUALS_EXTRACT_MAX_TOKENS,
+    config.visualsExtractTimeoutMs,
+  );
   return {
     roles,
     config,
@@ -143,6 +167,7 @@ function createLlm(env: NodeJS.ProcessEnv): IngestWiring["llm"] {
     ...(vision && { vision }),
     ...(visionPdf && { visionPdf }),
     ...(visuals && { visuals }),
+    ...(visualsExtract && { visualsExtract }),
   };
 }
 

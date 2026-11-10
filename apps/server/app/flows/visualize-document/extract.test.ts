@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { tainted } from "@loom/classify";
-import { type LlmProvider, type LlmRequest, guardRequest } from "@loom/llm";
+import {
+  type LlmProvider,
+  type LlmRequest,
+  UNTRUSTED_CONTENT_SYSTEM_NOTE,
+  guardRequest,
+} from "@loom/llm";
 import { describe, expect, it, vi } from "vitest";
 import { LLM_RETRY } from "../ingest-document/stepEffect";
-import { EXTRACT_WINDOW_CHARS, extractEffect } from "./extract";
-import type { Fact } from "./facts";
+import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";
+import type { ExtractionWrite, Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
+import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM } from "./prompts";
 import { visualizeExecutionId } from "./start";
+import { aggregateFacts } from "./testing";
 
 const C0 = randomUUID();
 const C1 = randomUUID();
@@ -42,14 +49,15 @@ function setup(
     documentId: randomUUID(),
   };
   const store = {
-    writes: [] as Fact[][],
-    held: [] as Fact[],
-    replace: async (_r: VisualizeRef, facts: readonly Fact[]) => {
+    writes: [] as ExtractionWrite[][],
+    held: [] as ExtractionWrite[],
+    replace: async (_r: VisualizeRef, facts: readonly ExtractionWrite[]) => {
       store.writes.push([...facts]);
       store.held = [...facts];
       return facts.length;
     },
-    list: async () => store.held,
+    list: async () => store.held.filter((f) => f.ordinal < 16) as Fact[],
+    aggregateCount: async () => store.held.filter((f) => f.ordinal >= 18).length,
   };
   const d = {
     guard: { begin: async () => {} },
@@ -290,6 +298,288 @@ describe("visualize-extract step", () => {
         outcome: "done",
         model: "none",
       });
+    });
+  });
+});
+
+const EVENTS = [
+  { when: "March 2024", date: "2024-03", label: "Alpha launch", chunkIds: [C0] },
+  { when: "Q3 2025", date: "2025-Q3", label: "Beta rollout", chunkIds: [C1] },
+  { when: "14 February 2026", date: "2026-02-14", label: "Gamma review", chunkIds: [C0, C1] },
+];
+const LINKS = [
+  { from: "Acme", rel: "acquired", to: "Beta Corp", chunkIds: [C0] },
+  { from: "Cora", rel: "leads", to: "Project X", chunkIds: [C1] },
+  { from: "Acme", rel: "owns", to: "Project X", chunkIds: [C0] },
+];
+/** A document extraction's answer: one good fact, a timeline and relations; `over` replaces any field. */
+const answer = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    facts: [GOOD],
+    timeline: { events: EVENTS },
+    relations: { links: LINKS },
+    ...over,
+  });
+
+describe("the timeline and relations of a document extraction", () => {
+  it("stores the timeline at 18 and the relations at 19 beside the facts, in one write and one model call", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    expect(await run(s)).toEqual({
+      outcome: "done",
+      count: 1,
+      aggregates: 2,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(1);
+    expect(s.store.writes).toHaveLength(1);
+    const written = s.store.writes[0] as ExtractionWrite[];
+    expect(written.map((f) => [f.ordinal, f.kind])).toEqual([
+      [0, "series"],
+      [18, "timeline"],
+      [19, "relations"],
+    ]);
+    expect(written[1]).toMatchObject({
+      kind: "timeline",
+      events: [
+        {
+          at: "2024-03-01",
+          precision: "month",
+          when: "March 2024",
+          label: "Alpha launch",
+          chunkId: C0,
+        },
+        {
+          at: "2025-07-01",
+          precision: "quarter",
+          when: "Q3 2025",
+          label: "Beta rollout",
+          chunkId: C1,
+        },
+        {
+          at: "2026-02-14",
+          precision: "day",
+          when: "14 February 2026",
+          label: "Gamma review",
+          chunkId: C0,
+        },
+      ],
+      chunkIds: [C0, C1],
+    });
+    expect(written[2]).toMatchObject({
+      kind: "relations",
+      entities: ["Acme", "Beta Corp", "Cora", "Project X"],
+      links: [
+        { from: 0, to: 1, rel: "acquired", chunkId: C0 },
+        { from: 2, to: 3, rel: "leads", chunkId: C1 },
+        { from: 0, to: 3, rel: "owns", chunkId: C0 },
+      ],
+      chunkIds: [C0, C1],
+    });
+  });
+
+  it("asks the extraction's own provider (a longer answer and timeout) when there is one, and the shared one otherwise", async () => {
+    const shared = scripted(() => answer());
+    const own = scripted(() => answer());
+    const s = setup({ llm: shared.llm });
+    expect(
+      await extractEffect({ ...s.d, extractLlm: own.llm }).execute(s.ref, {} as never),
+    ).toMatchObject({ outcome: "done", aggregates: 2 });
+    expect(own.requests).toHaveLength(1);
+    expect(shared.requests).toEqual([]);
+    await run(s); // no extraction provider: the shared one answers
+    expect(shared.requests).toHaveLength(1);
+  });
+
+  it("keeps the old behaviour when the answer has neither field: the facts only, no aggregates key", async () => {
+    const { llm } = scripted(() => JSON.stringify({ facts: [GOOD] }));
+    const s = setup({ llm });
+    expect(await run(s)).toEqual({ outcome: "done", count: 1, model: "claude-test" });
+    expect(s.store.writes[0]?.map((f) => f.ordinal)).toEqual([0]);
+  });
+
+  it.each([
+    ["fields that are not objects", { timeline: "oops", relations: [1, 2] }],
+    ["null fields", { timeline: null, relations: null }],
+    ["lists that are not lists", { timeline: { events: "x" }, relations: { links: {} } }],
+    [
+      "too few valid items",
+      { timeline: { events: EVENTS.slice(0, 2) }, relations: { links: LINKS.slice(0, 2) } },
+    ],
+    [
+      "items that are all bad",
+      {
+        timeline: {
+          events: [{ when: "soon", date: "last year", label: "x", chunkIds: [C0] }, 5, null, "x"],
+        },
+        relations: { links: [{ from: "A", to: "A", rel: "is", chunkIds: [C0] }, {}, 7] },
+      },
+    ],
+  ])("%s never cost the facts: they are stored, with no aggregate", async (_name, over) => {
+    const { llm } = scripted(() => answer(over));
+    const s = setup({ llm });
+    expect(await run(s)).toEqual({ outcome: "done", count: 1, model: "claude-test" });
+    expect(s.store.writes[0]?.map((f) => f.ordinal)).toEqual([0]);
+  });
+
+  it("drops only the bad items: a timeline with a bad date among three good events keeps the three", async () => {
+    const bad = { when: "next year", date: "next year", label: "Soon", chunkIds: [C0] };
+    const { llm } = scripted(() => answer({ timeline: { events: [bad, ...EVENTS] } }));
+    const s = setup({ llm });
+    expect(await run(s)).toMatchObject({ count: 1, aggregates: 2 });
+    const t = s.store.writes[0]?.[1] as { events: { label: string }[] };
+    expect(t.events.map((e) => e.label)).toEqual(["Alpha launch", "Beta rollout", "Gamma review"]);
+  });
+
+  it("cites only passages of this document: events that cite a foreign passage are dropped, and two left is no timeline", async () => {
+    const foreign = (e: (typeof EVENTS)[number]) => ({ ...e, chunkIds: [randomUUID()] });
+    const { llm } = scripted(() =>
+      answer({ timeline: { events: [foreign(EVENTS[0] as never), EVENTS[1], EVENTS[2]] } }),
+    );
+    const s = setup({ llm });
+    expect(await run(s)).toEqual({
+      outcome: "done",
+      count: 1,
+      aggregates: 1,
+      model: "claude-test",
+    });
+    expect(s.store.writes[0]?.map((f) => f.kind)).toEqual(["series", "relations"]);
+  });
+
+  it("merges the answers of several windows and dedupes across them", async () => {
+    const ids = [randomUUID(), randomUUID(), randomUUID()];
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(10_000)]));
+    const answers = [
+      {
+        facts: [],
+        timeline: {
+          events: [
+            { when: "2024", date: "2024", label: "One", chunkIds: [ids[0]] },
+            { when: "2025", date: "2025", label: "Two", chunkIds: [ids[1]] },
+          ],
+        },
+      },
+      {
+        facts: [],
+        timeline: {
+          events: [
+            { when: "2025", date: "2025", label: "two", chunkIds: [ids[2]] },
+            { when: "2026", date: "2026", label: "Three", chunkIds: [ids[2]] },
+          ],
+        },
+      },
+    ];
+    let n = 0;
+    const { llm, requests } = scripted(() => JSON.stringify(answers[n++]));
+    const s = setup({ llm, texts });
+    expect(await run(s)).toEqual({
+      outcome: "done",
+      count: 0,
+      aggregates: 1,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(2);
+    const t = s.store.writes[0]?.[0] as {
+      kind: string;
+      ordinal: number;
+      events: { label: string; chunkId: string }[];
+    };
+    expect([t.kind, t.ordinal]).toEqual(["timeline", 18]);
+    expect(t.events.map((e) => [e.label, e.chunkId])).toEqual([
+      ["One", ids[0]],
+      ["Two", ids[1]], // the first spelling and the first passage of the duplicate
+      ["Three", ids[2]],
+    ]);
+  });
+
+  it("asks a document extraction for the two fields, and never asks chat's extraction for them", async () => {
+    const { llm, requests } = scripted(() => answer());
+    await run(setup({ llm }));
+    const system = String(requests[0]?.system);
+    expect(system).toBe(`${EXTRACT_DOCUMENT_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`);
+    expect(system.startsWith("You extract facts")).toBe(true);
+    for (const phrase of [
+      '"timeline"',
+      '"relations"',
+      "at most 40",
+      "at most 30",
+      "Never infer, compute or complete a date",
+      "relative",
+      "at most 2 passage ids",
+    ])
+      expect(system, phrase).toContain(phrase);
+    // chat's call is byte-identical to what it was: the original prompt, no aggregates
+    const chat = scripted(() => '{"facts":[]}');
+    await askForFacts(chat.llm, [{ id: C0, text: "t" }]);
+    expect(String(chat.requests[0]?.system)).toBe(
+      `${EXTRACT_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
+    );
+    expect(String(chat.requests[0]?.system)).not.toContain("timeline");
+  });
+
+  it("askForExtraction returns the facts and the raw, unvalidated aggregates of the window", async () => {
+    const { llm } = scripted(() => answer());
+    expect(await askForExtraction(llm, [{ id: C0, text: "t" }])).toEqual({
+      drafts: [GOOD],
+      events: EVENTS,
+      links: LINKS,
+    });
+  });
+
+  it("a refusal clears a timeline and relations a previous run stored, with the facts", async () => {
+    const llm = Object.assign(
+      {
+        complete: async () => {
+          throw new LlmRefusalError();
+        },
+      },
+      { model: "claude-test" },
+    );
+    const s = setup({ llm });
+    const { timeline, relations } = aggregateFacts(C0);
+    s.store.held = [{ ...GOOD, ordinal: 0 } as Fact, timeline, relations];
+    expect(await run(s)).toEqual({ outcome: "done", count: 0, model: "claude-test" });
+    expect(s.store.held).toEqual([]);
+  });
+
+  it("a new extraction with no timeline replaces the old one (the write carries no ordinal 18)", async () => {
+    const { llm } = scripted(() => JSON.stringify({ facts: [GOOD], relations: { links: LINKS } }));
+    const s = setup({ llm });
+    s.store.held = [{ ...GOOD, ordinal: 0 } as Fact, aggregateFacts(C0).timeline];
+    await run(s);
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0, 19]);
+  });
+
+  describe("a re-run (-r<n> execution) over stored aggregates", () => {
+    const rerunCtx = (s: ReturnType<typeof setup>, n = 1) =>
+      ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+
+    it("reports the timeline and relations it keeps and makes no model call", async () => {
+      const { llm, requests } = scripted(() => answer());
+      const s = setup({ llm });
+      const { timeline, relations } = aggregateFacts(C0);
+      s.store.held = [{ ...GOOD, ordinal: 0 } as Fact, timeline, relations];
+      expect(await extractEffect(s.d).execute(s.ref, rerunCtx(s))).toEqual({
+        outcome: "done",
+        count: 1,
+        aggregates: 2,
+        model: "claude-test",
+      });
+      expect(requests).toEqual([]);
+      expect(s.store.writes).toEqual([]);
+    });
+
+    it("a document that has only a timeline is re-planned, not extracted again, and reports it", async () => {
+      const { llm, requests } = scripted(() => answer());
+      const s = setup({ llm });
+      s.store.held = [aggregateFacts(C0).timeline];
+      expect(await extractEffect(s.d).execute(s.ref, rerunCtx(s))).toEqual({
+        outcome: "done",
+        count: 0,
+        aggregates: 1,
+        model: "claude-test",
+      });
+      expect(requests).toEqual([]);
     });
   });
 });

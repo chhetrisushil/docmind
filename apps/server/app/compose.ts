@@ -259,6 +259,8 @@ export function buildServer(options: ComposeOptions) {
       afterDone,
       ...(options.ingest.sleep && { sleep: options.ingest.sleep }),
       ...(visualsLlm && { llm: visualsLlm }),
+      // The document extraction's own provider: a longer answer cap and timeout than the planner's and chat's.
+      ...(options.ingest.llm.visualsExtract && { extractLlm: options.ingest.llm.visualsExtract }),
       ...(planner && { planner }),
     },
   };
