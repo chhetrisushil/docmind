@@ -7,6 +7,7 @@ import { FieldKeyStoreError } from "../../../crypto/fields";
 import { bounded } from "../../../llm/bounded";
 import type { TagService } from "../../../tags/service";
 import type { ExistingTag } from "../../../tags/suggestions";
+import { DocumentGoneError, IngestAbortedError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { EntityMention } from "../pgEntities";
 import { LLM_RETRY } from "../stepEffect";
@@ -286,6 +287,9 @@ describe("summarize step: tag suggestions", () => {
     const s2 = deps({ llm: tagsLlm(reduceWith(["a"]), seen), tags: noRead.port });
     expect(await run(s2)).toMatchObject({ outcome: "done" });
     expect(JSON.stringify(seen)).not.toContain("already uses");
+    // Without the owner's tags nothing can be mapped onto them: no unmapped duplicates are stored, the old row is left alone.
+    expect(noRead.puts).toEqual([]);
+    expect(await s2.results.hasSummary(s2.ref)).toBe(true);
   });
 
   it("logs only the class of a swallowed failure, never a name", async () => {
@@ -300,17 +304,65 @@ describe("summarize step: tag suggestions", () => {
     log.mockRestore();
   });
 
-  it("a key-store outage fails the step, as elsewhere", async () => {
-    const outage = fakeTags([FIN], {
+  const outageOnRead = () =>
+    fakeTags([FIN], {
       context: async () => {
         throw new FieldKeyStoreError();
       },
     });
-    const s = deps({ llm: tagsLlm(reduceWith([])), tags: outage.port });
-    // stepEffect rewrites every failure to a fixed message (the event log): the step fails, no summary is written.
-    await expect(run(s)).rejects.toThrow("ingest step failed: summarize");
+  const outageOnPut = () =>
+    fakeTags([FIN], {
+      put: () => {
+        throw new FieldKeyStoreError();
+      },
+    });
+  it.each([
+    ["reading the tags", outageOnRead],
+    ["storing the suggestions", outageOnPut],
+  ])("a key-store outage while %s is retried, then fails the step", async (_n, make) => {
+    const sleep = vi.fn(async () => {});
+    const s = deps({ llm: tagsLlm(reduceWith(["a"])), tags: make().port, sleep });
+    await expect(run(s)).rejects.toThrow(/^ingest step failed: summarize$/);
+    expect(sleep).toHaveBeenCalledTimes(LLM_RETRY.maxAttempts - 1);
     expect(await s.results.hasSummary(s.ref)).toBe(false);
   });
+
+  const failing = (make: () => Error) => ({
+    read: fakeTags([FIN], {
+      context: async () => {
+        throw make();
+      },
+    }),
+    write: fakeTags([FIN], {
+      put: () => {
+        throw make();
+      },
+    }),
+  });
+
+  it.each(["read", "write"] as const)(
+    "a gone document while the tags %s ends the step quietly",
+    async (where) => {
+      const sleep = vi.fn(async () => {});
+      const t = failing(() => new DocumentGoneError())[where];
+      const s = deps({ llm: tagsLlm(reduceWith(["a"])), tags: t.port, sleep });
+      expect(await run(s)).toMatchObject({ outcome: "document_gone" });
+      expect(sleep).not.toHaveBeenCalled();
+      expect(await s.results.hasSummary(s.ref)).toBe(false);
+    },
+  );
+
+  it.each(["read", "write"] as const)(
+    "an abort while the tags %s is not swallowed",
+    async (where) => {
+      const sleep = vi.fn(async () => {});
+      const t = failing(() => new IngestAbortedError())[where];
+      const s = deps({ llm: tagsLlm(reduceWith(["a"])), tags: t.port, sleep });
+      await expect(run(s)).rejects.toThrow();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(await s.results.hasSummary(s.ref)).toBe(false);
+    },
+  );
 
   it("without the tag port the prompt and the result are as before", async () => {
     const seen: LlmRequest[] = [];

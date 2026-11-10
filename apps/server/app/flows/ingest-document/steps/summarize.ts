@@ -73,14 +73,15 @@ export function summarizeEffect(deps: SummarizeDeps): Effect<IngestStartInput, S
       const parsed = await deps.parsed.take(ref);
       if (!parsed) throw new Error("no parsed document to summarize");
       // The owner's tag names, read and opened here (never in the step input, so never in the event log). A failure to read
-      // them only costs the preference for existing tags.
-      const existing =
-        (await tolerant(async () => (await deps.tags?.suggestionContext(ref)) ?? [])) ?? [];
+      // them degrades to "no suggestions" (undefined: nothing can be mapped onto the owner's tags, so nothing is stored).
+      const existing = deps.tags
+        ? await tolerant(async () => (await deps.tags?.suggestionContext(ref)) ?? undefined)
+        : [];
       let run: SummaryRun | null;
       try {
         run = await summarizeDocument(provider, parsed, {
           maxChars: deps.summaryMaxChars,
-          existingTags: existing.map((t) => t.name),
+          existingTags: (existing ?? []).map((t) => t.name),
           ...(signal && { signal }),
         });
       } catch (err) {
@@ -99,8 +100,8 @@ export function summarizeEffect(deps: SummarizeDeps): Effect<IngestStartInput, S
           : g.entities.map((e) => ({ chunkIds, name: e.name, kind: e.kind }));
       });
       await deps.entities.replaceForDocument(ref, mentions, signal);
-      // Before the summary, so the summary stays last (its presence means "done"). A run replaces the row; none means none.
-      if (deps.tags) {
+      // Before the summary, so the summary stays last (its presence means "done"). A run replaces the row; none means none. Not stored when the tags could not be read (no mapping, so no duplicates).
+      if (deps.tags && existing) {
         const names = normaliseSuggestions(run.suggestedTags, existing);
         const put = deps.tags;
         await tolerant(() => put.putSuggestions(ref, names));
