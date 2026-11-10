@@ -363,7 +363,7 @@ export async function startDocumentServer(
     withoutGeminiKey?: boolean;
     /** Test seam: the suggest-tags starter and limiter the refresh route uses (default: the role is off). */
     suggest?: {
-      starter: Pick<SuggestTagsStarter, "start">;
+      starter: Pick<SuggestTagsStarter, "start"> & Partial<Pick<SuggestTagsStarter, "inFlight">>;
       limiter: { tryAcquire(userId: string): boolean };
     };
   } = {},

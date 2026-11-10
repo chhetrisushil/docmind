@@ -4,6 +4,7 @@ import {
   type ExecutionHandle,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
+import { UUID_PATTERN } from "../../chats/ids";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS, rerunTracker } from "../rerunTracker";
 import { SuggestTagsInput, suggestTagsFlow } from "./flow";
@@ -20,6 +21,8 @@ export interface SuggestTagsStarter {
    * malformed ref (synchronously) or a Loom failure other than an id already taken.
    */
   start(ref: SuggestTagsInput): Promise<SuggestTagsStart>;
+  /** Whether a run is in flight for the document in this process (the route checks it before it spends a rate-limit token). */
+  inFlight(ref: { userId: string; documentId: string }): boolean;
   /** Erasure: resolves when the document's pending starts have settled, so a cancel never runs before a start lands. */
   settle(identity: Pick<Identity, "userId">, documentId: string): Promise<void>;
   /**
@@ -39,6 +42,13 @@ export function suggestTagsExecutionId(
 ): UserExecutionId {
   return executionIdFor(userId, `suggest-tags-${documentId.toLowerCase()}-r${run}`);
 }
+
+const SUGGEST_TAGS_EXECUTION = new RegExp(
+  `^u_${UUID_PATTERN}:suggest-tags-${UUID_PATTERN}-r[1-9][0-9]{0,2}$`,
+);
+
+/** A suggest-tags execution (boot recovery re-drives it: the step replaces the suggestions row, so a re-run is safe). */
+export const isSuggestTagsExecution = (id: string): boolean => SUGGEST_TAGS_EXECUTION.test(id);
 
 const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.toLowerCase()}`;
 
@@ -87,6 +97,7 @@ export function loomSuggestTagsStarter(
       });
       return work;
     },
+    inFlight: (ref) => tracker.running(keyOf(ref.userId, ref.documentId)),
     async settle(identity, documentId) {
       while (true) {
         const runs = byDocument.get(keyOf(identity.userId, documentId));
@@ -96,8 +107,10 @@ export function loomSuggestTagsStarter(
     },
     async cancel(identity, documentId, reason) {
       const principal = { tenant: identity.tenantId, actor: identity.userId };
-      const top = Math.min(tracker.last(keyOf(identity.userId, documentId)), MAX_RERUNS);
-      for (let n = 1; n <= top; n++) {
+      // Run numbers are taken in order, so the durable runs of a document are r1..rK with no gap: walk up from r1 until
+      // Loom has no such execution (a restart forgets this process's counter, so it cannot be trusted alone).
+      const seen = Math.min(tracker.last(keyOf(identity.userId, documentId)), MAX_RERUNS);
+      for (let n = 1; n <= MAX_RERUNS; n++) {
         const executionId = suggestTagsExecutionId(identity.userId, documentId, n);
         try {
           await runtime.cancel(executionId, reason, { principal });
@@ -107,6 +120,7 @@ export function loomSuggestTagsStarter(
             !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
           )
             throw err;
+          if (n > seen) break;
         }
       }
     },

@@ -112,6 +112,8 @@ async function upsertTag(
  * all key-store calls (seal, open, hash) happen outside the transactions, never under a row lock. Every statement names the
  * owner and the tenant, in addition to row-level security. Nothing here logs or puts a name in an error.
  */
+const CONTENDED = "tag suggestion update contended";
+
 export class TagService {
   constructor(
     private readonly pool: Pool,
@@ -484,12 +486,17 @@ export class TagService {
       });
       if (done) return;
     }
-    throw new Error("tag suggestion update contended");
+    throw new Error(CONTENDED);
   }
 
   async accept(o: TagOwner, documentId: string, raw: string): Promise<DocumentTagsView | null> {
     if (!(await this.link(o, documentId, raw))) return null;
-    await this.removeSuggestion(o, documentId, raw);
+    try {
+      await this.removeSuggestion(o, documentId, raw);
+    } catch (err) {
+      // The tag is linked and `detail` hides a linked name, so a removal that kept losing its race changes nothing visible.
+      if (!(err instanceof Error && err.message === CONTENDED)) throw err;
+    }
     return this.detail(o, documentId);
   }
 

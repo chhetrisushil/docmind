@@ -135,6 +135,8 @@ describe("recoveryOwns", () => {
     const c = "22222222-2222-4222-8222-222222222222";
     expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6`)).toBe(true);
     expect(recoveryOwns(`u_${u}:visualize-turn-${c}-6-r2`)).toBe(true);
+    expect(recoveryOwns(`u_${u}:suggest-tags-${c}-r1`)).toBe(true);
+    expect(recoveryOwns(`u_${u}:suggest-tags-${c}`)).toBe(false);
     expect(recoveryOwns(`u_${u}:something-else`)).toBe(false);
   });
 });

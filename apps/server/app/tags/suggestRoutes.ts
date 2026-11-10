@@ -18,7 +18,7 @@ export interface SuggestRoutesDeps {
   pool: Pool;
   authenticator: Authenticator;
   tags: TagService;
-  starter: Pick<SuggestTagsStarter, "start">;
+  starter: Pick<SuggestTagsStarter, "start"> & Partial<Pick<SuggestTagsStarter, "inFlight">>;
   /** At most 10 refreshes per user per minute (a model call each). */
   limiter: { tryAcquire(userId: string): boolean };
 }
@@ -56,6 +56,9 @@ export function suggestRoutes(deps: SuggestRoutesDeps): Record<string, Handler> 
           "no_summary",
           "this document has no summary to suggest tags from",
         );
+      // A press while a run is in flight spends no model call, so it spends no rate-limit token either.
+      if (deps.starter.inFlight?.({ userId: identity.userId, documentId: row.id }))
+        return sendError(res, 409, "suggest_running", "tags for this document are being suggested");
       if (!deps.limiter.tryAcquire(identity.userId)) {
         res.setHeader("retry-after", "60");
         return sendError(res, 429, "too_many_requests", "too many requests; try again in a minute");
