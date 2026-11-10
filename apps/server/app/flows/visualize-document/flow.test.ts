@@ -8,6 +8,7 @@ import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
+import { FieldKeyStoreError } from "../../crypto/fields";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { isIngestExecution, isVisualizeExecution } from "../../status/model";
@@ -40,7 +41,7 @@ import type { VisualizeRef } from "./pgFacts";
 import { visualsPlanner } from "./planner";
 import { visualizeExecutionId } from "./start";
 import type { StructureReader } from "./structure";
-import { childrenOf, noStructure } from "./testing";
+import { aggregateFacts, childrenOf, noStructure } from "./testing";
 
 const LABEL = "Zebra-Secret-Revenue";
 const SUMMARY = "Zebra-Secret-Summary-Text";
@@ -112,6 +113,8 @@ function stack(
     legacyRuns?: Set<string>;
     /** Start the execution on the 1.0.0 flow, as one that was in flight at deploy was. */
     legacy?: boolean;
+    /** The extraction write throws this while it returns an error (a key-store outage). */
+    replaceError?: () => Error | undefined;
   } = {},
 ) {
   const inner = new InMemoryAsyncEventStore();
@@ -137,6 +140,8 @@ function stack(
     },
     facts: {
       replace: async (_r, facts) => {
+        const err = o.replaceError?.();
+        if (err) throw err;
         stamped = true;
         held = [...facts];
         return facts.length;
@@ -650,5 +655,99 @@ describe("a visualize execution is not an ingest one", () => {
       payload: { error: "x" },
     } as EventEnvelope;
     expect(foldIngestStatus([failed])).toEqual({});
+  });
+});
+
+describe("visualize-document flow: timeline and relations", () => {
+  const EVENTS = [
+    { when: "March 2024", date: "2024-03", label: "Zebra-Event-One", chunkIds: [CHUNK] },
+    { when: "Q3 2025", date: "2025-Q3", label: "Zebra-Event-Two", chunkIds: [CHUNK] },
+    { when: "14 February 2026", date: "2026-02-14", label: "Zebra-Event-Three", chunkIds: [CHUNK] },
+  ];
+  const LINKS = [
+    { from: "Zebra-Party-A", rel: "Zebra-rel-one", to: "Zebra-Party-B", chunkIds: [CHUNK] },
+    { from: "Zebra-Party-B", rel: "Zebra-rel-two", to: "Zebra-Party-C", chunkIds: [CHUNK] },
+    { from: "Zebra-Party-A", rel: "Zebra-rel-three", to: "Zebra-Party-C", chunkIds: [CHUNK] },
+  ];
+  const FACT_LIST = JSON.parse(FACTS).facts;
+  const ANSWER = JSON.stringify({
+    facts: FACT_LIST,
+    timeline: { events: EVENTS },
+    relations: { links: LINKS },
+  });
+  const AGGREGATES_ONLY = JSON.stringify({
+    facts: [],
+    timeline: { events: EVENTS },
+    relations: { links: LINKS },
+  });
+
+  it("stores both beside the facts from the one extraction call, plans over them, and shows the planner no text", async () => {
+    const s = stack([ANSWER, PLAN]);
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => [f.ordinal, f.kind])).toEqual([
+      [0, "figure"],
+      [18, "timeline"],
+      [19, "relations"],
+    ]);
+    expect(s.model?.requests).toHaveLength(2); // one extraction window and one planner call: no second call for the aggregates
+    const planner = JSON.stringify(s.model?.requests[1]);
+    expect(planner).toContain("fact-18");
+    expect(planner).toContain("fact-19");
+    for (const secret of ["Zebra-Event", "Zebra-Party", "Zebra-rel", "March 2024", "2024-03"])
+      expect(planner, secret).not.toContain(secret);
+  });
+
+  it("a bad timeline and bad relations still store and plan the good facts", async () => {
+    const s = stack([
+      JSON.stringify({ facts: FACT_LIST, timeline: "nope", relations: { links: [1, null] } }),
+      PLAN,
+    ]);
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([0]);
+  });
+
+  it("ends empty, not failed, for a document whose only facts are aggregates when the planner emits nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = stack([AGGREGATES_ONLY, EMPTY_PLAN]);
+    expect(await s.run()).toEqual({ outcome: "empty" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([18, 19]); // stored, only the plan is empty
+    expect(JSON.stringify(s.model?.requests[1])).toContain("fact-18"); // and the planner was offered them
+  });
+
+  it("retries a key-store outage on the extraction write, then stores everything", async () => {
+    let failures = 1;
+    const s = stack([ANSWER, ANSWER, PLAN], {
+      replaceError: () => (failures-- > 0 ? new FieldKeyStoreError() : undefined),
+    });
+    expect(await s.run()).toEqual({ outcome: "done" });
+    expect(s.held().map((f) => f.ordinal)).toEqual([0, 18, 19]);
+    expect(s.model?.requests).toHaveLength(3); // the window twice (the step retried), the planner once
+  });
+
+  it("a re-run that skips extraction keeps the aggregates, reports them, and offers them to the planner", async () => {
+    const s = stack([PLAN]);
+    const { timeline, relations } = aggregateFacts(CHUNK);
+    s.hold([
+      { kind: "figure", label: LABEL, value: 4242, unit: "USD", chunkIds: [CHUNK], ordinal: 0 },
+      timeline,
+      relations,
+    ]);
+    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    expect(await s.run(rerun)).toEqual({ outcome: "done" });
+    expect(s.model?.requests).toHaveLength(1); // the planner only
+    expect(s.held().map((f) => f.ordinal)).toEqual([0, 18, 19]); // nothing replaced
+    expect(JSON.stringify(s.model?.requests[0])).toContain("fact-19");
+  });
+
+  it("a document that has only aggregates still loads them on a re-run (they count as stored facts)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const s = stack([EMPTY_PLAN]);
+    s.hold([aggregateFacts(CHUNK).timeline]);
+    const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
+    expect(await s.run(rerun)).toEqual({ outcome: "empty" });
+    // No extraction: the planner retries an empty plan, so count requests by what they ask, not how many there are.
+    const requests = (s.model?.requests ?? []).map((r) => JSON.stringify(r));
+    expect(requests.some((r) => r.includes("You extract facts"))).toBe(false);
+    expect(requests[0]).toContain("fact-18");
   });
 });

@@ -16,10 +16,20 @@ import {
   ingestStepOptions,
   stepEffectOf,
 } from "../ingest-document/stepEffect";
-import { type DraftFact, ExtractAnswer, admit } from "./facts";
+import {
+  type AggregateFact,
+  DocumentAnswer,
+  type DraftFact,
+  ExtractAnswer,
+  RELATIONS_ORDINAL,
+  TIMELINE_ORDINAL,
+  admit,
+} from "./facts";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
-import { EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
+import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
+import { buildRelations, rawLinksOf } from "./relations";
 import type { VisualRuns } from "./runs";
+import { buildTimeline, rawEventsOf } from "./timeline";
 
 /** The most chunk text sent to the model in one request; a window never splits a chunk. */
 export const EXTRACT_WINDOW_CHARS = 24_000;
@@ -32,6 +42,8 @@ export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
  */
 export const ExtractResult = StepResult.extend({
   code: z.enum([...FAILURE_CODES, "visuals-model-unavailable"]).optional(),
+  /** The timeline and relations stored (1 or 2; absent when none). Counted apart from `count`, which is the extracted facts. */
+  aggregates: z.number().int().min(1).max(2).optional(),
 });
 export type ExtractResult = z.infer<typeof ExtractResult>;
 
@@ -41,11 +53,13 @@ export type ModelUnavailableEnd = { outcome: "failed"; code: "visuals-model-unav
 export interface ExtractDeps extends StepSeams {
   guard: StepGuard;
   chunks: Pick<ChunkStore, "sectionsOf" | "read">;
-  facts: Pick<VisualFactStore, "replace" | "list">;
+  facts: Pick<VisualFactStore, "replace" | "list" | "aggregateCount">;
   /** The most chunk text read, in chunk order (the summary cap, DOCMIND_SUMMARY_MAX_CHARS): it bounds the model calls. */
   summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */
   llm?: LlmProvider;
+  /** The same role sized for this step's longer answer and longer timeout (`visualsExtract`); preferred over `llm` when present. */
+  extractLlm?: LlmProvider;
   /** The run reader: a re-run of a document whose previous run ended `done` re-plans over its stored facts even when there are none. */
   runs?: Pick<VisualRuns, "last">;
   /**
@@ -98,17 +112,19 @@ export async function readChunks(
   return out;
 }
 
-/** The facts the `visuals` model finds in `chunks`: windowed, fenced as untrusted data. Not grounded, not stored. */
-export async function askForFacts(
+/** One model call per window of `chunks`, fenced as untrusted data, each answer's text read by `read`. */
+async function askWindows<T>(
   llm: LlmProvider,
   chunks: Chunk[],
+  system: string,
+  read: (content: string) => T,
   signal?: AbortSignal,
-): Promise<DraftFact[]> {
-  const drafts: DraftFact[] = [];
+): Promise<T[]> {
+  const out: T[] = [];
   for (const window of windows(chunks, EXTRACT_WINDOW_CHARS)) {
     const text = window.map((c) => `[[${c.id}]]\n${c.text}`).join("\n\n");
     const request = guardRequest({
-      system: `${EXTRACT_SYSTEM}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
+      system: `${system}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
       messages: [
         {
           role: "user",
@@ -122,21 +138,87 @@ export async function askForFacts(
     });
     const res = await llm.complete({ ...request, ...(signal && { signal }) });
     if (res.stopReason === "max_tokens") throw new LlmOutputError(); // truncated JSON
-    drafts.push(...jsonAnswer(res.content, ExtractAnswer).facts);
+    out.push(read(res.content));
   }
-  return drafts;
+  return out;
+}
+
+/**
+ * The facts the `visuals` model finds in `chunks`: windowed, fenced as untrusted data. Not grounded, not stored. This is
+ * the CHAT turn's call (and its request is unchanged): it asks for facts only.
+ */
+export async function askForFacts(
+  llm: LlmProvider,
+  chunks: Chunk[],
+  signal?: AbortSignal,
+): Promise<DraftFact[]> {
+  const answers = await askWindows(
+    llm,
+    chunks,
+    EXTRACT_SYSTEM,
+    (content) => jsonAnswer(content, ExtractAnswer).facts,
+    signal,
+  );
+  return answers.flat();
+}
+
+/** What a document extraction reads from the model: the facts (strict) and the raw events and links of every window, not yet validated. */
+export interface Extraction {
+  drafts: DraftFact[];
+  events: unknown[];
+  links: unknown[];
+}
+
+/**
+ * The DOCUMENT extraction's call: the same windows, with the prompt that also asks for a timeline and relations. The raw
+ * events and links of every window are concatenated in window order and normalised once (`aggregatesOf`), so a duplicate
+ * across windows is removed by the same dedupe. A fact that is malformed still fails its window (as `askForFacts`); a bad
+ * aggregate never does.
+ */
+export async function askForExtraction(
+  llm: LlmProvider,
+  chunks: Chunk[],
+  signal?: AbortSignal,
+): Promise<Extraction> {
+  const answers = await askWindows(
+    llm,
+    chunks,
+    EXTRACT_DOCUMENT_SYSTEM,
+    (content) => jsonAnswer(content, DocumentAnswer),
+    signal,
+  );
+  return {
+    drafts: answers.flatMap((a) => a.facts),
+    events: answers.flatMap((a) => rawEventsOf(a.timeline)),
+    links: answers.flatMap((a) => rawLinksOf(a.relations)),
+  };
+}
+
+/**
+ * The timeline (ordinal 18) and the relations (ordinal 19) the answers carried, validated against this document's passages
+ * (`ids`, in passage order). Either may be absent; neither costs anything else.
+ */
+function aggregatesOf(extraction: Extraction, ids: readonly string[]): AggregateFact[] {
+  const position = new Map(ids.map((id, i) => [id.toLowerCase(), i] as const));
+  const timeline = buildTimeline(extraction.events, position);
+  const relations = buildRelations(extraction.links, position);
+  return [
+    ...(timeline ? [{ ...timeline, ordinal: TIMELINE_ORDINAL }] : []),
+    ...(relations ? [{ ...relations, ordinal: RELATIONS_ORDINAL }] : []),
+  ];
 }
 
 /**
  * Visualize-extract step: the document's chunks go to the `visuals` model in windows, as fenced
- * untrusted data; the answer is parsed, grounded against the chunks, and the survivors stored sealed.
+ * untrusted data; the answer is parsed, the facts grounded against the chunks, the timeline and relations validated, and the
+ * survivors stored sealed (one write that owns ordinals 0..15 and 18..19).
  */
 export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractResult> {
   return stepEffectOf<ExtractResult, VisualizeRef, ModelUnavailableEnd>(
     "visualize-extract",
     deps.guard,
     async (ref, signal, _progress, executionId) => {
-      const llm = deps.llm;
+      const llm = deps.extractLlm ?? deps.llm;
       if (!llm) return { model: "none" };
       const generation =
         executionId === undefined
@@ -151,7 +233,10 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
         // The starter's note is read once and removed here (stored facts or not), so the set never fills up over a large boot.
         const noted = deps.afterDone?.delete(executionId) === true;
         const stored = await deps.facts.list(ref);
-        if (stored.length > 0) return { count: stored.length, model };
+        // A timeline or relations fact is a stored fact too: the model already answered for this document.
+        const held = await deps.facts.aggregateCount(ref);
+        if (stored.length > 0 || held > 0)
+          return { count: stored.length, ...(held > 0 && { aggregates: held }), model };
         // The new run is recorded `running` right after it starts, which replaces the previous state: the starter's note
         // is the sure source; the reader only helps if it runs before this run's own `running` record lands.
         const last = noted ? null : await deps.runs?.last(ref, ref.documentId, id.generation);
@@ -165,20 +250,25 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
         READ_BATCH,
       );
       const texts = new Map(chunks.map((c) => [c.id, c.text]));
-      let drafts: DraftFact[];
+      let extraction: Extraction;
       try {
-        drafts = await askForFacts(llm, chunks, signal);
+        extraction = await askForExtraction(llm, chunks, signal);
       } catch (err) {
         if (!(err instanceof LlmRefusalError)) throw err;
-        // A refusal is no facts, not a failure; the stored facts must reflect this run, so clear them.
+        // A refusal is no facts, not a failure; the stored facts (and aggregates) must reflect this run, so clear them.
         await deps.facts.replace(ref, [], signal, generation);
         return { count: 0, model };
       }
-      const { facts, dropped } = admit(drafts, texts, new Set(ids));
+      const { facts, dropped } = admit(extraction.drafts, texts, new Set(ids));
       // The count only, never a fact's content (spec 5: ungrounded facts are counted).
       console.info("visualize-extract dropped ungrounded facts", dropped);
-      const count = await deps.facts.replace(ref, facts, signal, generation);
-      return { count, model };
+      const aggregates = aggregatesOf(extraction, ids);
+      await deps.facts.replace(ref, [...facts, ...aggregates], signal, generation);
+      return {
+        count: facts.length,
+        ...(aggregates.length > 0 && { aggregates: aggregates.length }),
+        model,
+      };
     },
     {
       schema: ExtractResult,
