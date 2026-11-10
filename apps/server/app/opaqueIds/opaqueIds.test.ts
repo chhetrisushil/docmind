@@ -756,3 +756,20 @@ describe("review fixes", () => {
     expect(legacyIds.suggestTags(U, D.toUpperCase(), 1)).toBe(legacyIds.suggestTags(U, D, 1));
   });
 });
+
+describe("nested retires", () => {
+  it("overlapping retire and unretire pairs of one handle nest: the handle is usable only after the last unretire", async () => {
+    const { ids, userIds: u } = await userIds();
+    ids.retireHandle(u.handle);
+    ids.retireHandle(u.handle);
+    expect(ids.cached(U)).toBeUndefined();
+    ids.unretireHandle(u.handle);
+    expect(ids.cached(U)).toBeUndefined();
+    expect(await ids.load({ tenantId: T, userId: U })).toBe(false);
+    ids.unretireHandle(u.handle);
+    expect(ids.cached(U)).toBeDefined();
+    ids.unretireHandle(u.handle); // an extra unretire does not go negative
+    ids.retireHandle(u.handle);
+    expect(ids.cached(U)).toBeUndefined();
+  });
+});

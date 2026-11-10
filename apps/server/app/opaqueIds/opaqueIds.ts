@@ -91,7 +91,11 @@ export class OpaqueIds {
    * `eraseSubject`, before the cache is told: while a handle is here no read or mint hands out its builders, so a concurrent cache hit
    * cannot build an `h_` id against a key that may already be gone. Entries live only for the duration of one shred call.
    */
-  private readonly retiring = new Set<string>();
+  private readonly retiring = new Map<string, number>();
+
+  private isRetiring(handle: string): boolean {
+    return (this.retiring.get(handle) ?? 0) > 0;
+  }
 
   constructor(
     private readonly keys: Pick<KeyStore, "get" | "getOrCreate" | "wasDestroyed">,
@@ -112,7 +116,7 @@ export class OpaqueIds {
   async ensureUser(who: { tenantId: string; userId: string }): Promise<UserIds> {
     const hit = this.byUser.get(who.userId);
     if (hit) {
-      if (this.retiring.has(hit.ids.handle)) throw new FieldKeyUnavailableError();
+      if (this.isRetiring(hit.ids.handle)) throw new FieldKeyUnavailableError();
       return hit.ids;
     }
     let pending = this.inflight.get(who.userId);
@@ -175,7 +179,7 @@ export class OpaqueIds {
     if ((await guarded(() => this.store.claim(who, handle))) !== handle)
       throw new HandleMismatchError();
     if (await this.handleRetired(handle)) throw new FieldKeyUnavailableError();
-    if (ticket.cancelled || this.retiring.has(handle)) throw new FieldKeyUnavailableError();
+    if (ticket.cancelled || this.isRetiring(handle)) throw new FieldKeyUnavailableError();
     return this.put(who.userId, key, handle);
   }
 
@@ -185,7 +189,7 @@ export class OpaqueIds {
    */
   async ensureHandle(handle: string): Promise<UserIds | null> {
     const hit = this.byHandle.get(handle);
-    if (hit) return this.retiring.has(handle) ? null : hit.ids;
+    if (hit) return this.isRetiring(handle) ? null : hit.ids;
     if (!HANDLE_RE.test(handle)) return null;
     const missUntil = this.misses.get(handle);
     if (missUntil !== undefined && missUntil > Date.now()) return null;
@@ -219,7 +223,7 @@ export class OpaqueIds {
 
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
     const hit = this.byUser.get(userId);
-    if (hit) return this.retiring.has(handle) ? null : hit;
+    if (hit) return this.isRetiring(handle) ? null : hit;
     const ticket = this.ticket([`u:${userId}`, `h:${handle}`]);
     try {
       let dek: Buffer | null;
@@ -235,7 +239,7 @@ export class OpaqueIds {
         this.recordMiss(handle); // only a cache of the durable answer
         return null;
       }
-      if (ticket.cancelled || this.retiring.has(handle)) return null; // forgotten or being shredded while the key was being fetched
+      if (ticket.cancelled || this.isRetiring(handle)) return null; // forgotten or being shredded while the key was being fetched
       return this.put(userId, key, handle);
     } finally {
       ticket.done();
@@ -292,7 +296,7 @@ export class OpaqueIds {
    */
   async load(who: { tenantId: string; userId: string }): Promise<boolean> {
     const cached = this.byUser.get(who.userId);
-    if (cached) return !this.retiring.has(cached.ids.handle);
+    if (cached) return !this.isRetiring(cached.ids.handle);
     const handle = await guarded(() => this.store.read(who));
     if (handle === null) return false;
     return (await this.ensureHandle(handle)) !== null;
@@ -323,13 +327,15 @@ export class OpaqueIds {
    * parks (the key is alive, the retried stop must name the `h_` runs) resumes from the cache once it is un-retired.
    */
   retireHandle(handle: string): void {
-    this.retiring.add(handle);
+    this.retiring.set(handle, (this.retiring.get(handle) ?? 0) + 1); // nests: overlapping shreds of one handle
     this.cancel(`h:${handle}`);
   }
 
   /** The shred call returned (or threw): from here the key store's durable tombstone answers for a destroyed key. */
   unretireHandle(handle: string): void {
-    this.retiring.delete(handle);
+    const n = (this.retiring.get(handle) ?? 0) - 1;
+    if (n > 0) this.retiring.set(handle, n);
+    else this.retiring.delete(handle);
   }
 
   /** Drops a user from the cache (erasure, after the key is destroyed). */
@@ -344,7 +350,7 @@ export class OpaqueIds {
   /** The user's builders if cached, else undefined. For code that cannot await; a miss is a bug in the caller's entry point. */
   cached(userId: string): UserIds | undefined {
     const entry = this.byUser.get(userId);
-    return entry && !this.retiring.has(entry.ids.handle) ? entry.ids : undefined;
+    return entry && !this.isRetiring(entry.ids.handle) ? entry.ids : undefined;
   }
 
   /** What an execution or conversation id names, or null (unknown shape, unknown handle, a token that fails authentication). */

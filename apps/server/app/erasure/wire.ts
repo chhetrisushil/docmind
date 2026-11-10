@@ -138,7 +138,16 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
           p.ids?.forgetSubject(subjectId);
         return result;
       } finally {
-        if (handle !== null) p.ids?.unretireHandle(handle);
+        if (handle !== null && p.ids) {
+          // Fail closed: the handle is un-retired only when the key store durably says the key is alive. A shred that committed and then
+          // threw (or a failed check) leaves a destroyed key behind a cache entry that no miss-path check would ever revisit.
+          const alive = await Promise.resolve(p.keys.wasDestroyed?.(subjectId)).then(
+            (d) => d === false,
+            () => false,
+          );
+          if (!alive) p.ids.forgetSubject(subjectId);
+          p.ids.unretireHandle(handle);
+        }
       }
     },
     keys: {
