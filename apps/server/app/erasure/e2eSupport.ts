@@ -468,6 +468,10 @@ const ownHandleValue = (handle?: string): Check =>
   handle === undefined ? { test: () => false } : new RegExp(`^h_${handle}${SUFFIX_RE}$`);
 const checkFor = (key: string, handle?: string, opaque = false): Check | undefined =>
   ID_KEYS.has(key) ? (opaque ? ownHandleValue(handle) : idValue(handle)) : PAYLOAD_STRINGS[key];
+const ANY_UUID = new RegExp(UUID_RE);
+/** Whether a string leaf is acceptable under `key`. On an opaque row a UUID-shaped value is refused under ANY key, even a listed one. */
+const leafOk = (key: string, value: string, handle: string | undefined, opaque: boolean): boolean =>
+  !(opaque && ANY_UUID.test(value)) && checkFor(key, handle, opaque)?.test(value) === true;
 /** Whether an execution id is one of the erased user's new-format (`h_<handle>`) executions. */
 export const isOpaqueExecution = (executionId: unknown, handle?: string): boolean =>
   handle !== undefined && String(executionId).startsWith(`h_${handle}`);
@@ -533,8 +537,7 @@ export function unlistedStrings(
   handle?: string,
   opaque = false,
 ): string[] {
-  if (typeof value === "string")
-    return checkFor(key, handle, opaque)?.test(value) === true ? [] : [key];
+  if (typeof value === "string") return leafOk(key, value, handle, opaque) ? [] : [key];
   if (value === null || typeof value !== "object" || sealed(value)) return [];
   return Object.entries(value).flatMap(([k, v]) =>
     unlistedStrings(v, Array.isArray(value) ? key : k, handle, opaque),
@@ -552,7 +555,7 @@ export function payloadIsIdsOnly(
   opaque = false,
 ): boolean {
   if (value === null || typeof value === "number" || typeof value === "boolean") return true;
-  if (typeof value === "string") return checkFor(key, handle, opaque)?.test(value) === true;
+  if (typeof value === "string") return leafOk(key, value, handle, opaque);
   if (Array.isArray(value)) return value.every((v) => payloadIsIdsOnly(v, key, handle, opaque));
   if (typeof value === "object") {
     if (sealed(value)) return true;
@@ -678,6 +681,8 @@ const ALLOWED: Allowed[] = [
       typeof row.execution_id === "string" &&
       row.execution_id.startsWith(`__loom_ui_lineage__:turnvisuals-${who.userId}-`) &&
       sealed((row.payload as { by?: unknown } | null)?.by) &&
+      // `opaque`: no plaintext id of any kind may sit in the payload (not a document or chat UUID), only sealed values and tokens
+      payloadIsIdsOnly(row.payload, "", undefined, true) &&
       noContent(row, who),
   })),
   {
@@ -1026,10 +1031,13 @@ export async function assertErased(
     expect(await keys.wasDestroyed(subject)).toBe(true);
     expect(await keys.get(subject)).toBeNull();
     const handleKey = await db.owner.query(
-      "SELECT wrapped_dek IS NULL AS no_key, destroyed_at IS NOT NULL AS gone FROM data_keys WHERE subject_id = $1",
+      "SELECT wrapped_dek IS NULL AS no_key, destroyed_at IS NOT NULL AS gone, created_at = 'epoch'::timestamptz AS fixed_created, destroyed_at = 'epoch'::timestamptz AS fixed_destroyed FROM data_keys WHERE subject_id = $1",
       [subject],
     );
-    expect(handleKey.rows).toEqual([{ no_key: true, gone: true }]);
+    // A fixed instant, so the tombstone cannot be paired with the user's by time (migration 0038, `key_destroy`).
+    expect(handleKey.rows).toEqual([
+      { no_key: true, gone: true, fixed_created: true, fixed_destroyed: true },
+    ]);
     expect(
       (
         await db.owner.query("SELECT count(*)::int AS n FROM users WHERE id_handle = $1", [

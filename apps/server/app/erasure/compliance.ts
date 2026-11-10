@@ -67,14 +67,14 @@ export function complianceConfig({ keys, raw }: ErasureWiring) {
   };
 }
 
-const LINEAGE_ID = LINEAGE_ID_PATTERN;
-const HANDLE = HANDLE_PATTERN;
-const UUID = UUID_ANY_PATTERN;
 /** A user or execution id: any UUID, a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`) or an `h_…` id (`h_<handle>` and its `:` and `.c-` forms). */
-const HAS_ID_CASE_INSENSITIVE = new RegExp(`${UUID.source}|${USER_ID_TOKEN_SOURCE}`, "i");
+const HAS_ID_CASE_INSENSITIVE = new RegExp(
+  `${UUID_ANY_PATTERN.source}|${USER_ID_TOKEN_SOURCE}`,
+  "i",
+);
 /** Handles and lineage ids are lower-case base32 only: an upper-case token of the same length is not one. */
 const HAS_ID = (text: string): boolean =>
-  HAS_ID_CASE_INSENSITIVE.test(text) || LINEAGE_ID.test(text) || HANDLE.test(text);
+  HAS_ID_CASE_INSENSITIVE.test(text) || LINEAGE_ID_PATTERN.test(text) || HANDLE_PATTERN.test(text);
 const ID = "<id>";
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
@@ -87,9 +87,9 @@ export function redactIds(message: string): string {
   return message
     .replace(/(\bexecution\s+)"[^"]*"/gi, `$1"${ID}"`)
     .replace(new RegExp(`${USER_ID_TOKEN_SOURCE}[^\\s"',;)\\]]*`, "g"), ID)
-    .replace(new RegExp(`${LINEAGE_ID.source}[^\\s"',;)\\]]*`, "g"), ID)
-    .replace(new RegExp(HANDLE.source, "g"), ID)
-    .replace(new RegExp(UUID.source, "gi"), ID)
+    .replace(new RegExp(`${LINEAGE_ID_PATTERN.source}[^\\s"',;)\\]]*`, "g"), ID)
+    .replace(new RegExp(HANDLE_PATTERN.source, "g"), ID)
+    .replace(new RegExp(UUID_ANY_PATTERN.source, "gi"), ID)
     .replace(EMAIL, "<email>");
 }
 

@@ -31,7 +31,7 @@ const COLUMN = { ingest: "ingest_execution_id", visualize: "visualize_execution_
 /**
  * Runs migration 0038's idempotent backfill (`public.docmind_repair_execution_ids`, SECURITY DEFINER: the sweep's cross-tenant reach) and
  * returns how many columns it set. A document whose current generation has an old-format status row and no stored id gets that id: this is
- * how a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is found by the sweeps. It never overwrites
+ * how a document an OLD pod ingested between the migration job and the stop of the old pod (old pods never write the columns) is found by the sweeps. It never overwrites
  * a stored id. `bootIngest` calls it before the sweeps start (Task 6).
  */
 export async function repairStoredExecutionIds(

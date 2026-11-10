@@ -12,7 +12,7 @@
 --    Backfill (`docmind_repair_execution_ids`): a document whose current generation already has an old-format status row keeps that
 --    exact old id, so a run that started before the deploy stays found; any other document stays NULL and the next start records its
 --    (new-format) id. It only ever fills a NULL column, so it can run again: the migration runs it once, unbounded, and the server runs it at
---    every boot (bounded to documents updated in the last 7 days: the `p_within` argument), so a document an OLD pod ingested during a rolling deploy (old pods never write the columns) is repaired before the
+--    every boot (bounded to documents updated in the last 7 days: the `p_within` argument), so a document an OLD pod ingested between the migration job and the stop of the old pod (old pods never write the columns) is repaired before the
 --    sweeps start. Rolling BACK after this migration is not supported (see docs/operations/cloud-deploy.md).
 -- 4. The five SECURITY DEFINER functions that built ids (0024's `docmind_stale_uploads_v2`, 0028's `docmind_ready_documents`,
 --    0030's `docmind_visual_retry_documents`, 0032's `docmind_visual_stale_format_documents`, 0034's
@@ -184,3 +184,22 @@ LANGUAGE sql STABLE STRICT SECURITY DEFINER SET search_path = pg_catalog, pg_tem
    ORDER BY d.id
    LIMIT LEAST(GREATEST(p_limit, 1), 500)
 $$;
+
+-- 5. `key_destroy` (0007) tombstones a subject with `now()`. The user's tombstone and the tombstone of its handle subject `h_<H>` would
+--    then carry the same `destroyed_at` (seconds apart, and `created_at` of a later-created handle key is close to the user's too),
+--    which pairs the handle with the user by time for every erased user. A tombstone of an `h_` subject is therefore written with
+--    a fixed instant (the epoch) for both `created_at` and `destroyed_at`; the user's own tombstone is unchanged. `key_was_destroyed`
+--    and the table's CHECK only need `destroyed_at IS NOT NULL`, so nothing else changes. Same signature, owner, search_path and
+--    grants as 0007 (CREATE OR REPLACE keeps the ACL).
+CREATE OR REPLACE FUNCTION public.key_destroy(p_subject text)
+  RETURNS void
+  LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+  AS $$ INSERT INTO public.data_keys (subject_id, created_at, destroyed_at)
+        VALUES (p_subject,
+                CASE WHEN p_subject LIKE 'h\_%' THEN 'epoch'::timestamptz ELSE pg_catalog.now() END,
+                CASE WHEN p_subject LIKE 'h\_%' THEN 'epoch'::timestamptz ELSE pg_catalog.now() END)
+        ON CONFLICT (subject_id) DO UPDATE
+          SET wrapped_dek = NULL, kek_id = NULL,
+              created_at = CASE WHEN p_subject LIKE 'h\_%' THEN 'epoch'::timestamptz ELSE public.data_keys.created_at END,
+              destroyed_at = CASE WHEN p_subject LIKE 'h\_%' THEN 'epoch'::timestamptz
+                                  ELSE COALESCE(public.data_keys.destroyed_at, pg_catalog.now()) END $$;

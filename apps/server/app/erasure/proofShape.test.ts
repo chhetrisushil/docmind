@@ -158,6 +158,33 @@ describe("the proof's allowlist of residue", () => {
     ).toEqual([]);
   });
 
+  it("on an h_<handle> row, a UUID-shaped value is refused under ANY key, not only the id keys", () => {
+    const handle = "abcdefghijklmnopqrstuvwxya";
+    const hWho: Who = { ...who, handle };
+    const hId = `h_${handle}:ingest-${"a".repeat(51)}q.2`;
+    const row = (payload: unknown) => hit("loom.events", "payload", { execution_id: hId, payload });
+    const doc = randomUUID();
+    expect(unlistedStrings({ messageId: doc }, "", handle, true)).toEqual(["messageId"]);
+    expect(unexpected([row({ messageId: doc })], hWho)).toEqual(["loom.events.payload"]);
+    expect(payloadIsIdsOnly({ messageId: doc }, "", handle, true)).toBe(false);
+    // the same value on a u_ row keeps the old rule, and a 32 to 64 hex message id is still fine on an h_ row
+    expect(unlistedStrings({ messageId: doc }, "", handle, false)).toEqual([]);
+    expect(unexpected([row({ messageId: "a".repeat(32) })], hWho)).toEqual([]);
+  });
+
+  it("the old-format turn-visuals lineage line accepts only an ids-only payload", () => {
+    const line = `__loom_ui_lineage__:turnvisuals-${who.userId}-${randomUUID()}-1`;
+    const row = (payload: unknown) =>
+      hit("loom.events", "payload", { execution_id: line, event_type: "X", payload });
+    expect(unexpected([row({ by: envelope })], who)).toEqual([]);
+    expect(unexpected([row({ by: envelope, documentId: randomUUID() })], who)).toEqual([
+      "loom.events.payload",
+    ]);
+    expect(unexpected([row({ by: envelope, note: "plain text" })], who)).toEqual([
+      "loom.events.payload",
+    ]);
+  });
+
   it("a neutral refolded row is allowed only when its execution id holds no UUID", () => {
     const handle = "abcdefghijklmnopqrstuvwxya";
     const hWho: Who = { ...who, handle };

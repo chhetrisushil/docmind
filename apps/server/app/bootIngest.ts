@@ -143,8 +143,8 @@ export async function bootIngest(
   );
   // Register, then catch up on what the log holds, before anything is served (ADR 0132 D13).
   await bootStatus(status, cleanup);
-  // An old pod never writes `documents.ingest_execution_id` or `visualize_execution_id` (migration 0038), so a document it ingested during a
-  // rolling deploy has an old-format status row and no stored id: the stale-upload sweep would start a second ingest for it, and the ready and
+  // An old pod never writes `documents.ingest_execution_id` or `visualize_execution_id` (migration 0038), so a document it ingested between the
+  // migration job and its stop (deploys are recreate-only) has an old-format status row and no stored id: the stale-upload sweep would start a second ingest for it, and the ready and
   // visuals sweeps would never find it. The repair is idempotent (it only fills a NULL column from an existing status row) and runs here,
   // before recovery and every sweep. A failure is fatal with the fixed label: a sweep that lists on missing ids would double-start work.
   await bootStatus(

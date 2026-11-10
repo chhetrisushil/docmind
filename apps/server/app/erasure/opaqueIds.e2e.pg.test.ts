@@ -135,6 +135,12 @@ describe.skipIf(!PG_URL)(
         );
         expect((await lineage.resolveLatest(line)).ok).toBe(true);
 
+        // Every execution of the user, both formats, for the scan below (the handle comes from these ids).
+        user.executions = ((await st.durable.raw.eventStore.listExecutions?.()) ?? []).filter(
+          (id) => id.includes(handle) || id.includes(user.userId),
+        );
+        expect(user.executions).toContain(runId);
+
         // The composed erasure deps carry `ids`: with them erasure names the user's h_ run, cancels it and destroys the handle's key.
         expect((await eraseMe(st, user.cookie)).status).toBe(202);
         await waitErased(st, user.userId, 60_000);
@@ -149,6 +155,11 @@ describe.skipIf(!PG_URL)(
           refusal: { kind: "refused", finding: { code: "line-erased" } },
         });
         expect(st.composed.ids.cached(user.userId)).toBeUndefined(); // the cached id key went with the subject key
+        // Nothing is left that names the user or links the handle to a plain id, whether or not the erasure had to park on the live run.
+        await assertErased(st, user, { tenantGone: true });
+        expect(
+          await rowsLinkingHandleToIds(st.db.owner, handle, [user.userId, user.documentId]),
+        ).toEqual([]);
       },
       WAIT,
     );

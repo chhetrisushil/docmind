@@ -4,11 +4,12 @@ import type { KeyStore } from "@loom/plugin-crypto";
 import { InboxClosedError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { principalOf } from "../chats/access";
 import type { ChatWiring } from "../chats/wiring";
+import { existingUser } from "../documents/executionCandidates";
 import type { IngestPort } from "../documents/ingest";
 import type { StartScheduler } from "../documents/startScheduler";
 import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
 import type { VisualsStarter } from "../flows/visualize-document/start";
-import { type OpaqueIds, legacyIds } from "../opaqueIds";
+import { type OpaqueIds, handleOfSubject, legacyIds } from "../opaqueIds";
 import { drainWithin } from "../shutdown";
 import type { ErasureDeps } from "./eraser";
 import type { ErasureStore } from "./types";
@@ -31,7 +32,7 @@ export interface ErasureParts {
   store: ErasureDeps["store"];
   sql: Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf">;
   /** The id key cache: erasure reads an existing user's key (never mints one) to name their new-format runs, and evicts it when a subject key is destroyed. Absent: old-format ids only. */
-  ids?: Pick<OpaqueIds, "load" | "cached" | "forgetSubject">;
+  ids?: Pick<OpaqueIds, "load" | "cached" | "forgetSubject" | "retireHandle" | "unretireHandle">;
   starts: Pick<StartScheduler, "settle">;
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
@@ -63,8 +64,7 @@ export function requireKeyDestroyedProof(keys: { wasDestroyed?: unknown }): void
 export function erasureDeps(p: ErasureParts): ErasureDeps {
   requireKeyDestroyedProof(p.keys);
   /** The user's id builders when the user has a handle and a live key; undefined otherwise (a destroyed key means no new-format run can still be running). */
-  const userIdsOf = async (identity: Identity) =>
-    p.ids && (await p.ids.load(identity)) ? p.ids.cached(identity.userId) : undefined;
+  const userIdsOf = async (identity: Identity) => p.ids && existingUser(p.ids, identity);
   return {
     store: p.store,
     ...p.sql,
@@ -123,15 +123,23 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
       }
     },
     eraseSubject: async (subjectId) => {
-      const result = await p.app.eraseSubject(subjectId, undefined, { parked: "shred" });
-      // Loom's shred destroyed this subject's key itself, not through `keys.destroy`: the cached id key must not outlive it.
-      // `unknown` with the key already gone is a retry after a shred that committed and then threw: evict then too.
-      if (
-        result.outcome === "erased" ||
-        (result.outcome === "unknown" && (await p.keys.wasDestroyed?.(subjectId)) === true)
-      )
-        p.ids?.forgetSubject(subjectId);
-      return result;
+      // Loom destroys the handle's key inside `eraseSubject` and the cache hears of it only after: for that window the handle is retired,
+      // so a concurrent cache hit (a document delete, a visuals reconcile) cannot build an `h_` id against a key that may already be gone.
+      const handle = handleOfSubject(subjectId);
+      if (handle !== null) p.ids?.retireHandle(handle);
+      try {
+        const result = await p.app.eraseSubject(subjectId, undefined, { parked: "shred" });
+        // Loom's shred destroyed this subject's key itself, not through `keys.destroy`: the cached id key must not outlive it.
+        // `unknown` with the key already gone is a retry after a shred that committed and then threw: evict then too.
+        if (
+          result.outcome === "erased" ||
+          (result.outcome === "unknown" && (await p.keys.wasDestroyed?.(subjectId)) === true)
+        )
+          p.ids?.forgetSubject(subjectId);
+        return result;
+      } finally {
+        if (handle !== null) p.ids?.unretireHandle(handle);
+      }
     },
     keys: {
       destroy: async (subjectId) => {
