@@ -14,7 +14,7 @@ import { LLM_RETRY } from "../ingest-document/stepEffect";
 import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";
 import { EXTRACT_FORMAT, type ExtractionWrite, type Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
-import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM } from "./prompts";
+import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM, extractDocumentSystem } from "./prompts";
 import { visualizeExecutionId } from "./start";
 import { aggregateFacts } from "./testing";
 
@@ -643,8 +643,41 @@ describe("fix round 1: a lenient answer and a slow model", () => {
       outcome: "failed",
       code: "visuals-model-unavailable",
     });
-    expect(calls.n).toBeGreaterThan(2);
+    expect(calls.n).toBe(2); // no retry: the clock is deterministic for this document
     expect(s.store.writes).toEqual([]);
+  });
+
+  it("I2: a step-clock expiry makes exactly one attempt (no retry, no backoff) and ends visuals-model-unavailable", async () => {
+    const { llm, calls } = hanging();
+    const sleep = vi.fn(async () => {});
+    const s = setup({ llm, sleep });
+    expect(await extractEffect({ ...s.d, stepTimeoutMs: 30 }).execute(s.ref, {} as never)).toEqual({
+      outcome: "failed",
+      code: "visuals-model-unavailable",
+    });
+    expect(calls.n).toBe(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(s.store.writes).toEqual([]);
+  });
+
+  it("I2: each window of an 8-window document is asked for its share of events and links, at least 3", async () => {
+    const ids = Array.from({ length: 8 }, () => randomUUID());
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(EXTRACT_WINDOW_CHARS)]));
+    const { llm, requests } = scripted(() => JSON.stringify({ facts: [] }));
+    await run(setup({ llm, texts }));
+    expect(requests).toHaveLength(8);
+    for (const r of requests) {
+      expect(r.system).toContain("dated events the document narrates, at most 5,");
+      expect(r.system).toContain("relate to each other, at most 4.");
+      expect(r.system).not.toContain("at most 40,");
+    }
+    // 17 windows: the floor of 3 holds
+    expect(extractDocumentSystem(17)).toContain("narrates, at most 3,");
+    expect(extractDocumentSystem(17)).toContain("each other, at most 3.");
+    // one window: the whole caps
+    expect(extractDocumentSystem(1)).toContain("narrates, at most 40,");
+    expect(extractDocumentSystem(1)).toContain("each other, at most 30.");
+    expect(EXTRACT_DOCUMENT_SYSTEM).toBe(extractDocumentSystem(1));
   });
 
   it("M2: one window's flood of items does not crowd out a later window's events", async () => {

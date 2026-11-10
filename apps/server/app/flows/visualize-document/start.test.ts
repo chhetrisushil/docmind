@@ -496,6 +496,28 @@ describe("rerun and the retry sweep", () => {
     await vi.waitFor(() => expect(reextract.has(id)).toBe(false));
   });
 
+  it("M1: a note is dropped when its start does not happen (a taken number or a failed start)", async () => {
+    const f = fake();
+    const reextract = new Set<string>();
+    const r = ref();
+    // run number 1 is already taken by an execution this process does not track: the probe moves on to 2
+    f.started.push(visualizeExecutionId(r.userId, r.documentId, 1, 1));
+    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 });
+    expect([...reextract]).toEqual([visualizeExecutionId(r.userId, r.documentId, 1, 2)]);
+    // any other failed start leaves no note either
+    const bad = {
+      start: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+      cancel: vi.fn(async () => {}),
+    } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
+    const noted = new Set<string>();
+    const starter2 = loomVisualsStarter(bad, flow, { runs: runsStore(), reextract: noted });
+    await expect(starter2.rerun(ref(), 1)).rejects.toThrow("boom");
+    expect(noted.size).toBe(0);
+  });
+
   it("at the bound the oldest notes are evicted, never the pending ones wholesale", async () => {
     const f = fake();
     const reextract = new Set<string>(Array.from({ length: 1000 }, (_, i) => `old-${i}`));

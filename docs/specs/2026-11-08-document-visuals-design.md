@@ -329,11 +329,17 @@ visuals use the same path (`dm-turn-visuals` answers `REF_OPEN`; it still has no
 - Rollout is on demand: `factFormatFingerprint()` and the `visualize-document` 1.1.0 flow hash (the extract step's prompt and
   output are not part of it) are both unchanged, so nothing re-plans at boot. A new upload or re-ingest gets both diagrams from
   its own extraction; an existing document gets them when the user presses re-run (the route's re-run extracts once more when
-  the document's `documents.visual_extract_format` is missing or older than `docmind.extract@2`, and the extraction stamps it, so
+  the document's `documents.visual_extract_format` is missing or not `docmind.extract@2`, and the extraction stamps it, so
   later re-runs only re-plan; a boot pass never extracts).
 - The longer answer has its own provider on the `visuals` role (`llm.visualsExtract`): a 16 000-token cap and
   `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (default 180 s), so a long answer is not cut off at the planner's 60 s; the planner and
   chat keep 8192 tokens and `DOCMIND_LLM_TIMEOUT_MS`. Do not roll back to the c1 build while any document has a timeline or
   relations row (`docs/operations/cloud-deploy.md`).
+- Final review: each window of a long document is asked for its share of the caps, `ceil(40 / windows)` events and
+  `ceil(30 / windows)` links, at least 3 (the server's caps and the prompt-only change leave the flow hash alone), so the
+  larger answer stays inside the 600 s step clock. A step-clock expiry (`StepTimeoutError`) is deterministic for a document's
+  length, so the extract step ends it `visuals-model-unavailable` on the first occurrence (a `nonRetryable` step option) rather
+  than retrying six times; a per-call `LlmUnavailableError` keeps its 6 attempts. Every extraction write locks the document row
+  first (`FOR NO KEY UPDATE`), fenced or not, so there is one lock order.
 - Not done in c2: an automatic backfill, timelines or relationships in chat, cross-document timelines or relationship graphs,
   merging relationship nodes with the `entities` table, editing extracted events or links.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { MAX_RAW_ITEMS } from "./structureText";
 import {
   MAX_EVENTS,
   MAX_EVENT_LABEL,
-  MAX_RAW_ITEMS,
   MAX_WHEN,
   MIN_EVENTS,
   buildTimeline,

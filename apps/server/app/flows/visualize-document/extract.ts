@@ -28,7 +28,7 @@ import {
   admit,
 } from "./facts";
 import type { VisualFactStore, VisualizeRef } from "./pgFacts";
-import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_INSTRUCTION, EXTRACT_SYSTEM } from "./prompts";
+import { EXTRACT_INSTRUCTION, EXTRACT_SYSTEM, extractDocumentSystem } from "./prompts";
 import { buildRelations, rawLinksOf } from "./relations";
 import type { VisualRuns } from "./runs";
 import { MAX_RAW_ITEMS } from "./structureText";
@@ -127,15 +127,17 @@ export async function readChunks(
 async function askWindows<T>(
   llm: LlmProvider,
   chunks: Chunk[],
-  system: string,
+  system: string | ((windowCount: number) => string),
   read: (content: string) => T,
   signal?: AbortSignal,
 ): Promise<T[]> {
   const out: T[] = [];
-  for (const window of windows(chunks, EXTRACT_WINDOW_CHARS)) {
+  const all = windows(chunks, EXTRACT_WINDOW_CHARS);
+  const prompt = typeof system === "function" ? system(all.length) : system;
+  for (const window of all) {
     const text = window.map((c) => `[[${c.id}]]\n${c.text}`).join("\n\n");
     const request = guardRequest({
-      system: `${system}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
+      system: `${prompt}\n\n${UNTRUSTED_CONTENT_SYSTEM_NOTE}`,
       messages: [
         {
           role: "user",
@@ -194,7 +196,7 @@ export async function askForExtraction(
   const answers = await askWindows(
     llm,
     chunks,
-    EXTRACT_DOCUMENT_SYSTEM,
+    extractDocumentSystem,
     (content) => jsonAnswer(content, DocumentAnswer),
     signal,
   );
@@ -309,13 +311,16 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
         LLM_BACKOFF_CAP_MS,
       ),
       // The model stayed unreachable (a timeout, a 5xx, a rate limit) through every attempt: a recorded failure the user
-      // can retry, not a failed execution. The step clock (600 s for all the windows of one attempt) running out is the same
-      // thing: this step's time is its model calls (reads and the one write are fast), so a slow model that outlasts the
-      // clock, a long document at the 180 s per-call timeout or a single call at the 600 s ceiling, is "unavailable", as
-      // a call that outlasts its own provider timeout is. Mapping the clock (rather than sizing it by window count) keeps
-      // the flow's step list, and so its hash, untouched, and bounds a run at 6 attempts of 600 s.
+      // can retry, not a failed execution.
       exhausted: (err) =>
-        err instanceof LlmUnavailableError || err instanceof StepTimeoutError
+        err instanceof LlmUnavailableError
+          ? { outcome: "failed", code: "visuals-model-unavailable" }
+          : undefined,
+      // The step clock (600 s for all the windows of one attempt) running out is the same end, at once: it is deterministic
+      // for a document's length, so five more attempts would only spend the model six times over. The user can re-run.
+      // Mapping the clock (rather than sizing it by window count) keeps the flow's step list, and so its hash, untouched.
+      nonRetryable: (err) =>
+        err instanceof StepTimeoutError
           ? { outcome: "failed", code: "visuals-model-unavailable" }
           : undefined,
     },
