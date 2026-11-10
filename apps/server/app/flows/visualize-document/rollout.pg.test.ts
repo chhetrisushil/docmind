@@ -19,7 +19,13 @@ import { ALICE, U1, seedDoc, seedRow, seedUsers } from "../../documents/testHarn
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { subjectOfExecution } from "../../subject";
 import type { VisualizeDeps } from "./deps";
-import type { Fact, StructureFact } from "./facts";
+import {
+  AGGREGATE_ORDINAL_BASE,
+  type ExtractionWrite,
+  type Fact,
+  STRUCTURE_ORDINAL_BASE,
+  type StructureFact,
+} from "./facts";
 import { visualizeDocumentFlow } from "./flow";
 import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
@@ -120,7 +126,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
       },
     };
     const planner = visualsPlanner(llm, KEY);
-    let held: Fact[] = [
+    let held: ExtractionWrite[] = [
       { kind: "figure", label: "Revenue", value: 4242, chunkIds: [CHUNK], ordinal: 0 },
     ];
     let structured: StructureFact[] = [];
@@ -142,8 +148,10 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
           structured = [...facts];
           return facts.length;
         },
-        list: async () => held,
+        list: async () => held.filter((f) => f.ordinal < STRUCTURE_ORDINAL_BASE) as Fact[],
         listAll: async () => [...held, ...structured],
+        aggregateCount: async () => held.filter((f) => f.ordinal >= AGGREGATE_ORDINAL_BASE).length,
+        extractFormat: async () => null,
       },
       structure: READER,
       summaryMaxChars: 400_000,

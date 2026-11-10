@@ -22,7 +22,7 @@ export const LoadOutput = z
   .object({
     outcome: z.enum(["done", "document_gone", "failed"]),
     code: z.enum(FAILURE_CODES).optional(),
-    // The extracted facts (up to 16) and the structure facts (up to 2): at most MAX_STORED_FACTS (18) rows, ordinals 0..17.
+    // The extracted facts (up to 16), the structure facts (up to 2) and the aggregates (up to 2): at most MAX_STORED_FACTS (20) rows, ordinals 0..19.
     facts: z.array(StoredEntry).max(MAX_STORED_FACTS),
   })
   .strict();

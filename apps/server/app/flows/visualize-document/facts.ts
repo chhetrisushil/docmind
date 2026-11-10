@@ -1,18 +1,35 @@
 import { z } from "zod";
 import { ENTITY_KINDS } from "../../crypto/entityKeys";
 import type { CooccurrenceDraft } from "./cooccurrence";
+import { DATE_PRECISIONS, isStoredAt } from "./dates";
 import type { OutlineDraft } from "./outline";
+import {
+  MAX_ENTITIES,
+  MAX_LINKS,
+  MAX_PARTY,
+  MAX_REL,
+  MIN_LINKS,
+  type RelationsDraft,
+} from "./relations";
+import { nameKey } from "./structureText";
+import { MAX_EVENTS, MAX_EVENT_LABEL, MAX_WHEN, MIN_EVENTS, type TimelineDraft } from "./timeline";
 
 export const MAX_FACTS = 16;
 /**
- * Extraction keeps `MAX_FACTS` (16) facts at ordinals 0..15. `visual_facts.ordinal` is 0..17 after migration 0035, and 16 and 17
- * are reserved for the derived structure facts, which are written by their own step and never collide with an extracted fact.
+ * The ordinal map of `visual_facts` (migration 0037): the extracted facts at 0..15 (`MAX_FACTS`, extraction's own pool), the
+ * derived structure facts at 16 (outline) and 17 (entity map), and the model's two aggregates at 18 (timeline) and 19
+ * (relations). `PgVisualFacts.replace` (extraction) owns 0..15 and 18..19 together; `replaceStructure` owns 16..17.
  */
 export const STRUCTURE_ORDINAL_BASE = 16;
 export const OUTLINE_ORDINAL = 16;
 export const ENTITY_MAP_ORDINAL = 17;
-/** The most rows one document holds: the extracted facts plus the outline and the entity map. */
-export const MAX_STORED_FACTS = MAX_FACTS + 2;
+export const AGGREGATE_ORDINAL_BASE = 18;
+export const TIMELINE_ORDINAL = 18;
+export const RELATIONS_ORDINAL = 19;
+/** The most rows one document holds: the extracted facts, the outline, the entity map, the timeline and the relations. */
+export const MAX_STORED_FACTS = MAX_FACTS + 4;
+/** The format of the extraction that made a document's facts (its prompt and answer): `PgVisualFacts.replace` stamps it on the document, and a user's re-run extracts again when the stamp is missing or different. Bump it when the extraction's prompt or answer changes in a way existing documents should be re-extracted for. */
+export const EXTRACT_FORMAT = "docmind.extract@2";
 const Label = z.string().trim().min(1).max(120);
 const ChunkIds = z.array(z.string().uuid()).min(1).max(8);
 
@@ -106,6 +123,52 @@ const EntityMap = z
   })
   .strict();
 
+const Timeline = z
+  .object({
+    kind: z.literal("timeline"),
+    events: z
+      .array(
+        z
+          .object({
+            at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            precision: z.enum(DATE_PRECISIONS),
+            when: z.string().trim().min(1).max(MAX_WHEN),
+            label: z.string().trim().min(1).max(MAX_EVENT_LABEL),
+            chunkId: PassageId,
+          })
+          .strict(),
+      )
+      .min(MIN_EVENTS)
+      .max(MAX_EVENTS),
+    chunkIds: z.array(PassageId).min(1).max(MAX_EVENTS),
+  })
+  .strict();
+const PartyIndex = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_ENTITIES - 1);
+const Relations = z
+  .object({
+    kind: z.literal("relations"),
+    entities: z.array(z.string().trim().min(1).max(MAX_PARTY)).min(2).max(MAX_ENTITIES),
+    links: z
+      .array(
+        z
+          .object({
+            from: PartyIndex,
+            to: PartyIndex,
+            rel: z.string().trim().min(1).max(MAX_REL),
+            chunkId: PassageId,
+          })
+          .strict(),
+      )
+      .min(MIN_LINKS)
+      .max(MAX_LINKS),
+    chunkIds: z.array(PassageId).min(1).max(MAX_LINKS),
+  })
+  .strict();
+
 export const DraftFact = z.discriminatedUnion("kind", [Series, Figure, FactTable]);
 export type DraftFact = z.infer<typeof DraftFact>;
 export type Fact = DraftFact & { ordinal: number };
@@ -119,35 +182,72 @@ export const StoredFact = z.discriminatedUnion("kind", [
 
 /** A derived fact (never extracted by a model): the document's outline or its entity map. */
 export type StructureFact = (OutlineDraft | CooccurrenceDraft) & { ordinal: number };
+/** A fact the extraction call returns beside the charts: the document's timeline or its relationships. */
+export type AggregateFact = (TimelineDraft | RelationsDraft) & { ordinal: number };
+/** What the extraction write (`PgVisualFacts.replace`) takes: facts at 0..15 and aggregates at 18..19. */
+export type ExtractionWrite = Fact | AggregateFact;
 /** Everything `visual_facts` holds for a document. */
-export type AnyFact = Fact | StructureFact;
-/** Structure facts have their own ordinal schema: 16 for the outline, 17 for the map. The extracted `Ordinal` (0..15) is untouched. */
-const StructureOrdinal = z.object({
-  ordinal: z.union([z.literal(OUTLINE_ORDINAL), z.literal(ENTITY_MAP_ORDINAL)]),
-});
-/** A stored row of any kind (ordinals 0..17). `StoredFact` (extracted kinds, 0..15) stays what chat reads. */
+export type AnyFact = Fact | StructureFact | AggregateFact;
+/** A stored row of any kind, each kind at its own ordinal. `StoredFact` (extracted kinds, 0..15) stays what chat reads. */
 const StoredEntryUnion = z.discriminatedUnion("kind", [
   Series.extend(Ordinal.shape),
   Figure.extend(Ordinal.shape),
   FactTable.extend(Ordinal.shape),
-  Outline.extend(StructureOrdinal.shape),
-  EntityMap.extend(StructureOrdinal.shape),
+  Outline.extend({ ordinal: z.literal(OUTLINE_ORDINAL) }),
+  EntityMap.extend({ ordinal: z.literal(ENTITY_MAP_ORDINAL) }),
+  Timeline.extend({ ordinal: z.literal(TIMELINE_ORDINAL) }),
+  Relations.extend({ ordinal: z.literal(RELATIONS_ORDINAL) }),
 ]);
-/** Also enforces the plan's edge shape on a map: `a < b < entities.length` (a union member cannot carry a refinement). */
+/** Also enforces what a union member cannot carry as a refinement: a map's edges (`a < b < entities.length`), a timeline's dates (real, at their precision) and a relations fact's parties and links. */
 export const StoredEntry = StoredEntryUnion.superRefine((f, ctx) => {
-  if (f.kind !== "cooccurrence") return;
-  f.edges.forEach((e, i) => {
-    if (e.a >= e.b || e.b >= f.entities.length)
-      ctx.addIssue({
-        code: "custom",
-        path: ["edges", i],
-        message: "edge must satisfy a < b < entities.length",
-      });
-  });
+  if (f.kind === "cooccurrence") {
+    f.edges.forEach((e, i) => {
+      if (e.a >= e.b || e.b >= f.entities.length)
+        ctx.addIssue({
+          code: "custom",
+          path: ["edges", i],
+          message: "edge must satisfy a < b < entities.length",
+        });
+    });
+  } else if (f.kind === "timeline") {
+    f.events.forEach((e, i) => {
+      if (!isStoredAt(e.at, e.precision))
+        ctx.addIssue({
+          code: "custom",
+          path: ["events", i],
+          message: "event date must be a real date at its precision",
+        });
+    });
+  } else if (f.kind === "relations") {
+    if (new Set(f.entities.map(nameKey)).size !== f.entities.length)
+      ctx.addIssue({ code: "custom", path: ["entities"], message: "party names must be distinct" });
+    f.links.forEach((l, i) => {
+      if (l.from === l.to || l.from >= f.entities.length || l.to >= f.entities.length)
+        ctx.addIssue({
+          code: "custom",
+          path: ["links", i],
+          message: "a link joins two different listed parties",
+        });
+    });
+  }
 });
 export const isStructureFact = (f: { kind: string }): f is StructureFact =>
   f.kind === "outline" || f.kind === "cooccurrence";
+export const isAggregateFact = (f: { kind: string }): f is AggregateFact =>
+  f.kind === "timeline" || f.kind === "relations";
 export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).strict();
+/**
+ * The document extraction's answer: the facts (strict, as always) and two optional aggregates kept UNPARSED here. Each item
+ * of `timeline` and `relations` is validated and dropped on its own (`buildTimeline`, `buildRelations`), so a bad one never
+ * costs the facts. Chat keeps `ExtractAnswer`.
+ */
+export const DocumentAnswer = z
+  .object({
+    facts: z.array(DraftFact).max(32),
+    timeline: z.unknown().optional(),
+    relations: z.unknown().optional(),
+  })
+  .strict();
 
 const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };
 // Groups: 1 "(" open, 2 sign, 3 currency, 4 whole part, 5 decimals, 6 suffix, 7 "%", 8 ")" close.

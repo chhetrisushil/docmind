@@ -10,10 +10,17 @@ import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import { DocumentGoneError } from "../ingest-document/errors";
-import { ENTITY_MAP_ORDINAL, type Fact, OUTLINE_ORDINAL, type StructureFact } from "./facts";
+import {
+  ENTITY_MAP_ORDINAL,
+  type Fact,
+  MAX_FACTS,
+  MAX_STORED_FACTS,
+  OUTLINE_ORDINAL,
+  type StructureFact,
+} from "./facts";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals, plannerUnavailable } from "./plan";
-import { recording, scriptedPlannerModel } from "./testing";
+import { aggregateFacts, recording, scriptedPlannerModel } from "./testing";
 
 const FIGURE: Fact = {
   kind: "figure",
@@ -352,5 +359,54 @@ describe("the intent", () => {
     expect(VISUALS_INTENT.objective).toContain("EntityMap");
     expect(VISUALS_INTENT.objective).toMatch(/long, sectioned documents/);
     expect(VISUALS_INTENT.objective).toMatch(/short or flat documents/);
+  });
+});
+
+describe("LoadOutput.facts holds every row a document can have", () => {
+  const chunk = randomUUID();
+  const figures = Array.from({ length: MAX_FACTS }, (_, ordinal) => ({
+    kind: "figure" as const,
+    label: `Figure ${ordinal}`,
+    value: ordinal,
+    chunkIds: [chunk],
+    ordinal,
+  }));
+  const outline = {
+    kind: "outline" as const,
+    title: "Report",
+    nodes: ["A", "B", "C"].map((label, i) => ({
+      id: `s${i}`,
+      label,
+      level: 1,
+      passageCount: 1,
+      firstChunkId: chunk,
+    })),
+    chunkIds: [chunk],
+    ordinal: OUTLINE_ORDINAL,
+  };
+  const map = {
+    kind: "cooccurrence" as const,
+    entities: ["P1", "P2", "P3"].map((name) => ({
+      name,
+      entityKind: "person" as const,
+      passages: 2,
+    })),
+    edges: [
+      { a: 0, b: 1, weight: 2, firstChunkId: chunk },
+      { a: 1, b: 2, weight: 2, firstChunkId: chunk },
+    ],
+    chunkIds: [chunk],
+    ordinal: ENTITY_MAP_ORDINAL,
+  };
+  const { timeline, relations } = aggregateFacts(chunk);
+  const all = [...figures, outline, map, timeline, relations];
+
+  it("accepts 20 rows (16 extracted, outline, entity map, timeline, relations) and refuses a 21st", () => {
+    expect(all).toHaveLength(MAX_STORED_FACTS);
+    expect(all.map((f) => f.ordinal)).toEqual(Array.from({ length: 20 }, (_, i) => i)); // the control: ordinals really span 0..19
+    expect(LoadOutput.safeParse({ outcome: "done", facts: all }).success).toBe(true);
+    expect(LoadOutput.safeParse({ outcome: "done", facts: [...all, figures[0]] }).success).toBe(
+      false,
+    );
   });
 });

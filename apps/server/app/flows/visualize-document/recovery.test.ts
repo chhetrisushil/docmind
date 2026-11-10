@@ -14,7 +14,12 @@ import { InMemoryProgressBus } from "../../documents/progress";
 import { foldIngestStatus } from "../../status/model";
 import { startRecovery } from "../ingest-document/recovery";
 import type { VisualizeDeps } from "./deps";
-import type { Fact } from "./facts";
+import {
+  AGGREGATE_ORDINAL_BASE,
+  type ExtractionWrite,
+  type Fact,
+  STRUCTURE_ORDINAL_BASE,
+} from "./facts";
 import { visualizeDocumentFlow } from "./flow";
 import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
@@ -73,7 +78,7 @@ describe("recovering an interrupted visualize execution", () => {
     events: new InMemoryLineageStore(),
     content: new InMemoryContentStore(),
   });
-  let held: Fact[] = []; // the fact table outlives the process, like the database
+  let held: ExtractionWrite[] = []; // the fact table outlives the process, like the database
   const boot = (
     log: ReturnType<typeof keptLog>,
     over: Partial<VisualizeDeps>,
@@ -94,8 +99,10 @@ describe("recovering an interrupted visualize execution", () => {
           return f.length;
         },
         replaceStructure: async () => 0,
-        list: async () => held,
+        list: async () => held.filter((f) => f.ordinal < STRUCTURE_ORDINAL_BASE) as Fact[],
         listAll: async () => held,
+        aggregateCount: async () => held.filter((f) => f.ordinal >= AGGREGATE_ORDINAL_BASE).length,
+        extractFormat: async () => null,
       },
       structure: noStructure(),
       summaryMaxChars: 400_000,

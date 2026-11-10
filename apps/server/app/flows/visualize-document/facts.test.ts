@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { buildCooccurrence, topEntities } from "./cooccurrence";
 import {
+  AGGREGATE_ORDINAL_BASE,
+  DocumentAnswer,
   type DraftFact,
   ENTITY_MAP_ORDINAL,
   MAX_FACTS,
   MAX_STORED_FACTS,
   OUTLINE_ORDINAL,
+  RELATIONS_ORDINAL,
+  STRUCTURE_ORDINAL_BASE,
   StoredEntry,
   StoredFact,
+  TIMELINE_ORDINAL,
   admit,
   grounded as groundedDraft,
+  isAggregateFact,
   isStructureFact,
   numbersOf,
 } from "./facts";
 import { buildOutline } from "./outline";
+import { MAX_ENTITIES, MAX_LINKS, MAX_PARTY, MAX_REL, buildRelations } from "./relations";
+import { MAX_EVENTS, MAX_EVENT_LABEL, MAX_WHEN, buildTimeline } from "./timeline";
 
 const C1 = "11111111-1111-4111-8111-111111111111";
 const text = (s: string) => new Map([[C1, s]]);
@@ -487,7 +495,7 @@ describe("structure facts", () => {
 
   it("reserves ordinals 16 and 17 above the 16 extracted ones", () => {
     expect([MAX_FACTS, OUTLINE_ORDINAL, ENTITY_MAP_ORDINAL]).toEqual([16, 16, 17]);
-    expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 2);
+    expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 4);
   });
 
   it("a built outline and a built map parse as stored facts and are structure facts", () => {
@@ -537,5 +545,164 @@ describe("structure facts", () => {
     expect(parses([{ ...edge, a: 1, b: 0 }, m.edges[1] as object])).toBe(false);
     expect(parses([{ ...edge, a: 1, b: 1 }, m.edges[1] as object])).toBe(false);
     expect(parses([{ ...edge, b: m.entities.length }, m.edges[1] as object])).toBe(false);
+  });
+});
+
+describe("aggregate facts (timeline at 18, relations at 19)", () => {
+  const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const position = new Map([1, 2, 3].map((n, i) => [cid(n), i] as const));
+  const builtTimeline = buildTimeline(
+    [
+      { when: "March 2024", date: "2024-03", label: "Alpha", chunkIds: [cid(1)] },
+      { when: "Q3 2025", date: "2025-Q3", label: "Beta", chunkIds: [cid(2)] },
+      { when: "14 Feb 2026", date: "2026-02-14", label: "Gamma", chunkIds: [cid(3)] },
+    ],
+    position,
+  );
+  const builtRelations = buildRelations(
+    [
+      { from: "Acme", rel: "acquired", to: "Beta Corp", chunkIds: [cid(1)] },
+      { from: "Cora", rel: "leads", to: "Project X", chunkIds: [cid(2)] },
+      { from: "Acme", rel: "owns", to: "Project X", chunkIds: [cid(3)] },
+    ],
+    position,
+  );
+  const TIMELINE = builtTimeline as NonNullable<typeof builtTimeline>;
+  const RELATIONS = builtRelations as NonNullable<typeof builtRelations>;
+  const T = { ...TIMELINE, ordinal: TIMELINE_ORDINAL };
+  const R = { ...RELATIONS, ordinal: RELATIONS_ORDINAL };
+  const FIGURE = { kind: "figure", label: "x", value: 1, chunkIds: [cid(1)] } as const;
+
+  it("reserves 18 and 19 above the structure ordinals and sizes a document's rows", () => {
+    expect([
+      STRUCTURE_ORDINAL_BASE,
+      AGGREGATE_ORDINAL_BASE,
+      TIMELINE_ORDINAL,
+      RELATIONS_ORDINAL,
+    ]).toEqual([16, 18, 18, 19]);
+    // 16 extracted + outline + entity map + timeline + relations
+    expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 4);
+    expect(MAX_STORED_FACTS).toBe(RELATIONS_ORDINAL + 1);
+  });
+
+  it("the built facts parse as stored facts, and are aggregate facts", () => {
+    expect(builtTimeline).not.toBeNull();
+    expect(builtRelations).not.toBeNull();
+    const t = StoredEntry.parse(T);
+    const r = StoredEntry.parse(R);
+    expect(isAggregateFact(t) && isAggregateFact(r)).toBe(true);
+    expect(isAggregateFact(StoredEntry.parse({ ...FIGURE, ordinal: 0 }))).toBe(false);
+    expect(isStructureFact(t) || isStructureFact(r)).toBe(false);
+  });
+
+  it("pins every kind to its own ordinal (no schema stops at 15)", () => {
+    const ok = (f: object) => StoredEntry.safeParse(f).success;
+    expect(ok(T)).toBe(true);
+    expect(ok(R)).toBe(true);
+    for (const wrong of [0, 15, 16, 17, 19, 20])
+      expect(ok({ ...T, ordinal: wrong }), `timeline@${wrong}`).toBe(false);
+    for (const wrong of [0, 15, 16, 17, 18, 20])
+      expect(ok({ ...R, ordinal: wrong }), `relations@${wrong}`).toBe(false);
+    expect(ok({ ...FIGURE, ordinal: 15 })).toBe(true);
+    for (const wrong of [16, 17, 18, 19])
+      expect(ok({ ...FIGURE, ordinal: wrong }), `figure@${wrong}`).toBe(false);
+    // c1's structure kinds are tightened the same way: the outline only at 16, the entity map only at 17.
+    const outline = buildOutline("Report", [
+      { chunkId: cid(1), sectionOrdinal: 1, headingPath: ["A"] },
+      { chunkId: cid(2), sectionOrdinal: 2, headingPath: ["B"] },
+      { chunkId: cid(3), sectionOrdinal: 3, headingPath: ["C"] },
+    ]) as NonNullable<ReturnType<typeof buildOutline>>;
+    expect(ok({ ...outline, ordinal: OUTLINE_ORDINAL })).toBe(true);
+    expect(ok({ ...outline, ordinal: ENTITY_MAP_ORDINAL })).toBe(false);
+    // chat reads StoredFact: extracted kinds only
+    expect(StoredFact.safeParse(T).success).toBe(false);
+    expect(StoredFact.safeParse({ ...T, ordinal: 15 }).success).toBe(false);
+  });
+
+  it("refuses an unknown key, too few events or links, over-long text and a missing citation", () => {
+    const t = (over: object) => StoredEntry.safeParse({ ...T, ...over }).success;
+    const r = (over: object) => StoredEntry.safeParse({ ...R, ...over }).success;
+    const e0 = T.events[0] as (typeof T.events)[number];
+    expect(t({})).toBe(true); // the control
+    expect(t({ extra: 1 })).toBe(false);
+    expect(t({ events: T.events.slice(0, 2) })).toBe(false);
+    expect(t({ events: [{ ...e0, label: "x".repeat(81) }, ...T.events.slice(1)] })).toBe(false);
+    expect(t({ events: [{ ...e0, when: "w".repeat(41) }, ...T.events.slice(1)] })).toBe(false);
+    expect(t({ events: [{ ...e0, when: "" }, ...T.events.slice(1)] })).toBe(false);
+    expect(t({ events: [{ ...e0, chunkId: "nope" }, ...T.events.slice(1)] })).toBe(false);
+    expect(t({ chunkIds: [] })).toBe(false);
+    const l0 = R.links[0] as (typeof R.links)[number];
+    expect(r({})).toBe(true);
+    expect(r({ extra: 1 })).toBe(false);
+    expect(r({ links: R.links.slice(0, 2) })).toBe(false);
+    expect(r({ links: [{ ...l0, rel: "r".repeat(41) }, ...R.links.slice(1)] })).toBe(false);
+    expect(r({ links: [{ ...l0, rel: "" }, ...R.links.slice(1)] })).toBe(false);
+    expect(r({ entities: ["only one"] })).toBe(false);
+    expect(r({ chunkIds: [] })).toBe(false);
+  });
+
+  it("accepts everything the normalisers can produce at their caps (the stored schema imports their limits, so they cannot drift)", () => {
+    const cap = 1 + MAX_EVENTS; // 41 candidate years; the builder keeps MAX_EVENTS
+    const manyPositions = new Map([1, 2, 3].map((n, i) => [cid(n), i] as const));
+    const events = buildTimeline(
+      Array.from({ length: cap }, (_, i) => ({
+        when: "w".repeat(MAX_WHEN),
+        date: String(2000 + i),
+        label: "l".repeat(MAX_EVENT_LABEL),
+        chunkIds: [cid(1 + (i % 3))],
+      })),
+      manyPositions,
+    );
+    expect(events?.events).toHaveLength(MAX_EVENTS);
+    expect(StoredEntry.safeParse({ ...events, ordinal: TIMELINE_ORDINAL }).success).toBe(true);
+    const relations = buildRelations(
+      Array.from({ length: MAX_LINKS + 1 }, (_, i) => ({
+        from: `${"f".repeat(MAX_PARTY - 3)}${String(i).padStart(3, "0")}`,
+        rel: "r".repeat(MAX_REL),
+        to: `${"t".repeat(MAX_PARTY - 3)}${String(i).padStart(3, "0")}`,
+        chunkIds: [cid(1 + (i % 3))],
+      })),
+      manyPositions,
+    );
+    expect(relations?.links).toHaveLength(MAX_LINKS);
+    expect(relations?.entities).toHaveLength(MAX_ENTITIES);
+    expect(StoredEntry.safeParse({ ...relations, ordinal: RELATIONS_ORDINAL }).success).toBe(true);
+  });
+
+  it("refuses an event date that is not real at its precision", () => {
+    const t = (event: object) =>
+      StoredEntry.safeParse({ ...T, events: [event, ...T.events.slice(1)] }).success;
+    const e0 = T.events[0] as (typeof T.events)[number];
+    expect(t(e0)).toBe(true);
+    expect(t({ ...e0, at: "2025-02-30", precision: "day" })).toBe(false);
+    expect(t({ ...e0, at: "2025-08-01", precision: "quarter" })).toBe(false);
+    expect(t({ ...e0, at: "2025-03-02", precision: "month" })).toBe(false);
+    expect(t({ ...e0, at: "2025-02-01", precision: "year" })).toBe(false);
+    expect(t({ ...e0, at: "2025-07-01", precision: "decade" })).toBe(false);
+    expect(t({ ...e0, at: "0999-01-01", precision: "year" })).toBe(false);
+  });
+
+  it("refuses a link that joins a party to itself or to one that is not listed, and repeated party names", () => {
+    const r = (over: object) => StoredEntry.safeParse({ ...R, ...over }).success;
+    const l0 = R.links[0] as (typeof R.links)[number];
+    const rest = R.links.slice(1);
+    expect(r({ links: [l0, ...rest] })).toBe(true);
+    expect(r({ links: [{ ...l0, from: 1, to: 1 }, ...rest] })).toBe(false);
+    expect(r({ links: [{ ...l0, to: R.entities.length }, ...rest] })).toBe(false);
+    expect(r({ links: [{ ...l0, from: R.entities.length }, ...rest] })).toBe(false);
+    expect(r({ entities: ["Acme", " ACME ", "Cora", "Project X"] })).toBe(false);
+  });
+});
+
+describe("DocumentAnswer", () => {
+  it("keeps the aggregates unparsed so a bad one never costs the facts, but still refuses a bad fact or an unknown key", () => {
+    expect(
+      DocumentAnswer.safeParse({ facts: [], timeline: "nope", relations: [1, 2] }).success,
+    ).toBe(true);
+    expect(DocumentAnswer.safeParse({ facts: [] }).success).toBe(true);
+    expect(DocumentAnswer.safeParse({ facts: [], timeline: null }).success).toBe(true);
+    expect(DocumentAnswer.safeParse({ facts: [{ kind: "figure" }] }).success).toBe(false);
+    expect(DocumentAnswer.safeParse({ facts: [], extra: 1 }).success).toBe(false);
+    expect(DocumentAnswer.safeParse({ timeline: { events: [] } }).success).toBe(false);
   });
 });
