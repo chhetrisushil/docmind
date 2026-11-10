@@ -125,7 +125,12 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
     eraseSubject: async (subjectId) => {
       const result = await p.app.eraseSubject(subjectId, undefined, { parked: "shred" });
       // Loom's shred destroyed this subject's key itself, not through `keys.destroy`: the cached id key must not outlive it.
-      if (result.outcome === "erased") p.ids?.forgetSubject(subjectId);
+      // `unknown` with the key already gone is a retry after a shred that committed and then threw: evict then too.
+      if (
+        result.outcome === "erased" ||
+        (result.outcome === "unknown" && (await p.keys.wasDestroyed?.(subjectId)) === true)
+      )
+        p.ids?.forgetSubject(subjectId);
       return result;
     },
     keys: {

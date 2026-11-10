@@ -291,4 +291,10 @@ describe("redactIds new-format lineage ids and bare handles", () => {
     expect(redactIds(`user handle ${H} unknown`)).toBe("user handle <id> unknown");
     expect(warningFor(`user handle ${H} unknown`)).toBe("user handle <id> unknown");
   });
+
+  it("does not treat an upper-case 26-character token as a handle", () => {
+    const ULIDLIKE = "ABCDEFGHIJKLMNOPQRSTUVWXYE";
+    expect(warningFor(`job ${ULIDLIKE} stuck`)).toBe(`job ${ULIDLIKE} stuck`);
+    expect(redactIds(`job ${ULIDLIKE} stuck`)).toBe(`job ${ULIDLIKE} stuck`);
+  });
 });

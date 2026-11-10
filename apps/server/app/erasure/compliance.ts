@@ -66,10 +66,10 @@ const LINEAGE_ID = /\b(?:turn)?visuals-[a-z2-7]{26}-[a-z2-7]{52}/;
 const HANDLE = /\b[a-z2-7]{25}[aeimquy4]\b/;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 /** A user or execution id: any UUID, a `u_…` id (`u_<uuid>` or `u_<uuid>:<chat or document>`) or an `h_…` id (`h_<handle>` and its `:` and `.c-` forms). */
-const HAS_ID = new RegExp(
-  `${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}|${LINEAGE_ID.source}|${HANDLE.source}`,
-  "i",
-);
+const HAS_ID_CASE_INSENSITIVE = new RegExp(`${UUID.source}|\\b[uh]_[0-9A-Za-z_-]{6,}`, "i");
+/** Handles and lineage ids are lower-case base32 only: an upper-case token of the same length is not one. */
+const HAS_ID = (text: string): boolean =>
+  HAS_ID_CASE_INSENSITIVE.test(text) || LINEAGE_ID.test(text) || HANDLE.test(text);
 const ID = "<id>";
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 
@@ -95,7 +95,7 @@ export function redactIds(message: string): string {
  */
 export const warningFor = (message: string): string => {
   const out = redactIds(message);
-  return HAS_ID.test(out) ? "warning" : out;
+  return HAS_ID(out) ? "warning" : out;
 };
 
 export const HYDRATE_PAGE = 500;
