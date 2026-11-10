@@ -27,8 +27,9 @@ import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import type { DocumentStatusReads } from "../status/ingestStatus";
 import { UPLOADED } from "../status/model";
+import type { TagService } from "../tags/service";
 import { decodeContentCursor, readContent } from "./content";
-import { decodeCursor, encodeCursor } from "./cursor";
+import { decodeCursor, encodeCursor, filterFingerprint } from "./cursor";
 import { InFlight } from "./inFlight";
 import type { IngestPort } from "./ingest";
 import type { DocumentLimits } from "./limits";
@@ -64,6 +65,8 @@ export interface DocumentRoutesDeps {
   registry: ParserRegistry;
   /** The ingest-status model: every document status the API answers comes from here. */
   status: DocumentStatusReads;
+  /** The tag reads: every document answer carries its tags. */
+  tags: TagService;
   /** Starts and cancels document ingestion. */
   ingest: IngestPort;
   /** Cancels the document's visualize executions on delete. Absent: none are composed (tests that never start one). */
@@ -131,7 +134,7 @@ async function register(
         await staged.discard();
         return {
           kind: "stored",
-          document: await toDto(existing, cipher, UPLOADED),
+          document: await toDto(existing, cipher, UPLOADED, { tags: [] }),
           row: existing,
           generation: existing.ingest_generation,
           duplicate: true,
@@ -162,7 +165,7 @@ async function register(
       try {
         return {
           kind: "stored",
-          document: await toDto(row, cipher, UPLOADED),
+          document: await toDto(row, cipher, UPLOADED, { tags: [] }),
           row,
           generation: row.ingest_generation,
           duplicate: false,
@@ -199,6 +202,9 @@ function receive(deps: DocumentRoutesDeps, req: IncomingMessage, identity: Ident
       // one is `uploaded`. A failed duplicate is restarted under its next generation, which fires
       // its own start (so `restarted` results are never fired again below).
       if (result.kind === "stored" && result.duplicate) {
+        const tags =
+          (await deps.tags.forDocuments(identity, [result.row.id])).get(result.row.id) ?? [];
+        result.document = { ...result.document, tags };
         const out = await restartIfFailed(deps, identity, result.row, "POST /api/documents");
         const view = out.restarted ? UPLOADED : out.view;
         result.document = { ...result.document, status: view.status, error: view.error };
@@ -311,25 +317,41 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
       const url = new URL(req.url ?? "/", "http://localhost");
       const query = ListDocumentsQuery.safeParse(Object.fromEntries(url.searchParams));
       if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
-      let cursor: { t: string; i: string } | null = null;
+      const tagIds = query.data.tags ?? [];
+      const filter = tagIds.length > 0 ? { tagIds, match: query.data.match } : undefined;
+      const fingerprint = filterFingerprint(filter);
+      let cursor: { t: string; i: string; f?: string } | null = null;
       if (query.data.cursor !== undefined) {
         cursor = decodeCursor(query.data.cursor);
-        if (!cursor) return sendError(res, 400, "invalid_cursor", "cursor is not valid");
+        // A cursor issued for another filter would skip or repeat rows.
+        if (!cursor || (cursor.f ?? "") !== fingerprint)
+          return sendError(res, 400, "invalid_cursor", "cursor is not valid");
       }
       // owner_id comes from the session; the cursor only positions within the caller's own rows.
       const page = await withTenant(deps.pool, identity.tenantId, (tx) =>
-        listDocuments(tx, identity.userId, { cursor, limit: query.data.limit }),
+        listDocuments(tx, identity.userId, {
+          cursor,
+          limit: query.data.limit,
+          tenantId: identity.tenantId,
+          ...(filter && { filter }),
+        }),
       );
       const cipher = deps.fields.forUser(identity.userId);
       const views = await deps.status.forPage(
         identity,
         page.rows.map((row) => ({ id: row.id, generation: row.ingest_generation })),
       );
+      const tagsOf = await deps.tags.forDocuments(
+        identity,
+        page.rows.map((row) => row.id),
+      );
       json(res, 200, {
         items: await Promise.all(
-          page.rows.map((row) => toDto(row, cipher, views.get(row.id) ?? UPLOADED)),
+          page.rows.map((row) =>
+            toDto(row, cipher, views.get(row.id) ?? UPLOADED, { tags: tagsOf.get(row.id) ?? [] }),
+          ),
         ),
-        nextCursor: page.next ? encodeCursor(page.next) : null,
+        nextCursor: page.next ? encodeCursor(page.next, fingerprint) : null,
       } satisfies ListDocumentsResponse);
     }),
 
@@ -345,7 +367,9 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         : undefined;
       if (!row) return sendError(res, 404, "not_found", "document not found");
       const view = await deps.status.forDocument(identity, row.id, row.ingest_generation);
-      json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view));
+      const detail = await deps.tags.detail(identity, row.id);
+      if (!detail) return sendError(res, 404, "not_found", "document not found"); // deleted since the read above
+      json(res, 200, await toDto(row, deps.fields.forUser(identity.userId), view, detail));
     }),
 
     "GET /api/documents/:id/content": requireAuth(
@@ -402,8 +426,9 @@ export function documentRoutes(deps: DocumentRoutesDeps): Record<string, Handler
         const out = await restartIfFailed(deps, identity, row, "POST /api/documents/:id/retry");
         if (!out.restarted) return sendError(res, 409, "not_failed", "the document has not failed");
         const cipher = deps.fields.forUser(identity.userId);
+        const tags = (await deps.tags.forDocuments(identity, [out.row.id])).get(out.row.id) ?? [];
         json(res, 202, {
-          document: await toDto(out.row, cipher, UPLOADED),
+          document: await toDto(out.row, cipher, UPLOADED, { tags }),
         } satisfies RetryDocumentResponse);
       },
     ),

@@ -23,6 +23,7 @@ const doc = {
   error: null,
   stats: null,
   summary: null,
+  tags: [],
   createdAt: NOW,
   updatedAt: NOW,
 };
@@ -43,10 +44,11 @@ describe("document contracts", () => {
   });
 
   it("coerces list query strings and defaults the page size to 50", () => {
-    expect(ListDocumentsQuery.parse({})).toEqual({ limit: 50 });
+    expect(ListDocumentsQuery.parse({})).toEqual({ limit: 50, match: "any" });
     expect(ListDocumentsQuery.parse({ limit: "20", cursor: "abc" })).toEqual({
       limit: 20,
       cursor: "abc",
+      match: "any",
     });
     expect(ListDocumentsQuery.safeParse({ limit: "500" }).success).toBe(false);
   });
@@ -178,5 +180,36 @@ describe("document content contract", () => {
         focus: { from: -1, to: 0 },
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("document tags in the contracts", () => {
+  const base = {
+    id: "00000000-0000-4000-8000-000000000001",
+    title: "t",
+    filename: "f",
+    mime: "text/plain",
+    sizeBytes: 1,
+    status: "ready",
+    error: null,
+    stats: null,
+    summary: null,
+    createdAt: "2026-11-10T10:00:00.000Z",
+    updatedAt: "2026-11-10T10:00:00.000Z",
+  };
+  it("DocumentDto needs tags and may carry suggestedTags", () => {
+    expect(DocumentDto.safeParse(base).success).toBe(false);
+    expect(DocumentDto.safeParse({ ...base, tags: [] }).success).toBe(true);
+    expect(DocumentDto.safeParse({ ...base, tags: [], suggestedTags: ["a"] }).success).toBe(true);
+  });
+  it("ListDocumentsQuery reads tags and match, with any as the default", () => {
+    const a = "00000000-0000-4000-8000-00000000000a";
+    expect(ListDocumentsQuery.parse({})).toMatchObject({ match: "any" });
+    expect(ListDocumentsQuery.parse({ tags: `${a}`, match: "all" })).toMatchObject({
+      tags: [a],
+      match: "all",
+    });
+    expect(ListDocumentsQuery.safeParse({ tags: "nope" }).success).toBe(false);
+    expect(ListDocumentsQuery.safeParse({ match: "some" }).success).toBe(false);
   });
 });

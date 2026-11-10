@@ -442,6 +442,7 @@ export class FakeServer {
       error: null,
       stats: null,
       summary: null,
+      tags: [],
       createdAt: stamp(),
       updatedAt: stamp(),
     };

@@ -19,7 +19,8 @@ import { isDocumentGone } from "../flows/ingest-document/errors";
 import type { VisualFactStore } from "../flows/visualize-document/pgFacts";
 import type { TurnFactStore } from "../flows/visualize-turn/pgTurnFacts";
 import type { DocumentStatusReads } from "../status/ingestStatus";
-import { STATUS_MESSAGES, UPLOADED } from "../status/model";
+import { STATUS_MESSAGES, type StatusView, UPLOADED } from "../status/model";
+import type { TagService } from "../tags/service";
 import { readConnections } from "./connections";
 import { type ResolvedCite, resolveCites } from "./factCites";
 
@@ -27,6 +28,7 @@ export interface UiReaderDeps {
   pool: Pool;
   fields: FieldCrypto;
   status: DocumentStatusReads;
+  tags: Pick<TagService, "forDocuments" | "detail">;
   blobs: SourceDeps["blobs"];
   registry: SourceDeps["registry"];
   visualFacts: Pick<VisualFactStore, "list" | "listAll">;
@@ -95,22 +97,34 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         const page: Awaited<ReturnType<typeof listDocuments>> = await withTenant(
           deps.pool,
           identity.tenantId,
-          (tx) => listDocuments(tx, identity.userId, { cursor, limit: PAGE }),
+          (tx) =>
+            listDocuments(tx, identity.userId, {
+              cursor,
+              limit: PAGE,
+              tenantId: identity.tenantId,
+            }),
         );
         const views = await deps.status.forPage(
           identity,
           page.rows.map((r) => ({ id: r.id, generation: r.ingest_generation })),
         );
+        const pending: { row: (typeof page.rows)[number]; view: StatusView }[] = [];
         for (const row of page.rows) {
           // The status decides before anything is opened: only the documents returned are decrypted.
           const view = views.get(row.id) ?? UPLOADED;
           if (!keep(view.status)) continue;
-          if (items.length === limit) {
+          if (items.length + pending.length === limit) {
             truncated = true; // one more match than asked for
             break;
           }
-          items.push(shown(await toDto(row, cipher(), view)));
+          pending.push({ row, view });
         }
+        const tagsOf = await deps.tags.forDocuments(
+          identity,
+          pending.map((p) => p.row.id),
+        );
+        for (const { row, view } of pending)
+          items.push(shown(await toDto(row, cipher(), view, { tags: tagsOf.get(row.id) ?? [] })));
         if (truncated || !page.next) break;
         after = { t: page.next.created_cursor, i: page.next.id };
       }
@@ -122,11 +136,13 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
         getDocument(tx, identity.userId, id),
       );
       if (!row) return null;
+      const detail = await deps.tags.detail(identity, row.id);
       return shown(
         await toDto(
           row,
           cipher(),
           await deps.status.forDocument(identity, row.id, row.ingest_generation),
+          detail ?? { tags: [] },
         ),
       );
     },

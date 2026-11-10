@@ -3,6 +3,7 @@ import { UiViewResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { chatTitleBind, insertChat, setTitle } from "../chats/sessions";
 import { FieldCrypto } from "../crypto/fields";
+import { TagKeys } from "../crypto/tagKeys";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { summaryBind, titleBind } from "../documents/repo";
@@ -19,6 +20,7 @@ import { PgChunkStore } from "../flows/ingest-document/pgChunks";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
 import { PgTurnVisualFacts } from "../flows/visualize-turn/pgTurnFacts";
 import { ingestRun } from "../status/testing";
+import { TagService } from "../tags/service";
 import { resolveCites } from "./factCites";
 import { readersFor } from "./readers";
 
@@ -230,6 +232,7 @@ describe.skipIf(!PG_URL)("the UI plane against Postgres (needs DOCMIND_TEST_PG_U
         pool: h.app,
         fields: counting,
         status: h.status,
+        tags: new TagService(h.app, fields, new TagKeys(h.keys)),
         blobs: () => {
           throw new Error("unused: the documents reader reads no blobs");
         },

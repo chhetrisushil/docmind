@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Cursor, IsoDateTime, Uuid } from "./common";
+import { DocumentTag, TagIdList, TagMatch } from "./tags";
 
 export const DocumentStatus = z.enum(["uploaded", "parsing", "embedding", "ready", "failed"]);
 export type DocumentStatus = z.infer<typeof DocumentStatus>;
@@ -78,6 +79,10 @@ export const DocumentDto = z.object({
   error: z.string().nullable(),
   stats: DocumentStats.nullable(),
   summary: DocumentSummary.nullable(),
+  /** The document's tags, by name. */
+  tags: z.array(DocumentTag),
+  /** Names the model suggested and the user has not accepted or dismissed: filled by the detail read only. */
+  suggestedTags: z.array(z.string()).optional(),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -94,6 +99,10 @@ export type RetryDocumentResponse = z.infer<typeof RetryDocumentResponse>;
 export const ListDocumentsQuery = z.object({
   cursor: Cursor.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  /** Comma-separated tag ids; empty or absent is no filter. */
+  tags: TagIdList.optional(),
+  /** Any: a document with at least one of the tags; all: a document with every one. Ignored without tags. */
+  match: TagMatch.default("any"),
 });
 export type ListDocumentsQuery = z.infer<typeof ListDocumentsQuery>;
 
