@@ -59,6 +59,8 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `apps/server/app/flows/visualize-document/` | The flow that runs after ingest turns a document ready: `extract.ts` (LLM facts, grounding), `pgFacts.ts` (sealed `visual_facts`), `planner.ts` and `plan.ts` (the planner decision), `lineage.ts` and `commit.ts` (the sealed lineage head), `start.ts` (starter, re-run, boot sweep, cancel), `runs.ts` and `state.ts` (the recorded last run of a document's generation, and the detail page's visuals state) |
 | `apps/server/app/flows/visualize-turn/` | Chat visuals: `readTurn.ts` and `coverage.ts` (cited chunks, which stored facts cover them), `steps.ts` (turn-load, turn-extract, turn-facts), `plan.ts` and `commit.ts`, `trigger.ts` and `start.ts` (the turn-settled filter, the starter, on-demand re-runs), `pgTurnFacts.ts` (sealed `turn_visual_facts`) |
 | `apps/server/app/flows/chat-title/` | The small flow that names a chat from its first question |
+| `apps/server/app/flows/suggest-tags/` | The on-demand flow that suggests tags for one document from its stored summary (`start.ts` starter, `step.ts` the one model call) |
+| `apps/server/app/tags/` | The tag service (sealed names, links, suggestions), the tag and suggestion routes, `suggestions.ts` (the normaliser) |
 | `apps/server/app/chats/` | Chat sessions, the `doc-chat` agent, tools (`tools/`), retrieval (`retrieval/`), SSE stream, citations, reasoning, the rolling summary (`summaryChoice.ts` seals Loom's summary decision, which would otherwise land in the log in the clear; `summarizer.ts` keeps a failing summarizer from ending a chat) |
 | `apps/server/app/ui/` | `GET /api/ui/views/:view` and `POST /api/ui/hydrate`: compiled experiences and their owner-scoped readers (`connections.ts`: a document's related documents and shared entities) |
 | `apps/server/app/erasure/`, `keys/`, `crypto/` | Account erasure (`DELETE /api/me`), key-encryption keys, field crypto |
@@ -74,7 +76,7 @@ Packages never import from apps. Each package owns one seam (an interface plus i
 | `packages/blob-store` | Encrypted filesystem `ContentStore` (per-user envelopes) |
 | `packages/keystore-pg` | `PostgresKeyStore`: per-user data keys wrapped by a master key |
 | `packages/llm-anthropic` | Claude provider for Loom's `LlmProvider` |
-| `infra/migrations` | Ordered SQL migrations 0001–0035: roles, tenancy, auth, keys, documents, chunks, chats, erasure |
+| `infra/migrations` | Ordered SQL migrations 0001–0036: roles, tenancy, auth, keys, documents, chunks, chats, erasure, tags |
 | `infra/local-db.sh` | `pnpm db:start`, `db:stop`, `db:status` for a local Postgres outside `/tmp` |
 | `docs/` | Design spec, design notes, operations runbooks, implementation plans |
 

@@ -1,6 +1,6 @@
 # DocMind architecture
 
-Last updated 2026-10-23. This document describes how DocMind is built and why. For where to start reading the code, see [codebase-guide.md](codebase-guide.md). The binding design is the spec, [docs/specs/2026-10-18-docmind-design.md](specs/2026-10-18-docmind-design.md); where this summary and the spec disagree, the spec wins.
+Last updated 2026-11-10. This document describes how DocMind is built and why. For where to start reading the code, see [codebase-guide.md](codebase-guide.md). The binding design is the spec, [docs/specs/2026-10-18-docmind-design.md](specs/2026-10-18-docmind-design.md); where this summary and the spec disagree, the spec wins.
 
 ## 1. What DocMind is
 
@@ -69,6 +69,8 @@ Shutdown drains the HTTP server, stops background work and aborts in-flight mode
 | `flows/ingest-document/` | The ingestion flow and its seven steps |
 | `flows/visualize-document/` | Extracts facts from a ready document, plans visuals from them and commits the plan to the visuals lineage |
 | `flows/chat-title/` | Names a chat from its first question |
+| `flows/suggest-tags/` | Suggests tags for one document from its stored summary, on demand (one step, one model call) |
+| `tags/` | The tag service (sealed names, keyed lookup hash, links, suggestions), the tag and suggestion routes, the suggestion normaliser |
 | `chats/` | Chat sessions, the `doc-chat` conversation and agent, five tools, linked retrieval, citations, SSE stream, reasoning |
 | `ui/` | Compiled experiences (`GET /api/ui/views/:view`) and their data (`POST /api/ui/hydrate`) |
 | `erasure/` | `DELETE /api/me` and the background `Eraser` |
@@ -122,10 +124,11 @@ Both are sibling repositories linked with `link:`. CI checks them out at the pin
 | Documents, chunks, entities, links, chats, turn items, reasoning texts | Postgres tables | RLS by tenant; content columns (`*_enc`) sealed with the user's key |
 | Embeddings | `chunks.embedding` (pgvector) | Plaintext: pgvector compares raw vectors |
 | Link graph and entity keys | `chunk_links`, `chunk_entities`, `entities.name_key` | Plaintext metadata (existence, weight, HMAC); entity names sealed |
+| Tags, tag links, tag suggestions | `tags`, `document_tags`, `document_tag_suggestions` | RLS by tenant; names sealed with the user's key; uniqueness on `tags.name_bind`, an HMAC of the normalised name under a key derived from the user's data key (plaintext never compared) |
 | Document status, chat activity | Loom folded read models | Scoped per user |
 | Data keys | `data_keys` | Wrapped by the master key (`DOCMIND_KEK`) |
 
-Tables, by migration: `tenants`, `users`, `auth_sessions`, `auth_throttle`, `data_keys`, `documents`, `parsed_documents`, `chunks`, `entities`, `chunk_entities`, `chunk_links`, `chat_sessions`, `chat_turn_items`, `chat_reasoning_texts`, `erasure_requests`. The SQL is in `infra/migrations` (0001–0025).
+Tables, by migration: `tenants`, `users`, `auth_sessions`, `auth_throttle`, `data_keys`, `documents`, `parsed_documents`, `chunks`, `entities`, `chunk_entities`, `chunk_links`, `chat_sessions`, `chat_turn_items`, `chat_reasoning_texts`, `erasure_requests`, `tags`, `document_tags`, `document_tag_suggestions`. The SQL is in `infra/migrations` (0001–0025).
 
 Document status is not a column. It is the `ingest-status` model's fold of the flow's events: `uploaded`, `parsing`, `embedding`, `ready` or `failed`.
 
@@ -214,6 +217,16 @@ flowchart LR
 - **Old turns.** `readTurn` finds a reply by scanning backward from the tail (at most 5000 records; the reader has no seek by `ord`). An old-but-found turn is scanned by the route, `turn-load` and `turn-extract`, up to three times per click, bounded by the 10 per minute limiter; the found position is not passed along because the reader exposes no cursor by `ord`.
 - **Re-runs.** A re-run that ends `nothing` keeps the earlier head (ruling C1): earlier visuals stay. The frame's `outcome` (`visualized` or `nothing`) tells the web which happened. No new settings: it uses `DOCMIND_VISUALS_PROVIDER` and `DOCMIND_PLANNER_DECISION_KEY` of 7.1.
 
+### 7.3 Tags
+
+A user groups documents with their own tags (no hierarchy, no colours) and filters the library by them.
+
+- **Storage.** `tags` holds a sealed name (`tag:<id>:name`) and `name_bind`, an HMAC-SHA256 of the normalised name (NFKC, trim, one inner space, case-fold) under a key derived from the owner's data key with its own HKDF info (`crypto/tagKeys.ts`, the `EntityKeys` pattern), unique per owner. `document_tags` links a document and a tag through composite foreign keys on `(tenant_id, owner_id, id)`, so both always share the owner; `document_tag_suggestions` holds one sealed list of up to 5 names per document. All three cascade with the document, the tag and the user (migration 0036; the same tenant-isolation policy as `documents`, and the owner is named in every query), so erasure needs no step of its own and crypto-shredding also covers the names. Limits: 20 tags per document, 200 per user, 10 per filter.
+- **Suggestions (never applied automatically).** The ingest `summarize` step reads the owner's tag names (decrypted in memory, at most 200, most used first), puts them in the reduce prompt as a quoted JSON list with one line asking for `suggestedTags` (up to 5, reusing existing names, at most 3 new), parses the field leniently (missing or malformed is `[]`), runs `normaliseSuggestions` (clip to 40 characters, map onto an existing tag by normalised form, dedupe, drop tags the document already has) and stores the result before the summary. A suggestion problem never fails ingest; a key-store outage still fails the step. An existing document gets the on-demand `suggest-tags` flow (`flows/suggest-tags/`, one step, `u_<user>:suggest-tags-<doc>-r<n>`, one run at a time per document through `rerunTracker`, at most 10 presses per user per minute): it reads only the stored summary and the tag names, makes one model call with the same answer and normalisation, replaces the row and emits a `tags` document event. It is not recovery-owned: an interrupted run is pressed again, and the page's busy state ends after 60 seconds.
+- **The ingest flow identity is unchanged.** Loom's flow hash covers the step list, ids, tool ids, timeouts, retry policies, the deadline and the version, and nothing inside a step, so a prompt change in `summarize` leaves `ingest-document` at 3.0.0 with the same hash (`flowHash.test.ts` pins it); no legacy definition is needed.
+- **Listing.** `GET /api/documents?tags=<id>,<id>&match=any|all` filters in SQL before the cursor cut, with explicit owner and tenant predicates (`any` an `EXISTS`, `all` the documents holding every id), and the cursor carries a fingerprint of the filter, so a cursor reused under another filter answers 400. The library page is a hydrated view: its `documents` provider takes the same `tags` and `match` as parameters, and each row's Tags cell is a loom-ui token cell, so a chip in a row filters the list to that tag alone.
+- **Privacy.** Names and suggestions are sealed and never appear in logs, the event log, lineage or error messages. The user's tag names reach their configured model provider inside the summary and suggestion prompts, the same boundary as the document text.
+
 ## 8. Chat and retrieval
 
 ```mermaid
@@ -285,6 +298,8 @@ The background `Eraser` then runs these steps in order:
 
 The user's visuals lineage needs no step of its own: it is sealed under the same key, so the `shred` step makes it unreadable, and the user's visualize executions are stopped in `stop`.
 
+Tags, their links and the sealed suggestions need no step of their own either: the foreign keys cascade from the user row in `rows`, and the names are sealed under the key `shred` destroys. Erasure settles and cancels a user's on-demand `suggest-tags` starts like the other flows' starts (`erasure/wire.ts`), and a run that still got through would find no document and no sealing key.
+
 Each step is idempotent and recorded, and SQL enforces the order. A crash resumes at the first unrecorded step, and pending erasures resume at boot. An advisory lock keeps one runner per user across processes. `GET /api/erasure/:receipt` reports `pending` or `done`.
 
 ## 11. Configuration and deployment
@@ -340,6 +355,7 @@ These are from the spec's open risks (§10):
 - Sign-up has no email verification, so it reveals whether an address has an account.
 - Copies held by an external LLM provider are outside DocMind's control.
 - A lost `DOCMIND_CHAT_ENVELOPE_KEY` makes queued messages unreadable.
+- After 999 "Suggest tags" presses for one document the button answers busy (the run number is the execution id's suffix).
 - GitHub Actions currently can't run on the repository: account billing blocks it.
 
 ## 14. References

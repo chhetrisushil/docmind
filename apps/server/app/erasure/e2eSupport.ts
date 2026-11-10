@@ -117,12 +117,14 @@ export async function seedUser(
 ): Promise<Seeded> {
   const claude = st.claude;
   if (!claude) throw new Error("the stack has no fake LLM provider");
-  const [inDoc, inFile, inAsk, inAnswer, inTitle] = [
+  const [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest] = [
     `sentinel-doc-${tag()}`,
     `sentinel-file-${tag()}`,
     `sentinel-ask-${tag()}`,
     `sentinel-answer-${tag()}`,
     `sentinel-title-${tag()}`,
+    `sentinel-tag-${tag()}`,
+    `sentinel-suggest-${tag()}`,
   ];
   const title = `Title ${inTitle}`;
   const before = new Set(await executionIds(st));
@@ -133,6 +135,21 @@ export async function seedUser(
   const seen = await st.until(events, documentId, (s) => s === "ready" || s === "failed");
   events.close();
   expect(seen.at(-1)?.status).toBe("ready");
+  // A tag the user named and a suggestion the model made: both sealed under the user's key. The sentinels prove that the
+  // pipeline leaves neither name anywhere, and the row counts prove the scan has something to find the absence of.
+  const added = await st.chatReq(who.cookie, "POST", `/api/documents/${documentId}/tags`, {
+    name: inTag,
+  });
+  expect(added.status).toBe(200);
+  const ref = { tenantId: who.tenantId, userId: who.userId, documentId };
+  expect(await st.composed.tags.putSuggestions(ref, [inSuggest])).toBe(true);
+  for (const table of ["tags", "document_tags", "document_tag_suggestions"]) {
+    const rows = await st.db.owner.query(
+      `SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`,
+      [who.userId],
+    );
+    expect(rows.rows[0].n).toBe(1);
+  }
   const passageId = (
     await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1", [documentId])
   ).rows[0].id as string;
@@ -180,7 +197,7 @@ export async function seedUser(
     documentId,
     passageId,
     chatId: chat.id,
-    sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle],
+    sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest],
     title,
     executions,
   };
@@ -757,9 +774,26 @@ export async function assertErased(
     db.owner,
     needlesOf(user, { tenantGone: opts.tenantGone, emailReused: opts.emailReused === true }),
   );
-  for (const table of ["public.users", "public.read_model_state", "loom.events", "loom.fences"])
+  for (const table of [
+    "public.users",
+    "public.read_model_state",
+    "loom.events",
+    "loom.fences",
+    "public.tags",
+    "public.document_tag_suggestions",
+  ])
     expect(scanned.some((c) => c.startsWith(`${table}.`))).toBe(true); // the scan is not blind
   expect(unexpected(hits, who)).toEqual([]);
+
+  // 1b. The tag tables hold nothing of the user: their rows cascade from the user row, and the names were sealed under the
+  //     destroyed key (the scan above found neither sentinel in any column).
+  for (const table of ["tags", "document_tags", "document_tag_suggestions"]) {
+    const left = await db.owner.query(
+      `SELECT count(*)::int AS n FROM ${table} WHERE owner_id = $1`,
+      [user.userId],
+    );
+    expect(left.rows[0].n).toBe(0);
+  }
 
   // 2. The read models: the user's tombstones are really there (rows that name the user are judged by the scan).
   if (opts.tombstones !== false) {
