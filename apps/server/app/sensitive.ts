@@ -1,8 +1,20 @@
 /**
+ * The id fields of a flow's start input (and of each step's input, which is the same ref). They are ids, not content, but the ids of a user, a
+ * document and a chat in a plaintext payload would link an erased user's records after the key is gone (R14), so they are sealed with the rest.
+ */
+const FLOW_INPUT_IDS = [
+  "input.tenantId",
+  "input.userId",
+  "input.documentId",
+  "input.chatId",
+] as const;
+
+/**
  * Event paths that can carry user content, sealed in the log under the owning user's key.
  *
  * Rules for every flow, agent or tool added later (M3 onwards):
- *  - a flow's start input carries ids only (the `ingest-document` stub: `{ tenantId, userId, documentId }`), never a filename, title or text;
+ *  - a flow's start input carries ids only (the `ingest-document` stub: `{ tenantId, userId, documentId }`), never a filename, title or text; the ids
+ *    themselves are sealed (`FLOW_INPUT_IDS`), so no plain user, document or chat id is left in a payload once the key is gone;
  *  - any step output or event field that can hold user content (document text, summaries, questions,
  *    answers) is listed here, or marked `sensitive(...)` in its schema and derived with
  *    `sensitivePathsFromSteps`; add it in the SAME PR that adds the flow, because an event written
@@ -28,6 +40,7 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
     "input.ops",
     "input.summary",
     "input.report",
+    ...FLOW_INPUT_IDS,
   ],
   STEP_COMPLETED: [
     "output.content",
@@ -69,5 +82,6 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
     "input.turns[].assistant",
     "input.summary",
     "input.pending",
+    ...FLOW_INPUT_IDS,
   ],
 };

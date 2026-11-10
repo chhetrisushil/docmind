@@ -424,6 +424,19 @@ describe("clear fields, load and forgetSubject", () => {
   });
 });
 
+describe("a retired handle", () => {
+  it("is not loaded again after its h_ subject key was destroyed, though the user's data key is alive (so an erasure's stop builds no h_ cancel)", async () => {
+    const { ids, userIds: u } = await userIds();
+    ids.forgetSubject(`h_${u.handle}`);
+    expect(await ids.load({ tenantId: T, userId: U })).toBe(false);
+    expect(await ids.ensureHandle(u.handle)).toBeNull();
+    expect(ids.cached(U)).toBeUndefined();
+    // The user can still be (re)minted by an explicit start: only the cold read path is closed.
+    await ids.ensureUser({ tenantId: T, userId: U });
+    expect(ids.cached(U)).toBeDefined();
+  });
+});
+
 describe("the test id source", () => {
   it("builds the ids a test can compute without awaiting: deterministicUser equals what ensureUser gives", async () => {
     const ids = testIdSource();

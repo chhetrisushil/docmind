@@ -118,8 +118,13 @@ describe("the commit step", () => {
     const stored = (rawEvent?.payload as { input: Record<string, unknown> }).input;
     for (const key of ["ops", "summary", "report"])
       expect(sealed(stored[key]), `input.${key}`).toBe("loom/aes-256-gcm");
-    // The ids stay readable (they carry no content), and the store opens the rest again.
-    expect(stored.documentId).toBe(input.documentId);
+    // The ids are sealed too (`FLOW_INPUT_IDS`: no plain user or document id is left in the log), and the store opens everything again.
+    for (const key of ["tenantId", "userId", "documentId"])
+      expect(sealed(stored[key]), `input.${key}`).toBe("loom/aes-256-gcm");
+    const payload = JSON.stringify(rawEvent?.payload); // (the execution id of this old-format run names the user)
+    expect(payload).not.toContain(input.documentId);
+    expect(payload).not.toContain(input.userId);
+    expect(JSON.stringify(await store.read(executionId))).toContain(input.documentId);
     expect(JSON.stringify(await store.read(executionId))).toContain(SECRET_LABEL);
   });
 });

@@ -67,6 +67,8 @@ export const WARM_PAGE = 500;
 export const WARM_CONCURRENCY = 8;
 const MISS_LIMIT = 1000;
 const MISS_TTL_MS = 30_000;
+/** How long a handle whose `h_` subject key was destroyed stays unloadable: longer than any park-and-retry of an erasure. */
+const RETIRED_TTL_MS = 60 * 60 * 1000;
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 
 /**
@@ -185,13 +187,13 @@ export class OpaqueIds {
     return entry?.ids ?? null;
   }
 
-  private recordMiss(handle: string): void {
+  private recordMiss(handle: string, ttlMs = MISS_TTL_MS): void {
     this.misses.delete(handle);
     if (this.misses.size >= MISS_LIMIT) {
       const oldest = this.misses.keys().next().value;
       if (oldest !== undefined) this.misses.delete(oldest);
     }
-    this.misses.set(handle, Date.now() + MISS_TTL_MS);
+    this.misses.set(handle, Date.now() + ttlMs);
   }
 
   private async loadKey(userId: string, handle: string): Promise<Entry | null> {
@@ -285,6 +287,10 @@ export class OpaqueIds {
     this.cancel(`h:${handle}`);
     const entry = this.byHandle.get(handle);
     if (entry) this.forget(entry.ids.userId);
+    // The user's data key may outlive the handle's subject key (the erasure destroys them in turn), and this cache derives from the data
+    // key: without this, the next cold `load` would hand an erasure's stop an `h_` id it can only be refused on (and Loom audits the refusal
+    // with the actor's id in the clear). A bounded, expiring entry (the miss map), so nothing grows per erased user.
+    this.recordMiss(handle, RETIRED_TTL_MS);
   }
 
   /** Drops a user from the cache (erasure, after the key is destroyed). */

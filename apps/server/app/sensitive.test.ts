@@ -211,18 +211,28 @@ describe("SENSITIVE_EVENT_PATHS for conversations", () => {
     expect([i.seq, i.turns[0]?.n, i.turns[0]?.status]).toEqual([2, 1, "complete"]);
   });
 
-  it("leaves an ingest execution's events untouched", async () => {
+  it("seals the ids of a flow's start input and of a step's input, opens them again, and leaves outcomes and counts in the clear", async () => {
     const ingest = `u_${U}:ingest-${C}`;
-    const input = { tenantId: "t", userId: U, documentId: C };
-    const { raw } = await roundTrip(ingest, [
+    const input = { tenantId: "tenant-id-0001", userId: U, documentId: C };
+    const { raw, plain } = await roundTrip(ingest, [
       { eventType: "EXECUTION_STARTED", payload: { input } },
+      { eventType: "STEP_STARTED", payload: { stepId: "ingest-parse", input } },
       {
         eventType: "STEP_COMPLETED",
         payload: { stepId: "ingest-parse", output: { outcome: "done", count: 1 } },
       },
     ]);
-    expect(raw[0]?.payload).toEqual({ input });
-    expect(raw[1]?.payload).toEqual({
+    for (const e of raw.slice(0, 2)) {
+      const sealedInput = (e.payload as { input: Record<string, unknown> }).input;
+      expect(
+        [sealedInput.tenantId, sealedInput.userId, sealedInput.documentId].map(isSealed),
+      ).toEqual([true, true, true]);
+    }
+    // No plain user, tenant or document id is left in any payload of the raw log (the execution id is the id module's business).
+    const payloads = JSON.stringify(raw.map((e) => e.payload));
+    for (const plainId of [U, C, "tenant-id-0001"]) expect(payloads).not.toContain(plainId);
+    expect(plain[0]?.payload).toEqual({ input });
+    expect(raw[2]?.payload).toEqual({
       stepId: "ingest-parse",
       output: { outcome: "done", count: 1 },
     });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type BootIngestParts, bootIngest, recoveryOwns } from "./bootIngest";
+import { opaqueIds } from "./opaqueIds";
 
 const calls: string[] = [];
 const owned: (((id: string) => boolean) | undefined)[] = [];
@@ -42,6 +43,12 @@ vi.mock("./storage/lineageGc", () => ({
     return { stop: async () => void calls.push("lineageGc.stop") };
   },
 }));
+vi.mock("./documents/executionIds", () => ({
+  repairStoredExecutionIds: async () => {
+    calls.push("repairIds");
+    return repairIds();
+  },
+}));
 vi.mock("./storage/pgLineageGc", () => ({ lineageGcDeps: () => ({}) }));
 vi.mock("./documents/sweeper", () => ({
   startSweeper: () => {
@@ -49,6 +56,9 @@ vi.mock("./documents/sweeper", () => ({
     return { stop: async () => void calls.push("sweeper.stop") };
   },
 }));
+
+let warmIds: () => Promise<number> = async () => 0;
+let repairIds: () => Promise<number> = async () => 0;
 
 function parts(
   over: Partial<BootIngestParts> = {},
@@ -71,6 +81,7 @@ function parts(
       boot: activityBoot ?? (async () => void calls.push("bootActivity")),
       close: async () => void calls.push("closeActivity"),
     },
+    ids: { warm: () => warmIds() },
     vectors: {},
     readiness: {
       beginShutdown: note("readiness.beginShutdown"),
@@ -121,6 +132,8 @@ function withIndex(over: Partial<BootIngestParts> = {}) {
 }
 
 beforeEach(() => {
+  warmIds = async () => 0;
+  repairIds = async () => 0;
   calls.length = 0;
   owned.length = 0;
   swept.length = 0;
@@ -178,16 +191,17 @@ describe("bootIngest: the lineage content collector", () => {
 describe("bootIngest", () => {
   it("verifies, boots status, primes the decoy, listens, then starts recovery and the sweepers", async () => {
     await bootIngest(parts({ listen: async () => void calls.push("listen") }));
-    expect(calls.slice(0, 5)).toEqual([
+    expect(calls.slice(0, 6)).toEqual([
       "verifyVectors",
       "bootStatus",
+      "repairIds",
       "bootActivity",
       "primeDecoy",
       "listen",
     ]);
-    expect(calls[5]).toBe("startRecovery:owner-1");
-    expect(calls.slice(6)).toEqual(expect.arrayContaining(["startSweeper"]));
-    expect(calls.indexOf("startSweeper")).toBeGreaterThan(5);
+    expect(calls[6]).toBe("startRecovery:owner-1");
+    expect(calls.slice(7)).toEqual(expect.arrayContaining(["startSweeper"]));
+    expect(calls.indexOf("startSweeper")).toBeGreaterThan(6);
   });
 
   it("sweeps the ready documents for visuals right after recovery starts, and aborts that sweep at stop", async () => {
@@ -207,9 +221,10 @@ describe("bootIngest", () => {
 
   it("starts recovery and the sweepers without a listen step", async () => {
     await bootIngest(parts());
-    expect(calls.slice(0, 5)).toEqual([
+    expect(calls.slice(0, 6)).toEqual([
       "verifyVectors",
       "bootStatus",
+      "repairIds",
       "bootActivity",
       "primeDecoy",
       "startRecovery:owner-1",
@@ -241,6 +256,7 @@ describe("bootIngest", () => {
     expect(calls).toEqual([
       "verifyVectors",
       "bootStatus",
+      "repairIds",
       "bootActivity",
       "primeDecoy",
       "closeIngest",
@@ -406,9 +422,10 @@ describe("bootIngest", () => {
 
   it("hydrates the subject index after the models boot and before the decoy and the bind", async () => {
     await bootIngest(withIndex({ listen: async () => void calls.push("listen") }));
-    expect(calls.slice(0, 7)).toEqual([
+    expect(calls.slice(0, 8)).toEqual([
       "verifyVectors",
       "bootStatus",
+      "repairIds",
       "bootActivity",
       "hydrateIndex",
       "appStart",
@@ -451,5 +468,76 @@ describe("bootIngest", () => {
     await bootIngest(parts());
     expect(calls).not.toContain("hydrateIndex");
     expect(calls).not.toContain("appStart");
+  });
+});
+
+describe("bootIngest: the id key cache", () => {
+  it("is warmed before the status model boots, so before recovery, the fold or any observer", async () => {
+    warmIds = async () => {
+      calls.push("warmIds");
+      return 3;
+    };
+    await bootIngest(parts());
+    expect(calls.indexOf("warmIds")).toBeGreaterThan(-1);
+    expect(calls.indexOf("warmIds")).toBeLessThan(calls.indexOf("bootStatus"));
+  });
+
+  it("is warmed before the status boot, the chat-activity catch-up, the subject index hydrate and the first start of the runtime", async () => {
+    warmIds = async () => {
+      calls.push("warmIds");
+      return 3;
+    };
+    await bootIngest(withIndex({ listen: async () => void calls.push("listen") }));
+    const warm = calls.indexOf("warmIds");
+    for (const later of ["bootStatus", "bootActivity", "hydrateIndex", "appStart", "listen"])
+      expect(warm, later).toBeLessThan(calls.indexOf(later));
+    expect(warm).toBeLessThan(calls.findIndex((c) => c.startsWith("startRecovery")));
+  });
+
+  it("a failed warm-up cleans up with the fixed label, never serves and never starts recovery", async () => {
+    warmIds = async () => {
+      throw new Error("key store down: u_secret");
+    };
+    await expect(bootIngest(parts())).rejects.toThrow("id keys failed to boot");
+    expect(calls).not.toContain("bootStatus");
+    expect(calls).toContain("closeApp");
+  });
+
+  it("repairs the stored execution ids after the status model has caught up and before recovery or the sweeps start", async () => {
+    repairIds = async () => 2;
+    await bootIngest(parts());
+    expect(calls.indexOf("repairIds")).toBeGreaterThan(calls.indexOf("bootStatus"));
+    expect(calls.indexOf("repairIds")).toBeLessThan(
+      calls.findIndex((c) => c.startsWith("startRecovery")),
+    );
+    expect(calls.indexOf("repairIds")).toBeLessThan(calls.indexOf("startSweeper"));
+  });
+
+  it("a failed repair cleans up with the fixed label, never starts recovery, and never prints an id", async () => {
+    repairIds = async () => {
+      throw new Error("db down: u_secret");
+    };
+    await expect(bootIngest(parts())).rejects.toThrow("stored execution ids failed to boot");
+    expect(calls.some((c) => c.startsWith("startRecovery"))).toBe(false);
+    expect(calls).toContain("closeApp");
+  });
+
+  it("stop() removes the process-wide id cache as the very last closer, so the next stack in the same process starts cold", async () => {
+    opaqueIds.install({} as never);
+    const booted = await bootIngest(parts());
+    let installedAtPoolEnd: unknown = "unset";
+    const p = parts();
+    (p.pool as unknown as { end: () => Promise<void> }).end = async () => {
+      installedAtPoolEnd = opaqueIds.current();
+      calls.push("endPool");
+    };
+    opaqueIds.install({} as never);
+    const second = await bootIngest(p);
+    await second.stop();
+    // Still installed while the pool ends, gone afterwards.
+    expect(installedAtPoolEnd).toBeDefined();
+    expect(opaqueIds.current()).toBeUndefined();
+    await booted.stop();
+    expect(opaqueIds.current()).toBeUndefined();
   });
 });
