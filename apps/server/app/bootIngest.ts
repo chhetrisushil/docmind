@@ -105,6 +105,7 @@ export async function bootIngest(
     chat,
     titles,
     turns,
+    suggestTags,
     visuals,
     eraser,
     erasureLocks,
@@ -247,6 +248,7 @@ export async function bootIngest(
               await starts.idle();
               await titles?.idle();
               await turns?.idle();
+              await suggestTags?.idle();
               await visuals.idle();
             },
             closeIngest: () => closeIngest(ingest),

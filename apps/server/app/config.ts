@@ -7,6 +7,7 @@ import { isChatExecution } from "./chats/activity";
 import { type ErasureWiring, complianceConfig, warningFor } from "./erasure/compliance";
 import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";
 import { type IngestDeps, ingestEffects } from "./flows/ingest-document/deps";
+import { type SuggestTagsDeps, suggestTagsEffect } from "./flows/suggest-tags/step";
 import { type VisualizeDeps, visualizeEffects } from "./flows/visualize-document/deps";
 import { type TurnVisualizeDeps, turnEffects } from "./flows/visualize-turn/deps";
 import {
@@ -44,6 +45,8 @@ export interface FlowDeps {
   chat?: ChatDeps;
   /** The auto-title step's dependencies; without them the flow's step fails at its first use (like an unregistered ingest step). */
   chatTitle?: ChatTitleDeps;
+  /** The on-demand tag suggestions step's dependencies; without them the flow's step fails at its first use. */
+  suggestTags?: SuggestTagsDeps;
   /**
    * The visualize-document flow's dependencies. Its flow (the runner holds the app's planner) and effects register
    * only with them; without them a start of that flow is refused (the CLI, in-memory tests).
@@ -148,6 +151,7 @@ export function buildApp(
             effects.register(id, effect);
         }
         if (deps.chatTitle) effects.register("chat-title", chatTitleEffect(deps.chatTitle));
+        if (deps.suggestTags) effects.register("suggest-tags", suggestTagsEffect(deps.suggestTags));
       },
     },
     security: {

@@ -7,6 +7,7 @@ import { chatConversationId } from "../chats/ids";
 import type { ChatWiring } from "../chats/wiring";
 import type { IngestPort } from "../documents/ingest";
 import type { StartScheduler } from "../documents/startScheduler";
+import type { SuggestTagsStarter } from "../flows/suggest-tags/start";
 import type { VisualsStarter } from "../flows/visualize-document/start";
 import { drainWithin } from "../shutdown";
 import { executionIdFor } from "../subject";
@@ -34,6 +35,8 @@ export interface ErasureParts {
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
   visuals: Pick<VisualsStarter, "cancel" | "settle" | "idle">;
+  /** The on-demand tag suggestion starter: its pending starts are settled and its runs cancelled like the other flows'. */
+  suggestTags?: Pick<SuggestTagsStarter, "cancel" | "idle" | "settle">;
   /** Absent when chat is not composed: there are no conversations to stop. */
   chat?: {
     stops: Pick<ChatWiring["stops"], "stop">;
@@ -67,17 +70,21 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
         Promise.all([
           p.starts.settle(identity, documentId),
           p.visuals.settle(identity, documentId),
+          p.suggestTags?.settle(identity, documentId),
         ]).then(() => undefined),
         SETTLE_MS,
       ),
     settleTitles: async () => {
       await p.titles?.idle();
       await p.visuals.idle(); // a fired visualize start has landed (and is cancelled by cancelVisualize) before the shred
+      await p.suggestTags?.idle(); // likewise a fired suggest-tags start
     },
     cancelIngest: (identity, documentId, generation) =>
       p.ingest.cancel(identity, documentId, generation),
-    cancelVisualize: (identity, documentId, generation) =>
-      p.visuals.cancel(identity, documentId, generation, ERASED),
+    cancelVisualize: async (identity, documentId, generation) => {
+      await p.visuals.cancel(identity, documentId, generation, ERASED);
+      await p.suggestTags?.cancel(identity, documentId, ERASED); // the document's on-demand tag runs stop at the same point
+    },
     async stopChat(identity: Identity, chatId: string) {
       if (!p.chat) return;
       const conversationId = chatConversationId(identity.userId, chatId);

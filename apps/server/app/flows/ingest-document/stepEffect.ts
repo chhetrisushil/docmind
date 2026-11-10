@@ -3,6 +3,7 @@ import type { RetryPolicy } from "@loom/core";
 import type { Effect } from "@loom/effect-runtime";
 import { z } from "zod";
 import { generationOf } from "../../status/model";
+import { defaultSleep } from "../sleep";
 import {
   BlobMissingError,
   FAILURE_CODES,
@@ -125,20 +126,6 @@ export interface StepOptions<E = never> {
   exhausted?: (err: unknown) => E | undefined;
 }
 
-const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new ParseAbortedError());
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(new ParseAbortedError());
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-
 /**
  * A shutdown (the `shutdown` signal, aborted just before `runner.close()`) interrupts a step while
  * the execution's own signal is quiet, whatever error that surfaces as. That is neither a failure nor an attempt: the step must stay un-completed in the log, as
@@ -223,7 +210,9 @@ export function stepEffectOf<O, R extends { tenantId: string } = IngestStartInpu
   options: StepOptions<E> = {},
 ): Effect<R, O> {
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
-  const sleep = options.sleep ?? defaultSleep;
+  const sleep =
+    options.sleep ??
+    ((ms: number, signal?: AbortSignal) => defaultSleep(ms, signal, () => new ParseAbortedError()));
   const settleMs = options.settleMs ?? ATTEMPT_SETTLE_MS;
   const attemptOnce = async (
     ref: R,

@@ -73,6 +73,22 @@ describe("erasureDeps", () => {
     ]);
   });
 
+  it("settles and cancels the document's suggest-tags runs with its other starts, and awaits the starter with the titles", async () => {
+    const calls: string[] = [];
+    const { parts: p } = parts({
+      suggestTags: {
+        settle: async (_who, doc) => void calls.push(`suggest.settle:${doc}`),
+        cancel: async (_who, doc, reason) => void calls.push(`suggest.cancel:${doc}:${reason}`),
+        idle: async () => void calls.push("suggest.idle"),
+      },
+    });
+    const deps = erasureDeps(p);
+    await deps.settleStart(who, "d");
+    await deps.cancelVisualize(who, "d", 3);
+    await deps.settleTitles();
+    expect(calls).toEqual(["suggest.settle:d", "suggest.cancel:d:erased", "suggest.idle"]);
+  });
+
   it("tolerates a conversation that never started or is closed, and a title that never started", async () => {
     const { parts: p } = parts({
       chat: {

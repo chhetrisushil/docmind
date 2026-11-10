@@ -48,6 +48,7 @@ import { loomTitleStarter } from "./flows/chat-title/start";
 import type { IngestWiring } from "./flows/ingest-document/limits";
 import { PgChunkStore } from "./flows/ingest-document/pgChunks";
 import { pgIngestDeps } from "./flows/ingest-document/pgDeps";
+import { loomSuggestTagsStarter } from "./flows/suggest-tags/start";
 import { newVisualizeGate } from "./flows/visualize-document/deps";
 import { visualizeDocumentFlow } from "./flows/visualize-document/flow";
 import { visualsLineage } from "./flows/visualize-document/lineage";
@@ -87,6 +88,7 @@ import { PgContentStore } from "./storage/pgContentStore";
 import { subjectOfExecution } from "./subject";
 import { tagRoutes } from "./tags/routes";
 import { TagService } from "./tags/service";
+import { suggestRoutes } from "./tags/suggestRoutes";
 import { uiRoutes } from "./ui/routes";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
@@ -309,6 +311,13 @@ export function buildServer(options: ComposeOptions) {
         ...(titleLlm && { llm: titleLlm }),
       },
     }),
+    suggestTags: {
+      pool,
+      fields,
+      tags,
+      bus: options.ingest.bus,
+      ...(options.ingest.llm.summary && { llm: options.ingest.llm.summary }),
+    },
     ...(options.erasure && { erasure: { keys, raw: options.erasure.raw } }),
     onEvent: (event) => {
       for (const sink of feed.sinks) {
@@ -325,6 +334,10 @@ export function buildServer(options: ComposeOptions) {
     },
   });
   const titles = options.chat && loomTitleStarter(app.runtime);
+  // On-demand tag suggestions: one flow, one model call; off with the `summary` role.
+  const suggestTags = loomSuggestTagsStarter(app.runtime, {
+    enabled: () => options.ingest.llm.summary !== undefined,
+  });
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
@@ -456,6 +469,7 @@ export function buildServer(options: ComposeOptions) {
               ...(titles && { titles }),
               ingest,
               visuals,
+              suggestTags,
               ...(chat && { chat }),
               status,
               activity,
@@ -535,6 +549,13 @@ export function buildServer(options: ComposeOptions) {
         tags,
       }),
       ...tagRoutes({ authenticator, tags }),
+      ...suggestRoutes({
+        pool,
+        authenticator,
+        tags,
+        starter: suggestTags,
+        limiter: new UserRateLimit(),
+      }),
       ...uiRoutes({
         authenticator,
         views,
@@ -609,6 +630,8 @@ export function buildServer(options: ComposeOptions) {
     titles,
     /** Starts visualize-turn runs; absent without chat. idle() is awaited at shutdown with the other starts. */
     turns,
+    /** Starts the on-demand tag suggestions; shutdown awaits `idle()` with the other starts. */
+    suggestTags,
     /** Starts, sweeps and cancels the visualize flow; boot calls `sweep()`, shutdown awaits `idle()`. */
     visuals,
     /** True while the `visuals` role is on (the lineage collector runs only then). */
