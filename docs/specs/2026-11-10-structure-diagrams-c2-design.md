@@ -18,7 +18,7 @@ This is step (c), phase c2 of document visuals. Phase c1 (outline and entity map
 | D2 | Two aggregate facts at reserved ordinals, outside the 16-fact chart pool: `timeline` at 18, `relations` at 19. |
 | D3 | Dates are kept at day, month, quarter or year precision and shown as written. Relative or undated phrases are dropped. |
 | D4 | Relationships get their own Diagram entry. c1's entity map is unchanged. |
-| D5 | **Rollout is on demand only, and re-extracts once.** New uploads and re-ingests get the new facts automatically and stamp the document with the extraction format (`docmind.extract@2`). An existing document is stamped nothing (NULL) until it is extracted again. A re-run the user asks for re-extracts only when the stored stamp is missing or is not the current one: one extraction call per document, once. After that, re-runs are cheap re-plans as today. The boot re-plan is not triggered and a boot pass never extracts, so the fact-format fingerprint is unchanged. |
+| D5 | **Rollout is on demand only, and re-extracts once.** New uploads and re-ingests get the new facts automatically and stamp the document with the extraction format (`docmind.extract@2`). An existing document is stamped nothing (NULL) until it is extracted again. A re-run the user asks for (the "Refresh visuals" button on the Visuals tab, or Retry after a failure) re-extracts only when the stored stamp is missing or is not the current one: one extraction call per document, once. After that, re-runs are cheap re-plans as today. The boot re-plan is not triggered and a boot pass never extracts, so the fact-format fingerprint is unchanged. |
 | D6 | Migration 0037 widens the ordinal CHECK to 0..19 and extends the kind/ordinal rule. |
 | D7 | The visualize-document flow version is unchanged: only the extract step's prompt and output change. This is verified against Loom's flow hash and pinned by a test. |
 
@@ -112,7 +112,7 @@ The prompt tells the model:
 - `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything.
 - Existing plans stay valid, because v3's entries are a subset of v4's.
 - The plan verifies that a stored plan from v3 still hydrates under v4.
-- **Re-extract once.** The route's re-run (never a boot pass) is marked as asked by the user. The extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2). The note is spent only after the extraction has been written (or when the step settles without extracting), so a step that fails and is retried still extracts. The extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
+- **Re-extract once.** The user asks for it with "Refresh visuals" (always present on a served document's Visuals tab, or Retry when the visuals failed); both call the retry route. The route's re-run (never a boot pass) is marked as asked by the user. The extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2). The note is spent only after the extraction has been written (or when the step settles without extracting), so a step that fails and is retried still extracts. The extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
 
 ## 6. Privacy and cost
 
@@ -167,3 +167,7 @@ The prompt tells the model:
 - Cross-document timelines or relationship graphs.
 - Merging relationship nodes with the `entities` table, or with c1's entity map.
 - Editing extracted events or links.
+
+## As built
+
+- Re-runs happen from "Refresh visuals" (a secondary button on the Visuals tab, shown whenever the document is served and no run is in flight; it reads "Refreshing…" and is disabled until a `visuals` event or 60 s) or from Retry when the visuals failed. Both reuse the existing `POST /api/documents/:id/visuals/retry` path, its refusal notes ("limited", "busy") and its rate limit. Its help text says it may re-read the document once to add new diagram types.
