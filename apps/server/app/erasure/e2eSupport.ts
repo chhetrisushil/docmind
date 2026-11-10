@@ -678,6 +678,25 @@ const ALLOWED: Allowed[] = [
     reason: "D7: a read-model tombstone (state NULL, erased) keeps the key of the row it replaced",
     ok: (row: Row, who: Who) => row.state === null && row.erased === true && noContent(row, who),
   })),
+  // A read-model rebuild after the erasure refolds the erased user's `h_<handle>` executions. Their handle no longer resolves, so the
+  // fold gives each a neutral row (an empty state, no scope, no key): the handle's prefix can no longer be walked to tombstone it, and it
+  // holds nothing but the execution id, which the tombstone keeps as well.
+  ...["execution_id", "scope", "app_key"].map((column) => ({
+    table: "public.read_model_state",
+    column,
+    reason:
+      "a refolded execution of an erased handle: a neutral row (empty state, no scope, no key) that keeps only the execution id",
+    ok: (row: Row, who: Who) =>
+      who.handle !== undefined &&
+      String(row.execution_id).startsWith(`h_${who.handle}`) &&
+      row.erased === false &&
+      typeof row.state === "object" &&
+      row.state !== null &&
+      Object.keys(row.state).length === 0 &&
+      row.scope === null &&
+      row.app_key === null &&
+      noContent(row, who),
+  })),
 ];
 
 const key = (h: { table: string; column: string }) => `${h.table}.${h.column}`;

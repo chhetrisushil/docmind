@@ -6,6 +6,14 @@ const ID = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const OTHER = "b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2";
 const ref = { documentId: ID, tenantId: ID, userId: ID };
 const executionId = legacyIngestId(ID, ID);
+// The raw log holds the flow input's ids sealed under the user's key (`sensitive.ts` `FLOW_INPUT_IDS`).
+const SEALED_ID = {
+  __loomEnc: "loom/aes-256-gcm",
+  iv: Buffer.alloc(12, 1).toString("base64"),
+  tag: Buffer.alloc(16, 2).toString("base64"),
+  data: Buffer.alloc(20, 3).toString("base64"),
+};
+const sealedRef = { documentId: SEALED_ID, tenantId: SEALED_ID, userId: SEALED_ID };
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars";
 const ev = (eventType: string, payload: unknown, over: Record<string, unknown> = {}): RawEvent =>
   ({
@@ -18,7 +26,7 @@ const ev = (eventType: string, payload: unknown, over: Record<string, unknown> =
     payload,
     ...over,
   }) as RawEvent;
-const started = { input: ref, stepId: "ingest-parse" };
+const started = { input: sealedRef, stepId: "ingest-parse" };
 const done = { output: { outcome: "done", count: 3 }, stepId: "ingest-parse" };
 const SEALED = {
   __loomEnc: "loom/aes-256-gcm",
@@ -51,26 +59,34 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     ],
     [
       "a filename in a step input",
-      ev("STEP_STARTED", { input: { ...ref, filename: "Q3 report.pdf" }, stepId: "ingest-parse" }),
+      ev("STEP_STARTED", {
+        input: { ...sealedRef, filename: "Q3 report.pdf" },
+        stepId: "ingest-parse",
+      }),
       /unexpected key .*\.input\.filename/,
     ],
     [
       "an email in a step input",
-      ev("STEP_STARTED", { input: { ...ref, email: "a@b.example" }, stepId: "ingest-parse" }),
+      ev("STEP_STARTED", { input: { ...sealedRef, email: "a@b.example" }, stepId: "ingest-parse" }),
       /unexpected key .*\.input\.email/,
     ],
     [
       "a title as an id",
       ev("STEP_STARTED", {
-        input: { ...ref, documentId: "Quarterly report" },
+        input: { ...sealedRef, documentId: "Quarterly report" },
         stepId: "ingest-parse",
       }),
       /input\.documentId is not an id/,
     ],
     [
       "another document's id",
-      ev("STEP_STARTED", { input: { ...ref, documentId: OTHER }, stepId: "ingest-parse" }),
+      ev("STEP_STARTED", { input: { ...sealedRef, documentId: OTHER }, stepId: "ingest-parse" }),
       /input\.documentId is not an id/,
+    ],
+    [
+      "the user's id in the clear (the flow input's ids are sealed)",
+      ev("STEP_STARTED", { input: { ...sealedRef, userId: ID }, stepId: "ingest-parse" }),
+      /input\.userId is not an id/,
     ],
     [
       "text as the outcome",
@@ -90,7 +106,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     [
       "a plaintext principal",
       ev("EXECUTION_STARTED", {
-        input: ref,
+        input: sealedRef,
         flowHash: "fnv1a:41c3727d",
         principal: { v: 1, identity: { actor: "alice@example.com", tenant: "acme" } },
       }),
@@ -189,7 +205,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     ],
     [
       "a step id outside the flow's steps",
-      ev("STEP_STARTED", { input: ref, stepId: "ingest-quarterly" }),
+      ev("STEP_STARTED", { input: sealedRef, stepId: "ingest-quarterly" }),
       /\.stepId is not an id/,
     ],
     [
@@ -200,7 +216,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     [
       "a sealed leaf that is not base64",
       ev("EXECUTION_STARTED", {
-        input: ref,
+        input: sealedRef,
         flowHash: "fnv1a:41c3727d",
         principal: {
           v: 1,
@@ -212,7 +228,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     [
       "a sealed iv of the wrong length",
       ev("EXECUTION_STARTED", {
-        input: ref,
+        input: sealedRef,
         flowHash: "fnv1a:41c3727d",
         principal: {
           v: 1,
@@ -232,11 +248,11 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     expect(() =>
       check(
         ev("EXECUTION_STARTED", {
-          input: ref,
+          input: sealedRef,
           flowHash: "fnv1a:41c3727d",
           principal: { v: 1, identity: { actor: SEALED, tenant: SEALED } },
         }),
-        ev("STEP_STARTED", { input: ref, stepId: "ingest-chunk" }),
+        ev("STEP_STARTED", { input: sealedRef, stepId: "ingest-chunk" }),
         ev("STEP_FAILED", { error: "Error: ingest step failed: chunk", stepId: "ingest-chunk" }),
       ),
     ).not.toThrow();
@@ -245,7 +261,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
   it("accepts the embed step's result with exactly the configured model, and its fixed failure", () => {
     expect(() =>
       checkEmbed(
-        ev("STEP_STARTED", { input: ref, stepId: "ingest-embed" }),
+        ev("STEP_STARTED", { input: sealedRef, stepId: "ingest-embed" }),
         embedDone({ outcome: "done", count: 2, model: MODEL }),
         ev("STEP_FAILED", { error: "Error: ingest step failed: embed", stepId: "ingest-embed" }),
       ),
@@ -307,7 +323,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
   it("accepts a later generation's execution id for that generation only", () => {
     const later = ev(
       "STEP_STARTED",
-      { input: ref, stepId: "ingest-parse" },
+      { input: sealedRef, stepId: "ingest-parse" },
       {
         id: `${legacyIngestId(ID, ID, 3)}-1`,
         executionId: legacyIngestId(ID, ID, 3),
@@ -322,7 +338,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
   it.each(["analyze", "summarize", "link"])("accepts the %s placeholder's events", (name) => {
     expect(() =>
       check(
-        ev("STEP_STARTED", { input: ref, stepId: `ingest-${name}` }),
+        ev("STEP_STARTED", { input: sealedRef, stepId: `ingest-${name}` }),
         ev("STEP_COMPLETED", { output: { outcome: "done" }, stepId: `ingest-${name}` }),
         ev("STEP_FAILED", {
           error: `Error: ingest step failed: ${name}`,
@@ -342,7 +358,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
   });
 
   it("throws for a step id the flow does not have", () => {
-    expect(() => check(ev("STEP_STARTED", { input: ref, stepId: "ingest-publish" }))).toThrow(
+    expect(() => check(ev("STEP_STARTED", { input: sealedRef, stepId: "ingest-publish" }))).toThrow(
       /stepId is not an id/,
     );
   });

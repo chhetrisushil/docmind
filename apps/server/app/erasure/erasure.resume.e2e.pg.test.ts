@@ -115,10 +115,16 @@ describe.skipIf(!PG_URL)(
               $$ BEGIN RAISE EXCEPTION 'tombstones refused'; END $$;
             CREATE TRIGGER refuse_tombstone BEFORE INSERT ON loom.events
               FOR EACH ROW WHEN (NEW.event_type = 'PAYLOAD_SHREDDED') EXECUTE FUNCTION loom.refuse_tombstone();`);
+          // Loom's shred destroys the subject key of every subject that owns an execution: here the user's handle (every run of
+          // the document flows is new-format), since the user's UUID subject owns none.
+          const handle = (
+            await first.db.owner.query("SELECT id_handle FROM users WHERE id = $1", [gus.userId])
+          ).rows[0]?.id_handle as string;
+          expect(handle).toMatch(/^[a-z2-7]{26}$/);
           expect((await eraseMe(first, gus.cookie)).status).toBe(202);
           await vi.waitFor(
             async () => {
-              expect(await first.keys.wasDestroyed(gus.userId)).toBe(true);
+              expect(await first.keys.wasDestroyed(`h_${handle}`)).toBe(true);
             },
             { timeout: 90_000, interval: 100 },
           );

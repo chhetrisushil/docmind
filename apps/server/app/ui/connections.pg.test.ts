@@ -3,10 +3,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { type FieldCrypto, FieldKeyStoreError } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
-import { T1, T2, U1, U1B, U2 } from "../documents/testHarness";
+import { T1, T2, U1, U1B, U2, seedRow } from "../documents/testHarness";
 import { type PgFixture, startPgFixture } from "../flows/ingest-document/pgFixture";
 import { ENTITIES_SQL, RELATED_SQL, SELF_SQL, readConnections } from "./connections";
-import { connectionsSeeder } from "./testSupport";
+import { READY_STATE, connectionsSeeder } from "./testSupport";
 
 const A1 = { tenantId: T1, userId: U1 };
 
@@ -71,6 +71,39 @@ describe.skipIf(!PG_URL)("readConnections (needs DOCMIND_TEST_PG_URL)", () => {
     expect((await read("a"))?.related.map((r) => r.documentId)).toEqual([id("b")]);
     await fx.db.owner.query("DELETE FROM documents WHERE id = $1", [id("b")]);
     expect((await read("a"))?.related).toEqual([]);
+  });
+
+  it("counts a document ready under either id format (the stored id decides), and not one whose stored id is missing", async () => {
+    await seed("a", { chunks: 4 });
+    await seed("old"); // ready under an old-format id, as the migration's backfill (or `seed`) stores it
+    await seed("fresh", { ready: false });
+    await seed("unrecorded", { ready: false });
+    const opaque = (name: string) =>
+      `h_${"a".repeat(26)}:ingest-${id(name).replaceAll("-", "").padEnd(52, "b")}.2`;
+    // A new-format run: a status row under the opaque id and the same id recorded on the document.
+    await seedRow(fx.db.owner, opaque("fresh"), id("fresh"), A1.userId, READY_STATE);
+    await fx.db.owner.query("UPDATE documents SET ingest_execution_id = $2 WHERE id = $1", [
+      id("fresh"),
+      opaque("fresh"),
+    ]);
+    // A ready status row, but the document has no recorded id: SQL cannot build one, so it is not ready.
+    await seedRow(fx.db.owner, opaque("unrecorded"), id("unrecorded"), A1.userId, READY_STATE);
+    await link(ch("a", 0), ch("old", 0), 0.9);
+    await link(ch("a", 1), ch("fresh", 0), 0.8);
+    await link(ch("a", 2), ch("unrecorded", 0), 0.7);
+    expect((await read("a"))?.related.map((r) => r.documentId)).toEqual([id("old"), id("fresh")]);
+    // The same through the entity query's readiness join.
+    const shared = await entity("Acme", [
+      ch("a", 3),
+      ch("old", 1),
+      ch("fresh", 1),
+      ch("unrecorded", 1),
+    ]);
+    const entities = (await read("a"))?.entities ?? [];
+    expect(entities.map((e) => e.entityId)).toEqual([shared]); // the seeded entity is the one listed
+    expect(entities[0]?.documents.map((d) => d.documentId).sort()).toEqual(
+      [id("fresh"), id("old")].sort(),
+    );
   });
 
   it("returns at most 8 related documents, the strongest", async () => {

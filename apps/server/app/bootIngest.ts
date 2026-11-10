@@ -4,6 +4,7 @@ import { bootServing } from "./boot";
 import { isRecoverableChatExecution } from "./chats/ids";
 import { closeSequence } from "./closeSequence";
 import type { buildServer } from "./compose";
+import { repairStoredExecutionIds } from "./documents/executionIds";
 import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
 import { startSweeper } from "./documents/sweeper";
 import { hydrateSubjectIndex } from "./erasure/compliance";
@@ -12,6 +13,7 @@ import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
 import { isSuggestTagsExecution } from "./flows/suggest-tags/start";
 import { isTurnVisualizeExecution } from "./flows/visualize-turn/ids";
+import { opaqueIds } from "./opaqueIds";
 import { SHUTDOWN_DRAIN_MS, drainWithin, runAll } from "./shutdown";
 import { snapshotPruneDeps } from "./snapshots/pgPruner";
 import { startSnapshotPruner } from "./snapshots/pruner";
@@ -121,8 +123,36 @@ export async function bootIngest(
 
   // The schema (applied out of band by `pnpm db:migrate`) must fit the embedder before anything else starts.
   await verifyVectors(vectors, cleanup);
+  // The id key cache is warmed before the status model boots, so before recovery, the fold or any observer reads a new-format id (R14). A
+  // key-store outage fails the boot here (with the fixed label, never an id): nothing falls back to an old-format id.
+  await bootStatus(
+    {
+      boot: async () => {
+        // Counts only, so a slow boot on many users is explained (the cache is in memory).
+        console.info("id keys warmed", { users: await built.ids.warm() });
+      },
+    },
+    cleanup,
+    "id keys",
+  );
   // Register, then catch up on what the log holds, before anything is served (ADR 0132 D13).
   await bootStatus(status, cleanup);
+  // An old pod never writes `documents.ingest_execution_id` or `visualize_execution_id` (migration 0038), so a document it ingested during a
+  // rolling deploy has an old-format status row and no stored id: the stale-upload sweep would start a second ingest for it, and the ready and
+  // visuals sweeps would never find it. The repair is idempotent (it only fills a NULL column from an existing status row) and runs here,
+  // before recovery and every sweep. A failure is fatal with the fixed label: a sweep that lists on missing ids would double-start work.
+  await bootStatus(
+    {
+      boot: async () => {
+        // A count only, so a slow boot after a long rollout is explained.
+        console.info("stored execution ids repaired", {
+          columns: await repairStoredExecutionIds(pool),
+        });
+      },
+    },
+    cleanup,
+    "stored execution ids",
+  );
   // The session list falls back to created_at without this model, so its failure never blocks serving.
   await activity.boot().catch((err: unknown) => {
     console.error(
@@ -267,6 +297,8 @@ export async function bootIngest(
             closeReadiness: () => readiness.close(),
             endPool: () => pool.end(),
           }),
+          // The last closer: `opaqueIds.install` is process-wide, so a later stack in this process must start cold, not inherit this cache.
+          async () => opaqueIds.install(undefined),
         );
       };
       await (parts.drainServer ?? ((then) => then()))(close);

@@ -138,11 +138,8 @@ const stepOutput = (models: readonly string[]): Shape => ({
 
 /** The payload of every event type, per key the only values it may hold; an unlisted type or key fails. */
 const payloads = (ref: IngestStartInput, models: readonly string[]): Record<string, Shape> => {
-  const ids: Shape = {
-    documentId: exactly(ref.documentId),
-    tenantId: exactly(ref.tenantId),
-    userId: exactly(ref.userId),
-  };
+  // Sealed under the user's key (`sensitive.ts` `FLOW_INPUT_IDS`): the raw log holds no plain id.
+  const ids: Shape = { documentId: sealed, tenantId: sealed, userId: sealed };
   return {
     EXECUTION_STARTED: {
       input: ids,
@@ -263,7 +260,7 @@ const SEAL: Shape = {
   covers: (v) =>
     Array.isArray(v) &&
     v.every((p) =>
-      /^(EXECUTION_STARTED\.principal\.identity\.(actor|tenant)|(STEP|EXECUTION)_FAILED\.error)$/.test(
+      /^(EXECUTION_STARTED\.principal\.identity\.(actor|tenant)|(EXECUTION|STEP)_STARTED\.input\.(tenantId|userId|documentId)|(STEP|EXECUTION)_FAILED\.error)$/.test(
         String(p),
       ),
     ),
