@@ -8,6 +8,7 @@ import {
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
 import type { Pool } from "pg";
+import type { ExecutionRecorder } from "../../documents/executionIds";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS } from "../rerunTracker";
 import { rerunTracker } from "../rerunTracker";
@@ -205,6 +206,8 @@ const logClass = (what: string) => (err: unknown) =>
   console.error(what, err instanceof Error ? err.constructor.name : typeof err);
 
 export interface VisualsStarterOptions {
+  /** Records the automatic run's id on the document before it starts (migration 0038), so the boot sweeps can compare it with the status rows. */
+  executions?: ExecutionRecorder;
   /** The boot sweep's source; absent: the sweep does nothing. */
   ready?: ReadyDocuments;
   /** The boot sweep's second source: documents to re-run (their last run ended `visuals-model-unavailable`); absent: none. */
@@ -253,6 +256,7 @@ export function loomVisualsStarter(
   options: VisualsStarterOptions = {},
 ): VisualsStarter {
   const {
+    executions,
     ready,
     retry,
     stale,
@@ -286,6 +290,14 @@ export function loomVisualsStarter(
       documentId: ref.documentId.toLowerCase(),
     });
     const executionId = visualizeExecutionId(input.userId, input.documentId, generation, rerun);
+    // The automatic run's id goes on the document BEFORE the start (the boot sweeps compare it with the status rows); a re-run is never swept.
+    if (rerun === undefined)
+      await executions?.recordVisualize(
+        { tenantId: input.tenantId, userId: input.userId },
+        input.documentId,
+        generation,
+        executionId,
+      );
     try {
       const handle = await runtime.start(flow, input, {
         // One execution per (document, generation, run): Loom starts a caller-chosen id once. No content in the name.

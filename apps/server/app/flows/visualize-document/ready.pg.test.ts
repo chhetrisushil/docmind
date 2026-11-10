@@ -5,7 +5,16 @@ import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
 import { ingestExecutionId } from "../../documents/ingest";
-import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
+import {
+  ALICE,
+  BOB,
+  U1,
+  U2,
+  backfillExecutionIds,
+  seedDoc,
+  seedRow,
+  seedUsers,
+} from "../../documents/testHarness";
 import { pgReadyDocuments, visualizeExecutionId } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
@@ -56,6 +65,7 @@ describe.skipIf(!PG_URL)("docmind_ready_documents (needs DOCMIND_TEST_PG_URL)", 
       "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')",
       [visualizeExecutionId(U1, done, await g(done))],
     );
+    await backfillExecutionIds(owner);
     await seedRow(
       owner,
       ingestExecutionId(U1, running, await g(running)),

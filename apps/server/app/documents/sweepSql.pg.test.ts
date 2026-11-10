@@ -17,7 +17,10 @@ const DEFINERS = [
   "docmind_orphan_statuses",
   "docmind_ready_documents",
   "docmind_record_visual_run",
+  "docmind_repair_execution_ids",
   "docmind_stale_uploads_v2",
+  "docmind_user_handles",
+  "docmind_user_of_handle",
   "docmind_visual_retry_documents",
   "docmind_visual_running_runs",
   "docmind_visual_stale_format_documents",
@@ -89,7 +92,7 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     await seedRow(owner, ingestExecutionId(U1, doc, 2), doc, U1); // generation 2 ran
     expect((await app.query(`SELECT id FROM ${fn()}`)).rows).toEqual([]);
     await owner.query(
-      "UPDATE documents SET ingest_generation = 3, updated_at = now() - interval '10 minutes' WHERE id = $1",
+      "UPDATE documents SET ingest_generation = 3, updated_at = now() - interval '10 minutes', ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [doc],
     );
     expect((await app.query(`SELECT id, generation FROM ${fn()}`)).rows).toEqual([
@@ -104,7 +107,7 @@ describe.skipIf(!PG_URL)("docmind_stale_uploads (needs DOCMIND_TEST_PG_URL)", ()
     const doc = await seedDoc(owner, app, fields, ALICE, fp(), 30 * 24 * 3600); // created 30 days ago
     expect((await app.query(`SELECT id FROM ${fn()}`)).rows).toEqual([]);
     await owner.query(
-      "UPDATE documents SET ingest_generation = 3, updated_at = now() - interval '10 minutes' WHERE id = $1",
+      "UPDATE documents SET ingest_generation = 3, updated_at = now() - interval '10 minutes', ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [doc],
     );
     expect((await app.query(`SELECT id FROM ${fn()}`)).rows).toEqual([{ id: doc }]);

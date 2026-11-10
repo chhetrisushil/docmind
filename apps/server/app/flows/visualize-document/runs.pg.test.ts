@@ -9,7 +9,16 @@ import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
 import { ingestExecutionId } from "../../documents/ingest";
 import { InMemoryProgressBus } from "../../documents/progress";
-import { ALICE, BOB, U1, U2, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
+import {
+  ALICE,
+  BOB,
+  U1,
+  U2,
+  backfillExecutionIds,
+  seedDoc,
+  seedRow,
+  seedUsers,
+} from "../../documents/testHarness";
 import { visualizeDocumentFlow } from "./flow";
 import { PgVisualRuns, visualRunRecorder } from "./runs";
 import {
@@ -299,7 +308,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     ).toEqual([]);
     // A document whose generation moved on is left out (a user being erased: see the final retry test).
     await owner.query(
-      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      "UPDATE documents SET ingest_generation = ingest_generation + 1, ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [stale.id],
     );
     expect((await list(NIL, 100)).map((d) => d.documentId)).toEqual(
@@ -308,11 +317,13 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
   });
 
   /** Loom's neutral row for a visualize execution of the document's generation. */
-  const visualizeStarted = (who: string, d: { id: string }, g: number) =>
-    owner.query(
+  const visualizeStarted = async (who: string, d: { id: string }, g: number) => {
+    await owner.query(
       "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')",
       [visualizeExecutionId(who, d.id, g)],
     );
+    await backfillExecutionIds(owner);
+  };
 
   it("docmind_visual_unrecorded_documents lists ready current-generation documents with no visual_runs row, across tenants, paged, ids only, not for erasing users", async () => {
     await owner.query("DELETE FROM documents");
@@ -334,7 +345,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     ] as const)
       await visualizeStarted(who, d, d.g);
     await owner.query(
-      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      "UPDATE documents SET ingest_generation = ingest_generation + 1, ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [reingested.id],
     );
     await seedRow(
@@ -353,7 +364,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     await runs.record(at(U1, withRow), "failed", "visuals-plan-invalid");
     await runs.record(at(U1, moved), "done", undefined, "old");
     await owner.query(
-      "UPDATE documents SET ingest_generation = ingest_generation + 1 WHERE id = $1",
+      "UPDATE documents SET ingest_generation = ingest_generation + 1, ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [moved.id],
     );
     await seedRow(owner, ingestExecutionId(U1, moved.id, moved.g + 1), moved.id, U1, ready);
