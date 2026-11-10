@@ -484,6 +484,30 @@ describe("rerun and the retry sweep", () => {
     expect([...reextract]).toEqual([visualizeExecutionId(r.userId, r.documentId, 2, 1)]);
   });
 
+  it("drops a note when its run ends without extracting (the run's end is observed)", async () => {
+    const f = fake();
+    const reextract = new Set<string>();
+    const r = ref();
+    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    await starter.rerun(r, 1);
+    const id = visualizeExecutionId(r.userId, r.documentId, 1, 1);
+    expect(reextract.has(id)).toBe(true);
+    f.finish(id);
+    await vi.waitFor(() => expect(reextract.has(id)).toBe(false));
+  });
+
+  it("at the bound the oldest notes are evicted, never the pending ones wholesale", async () => {
+    const f = fake();
+    const reextract = new Set<string>(Array.from({ length: 1000 }, (_, i) => `old-${i}`));
+    const r = ref();
+    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    await starter.rerun(r, 1);
+    expect(reextract.size).toBe(1000);
+    expect(reextract.has("old-0")).toBe(false);
+    expect(reextract.has("old-1")).toBe(true);
+    expect(reextract.has(visualizeExecutionId(r.userId, r.documentId, 1, 1))).toBe(true);
+  });
+
   it("notes nothing when the visuals role is off (nothing starts)", async () => {
     const f = fake();
     const reextract = new Set<string>();
@@ -675,6 +699,20 @@ describe("the stale-format boot pass", () => {
     expect(s.started).toEqual(docs.map((d) => visualizeExecutionId(d.userId, d.documentId, 1, 1)));
     expect(s.peak()).toBeLessThanOrEqual(SWEEP_EXECUTIONS);
     expect(s.runs.record).toHaveBeenCalledTimes(5);
+  });
+
+  it("a stale-format pass notes nothing for the extract step (it never extracts)", async () => {
+    const s = setup();
+    const reextract = new Set<string>();
+    const docs = [mk(), mk()];
+    const starter = loomVisualsStarter(s.runtime, flow, {
+      stale: page(docs),
+      runs: s.runs,
+      reextract,
+    });
+    expect(await starter.sweep()).toBe(2);
+    expect(s.started).toHaveLength(2);
+    expect(reextract.size).toBe(0);
   });
 
   it("does not start a document whose run is still going (the shared lock/tracker), and nothing while the role is off or without a source", async () => {
