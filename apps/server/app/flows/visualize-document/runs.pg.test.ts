@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
-import { ingestExecutionId } from "../../documents/ingest";
 import { InMemoryProgressBus } from "../../documents/progress";
 import {
   ALICE,
@@ -19,6 +18,12 @@ import {
   seedRow,
   seedUsers,
 } from "../../documents/testHarness";
+import {
+  deterministicUser,
+  legacyIngestId,
+  legacyVisualizeId,
+  testIdSource,
+} from "../../opaqueIds/testing";
 import { visualizeDocumentFlow } from "./flow";
 import { PgVisualRuns, visualRunRecorder } from "./runs";
 import {
@@ -28,7 +33,6 @@ import {
   pgRunningRuns,
   pgStaleFormatDocuments,
   pgUnrecordedDocuments,
-  visualizeExecutionId,
 } from "./start";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
@@ -66,7 +70,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
   const readyDoc = async (who = ALICE) => {
     const id = await seedDoc(owner, app, fields, who, fp(), 600);
     const g = await generationOf(id);
-    await seedRow(owner, ingestExecutionId(who.userId, id, g), id, who.userId, ready);
+    await seedRow(owner, legacyIngestId(who.userId, id, g), id, who.userId, ready);
     return { id, g };
   };
   const rowOf = async (id: string) =>
@@ -320,7 +324,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
   const visualizeStarted = async (who: string, d: { id: string }, g: number) => {
     await owner.query(
       "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, NULL, NULL, 0, '{}')",
-      [visualizeExecutionId(who, d.id, g)],
+      [legacyVisualizeId(who, d.id, g)],
     );
     await backfillExecutionIds(owner);
   };
@@ -350,7 +354,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
     );
     await seedRow(
       owner,
-      ingestExecutionId(U1, reingested.id, reingested.g + 1),
+      legacyIngestId(U1, reingested.id, reingested.g + 1),
       reingested.id,
       U1,
       ready,
@@ -367,7 +371,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       "UPDATE documents SET ingest_generation = ingest_generation + 1, ingest_execution_id = NULL, visualize_execution_id = NULL WHERE id = $1",
       [moved.id],
     );
-    await seedRow(owner, ingestExecutionId(U1, moved.id, moved.g + 1), moved.id, U1, ready);
+    await seedRow(owner, legacyIngestId(U1, moved.id, moved.g + 1), moved.id, U1, ready);
     await visualizeStarted(U1, moved, moved.g + 1);
     const expected = [a.id, b.id, moved.id, bumped.id].sort();
     const list = pgUnrecordedDocuments(app);
@@ -432,7 +436,7 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       const at = { userId: U1, documentId: d.id, generation: d.g, run: 1 };
       await runs.record({ ...at, run: 0 }, "done", undefined, "old"); // planned before the deploy
       await runs.record(at, "running"); // a boot re-run (or the in-flight run) is running
-      const executionId = visualizeExecutionId(U1, d.id, d.g, 1);
+      const executionId = legacyVisualizeId(U1, d.id, d.g, 1);
       if (legacy) legacyRuns.add(executionId); // the 1.0.0 runner noted it
       recorder.onEvent({
         id: "e",
@@ -480,13 +484,14 @@ describe.skipIf(!PG_URL)("visual_runs and its functions (needs DOCMIND_TEST_PG_U
       runtime as unknown as Pick<WorkflowRuntime, "start" | "cancel">,
       visualizeDocumentFlow(),
       {
+        ids: testIdSource(),
         stale: pgStaleFormatDocuments(app),
         runs,
         afterDone,
       },
     );
     expect(await starter.sweep()).toBe(1);
-    expect(started).toEqual([visualizeExecutionId(U1, d.id, d.g, 1)]); // a stale re-run is always `-r<n>`, n > 0
+    expect(started).toEqual([deterministicUser(U1).visualize(d.id, d.g, 1)]); // a stale re-run is always `-r<n>`, n > 0
     expect(afterDone.size).toBe(1); // noted for the extract step: no extraction
     expect(await starter.sweep()).toBe(0);
     expect(started).toHaveLength(1);

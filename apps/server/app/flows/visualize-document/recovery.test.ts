@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { recoveryOwns } from "../../bootIngest";
 import { chatConversationId } from "../../chats/ids";
 import { buildApp } from "../../config";
-import { ingestExecutionId } from "../../documents/ingest";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { legacyIngestId, legacyVisualizeId } from "../../opaqueIds/testing";
 import { foldIngestStatus } from "../../status/model";
 import { startRecovery } from "../ingest-document/recovery";
 import type { VisualizeDeps } from "./deps";
@@ -21,9 +21,8 @@ import {
   STRUCTURE_ORDINAL_BASE,
 } from "./facts";
 import { visualizeDocumentFlow } from "./flow";
-import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
-import { visualizeExecutionId } from "./start";
+import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { childrenOf, noStructure } from "./testing";
 
 const CHUNK = randomUUID();
@@ -108,6 +107,7 @@ describe("recovering an interrupted visualize execution", () => {
       summaryMaxChars: 400_000,
       bus: new InMemoryProgressBus(),
       lineage,
+      ids: lineageTestIds,
       now: () => "2026-11-08T10:00:00.000Z",
       sleep: async () => {},
       llm: provider,
@@ -130,7 +130,7 @@ describe("recovering an interrupted visualize execution", () => {
   it("startRecovery with the boot `owns` resumes it to completion, committing the plan once", async () => {
     const log = keptLog();
     const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
-    const executionId = visualizeExecutionId(ref.userId, ref.documentId, 2);
+    const executionId = legacyVisualizeId(ref.userId, ref.documentId, 2);
     // First process: the load step never settles (a crash mid-step).
     let entered: () => void = () => {};
     const inStep = new Promise<void>((r) => {
@@ -161,7 +161,7 @@ describe("recovering an interrupted visualize execution", () => {
     });
     expect(state?.status).toBe("completed");
     expect(state?.variables._output).toEqual({ outcome: "done" });
-    const latest = await lineage.resolveLatest(experienceIdOf(ref));
+    const latest = await lineage.resolveLatest(await experienceIdOf(ref));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
     // The visualize events moved no ingest status.
     expect(foldIngestStatus(await log.store.read(executionId))).toEqual({});
@@ -170,7 +170,7 @@ describe("recovering an interrupted visualize execution", () => {
   it("an execution begun on 1.0.0 (before the deploy) resumes on 1.0.0 after it: recorded hash kept, no structure step, no code mismatch", async () => {
     const log = keptLog();
     const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
-    const executionId = visualizeExecutionId(ref.userId, ref.documentId, 2);
+    const executionId = legacyVisualizeId(ref.userId, ref.documentId, 2);
     let entered: () => void = () => {};
     const inStep = new Promise<void>((r) => {
       entered = r;
@@ -229,9 +229,9 @@ describe("recovering an interrupted visualize execution", () => {
   it("the boot recovery owns ingest, visualize and chat executions, and nothing else", () => {
     const u = randomUUID();
     const d = randomUUID();
-    expect(recoveryOwns(ingestExecutionId(u, d, 2))).toBe(true);
-    expect(recoveryOwns(visualizeExecutionId(u, d, 1))).toBe(true);
-    expect(recoveryOwns(visualizeExecutionId(u, d, 7))).toBe(true);
+    expect(recoveryOwns(legacyIngestId(u, d, 2))).toBe(true);
+    expect(recoveryOwns(legacyVisualizeId(u, d, 1))).toBe(true);
+    expect(recoveryOwns(legacyVisualizeId(u, d, 7))).toBe(true);
     expect(recoveryOwns(chatConversationId(u, d))).toBe(true);
     expect(recoveryOwns(`u_${u}:visualize-not-a-uuid`)).toBe(false);
     expect(recoveryOwns(`u_${u}:erasure-${d}`)).toBe(false);

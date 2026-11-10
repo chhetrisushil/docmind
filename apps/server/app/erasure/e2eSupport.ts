@@ -375,6 +375,8 @@ export interface Who {
   tenantId: string;
   email: string;
   sentinels: readonly string[];
+  /** The user's id handle (`h_<handle>` names their new-format executions), read before the erasure deletes it. */
+  handle?: string;
 }
 
 type Row = Record<string, unknown>;
@@ -391,7 +393,13 @@ interface Allowed {
 }
 
 const isUserExecution = (id: unknown, who: Who) =>
-  typeof id === "string" && id.startsWith(`u_${who.userId}`);
+  typeof id === "string" &&
+  (id.startsWith(`u_${who.userId}`) ||
+    (who.handle !== undefined && id.startsWith(`h_${who.handle}`)));
+
+/** The handle of the user whose new-format executions (`h_<handle>:...`) are among `ids`, if any. */
+export const handleOfExecutions = (ids: readonly string[]): string | undefined =>
+  ids.map((id) => /^h_([a-z2-7]{25}[aeimquy4])[:.]/.exec(id)?.[1]).find((h) => h !== undefined);
 
 /** The user's own Loom executions: `u_<user>...` (a chat is `.c-<chat>`, a flow `:<name>`). */
 const ownExecution = (row: Row, who: Who) => isUserExecution(row.execution_id, who);
@@ -406,7 +414,10 @@ const sealed = (v: unknown) =>
   (v as { __loomEnc?: unknown }).__loomEnc === "loom/aes-256-gcm";
 
 const UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const ID_VALUE = new RegExp(`^(${UUID_RE}|u_${UUID_RE}([:.~][A-Za-z0-9_.:~-]*)?)$`);
+const HANDLE_RE = "h_[a-z2-7]{25}[aeimquy4]"; // a new-format subject: the user's handle (R14)
+const ID_VALUE = new RegExp(
+  `^(${UUID_RE}|${HANDLE_RE}|u_${UUID_RE}([:.~][A-Za-z0-9_.:~-]*)?|${HANDLE_RE}([:.~][A-Za-z0-9_.:~-]*)?)$`,
+);
 const oneOf = (...values: string[]): RegExp =>
   new RegExp(`^(${values.map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`);
 const exactly = (values: readonly string[]) => ({ test: (v: string) => values.includes(v) });
@@ -766,16 +777,22 @@ export function assertBlobsGone(st: IngestStack, gone: Seeded, tenantGone: boole
  */
 export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promise<void> {
   const raw = st.durable.raw.eventStore;
+  const handle = handleOfExecutions(gone.executions);
   const ids = [
     ...new Set([
       ...gone.executions,
-      ...(await executionIds(st)).filter((id) => id.includes(gone.userId)),
+      ...(await executionIds(st)).filter(
+        (id) => id.includes(gone.userId) || (handle !== undefined && id.startsWith(`h_${handle}`)),
+      ),
     ]),
   ];
   expect(gone.executions.length).toBeGreaterThanOrEqual(3);
   const secrets = [...SECRETS, ...gone.sentinels, gone.title];
   for (const id of ids) {
-    expect(id.includes(gone.userId)).toBe(true); // keyed outside the user's subject: unshreddable
+    // keyed outside the user's subject: unshreddable (a new-format id names the user by handle, an old one by UUID)
+    expect(id.includes(gone.userId) || (handle !== undefined && id.startsWith(`h_${handle}`))).toBe(
+      true,
+    );
     const events = await raw.read(id);
     if (events.length === 0) continue; // gone altogether (an inbox stream retired with its conversation)
     assertNoPlaintext(events, secrets);
@@ -821,6 +838,7 @@ export async function assertErased(
     tenantId: user.tenantId,
     email: user.email,
     sentinels: user.sentinels,
+    handle: handleOfExecutions(user.executions),
   };
 
   // 1. Nothing names the user, anywhere: every column of every table in every schema, as text, for the sentinels, the

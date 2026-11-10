@@ -1,8 +1,6 @@
 import type { UploadDocumentResponse } from "@docmind/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { visualizeExecutionId } from "../flows/visualize-document/start";
-import { ingestExecutionId } from "./ingest";
 import { type IngestStack, startIngestStack } from "./ingestStack";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
@@ -29,6 +27,11 @@ describe.skipIf(!PG_URL)(
         events.close();
       }
     }
+    const whoOf = async (st: IngestStack, userId: string) => ({
+      userId,
+      tenantId: (await st.db.owner.query("SELECT tenant_id FROM users WHERE id = $1", [userId]))
+        .rows[0].tenant_id as string,
+    });
     const columns = async (st: IngestStack, id: string) =>
       (
         await st.db.owner.query(
@@ -42,7 +45,7 @@ describe.skipIf(!PG_URL)(
       stacks.push(st);
       const { id, userId } = await uploadReady(st, "records-ingest@example.com");
       const row = await columns(st, id);
-      expect(row.i).toBe(ingestExecutionId(userId, id, Number(row.g)));
+      expect(row.i).toBe(await st.runIds.ingest(await whoOf(st, userId), id, Number(row.g)));
       expect(row.v).toBeNull();
       const stale = await st.app.query(
         "SELECT id FROM docmind_stale_uploads_v2(make_interval(secs => 0), make_interval(secs => 604800), 500)",
@@ -60,7 +63,10 @@ describe.skipIf(!PG_URL)(
       const { id, userId } = await uploadReady(st, "records-visuals@example.com");
       const g = Number((await columns(st, id)).g);
       await vi.waitFor(
-        async () => expect((await columns(st, id)).v).toBe(visualizeExecutionId(userId, id, g)),
+        async () =>
+          expect((await columns(st, id)).v).toBe(
+            await st.runIds.visualize(await whoOf(st, userId), id, g),
+          ),
         {
           timeout: 30_000,
           interval: 50,

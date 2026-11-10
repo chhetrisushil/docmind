@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { ingestExecutionId } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import { type RawEvent, assertEventsAreContentFree } from "./testing";
 
 const ID = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const OTHER = "b2b2b2b2-b2b2-4b2b-8b2b-b2b2b2b2b2b2";
 const ref = { documentId: ID, tenantId: ID, userId: ID };
-const executionId = ingestExecutionId(ID, ID);
+const executionId = legacyIngestId(ID, ID);
 const SENTENCE = "Nocturne quarterly revenue forecast: seventeen thousand dollars";
 const ev = (eventType: string, payload: unknown, over: Record<string, unknown> = {}): RawEvent =>
   ({
@@ -136,7 +136,7 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
     ],
     [
       "another execution's id",
-      ev("STEP_STARTED", started, { executionId: ingestExecutionId(OTHER, ID) }),
+      ev("STEP_STARTED", started, { executionId: legacyIngestId(OTHER, ID) }),
       /executionId is not an id/,
     ],
     [
@@ -309,8 +309,8 @@ describe("assertEventsAreContentFree (the proof has teeth)", () => {
       "STEP_STARTED",
       { input: ref, stepId: "ingest-parse" },
       {
-        id: `${ingestExecutionId(ID, ID, 3)}-1`,
-        executionId: ingestExecutionId(ID, ID, 3),
+        id: `${legacyIngestId(ID, ID, 3)}-1`,
+        executionId: legacyIngestId(ID, ID, 3),
       },
     );
     expect(() => assertEventsAreContentFree([later], ref, [], 3)).not.toThrow();

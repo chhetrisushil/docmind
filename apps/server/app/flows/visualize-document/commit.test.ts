@@ -9,7 +9,7 @@ import { InMemoryProgressBus } from "../../documents/progress";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { executionIdFor, subjectOfExecution } from "../../subject";
 import { type CommitInput, commitEffect } from "./commit";
-import { experienceIdOf } from "./lineage";
+import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { aPlan, childrenOf } from "./testing";
 
 const SECRET_LABEL = "Zebra-Secret-Label";
@@ -37,12 +37,13 @@ describe("the commit step", () => {
     const effect = commitEffect({
       guard: { begin: async () => {} },
       lineage,
+      ids: lineageTestIds,
       bus: new InMemoryProgressBus(),
       now: () => "2026-11-08T10:00:00.000Z",
     });
     const out = await effect.execute(input, undefined as never);
     expect(out).toEqual({ outcome: "done", count: input.ops.length });
-    const latest = await lineage.resolveLatest(experienceIdOf(r));
+    const latest = await lineage.resolveLatest(await experienceIdOf(r));
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual(["revenue"]);
   });
 
@@ -61,6 +62,7 @@ describe("the commit step", () => {
     const effect = commitEffect({
       guard: { begin: async () => {} },
       lineage,
+      ids: lineageTestIds,
       bus,
       now: () => "2026-11-08T10:00:00.000Z",
     });
@@ -73,6 +75,7 @@ describe("the commit step", () => {
     const broken = commitEffect({
       guard: { begin: async () => {} },
       lineage,
+      ids: lineageTestIds,
       bus: {
         publish: () => {
           throw new Error("bus down");

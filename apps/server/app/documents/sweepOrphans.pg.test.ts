@@ -6,9 +6,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
+import { legacyIngestId } from "../opaqueIds/testing";
 import { IngestStatus } from "../status/ingestStatus";
 import { pgStatusReaderFor, pgStatusWriter } from "../status/pgStores";
-import { ingestExecutionId } from "./ingest";
 import { InMemoryProgressBus } from "./progress";
 import { sweepOrphanStatuses } from "./sweep";
 import { ALICE, U1, seedDoc, seedRow, seedUsers } from "./testHarness";
@@ -53,9 +53,9 @@ describe.skipIf(!PG_URL)("sweepOrphanStatuses (needs DOCMIND_TEST_PG_URL)", () =
       600,
     );
     const gone = randomUUID();
-    await seedRow(db.owner, ingestExecutionId(U1, kept), kept, U1);
-    await seedRow(db.owner, ingestExecutionId(U1, gone), gone, U1);
-    await seedRow(db.owner, ingestExecutionId(U1, gone, 1), gone, U1);
+    await seedRow(db.owner, legacyIngestId(U1, kept), kept, U1);
+    await seedRow(db.owner, legacyIngestId(U1, gone), gone, U1);
+    await seedRow(db.owner, legacyIngestId(U1, gone, 1), gone, U1);
     expect(await sweepOrphanStatuses({ pool: app, status, limit: 10 })).toBe(2);
     const { rows } = await db.owner.query(
       "SELECT app_key, erased, state FROM read_model_state ORDER BY execution_id",

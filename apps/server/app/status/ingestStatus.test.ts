@@ -6,10 +6,11 @@ import {
   InMemoryReadModelStore,
 } from "@loom/plugin-read-model";
 import { afterEach, describe, expect, it } from "vitest";
-import { INGEST_GENERATION, ingestExecutionId } from "../documents/ingest";
+import { INGEST_GENERATION } from "../documents/ingest";
 import { InMemoryProgressBus } from "../documents/progress";
 import { OpaqueIds, opaqueIds } from "../opaqueIds";
 import { testOpaqueIds } from "../opaqueIds/testing";
+import { legacyIngestId } from "../opaqueIds/testing";
 import { IngestStatus, type IngestStatusOptions } from "./ingestStatus";
 import { INGEST_STATUS_MODEL, STATUS_MESSAGES, UPLOADED } from "./model";
 import { MemoryLog, atDefault, evt, ingestRun } from "./testing";
@@ -17,7 +18,7 @@ import { MemoryLog, atDefault, evt, ingestRun } from "./testing";
 const U = randomUUID();
 const [D1, D2] = [randomUUID(), randomUUID()];
 const ALICE: Identity = { tenantId: randomUUID(), userId: U };
-const exec = (documentId: string) => ingestExecutionId(U, documentId);
+const exec = (documentId: string) => legacyIngestId(U, documentId);
 
 function setup(over: Partial<IngestStatusOptions> = {}) {
   const store = new InMemoryReadModelStore();
@@ -117,7 +118,7 @@ describe("IngestStatus", () => {
     const gen3 = [{ id: D1, generation: 3 }];
     expect((await status.forPage(ALICE, gen3)).get(D1)).toBeUndefined();
     expect((await status.forDocument(ALICE, D1, 3)).status).toBe(UPLOADED.status);
-    feed(...ingestRun(ingestExecutionId(U, D1, 3), "parsed"));
+    feed(...ingestRun(legacyIngestId(U, D1, 3), "parsed"));
     await status.close();
     expect((await status.forDocument(ALICE, D1, 3)).status).toBe("parsing");
   });
@@ -125,8 +126,8 @@ describe("IngestStatus", () => {
   it("ignores a higher generation's row when the document's generation is lower, and generation 1's bare id counts as 1", async () => {
     const { log, status } = setup();
     log.append(
-      ...ingestRun(ingestExecutionId(U, D1, 4), "parsed"),
-      ...ingestRun(ingestExecutionId(U, D2, 1), "started"),
+      ...ingestRun(legacyIngestId(U, D1, 4), "parsed"),
+      ...ingestRun(legacyIngestId(U, D2, 1), "started"),
     );
     await status.boot();
     const views = await status.forPage(ALICE, [
@@ -278,7 +279,7 @@ describe("IngestStatus", () => {
     log.append(
       ...ingestRun(exec(D1), "ready"),
       ...ingestRun(exec(D2), "parsed"),
-      ...ingestRun(ingestExecutionId(other, doc3), "parsed"),
+      ...ingestRun(legacyIngestId(other, doc3), "parsed"),
     );
     await status.boot();
     expect(await status.forgetUser(U)).toBe(2);
@@ -293,10 +294,7 @@ describe("IngestStatus", () => {
   it("forgetDocument purges only the caller's rows when another user's row shares the key", async () => {
     const { log, status } = setup();
     const other = randomUUID();
-    log.append(
-      ...ingestRun(exec(D1), "parsed"),
-      ...ingestRun(ingestExecutionId(other, D1), "parsed"),
-    );
+    log.append(...ingestRun(exec(D1), "parsed"), ...ingestRun(legacyIngestId(other, D1), "parsed"));
     await status.boot();
     await status.forgetDocument(ALICE, D1);
     expect((await status.forPage(ALICE, atDefault(D1))).size).toBe(0);

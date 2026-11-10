@@ -10,12 +10,12 @@ import {
   guardRequest,
 } from "@loom/llm";
 import { describe, expect, it, vi } from "vitest";
+import { legacyVisualizeId } from "../../opaqueIds/testing";
 import { LLM_RETRY } from "../ingest-document/stepEffect";
 import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";
 import { EXTRACT_FORMAT, type ExtractionWrite, type Fact } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
 import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM, extractDocumentSystem } from "./prompts";
-import { visualizeExecutionId } from "./start";
 import { aggregateFacts } from "./testing";
 
 const C0 = randomUUID();
@@ -222,7 +222,7 @@ describe("visualize-extract step", () => {
 
   describe("a re-run (-r<n> execution)", () => {
     const rerunCtx = (s: ReturnType<typeof setup>, n = 1) =>
-      ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+      ({ executionId: legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
 
     it("keeps the stored facts and makes no model call", async () => {
       const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
@@ -292,7 +292,7 @@ describe("visualize-extract step", () => {
       const { llm, requests } = scripted(() => JSON.stringify({ facts: [GOOD] }));
       const s = setup({ llm });
       s.store.held = [{ ...GOOD, ordinal: 0 } as Fact];
-      const ctx = { executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1) } as never;
+      const ctx = { executionId: legacyVisualizeId(s.ref.userId, s.ref.documentId, 1) } as never;
       await extractEffect(s.d).execute(s.ref, ctx);
       expect(requests).toHaveLength(1);
     });
@@ -557,7 +557,7 @@ describe("the timeline and relations of a document extraction", () => {
 
   describe("a re-run (-r<n> execution) over stored aggregates", () => {
     const rerunCtx = (s: ReturnType<typeof setup>, n = 1) =>
-      ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+      ({ executionId: legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
 
     it("reports the timeline and relations it keeps and makes no model call", async () => {
       const { llm, requests } = scripted(() => answer());
@@ -741,9 +741,9 @@ describe("fix round 1: a lenient answer and a slow model", () => {
 
 describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-c2 document", () => {
   const ctxOf = (s: ReturnType<typeof setup>, n = 1) =>
-    ({ executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
+    ({ executionId: legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, n) }) as never;
   const noteFor = (s: ReturnType<typeof setup>, n = 1) =>
-    new Set([visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, n)]);
+    new Set([legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, n)]);
   const existing = { ...GOOD, ordinal: 0 } as Fact;
 
   it("a re-run the user asked for extracts a document with no stamp, stamps it, and consumes its note", async () => {
@@ -863,7 +863,7 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
     });
     const s = setup({ llm });
     s.store.held = [existing];
-    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const id = legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, 1);
     const reextract = new Set([id]);
     expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
       outcome: "done",
@@ -882,7 +882,7 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
     const { llm, requests } = scripted(() => answer());
     const s = setup({ llm });
     s.store.held = [existing];
-    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const id = legacyVisualizeId(s.ref.userId, s.ref.documentId, 1, 1);
     const reextract = new Set([id]);
     const write = s.store.replace;
     let failures = 1;
@@ -899,7 +899,7 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
   it("the automatic run extracts as before and stamps the format (a new upload or re-ingest)", async () => {
     const { llm, requests } = scripted(() => answer());
     const s = setup({ llm });
-    const ctx = { executionId: visualizeExecutionId(s.ref.userId, s.ref.documentId, 1) } as never;
+    const ctx = { executionId: legacyVisualizeId(s.ref.userId, s.ref.documentId, 1) } as never;
     await extractEffect(s.d).execute(s.ref, ctx);
     expect(requests).toHaveLength(1);
     expect(s.store.format).toBe(EXTRACT_FORMAT);

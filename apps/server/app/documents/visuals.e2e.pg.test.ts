@@ -10,9 +10,9 @@ import { eraseMe, waitErased } from "../erasure/e2eSupport";
 import { chunkIdFor } from "../flows/ingest-document/chunker";
 import { PgEntityStore } from "../flows/ingest-document/pgEntities";
 import type { PgFixture } from "../flows/ingest-document/pgFixture";
-import { experienceIdOf, visualsLineage } from "../flows/visualize-document/lineage";
+import { visualsLineage } from "../flows/visualize-document/lineage";
 import { PgVisualFacts } from "../flows/visualize-document/pgFacts";
-import { pgStaleFormatDocuments, visualizeExecutionId } from "../flows/visualize-document/start";
+import { pgStaleFormatDocuments } from "../flows/visualize-document/start";
 import { collectLineageContent } from "../storage/lineageGc";
 import { lineageGcDeps } from "../storage/pgLineageGc";
 import { subjectOfExecution } from "../subject";
@@ -132,10 +132,14 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
   /** The outcome the visualize execution of the document's current generation ended with. */
   async function visualizeOutcome(st: IngestStack, userId: string, documentId: string) {
     const { rows } = await st.db.owner.query(
-      "SELECT ingest_generation AS g FROM documents WHERE id = $1",
+      "SELECT ingest_generation AS g, tenant_id FROM documents WHERE id = $1",
       [documentId],
     );
-    const execution = visualizeExecutionId(userId, documentId, Number(rows[0].g));
+    const execution = await st.runIds.visualize(
+      { tenantId: rows[0].tenant_id, userId },
+      documentId,
+      Number(rows[0].g),
+    );
     let outcome = "";
     await vi.waitFor(
       async () => {
@@ -250,7 +254,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
       keys: st.keys,
       subjectOf: subjectOfExecution,
     });
-    const benLine = experienceIdOf({ ...ben, documentId: benDoc });
+    const benLine = (await st.composed.ids.ensureUser(ben)).documentLineage(benDoc); // the line the composed server committed to
     const before = await lineage.resolveLatest(benLine);
     expect(before.ok && JSON.stringify(before.value)).toContain(BEN.label);
 
@@ -351,11 +355,11 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
   /** The output the visualize execution `rerun` (0: the automatic one) of the document's current generation ended with. */
   async function visualizeEnd(st: IngestStack, userId: string, documentId: string, rerun = 0) {
     const { rows } = await st.db.owner.query(
-      "SELECT ingest_generation AS g FROM documents WHERE id = $1",
+      "SELECT ingest_generation AS g, tenant_id FROM documents WHERE id = $1",
       [documentId],
     );
-    const execution = visualizeExecutionId(
-      userId,
+    const execution = await st.runIds.visualize(
+      { tenantId: rows[0].tenant_id, userId },
       documentId,
       Number(rows[0].g),
       rerun === 0 ? undefined : rerun,
@@ -507,9 +511,13 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     expect(served.visuals).toEqual({ state: "ready" });
     await second.composed.visuals.idle();
     const ids = (await second.durable.raw.eventStore.listExecutions?.()) ?? [];
-    expect(ids.filter((e) => e.includes(`visualize-${id}`)).sort()).toEqual(
-      [visualizeExecutionId(ada.userId, id, 2), visualizeExecutionId(ada.userId, id, 2, 1)].sort(),
-    ); // one re-run, not two
+    const expected = [
+      await second.runIds.visualize(ada, id, 2),
+      await second.runIds.visualize(ada, id, 2, 1),
+    ].sort();
+    // The user's visualize executions (the id names the user by handle and the document by token, never by UUID).
+    const handle = expected[0]?.slice(0, expected[0].indexOf(":"));
+    expect(ids.filter((e) => e.startsWith(`${handle}:visualize-`)).sort()).toEqual(expected); // one re-run, not two
   }, 180_000);
 
   it("a run whose end event was lost (a stale running row) is repaired on the next read, and Retry works again", async () => {
@@ -631,9 +639,11 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
       (await hydrate(st, ada.cookie, a, "connections-table")) as { state: string; value: Table };
     const graph = async () =>
       (await hydrate(st, ada.cookie, a, "connections-map")) as { state: string; value: GraphMap };
+    // The document's visualize executions: its generation-2 id and its re-runs `<id>-r<n>` (the id names the document by token, never by UUID).
+    const visualizeBase = await st.runIds.visualize(ada, a);
     const visualizeRuns = async () =>
       ((await st.durable.raw.eventStore.listExecutions?.()) ?? [])
-        .filter((e) => e.includes(`visualize-${a}`))
+        .filter((e) => e.startsWith(visualizeBase))
         .sort();
     const versionOf = async () =>
       UiViewResponse.parse(await (await detail(st, ada.cookie, a)).json()).versionHash;

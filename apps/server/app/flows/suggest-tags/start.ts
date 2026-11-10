@@ -4,8 +4,12 @@ import {
   type ExecutionHandle,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
+import {
+  type UserIdSource,
+  existingUser,
+  suggestTagsCandidates,
+} from "../../documents/executionCandidates";
 import { opaqueIds } from "../../opaqueIds";
-import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS, rerunTracker } from "../rerunTracker";
 import { SuggestTagsInput, suggestTagsFlow } from "./flow";
 
@@ -35,15 +39,6 @@ export interface SuggestTagsStarter {
   idle(): Promise<void>;
 }
 
-/** `suggest-tags-<doc>-r<n>`: the name holds ids and a number, never content. */
-export function suggestTagsExecutionId(
-  userId: string,
-  documentId: string,
-  run: number,
-): UserExecutionId {
-  return executionIdFor(userId, `suggest-tags-${documentId.toLowerCase()}-r${run}`);
-}
-
 /** A suggest-tags execution (boot recovery re-drives it: the step replaces the suggestions row, so a re-run is safe). */
 export const isSuggestTagsExecution = (id: string): boolean =>
   opaqueIds.family(id) === "suggestTags";
@@ -52,7 +47,7 @@ const keyOf = (userId: string, documentId: string) => `${userId}:${documentId.to
 
 export function loomSuggestTagsStarter(
   runtime: Pick<WorkflowRuntime, "start" | "cancel">,
-  o: { enabled?: () => boolean } = {},
+  o: { ids: UserIdSource; enabled?: () => boolean },
 ): SuggestTagsStarter {
   const tracker = rerunTracker();
   const pending = new Set<Promise<unknown>>();
@@ -64,8 +59,10 @@ export function loomSuggestTagsStarter(
       const work = tracker.exclusive(key, async (): Promise<SuggestTagsStart> => {
         if (o.enabled && !o.enabled()) return { kind: "disabled" };
         if (tracker.running(key)) return { kind: "running" };
+        // A key-store outage throws here, before Loom sees anything: a start never falls back to an id with the plain UUIDs.
+        const user = await o.ids.ensureUser({ tenantId: input.tenantId, userId: input.userId });
         const out = await tracker.probe(key, 0, async (n): Promise<ExecutionHandle | null> => {
-          const executionId = suggestTagsExecutionId(input.userId, input.documentId, n);
+          const executionId = user.suggestTags(input.documentId, n);
           try {
             const handle = await runtime.start(suggestTagsFlow, input, {
               executionId,
@@ -109,18 +106,25 @@ export function loomSuggestTagsStarter(
       // has no such execution (a restart forgets this process's counter, so it cannot be trusted alone). A start that failed
       // after taking a number can leave a gap and stop the walk early; recovery ownership then re-drives or ends that run.
       const seen = Math.min(tracker.last(keyOf(identity.userId, documentId)), MAX_RERUNS);
+      // A run may be under either id format (from before the deploy, or after): cancel every candidate that exists. The walk stops at the
+      // first number past this process's counter for which neither format exists.
+      const user = await existingUser(o.ids, identity);
+      const doc = documentId.toLowerCase(); // ids are lower-case; a caller's spelling may not be
       for (let n = 1; n <= MAX_RERUNS; n++) {
-        const executionId = suggestTagsExecutionId(identity.userId, documentId, n);
-        try {
-          await runtime.cancel(executionId, reason, { principal });
-        } catch (err) {
-          // Loom throws a plain Error (no class) for an execution that never existed; match its exact message for this id only.
-          if (
-            !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
-          )
-            throw err;
-          if (n > seen) break;
+        let found = false;
+        for (const executionId of suggestTagsCandidates(identity.userId, doc, n, user)) {
+          try {
+            await runtime.cancel(executionId, reason, { principal });
+            found = true;
+          } catch (err) {
+            // Loom throws a plain Error (no class) for an execution that never existed; match its exact message for this id only.
+            if (
+              !(err instanceof Error && err.message === `No execution found for id: ${executionId}`)
+            )
+              throw err;
+          }
         }
+        if (!found && n > seen) break;
       }
     },
     async idle() {

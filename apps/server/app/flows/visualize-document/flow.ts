@@ -9,7 +9,7 @@ import { dropUnfittingOps, fittedSummary, logDropped } from "./fit";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, planVisuals, plannerUnavailable } from "./plan";
 
-/** Ids only, strict: the same shape as the ingest start. The execution id is `visualizeExecutionId(...)` (start.ts). */
+/** Ids only, strict: the same shape as the ingest start. The execution id is built by `UserIds.visualize` (start.ts). */
 export const VisualizeInput = z
   .object({ tenantId: z.string().uuid(), userId: z.string().uuid(), documentId: z.string().uuid() })
   .strict();

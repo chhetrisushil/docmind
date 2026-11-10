@@ -14,8 +14,9 @@ import { ReferencePlanner } from "@loom-ui/planner";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { describe, expect, it, vi } from "vitest";
 import type { Fact } from "../flows/visualize-document/facts";
-import { commitPlan, experienceIdOf } from "../flows/visualize-document/lineage";
+import { commitPlan } from "../flows/visualize-document/lineage";
 import { planVisuals } from "../flows/visualize-document/plan";
+import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { recording, scriptedPlannerModel } from "../flows/visualize-document/testing";
 
 const fact = (ordinal: number, label: string, value: number): Fact => ({
@@ -54,8 +55,8 @@ describe("planner output to a served, hydrated detail (R26)", () => {
       content: new InMemoryContentStore(),
     });
     const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
-    await commitPlan(lineage, ref, plan, () => "2026-11-08T10:00:00.000Z");
-    const head = await lineage.resolveLatest(experienceIdOf(ref));
+    await commitPlan(lineage, lineageTestIds, ref, plan, () => "2026-11-08T10:00:00.000Z");
+    const head = await lineage.resolveLatest(await experienceIdOf(ref));
     if (!head.ok) throw new Error("no head");
 
     const exp = detailWithVisuals(head.value, ref.documentId);
@@ -134,8 +135,8 @@ describe("planner output to a served, hydrated detail (R26)", () => {
       content: new InMemoryContentStore(),
     });
     const ref = { tenantId: randomUUID(), userId: randomUUID(), documentId: randomUUID() };
-    await commitPlan(lineage, ref, plan, () => "2026-11-08T10:00:00.000Z");
-    const head = await lineage.resolveLatest(experienceIdOf(ref));
+    await commitPlan(lineage, lineageTestIds, ref, plan, () => "2026-11-08T10:00:00.000Z");
+    const head = await lineage.resolveLatest(await experienceIdOf(ref));
     if (!head.ok) throw new Error("no head");
     // An invalid prop on the planned node (a span the layout does not allow) makes the compile fail.
     const bad = JSON.parse(JSON.stringify(head.value));

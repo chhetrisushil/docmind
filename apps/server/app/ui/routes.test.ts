@@ -8,6 +8,7 @@ import { ReferencePlanner } from "@loom-ui/planner";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { commitPlan, commitPlanTo } from "../flows/visualize-document/lineage";
+import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { aPlan, recording, scriptedPlannerModel } from "../flows/visualize-document/testing";
 import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { TURN_INTENT, planTurn } from "../flows/visualize-turn/plan";
@@ -66,6 +67,7 @@ beforeAll(async () => {
       views,
       readers: {} as never,
       lineage,
+      ids: lineageTestIds,
       owns: async (_identity, id) => id === MINE || id === MINE_EMPTY,
       ownsChat: async (identity, id) => {
         ownsCalls.push([identity.userId, id]);
@@ -267,6 +269,7 @@ describe("GET /api/ui/documents/:id/detail", () => {
     const plan = await aPlan("revenue", "Revenue");
     await commitPlan(
       lineage,
+      lineageTestIds,
       { tenantId: ID.tenantId, userId: ID.userId, documentId: id },
       plan,
       () => "2026-11-08T10:00:00.000Z",
@@ -315,6 +318,7 @@ describe("GET /api/ui/documents/:id/detail", () => {
         views: createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) }),
         readers: {} as never,
         lineage: erased,
+        ids: lineageTestIds,
         owns: async () => true,
       }),
     );
@@ -503,6 +507,7 @@ describe("a document's detail says where its visuals stand", () => {
     headNow = async () => {
       await commitPlan(
         lin,
+        lineageTestIds,
         { tenantId: ID.tenantId, userId: ID.userId, documentId: STATE_DOC },
         await aPlan("revenue", "Revenue"),
         at,
@@ -514,6 +519,7 @@ describe("a document's detail says where its visuals stand", () => {
         views: createViews({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) }),
         readers: {} as never,
         lineage: lin,
+        ids: lineageTestIds,
         owns: async (identity, id) => identity.userId === ID.userId && id === STATE_DOC,
         visualsState: async (identity, id, hasHead) => {
           calls.push([identity.userId, id, hasHead]);

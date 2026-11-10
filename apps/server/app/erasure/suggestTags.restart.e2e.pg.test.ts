@@ -3,7 +3,6 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { PgDocumentResults } from "../flows/ingest-document/pgResults";
-import { suggestTagsExecutionId } from "../flows/suggest-tags/start";
 import { eraseMe, seedUser, waitErased } from "./e2eSupport";
 
 const WAIT = 300_000;
@@ -71,13 +70,10 @@ describe.skipIf(!PG_URL)("suggest-tags across a restart (needs DOCMIND_TEST_PG_U
     await new PgDocumentResults(second.app, second.fields).putSummary(ref, SUMMARY);
     expect(await second.composed.suggestTags.start(ref)).toEqual({ kind: "started", run: 1 });
     await hang.entered;
+    // The run the real code started is new-format; the resumed stacks share the keys and the stored handle, so they build the same id.
+    const executionId = await second.runIds.suggestTags(ref, ref.documentId, 1);
     await kill(second); // the process dies mid-step
-    return {
-      first,
-      user,
-      ref,
-      executionId: suggestTagsExecutionId(user.userId, user.documentId, 1),
-    };
+    return { first, user, ref, executionId };
   }
 
   it(

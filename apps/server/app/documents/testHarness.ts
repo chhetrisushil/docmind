@@ -39,6 +39,8 @@ import {
   startFakeGemini,
   startFakeOpenAiCompat,
 } from "../llm/testing";
+import { opaqueIds } from "../opaqueIds";
+import { testIdSource } from "../opaqueIds/testing";
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
@@ -224,6 +226,8 @@ function makeIngest(
   /** The (unsealed, in-memory) event log of every ingest execution. */
   eventStore: InMemoryAsyncEventStore;
   runtime: WorkflowRuntime;
+  /** The id cache the harness's starters build from; installed process-wide until `close`. */
+  ids: ReturnType<typeof testIdSource>;
   close(): Promise<void>;
 } {
   const eventStore = new InMemoryAsyncEventStore();
@@ -261,7 +265,13 @@ function makeIngest(
     bus,
     onError: () => {},
   });
-  const inner = loomIngest(loom.runtime, new PgExecutionRecorder(app));
+  // The id cache is process-wide (the status fold parses new-format ids through it): installed for the harness's life, removed on close.
+  const ids = testIdSource();
+  opaqueIds.install(ids);
+  const inner = loomIngest(loom.runtime, {
+    ids,
+    executions: new PgExecutionRecorder(app),
+  });
   const failures = { start: 0, cancel: 0 };
   const probe: IngestProbe = {
     handles: new Map(),
@@ -317,7 +327,9 @@ function makeIngest(
     bus,
     eventStore,
     runtime: loom.runtime,
+    ids,
     close: async () => {
+      opaqueIds.install(undefined);
       probe.release();
       probe.releaseStart();
       await status.close();
@@ -474,6 +486,7 @@ export async function startDocumentServer(
         starter:
           overrides.suggest?.starter ??
           loomSuggestTagsStarter(ingest.runtime, {
+            ids: ingest.ids,
             enabled: () => wiring.llm.summary !== undefined,
           }),
         limiter: overrides.suggest?.limiter ?? { tryAcquire: () => true },
@@ -482,6 +495,7 @@ export async function startDocumentServer(
         authenticator: testAuthenticator,
         views,
         lineage,
+        ids: ingest.ids,
         readers: {
           pool: app,
           fields,

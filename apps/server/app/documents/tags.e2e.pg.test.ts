@@ -1,8 +1,7 @@
 import { DocumentTagsResponse, ListDocumentsResponse, TagResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
-import { suggestTagsExecutionId } from "../flows/suggest-tags/start";
-import { ingestExecutionId } from "./ingest";
+import { deterministicUser } from "../opaqueIds/testing";
 import {
   ALICE,
   type DocumentHarness,
@@ -94,7 +93,7 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       );
       expect(dismissed.suggestedTags).toEqual(["Finance zqx-tag"]);
 
-      const events = await h.eventStore.read(ingestExecutionId(ALICE.userId, id));
+      const events = await h.eventStore.read(deterministicUser(ALICE.userId).ingest(id, 2));
       expect(events.length).toBeGreaterThan(2); // the scan reads a real log
       const log = JSON.stringify(events);
       for (const name of [
@@ -202,7 +201,7 @@ describe.skipIf(!PG_URL)("document tags end to end (needs DOCMIND_TEST_PG_URL)",
       expect(sent).toContain(TLDR); // the stored summary
       expect(sent).not.toContain("Paragraph 0."); // never a passage
       const log = JSON.stringify(
-        await h.eventStore.read(suggestTagsExecutionId(ALICE.userId, id, 1)),
+        await h.eventStore.read(deterministicUser(ALICE.userId).suggestTags(id, 1)),
       );
       for (const name of ["Legal zqx-tag", "Q3 plan zqx-tag"]) expect(log).not.toContain(name);
       expect(log).toContain('"outcome":"suggested"');

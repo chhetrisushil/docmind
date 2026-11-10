@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { buildApp } from "../../config";
-import { ingestExecutionId } from "../../documents/ingest";
+import { legacyIngestId } from "../../opaqueIds/testing";
 import type { IngestDeps } from "./deps";
 import { type IngestStartInput, ingestDocumentFlow } from "./flow";
 import { fakeIngestDeps } from "./testing";
@@ -49,10 +49,10 @@ export const start = (
   flow = ingestDocumentFlow,
 ) =>
   app.runtime.start(flow, ids, {
-    executionId: ingestExecutionId(ids.userId, ids.documentId),
+    executionId: legacyIngestId(ids.userId, ids.documentId),
     principal: { tenant: ids.tenantId, actor: ids.userId },
   });
 export const eventsOf = (log: Log, ids: IngestStartInput) =>
-  log.store.read(ingestExecutionId(ids.userId, ids.documentId));
+  log.store.read(legacyIngestId(ids.userId, ids.documentId));
 export const types = async (log: Log, ids: IngestStartInput) =>
   (await eventsOf(log, ids)).map((e) => e.eventType);

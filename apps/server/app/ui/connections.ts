@@ -18,11 +18,11 @@ export interface ConnectionsDeps {
 /**
  * "Ready" is what the status read model says (`documents.status` is not maintained): the same rule as `docmind_ready_documents`
  * (migration 0028), through the app role's tenant-scoped `SELECT` on `read_model_state`.
- * `execKey` is the status row's execution id, computed by the caller in a subquery's output: row-level security only lets a
- * leakproof comparison of plain values reach the primary key (model_id, execution_id), and the string building is not leakproof.
+ * `execKey` is the status row's execution id, the stored column read in a subquery's output: row-level security only lets a
+ * leakproof comparison of plain values reach the primary key (model_id, execution_id).
  */
-const EXEC_KEY = (d: string): string => `'u_' || ${d}.owner_id::text || ':ingest-' || ${d}.id::text
-           || CASE WHEN ${d}.ingest_generation = 1 THEN '' ELSE '.' || ${d}.ingest_generation::text END`;
+/** The id of the document's current ingest execution as the application stored it when it started (migration 0038): a new-format id cannot be built in SQL. NULL (never started) matches no status row. */
+const EXEC_KEY = (d: string): string => `${d}.ingest_execution_id`;
 const READY_ROW = (key: string): string => `EXISTS (
     SELECT 1 FROM read_model_state s
      WHERE s.model_id = 'ingest-status' AND s.execution_id = ${key}

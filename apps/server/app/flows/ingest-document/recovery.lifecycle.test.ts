@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, loomIngest } from "../../documents/ingest";
+import { legacyIngestId, testIdSource } from "../../opaqueIds/testing";
 import { foldIngestStatus } from "../../status/model";
 import { DocumentGoneError } from "./errors";
 import { type IngestStartInput, ingestDocumentFlow } from "./flow";
@@ -21,7 +22,7 @@ describe("recoverIngest: resuming executions", () => {
     await start(boot(log, first.deps), ids);
     await first.inStep;
     const second = boot(log, fakeIngestDeps());
-    await loomIngest(second.runtime).cancel(
+    await loomIngest(second.runtime, { ids: testIdSource() }).cancel(
       { tenantId: ids.tenantId, userId: ids.userId },
       ids.documentId,
       INGEST_GENERATION,
@@ -78,13 +79,13 @@ describe("recoverIngest: resuming executions", () => {
       { ref: ids, step: "link" },
       { ref: ids, step: "finalize" },
     ]); // the hung parse is re-run, then every later step, all for the recorded principal
-    const state = await app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
+    const state = await app.runtime.loadState(legacyIngestId(ids.userId, ids.documentId), {
       principal: { tenant: ids.tenantId, actor: ids.userId },
     });
     expect(state?.status).toBe("completed");
     // an intruder in the same tenant is still refused: recovery did not widen access
     await expect(
-      app.runtime.loadState(ingestExecutionId(ids.userId, ids.documentId), {
+      app.runtime.loadState(legacyIngestId(ids.userId, ids.documentId), {
         principal: { tenant: ids.tenantId, actor: randomUUID() },
       }),
     ).rejects.toMatchObject({ name: "ExecutionDeniedError" });

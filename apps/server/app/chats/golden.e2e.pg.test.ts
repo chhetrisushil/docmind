@@ -235,15 +235,23 @@ describe.skipIf(!PG_URL)(
         // Loom also keeps the keys that seal each inbox message's sender under an opaque handle (ADR 0139 N6, on by
         // default): the sender master, marker and seed, and the handle's `sbj-…` subject; one sender here, ada.
         // Reading the sealed log back through the decrypting store with her key finds the question: it was her key.
-        expect([
-          ...new Set(ids.map((id) => subjectOfExecution({ executionId: inboxChainOf(id) ?? id }))),
-        ]).toEqual([ada.userId]);
+        // The document's ingest run is new-format: it belongs to ada's handle subject `h_<H>` (R14), with its own key.
+        const handleSubject = `h_${(await st.composed.ids.ensureUser(ada)).handle}`;
+        expect(
+          [
+            ...new Set(
+              ids.map((id) => subjectOfExecution({ executionId: inboxChainOf(id) ?? id })),
+            ),
+          ].sort(),
+        ).toEqual([ada.userId, handleSubject].sort());
         const keySubjects: string[] = (
           await st.db.owner.query("SELECT subject_id FROM data_keys")
         ).rows.map((r) => r.subject_id);
         const loomSender = (s: string) =>
           s.startsWith("__loom_sender_") || /^sbj-[0-9a-f]{32}$/.test(s);
-        expect(keySubjects.filter((s) => !loomSender(s))).toEqual([ada.userId]);
+        expect(keySubjects.filter((s) => !loomSender(s)).sort()).toEqual(
+          [ada.userId, handleSubject].sort(),
+        );
         expect(keySubjects.filter((s) => /^sbj-/.test(s))).toHaveLength(1);
         expect(await st.keys.get(bob.userId)).toBeNull();
         const opened = JSON.stringify(

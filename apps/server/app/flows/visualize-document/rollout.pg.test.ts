@@ -8,14 +8,20 @@ import { InMemoryContentStore } from "@loom/plugin-content";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildApp } from "../../config";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../../db/testSupport";
-import { ingestExecutionId } from "../../documents/ingest";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { ALICE, U1, seedDoc, seedRow, seedUsers } from "../../documents/testHarness";
+import { opaqueIds } from "../../opaqueIds";
+import {
+  deterministicUser,
+  legacyIngestId,
+  legacyVisualizeId,
+  testIdSource,
+} from "../../opaqueIds/testing";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { subjectOfExecution } from "../../subject";
 import type { VisualizeDeps } from "./deps";
@@ -27,11 +33,11 @@ import {
   type StructureFact,
 } from "./facts";
 import { visualizeDocumentFlow } from "./flow";
-import { experienceIdOf } from "./lineage";
 import { visualsPlanner } from "./planner";
 import { PgVisualRuns, visualRunRecorder } from "./runs";
-import { loomVisualsStarter, pgStaleFormatDocuments, visualizeExecutionId } from "./start";
+import { loomVisualsStarter, pgStaleFormatDocuments } from "./start";
 import type { StructureReader } from "./structure";
+import { experienceIdOf, lineageTestIds } from "./testSupport";
 import { childrenOf } from "./testing";
 
 const NIL = "00000000-0000-0000-0000-000000000000";
@@ -100,7 +106,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
     );
     await seedRow(
       owner,
-      ingestExecutionId(U1, id, g),
+      legacyIngestId(U1, id, g),
       id,
       U1,
       '{"status":"ready","step":"finalize","code":null}',
@@ -157,6 +163,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
       summaryMaxChars: 400_000,
       bus,
       lineage,
+      ids: lineageTestIds,
       now: () => "2026-11-10T10:00:00.000Z",
       sleep: async () => {},
       afterDone,
@@ -202,10 +209,14 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
         return handle;
       },
     };
+    // The recorder parses the new-format execution id through the process-wide id cache: the starter's own cache is installed for this test.
+    const ids = testIdSource();
+    opaqueIds.install(ids);
+    onTestFinished(() => opaqueIds.install(undefined));
     const starter = loomVisualsStarter(
       runtime as unknown as Pick<WorkflowRuntime, "start" | "cancel">,
       flow,
-      { stale: list, runs, afterDone },
+      { ids, stale: list, runs, afterDone },
     );
 
     expect(await starter.sweep()).toBe(1); // boot pass: re-planned once
@@ -215,7 +226,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
     expect(requests).toHaveLength(1); // the planner call only: zero extraction requests
     expect(structured.map((f) => f.ordinal)).toEqual([16]); // structure derived
     const latest = await lineage.resolveLatest(
-      experienceIdOf({ tenantId: ALICE.tenantId, userId: U1, documentId: id }),
+      await experienceIdOf({ tenantId: ALICE.tenantId, userId: U1, documentId: id }),
     );
     expect(latest.ok && childrenOf(latest.value.root).map((c) => c.id)).toEqual([
       "revenue",
@@ -228,7 +239,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
     expect(await list(NIL, 10)).toEqual([]); // the next boot lists nothing
     expect(await starter.sweep()).toBe(0);
     expect(requests).toHaveLength(1);
-    expect(visualizeExecutionId(U1, id, g, 1)).toBeTruthy();
+    expect(legacyVisualizeId(U1, id, g, 1)).toBeTruthy();
   });
 
   it("D5 (timeline and relations): a document planned before c2, stamped with the current fingerprint, is not listed by the stale pass, and a boot sweep re-plans only the one stamped with an older format", async () => {
@@ -245,7 +256,7 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
       );
       await seedRow(
         owner,
-        ingestExecutionId(U1, id, g),
+        legacyIngestId(U1, id, g),
         id,
         U1,
         '{"status":"ready","step":"finalize","code":null}',
@@ -276,12 +287,12 @@ describe.skipIf(!PG_URL)("rollout of the structure release (needs DOCMIND_TEST_P
     const starter = loomVisualsStarter(
       { start, cancel: vi.fn() } as unknown as Pick<WorkflowRuntime, "start" | "cancel">,
       visualizeDocumentFlow(),
-      { stale: pgStaleFormatDocuments(app), runs },
+      { ids: testIdSource(), stale: pgStaleFormatDocuments(app), runs },
     );
     expect(await starter.sweep()).toBe(1);
     expect(start).toHaveBeenCalledTimes(1);
     expect((start.mock.calls[0] as unknown[])[2]).toMatchObject({
-      executionId: visualizeExecutionId(U1, older.id, older.g, 1),
+      executionId: deterministicUser(U1).visualize(older.id, older.g, 1),
     });
   });
 });

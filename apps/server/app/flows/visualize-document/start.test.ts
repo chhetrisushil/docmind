@@ -4,19 +4,20 @@ import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
-import { ingestExecutionId } from "../../documents/ingest";
+import { FieldKeyStoreError } from "../../crypto/fields";
 import { InMemoryProgressBus } from "../../documents/progress";
+import { legacyIds } from "../../opaqueIds";
+import {
+  deterministicUser,
+  legacyIngestId,
+  legacyVisualizeId,
+  testIdSource,
+} from "../../opaqueIds/testing";
 import { IngestStatus } from "../../status/ingestStatus";
 import { MemoryLog, evt } from "../../status/testing";
-import { executionIdFor } from "../../subject";
 import { visualizeDocumentFlow } from "./flow";
 import type { ReadyDocument } from "./start";
-import {
-  SWEEP_EXECUTIONS,
-  hasVisualsHead,
-  loomVisualsStarter,
-  visualizeExecutionId,
-} from "./start";
+import { SWEEP_EXECUTIONS, hasVisualsHead, loomVisualsStarter } from "./start";
 import { noStructure } from "./testing";
 
 /** One shared wait per execution, like Loom's handle: asking again for the completion is the same wait. */
@@ -32,21 +33,30 @@ const ref = () => ({ tenantId: randomUUID(), userId: randomUUID(), documentId: r
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("visualizeExecutionId", () => {
-  it("is visualize-<doc> for generation 1 and visualize-<doc>.<gen> otherwise, under the user's prefix", () => {
+describe("the visualize execution ids a start builds", () => {
+  it("are h_<handle>:visualize-<token>[.<gen>][-r<n>], with no plain user or document id and the generation in the clear", () => {
     const r = ref();
-    expect(visualizeExecutionId(r.userId, r.documentId, 1)).toBe(
-      executionIdFor(r.userId, `visualize-${r.documentId}`),
+    const user = deterministicUser(r.userId);
+    expect(user.visualize(r.documentId, 1)).toMatch(
+      /^h_[a-z2-7]{25}[aeimquy4]:visualize-[a-z2-7]{51}[aq]$/,
     );
-    expect(visualizeExecutionId(r.userId, r.documentId.toUpperCase(), 3)).toBe(
-      `u_${r.userId}:visualize-${r.documentId}.3`,
+    expect(user.visualize(r.documentId, 3)).toMatch(
+      /^h_[a-z2-7]{25}[aeimquy4]:visualize-[a-z2-7]{51}[aq]\.3$/,
     );
+    expect(user.visualize(r.documentId, 3, 999)).toMatch(/\.3-r999$/);
+    for (const id of [user.visualize(r.documentId, 3), user.visualize(r.documentId, 1, 2)]) {
+      expect(id).not.toContain(r.userId);
+      expect(id).not.toContain(r.documentId);
+    }
   });
 
-  it("refuses a generation outside 1..999999999", () => {
+  it("refuse a generation outside 1..999999999 and a re-run outside 1..999", () => {
     const r = ref();
+    const user = deterministicUser(r.userId);
     for (const g of [0, -1, 1.5, 1_000_000_000])
-      expect(() => visualizeExecutionId(r.userId, r.documentId, g)).toThrow(RangeError);
+      expect(() => user.visualize(r.documentId, g)).toThrow(RangeError);
+    for (const n of [0, -1, 1.5, 1000])
+      expect(() => user.visualize(r.documentId, 1, n)).toThrow(RangeError);
   });
 });
 
@@ -85,36 +95,48 @@ describe("the starter", () => {
       log.push("start");
       return { executionId: o.executionId } as never;
     });
-    const starter = loomVisualsStarter(f.runtime, flow, { executions: recorder(log) });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      executions: recorder(log),
+    });
     const r = ref();
     await starter.start(r, 2);
-    expect(log).toEqual([`record:2:${visualizeExecutionId(r.userId, r.documentId, 2)}`, "start"]);
+    expect(log).toEqual([
+      `record:2:${deterministicUser(r.userId).visualize(r.documentId, 2)}`,
+      "start",
+    ]);
     log.length = 0;
     await starter.rerun(r, 2);
     expect(log).toEqual(["start"]); // a re-run is started but never recorded
     const g = fake();
-    const failing = loomVisualsStarter(g.runtime, flow, { executions: recorder([], true) });
+    const failing = loomVisualsStarter(g.runtime, flow, {
+      ids: testIdSource(),
+      executions: recorder([], true),
+    });
     await expect(failing.start(ref(), 2)).rejects.toThrow("record failed");
     expect(g.calls).not.toHaveBeenCalled();
   });
 
   it("starts once per (document, generation); a repeat is null, a new generation starts again", async () => {
     const { runtime, started } = fake();
-    const starter = loomVisualsStarter(runtime, flow);
+    const starter = loomVisualsStarter(runtime, flow, { ids: testIdSource() });
     const r = ref();
     expect(await starter.start(r, 2)).not.toBeNull();
     expect(await starter.start(r, 2)).toBeNull();
     expect(await starter.start(r, 3)).not.toBeNull();
     expect([...started]).toEqual([
-      visualizeExecutionId(r.userId, r.documentId, 2),
-      visualizeExecutionId(r.userId, r.documentId, 3),
+      deterministicUser(r.userId).visualize(r.documentId, 2),
+      deterministicUser(r.userId).visualize(r.documentId, 3),
     ]);
   });
 
   it("fire never throws: an already-started id is silent, any other failure goes to onError by itself", async () => {
     const f = fake();
     const errors: unknown[] = [];
-    const starter = loomVisualsStarter(f.runtime, flow, { onError: (e) => errors.push(e) });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      onError: (e) => errors.push(e),
+    });
     const r = ref();
     starter.fire(r, 2);
     starter.fire(r, 2);
@@ -133,7 +155,11 @@ describe("the starter", () => {
   it("starts nothing while disabled (the visuals role is off), sweep included", async () => {
     const f = fake();
     const ready = vi.fn(async () => [] as ReadyDocument[]);
-    const starter = loomVisualsStarter(f.runtime, flow, { enabled: false, ready });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      enabled: false,
+      ready,
+    });
     expect(await starter.start(ref(), 2)).toBeNull();
     expect(await starter.sweep()).toBe(0);
     expect(f.calls).not.toHaveBeenCalled();
@@ -153,13 +179,17 @@ describe("the starter", () => {
           : docs.findIndex((d) => d.documentId === after) + 1;
       return docs.slice(from, from + limit);
     });
-    const starter = loomVisualsStarter(f.runtime, flow, { ready, pageSize: 2 });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      ready,
+      pageSize: 2,
+    });
     expect(await starter.sweep()).toBe(5);
     await starter.idle();
     expect(ready.mock.calls.map((c) => c[1])).toEqual([2, 2, 2]);
     expect(ready.mock.calls[1]?.[0]).toBe(docs[1]?.documentId);
     expect([...f.started]).toEqual(
-      docs.map((d) => visualizeExecutionId(d.userId, d.documentId, d.generation)),
+      docs.map((d) => deterministicUser(d.userId).visualize(d.documentId, d.generation)),
     );
     // A second sweep over the same list starts nothing new: Loom's start-once is the backstop.
     expect(await starter.sweep()).toBe(5);
@@ -171,6 +201,7 @@ describe("the starter", () => {
     const f = fake();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
       ready: async () => {
         throw new RangeError("secret detail");
       },
@@ -180,16 +211,18 @@ describe("the starter", () => {
     const aborted = new AbortController();
     aborted.abort();
     const never = vi.fn(async () => [] as ReadyDocument[]);
-    expect(await loomVisualsStarter(f.runtime, flow, { ready: never }).sweep(aborted.signal)).toBe(
-      0,
-    );
+    expect(
+      await loomVisualsStarter(f.runtime, flow, { ids: testIdSource(), ready: never }).sweep(
+        aborted.signal,
+      ),
+    ).toBe(0);
     expect(never).not.toHaveBeenCalled();
   });
 
   it("cancel records the caller's reason", async () => {
     const f = fake();
     const r = ref();
-    await loomVisualsStarter(f.runtime, flow).cancel(
+    await loomVisualsStarter(f.runtime, flow, { ids: testIdSource() }).cancel(
       { tenantId: r.tenantId, userId: r.userId },
       r.documentId,
       1,
@@ -212,7 +245,7 @@ describe("the starter", () => {
       },
       cancel: async () => void order.push("cancel"),
     } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
-    const starter = loomVisualsStarter(runtime, flow);
+    const starter = loomVisualsStarter(runtime, flow, { ids: testIdSource() });
     const r = ref();
     const other = ref();
     starter.fire(r, 2);
@@ -258,7 +291,11 @@ describe("the starter", () => {
           : docs.findIndex((d) => d.documentId === after) + 1;
       return docs.slice(from, from + limit);
     };
-    const fired = await loomVisualsStarter(runtime, flow, { ready, pageSize: 3 }).sweep();
+    const fired = await loomVisualsStarter(runtime, flow, {
+      ids: testIdSource(),
+      ready,
+      pageSize: 3,
+    }).sweep();
     expect(fired).toBe(7);
     expect(peak).toBe(SWEEP_EXECUTIONS);
     expect(live).toBe(0); // the sweep resolves after every execution completed
@@ -278,7 +315,7 @@ describe("the starter", () => {
     const docs: ReadyDocument[] = Array.from({ length: 4 }, () => ({ ...ref(), generation: 1 }));
     const ready = async (after: string) =>
       after === "00000000-0000-0000-0000-000000000000" ? docs : [];
-    expect(await loomVisualsStarter(runtime, flow, { ready }).sweep()).toBe(4);
+    expect(await loomVisualsStarter(runtime, flow, { ids: testIdSource(), ready }).sweep()).toBe(4);
     expect(log).toHaveBeenCalledWith("visualize execution failed", "RangeError");
   });
 
@@ -287,12 +324,12 @@ describe("the starter", () => {
     f.cancel.mockImplementation(async (id: string) => {
       throw new Error(`No execution found for id: ${id}`);
     });
-    const starter = loomVisualsStarter(f.runtime, flow);
+    const starter = loomVisualsStarter(f.runtime, flow, { ids: testIdSource() });
     const r = ref();
     await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 4, "why");
     expect(f.cancel.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
-      visualizeExecutionId(r.userId, r.documentId, 3),
-      visualizeExecutionId(r.userId, r.documentId, 4),
+      legacyVisualizeId(r.userId, r.documentId, 3),
+      legacyVisualizeId(r.userId, r.documentId, 4),
     ]);
     await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 1, "why");
     expect(f.cancel).toHaveBeenCalledTimes(3); // generation 1 has no earlier one
@@ -305,7 +342,7 @@ describe("the starter", () => {
 
 describe("IngestStatus onReady starts the visualize flow", () => {
   const readyRun = (r: ReturnType<typeof ref>, generation: number) => {
-    const id = ingestExecutionId(r.userId, r.documentId, generation);
+    const id = legacyIngestId(r.userId, r.documentId, generation);
     return [
       evt(id, 0, "EXECUTION_STARTED", { input: r }),
       evt(id, 1, "STEP_STARTED", { stepId: "ingest-finalize" }),
@@ -315,7 +352,7 @@ describe("IngestStatus onReady starts the visualize flow", () => {
   function setup(over: { onReadyThrows?: boolean } = {}) {
     const app = buildApp({ kind: "memory" }, undefined, {});
     const flow = visualizeDocumentFlow();
-    const starter = loomVisualsStarter(app.runtime, flow);
+    const starter = loomVisualsStarter(app.runtime, flow, { ids: testIdSource() });
     const created: string[] = [];
     const starts: Promise<void>[] = [];
     const errors: unknown[] = [];
@@ -357,14 +394,14 @@ describe("IngestStatus onReady starts the visualize flow", () => {
         .map((e, i) => ({ ...e, sequence: 3 + i, id: `${e.executionId}-r${i}` })),
     ); // a replayed finalize
     await s.settle();
-    expect(s.created).toEqual([visualizeExecutionId(r.userId, r.documentId, 2)]);
+    expect(s.created).toEqual([deterministicUser(r.userId).visualize(r.documentId, 2)]);
     expect(s.errors).toEqual([]);
     // A document that turned ready again at a newer generation is a new execution.
     s.feed(...readyRun(r, 3));
     await s.settle();
     expect(s.created).toEqual([
-      visualizeExecutionId(r.userId, r.documentId, 2),
-      visualizeExecutionId(r.userId, r.documentId, 3),
+      deterministicUser(r.userId).visualize(r.documentId, 2),
+      deterministicUser(r.userId).visualize(r.documentId, 3),
     ]);
     await s.app.close();
   });
@@ -381,12 +418,12 @@ describe("IngestStatus onReady starts the visualize flow", () => {
   it("does not fire for a step that is not the finalize, nor for a visualize execution's events", async () => {
     const s = setup();
     const r = ref();
-    const id = ingestExecutionId(r.userId, r.documentId, 2);
+    const id = legacyIngestId(r.userId, r.documentId, 2);
     s.feed(
       evt(id, 0, "EXECUTION_STARTED", { input: r }),
       evt(id, 1, "STEP_STARTED", { stepId: "ingest-parse" }),
     );
-    const vid = visualizeExecutionId(r.userId, r.documentId, 2);
+    const vid = legacyVisualizeId(r.userId, r.documentId, 2);
     s.status.onEvent(
       evt(vid, 0, "STEP_COMPLETED", { stepId: "visualize-commit", output: { outcome: "done" } }),
     );
@@ -407,6 +444,7 @@ describe("a start still pending when the cancel runs", () => {
         flow,
         deps: {
           guard: { begin: () => hang },
+          ids: testIdSource(),
           chunks: { sectionsOf: async () => [], read: async () => [] },
           facts: {
             replace: async () => 0,
@@ -427,35 +465,20 @@ describe("a start still pending when the cancel runs", () => {
         },
       },
     });
-    const starter = loomVisualsStarter(app.runtime, flow);
+    const starter = loomVisualsStarter(app.runtime, flow, { ids: testIdSource() });
     const r = ref();
     const id = { tenantId: r.tenantId, userId: r.userId };
     starter.fire(r, 2); // still pending: the cancel below would otherwise find no execution
     await starter.settle(id, r.documentId);
     await starter.cancel(id, r.documentId, 2, "document-deleted");
-    const state = await app.runtime.loadState(visualizeExecutionId(r.userId, r.documentId, 2), {
-      principal: { tenant: r.tenantId, actor: r.userId },
-    });
+    const state = await app.runtime.loadState(
+      deterministicUser(r.userId).visualize(r.documentId, 2),
+      {
+        principal: { tenant: r.tenantId, actor: r.userId },
+      },
+    );
     expect(state?.status).toBe("cancelled");
     await app.close();
-  });
-});
-
-describe("visualizeExecutionId re-runs", () => {
-  it("adds -r<n> after the generation suffix, under the user's prefix", () => {
-    const r = ref();
-    expect(visualizeExecutionId(r.userId, r.documentId, 1, 2)).toBe(
-      `u_${r.userId}:visualize-${r.documentId}-r2`,
-    );
-    expect(visualizeExecutionId(r.userId, r.documentId.toUpperCase(), 3, 999)).toBe(
-      `u_${r.userId}:visualize-${r.documentId}.3-r999`,
-    );
-  });
-
-  it("refuses a re-run outside 1..999", () => {
-    const r = ref();
-    for (const n of [0, -1, 1.5, 1000])
-      expect(() => visualizeExecutionId(r.userId, r.documentId, 1, n)).toThrow(RangeError);
   });
 });
 
@@ -489,14 +512,14 @@ describe("rerun and the retry sweep", () => {
   it("starts the next free -r<n>: ids Loom already has are skipped, and the run is recorded as running", async () => {
     const f = fake();
     const runs = runsStore();
-    const starter = loomVisualsStarter(f.runtime, flow, { runs });
+    const starter = loomVisualsStarter(f.runtime, flow, { ids: testIdSource(), runs });
     const r = ref();
     f.started.push(
-      visualizeExecutionId(r.userId, r.documentId, 2, 1),
-      visualizeExecutionId(r.userId, r.documentId, 2, 2),
+      deterministicUser(r.userId).visualize(r.documentId, 2, 1),
+      deterministicUser(r.userId).visualize(r.documentId, 2, 2),
     ); // two earlier re-runs (a restart forgot them)
     expect(await starter.rerun(r, 2)).toEqual({ kind: "started", rerun: 3 });
-    expect(f.started.at(-1)).toBe(visualizeExecutionId(r.userId, r.documentId, 2, 3));
+    expect(f.started.at(-1)).toBe(deterministicUser(r.userId).visualize(r.documentId, 2, 3));
     expect(runs.record).toHaveBeenCalledWith(
       { userId: r.userId, documentId: r.documentId, generation: 2, run: 3 },
       "running",
@@ -507,18 +530,26 @@ describe("rerun and the retry sweep", () => {
     const f = fake();
     const reextract = new Set<string>();
     const r = ref();
-    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+      reextract,
+    });
     expect(await starter.rerun(r, 2)).toEqual({ kind: "started", rerun: 1 });
-    expect([...reextract]).toEqual([visualizeExecutionId(r.userId, r.documentId, 2, 1)]);
+    expect([...reextract]).toEqual([deterministicUser(r.userId).visualize(r.documentId, 2, 1)]);
   });
 
   it("drops a note when its run ends without extracting (the run's end is observed)", async () => {
     const f = fake();
     const reextract = new Set<string>();
     const r = ref();
-    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+      reextract,
+    });
     await starter.rerun(r, 1);
-    const id = visualizeExecutionId(r.userId, r.documentId, 1, 1);
+    const id = deterministicUser(r.userId).visualize(r.documentId, 1, 1);
     expect(reextract.has(id)).toBe(true);
     f.finish(id);
     await vi.waitFor(() => expect(reextract.has(id)).toBe(false));
@@ -529,10 +560,14 @@ describe("rerun and the retry sweep", () => {
     const reextract = new Set<string>();
     const r = ref();
     // run number 1 is already taken by an execution this process does not track: the probe moves on to 2
-    f.started.push(visualizeExecutionId(r.userId, r.documentId, 1, 1));
-    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    f.started.push(deterministicUser(r.userId).visualize(r.documentId, 1, 1));
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+      reextract,
+    });
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 });
-    expect([...reextract]).toEqual([visualizeExecutionId(r.userId, r.documentId, 1, 2)]);
+    expect([...reextract]).toEqual([deterministicUser(r.userId).visualize(r.documentId, 1, 2)]);
     // any other failed start leaves no note either
     const bad = {
       start: vi.fn(async () => {
@@ -541,7 +576,11 @@ describe("rerun and the retry sweep", () => {
       cancel: vi.fn(async () => {}),
     } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
     const noted = new Set<string>();
-    const starter2 = loomVisualsStarter(bad, flow, { runs: runsStore(), reextract: noted });
+    const starter2 = loomVisualsStarter(bad, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+      reextract: noted,
+    });
     await expect(starter2.rerun(ref(), 1)).rejects.toThrow("boom");
     expect(noted.size).toBe(0);
   });
@@ -550,18 +589,23 @@ describe("rerun and the retry sweep", () => {
     const f = fake();
     const reextract = new Set<string>(Array.from({ length: 1000 }, (_, i) => `old-${i}`));
     const r = ref();
-    const starter = loomVisualsStarter(f.runtime, flow, { runs: runsStore(), reextract });
+    const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+      reextract,
+    });
     await starter.rerun(r, 1);
     expect(reextract.size).toBe(1000);
     expect(reextract.has("old-0")).toBe(false);
     expect(reextract.has("old-1")).toBe(true);
-    expect(reextract.has(visualizeExecutionId(r.userId, r.documentId, 1, 1))).toBe(true);
+    expect(reextract.has(deterministicUser(r.userId).visualize(r.documentId, 1, 1))).toBe(true);
   });
 
   it("notes nothing when the visuals role is off (nothing starts)", async () => {
     const f = fake();
     const reextract = new Set<string>();
     const off = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
       runs: runsStore(),
       reextract,
       enabled: false,
@@ -572,16 +616,16 @@ describe("rerun and the retry sweep", () => {
 
   it("answers running while a run of the document is in flight (the automatic run included), then starts again once it ends", async () => {
     const f = fake();
-    const starter = loomVisualsStarter(f.runtime, flow);
+    const starter = loomVisualsStarter(f.runtime, flow, { ids: testIdSource() });
     const r = ref();
     await starter.start(r, 1); // the automatic run
     expect(starter.running(r, 1)).toBe(true);
     expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
-    f.finish(visualizeExecutionId(r.userId, r.documentId, 1));
+    f.finish(deterministicUser(r.userId).visualize(r.documentId, 1));
     await vi.waitFor(() => expect(starter.running(r, 1)).toBe(false));
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 1 });
     expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
-    f.finish(visualizeExecutionId(r.userId, r.documentId, 1, 1));
+    f.finish(deterministicUser(r.userId).visualize(r.documentId, 1, 1));
     await vi.waitFor(() => expect(starter.running(r, 1)).toBe(false));
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 }); // this process remembers its last number
   });
@@ -589,6 +633,7 @@ describe("rerun and the retry sweep", () => {
   it("answers running when the table records a run as running (a run recovered after a restart)", async () => {
     const f = fake();
     const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
       runs: runsStore({ run: 1, state: "running", code: null }),
     });
     expect(await starter.rerun(ref(), 1)).toEqual({ kind: "running" });
@@ -597,7 +642,7 @@ describe("rerun and the retry sweep", () => {
 
   it("answers disabled while the role is off and starts nothing", async () => {
     const f = fake();
-    const starter = loomVisualsStarter(f.runtime, flow, { enabled: false });
+    const starter = loomVisualsStarter(f.runtime, flow, { ids: testIdSource(), enabled: false });
     expect(await starter.rerun(ref(), 1)).toEqual({ kind: "disabled" });
     expect(f.started).toEqual([]);
   });
@@ -609,7 +654,9 @@ describe("rerun and the retry sweep", () => {
       },
       cancel: async () => {},
     } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
-    expect(await loomVisualsStarter(runtime, flow).rerun(ref(), 1)).toEqual({ kind: "running" });
+    expect(
+      await loomVisualsStarter(runtime, flow, { ids: testIdSource() }).rerun(ref(), 1),
+    ).toEqual({ kind: "running" });
   });
 
   it("any other start failure is thrown to the caller", async () => {
@@ -619,20 +666,23 @@ describe("rerun and the retry sweep", () => {
       },
       cancel: async () => {},
     } as unknown as Pick<WorkflowRuntime, "start" | "cancel">;
-    await expect(loomVisualsStarter(runtime, flow).rerun(ref(), 1)).rejects.toThrow(RangeError);
+    await expect(
+      loomVisualsStarter(runtime, flow, { ids: testIdSource() }).rerun(ref(), 1),
+    ).rejects.toThrow(RangeError);
   });
 
   it("cancel also cancels the re-runs up to the highest one the table recorded", async () => {
     const f = fake();
     const starter = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
       runs: runsStore({ run: 2, state: "failed", code: "visuals-model-unavailable" }),
     });
     const r = ref();
     await starter.cancel({ tenantId: r.tenantId, userId: r.userId }, r.documentId, 1, "why");
     expect(f.cancel.mock.calls.map((c) => (c as unknown[])[0])).toEqual([
-      visualizeExecutionId(r.userId, r.documentId, 1),
-      visualizeExecutionId(r.userId, r.documentId, 1, 1),
-      visualizeExecutionId(r.userId, r.documentId, 1, 2),
+      legacyVisualizeId(r.userId, r.documentId, 1),
+      legacyVisualizeId(r.userId, r.documentId, 1, 1),
+      legacyVisualizeId(r.userId, r.documentId, 1, 2),
     ]);
   });
 
@@ -667,15 +717,16 @@ describe("rerun and the retry sweep", () => {
     };
     const runs = runsStore();
     const starter = loomVisualsStarter(runtime, flow, {
+      ids: testIdSource(),
       ready: page([{ ...fresh, generation: 1 }]),
       retry: page(retry),
       runs,
       pageSize: 2,
     });
     expect(await starter.sweep()).toBe(6);
-    expect(f.started[0]).toBe(visualizeExecutionId(fresh.userId, fresh.documentId, 1));
+    expect(f.started[0]).toBe(deterministicUser(fresh.userId).visualize(fresh.documentId, 1));
     expect(f.started.slice(1)).toEqual(
-      retry.map((d) => visualizeExecutionId(d.userId, d.documentId, 2, 1)),
+      retry.map((d) => deterministicUser(d.userId).visualize(d.documentId, 2, 1)),
     );
     expect(peak).toBeLessThanOrEqual(SWEEP_EXECUTIONS);
     expect(live).toBe(0);
@@ -690,12 +741,17 @@ describe("rerun and the retry sweep", () => {
     const one = async (after: string) =>
       after === "00000000-0000-0000-0000-000000000000" ? [doc] : [];
     const busy = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
       retry: one,
       runs: runsStore({ run: 1, state: "running", code: null }),
     });
     expect(await busy.sweep()).toBe(1); // fired, but the re-run found it running and started nothing
     expect(f.started).toEqual([]);
-    const off = loomVisualsStarter(f.runtime, flow, { retry: one, enabled: false });
+    const off = loomVisualsStarter(f.runtime, flow, {
+      ids: testIdSource(),
+      retry: one,
+      enabled: false,
+    });
     expect(await off.sweep()).toBe(0);
     expect(f.started).toEqual([]);
   });
@@ -741,12 +797,15 @@ describe("the stale-format boot pass", () => {
     const s = setup();
     const docs = Array.from({ length: 5 }, mk);
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       stale: page(docs),
       runs: s.runs,
       pageSize: 2,
     });
     expect(await starter.sweep()).toBe(5);
-    expect(s.started).toEqual(docs.map((d) => visualizeExecutionId(d.userId, d.documentId, 1, 1)));
+    expect(s.started).toEqual(
+      docs.map((d) => deterministicUser(d.userId).visualize(d.documentId, 1, 1)),
+    );
     expect(s.peak()).toBeLessThanOrEqual(SWEEP_EXECUTIONS);
     expect(s.runs.record).toHaveBeenCalledTimes(5);
   });
@@ -756,6 +815,7 @@ describe("the stale-format boot pass", () => {
     const reextract = new Set<string>();
     const docs = [mk(), mk()];
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       stale: page(docs),
       runs: s.runs,
       reextract,
@@ -769,6 +829,7 @@ describe("the stale-format boot pass", () => {
     const s = setup();
     const doc = mk();
     const busy = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       stale: page([doc]),
       runs: {
         record: s.runs.record,
@@ -777,9 +838,13 @@ describe("the stale-format boot pass", () => {
     });
     expect(await busy.sweep()).toBe(1);
     expect(s.started).toEqual([]);
-    const off = loomVisualsStarter(s.runtime, flow, { stale: page([doc]), enabled: false });
+    const off = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
+      stale: page([doc]),
+      enabled: false,
+    });
     expect(await off.sweep()).toBe(0);
-    expect(await loomVisualsStarter(s.runtime, flow, {}).sweep()).toBe(0);
+    expect(await loomVisualsStarter(s.runtime, flow, { ids: testIdSource() }).sweep()).toBe(0);
     expect(s.started).toEqual([]);
   });
 
@@ -788,6 +853,7 @@ describe("the stale-format boot pass", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const fresh = mk();
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       ready: page([fresh]),
       stale: async () => {
         throw new RangeError("down");
@@ -795,7 +861,7 @@ describe("the stale-format boot pass", () => {
       runs: s.runs,
     });
     await expect(starter.sweep()).resolves.toBe(1);
-    expect(s.started).toEqual([visualizeExecutionId(fresh.userId, fresh.documentId, 1)]);
+    expect(s.started).toEqual([deterministicUser(fresh.userId).visualize(fresh.documentId, 1)]);
     expect(log).toHaveBeenCalledWith("visuals stale-format pass failed", "RangeError");
     log.mockRestore();
   });
@@ -809,6 +875,7 @@ describe("the stale-format boot pass", () => {
     const retryDoc = mk();
     const staleDoc = mk();
     const a = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       ready: boom,
       retry: page([retryDoc]),
       stale: page([staleDoc]),
@@ -816,17 +883,20 @@ describe("the stale-format boot pass", () => {
     });
     await expect(a.sweep()).resolves.toBe(2);
     expect(s.started).toEqual([
-      visualizeExecutionId(retryDoc.userId, retryDoc.documentId, 1, 1),
-      visualizeExecutionId(staleDoc.userId, staleDoc.documentId, 1, 1),
+      deterministicUser(retryDoc.userId).visualize(retryDoc.documentId, 1, 1),
+      deterministicUser(staleDoc.userId).visualize(staleDoc.documentId, 1, 1),
     ]);
     s.started.length = 0;
     const b = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       retry: boom,
       stale: page([staleDoc]),
       runs: s.runs,
     });
     await expect(b.sweep()).resolves.toBe(1);
-    expect(s.started).toEqual([visualizeExecutionId(staleDoc.userId, staleDoc.documentId, 1, 1)]);
+    expect(s.started).toEqual([
+      deterministicUser(staleDoc.userId).visualize(staleDoc.documentId, 1, 1),
+    ]);
     expect(log).toHaveBeenCalledWith("visuals ready pass failed", "RangeError");
     expect(log).toHaveBeenCalledWith("visuals retry pass failed", "RangeError");
     log.mockRestore();
@@ -837,6 +907,7 @@ describe("the stale-format boot pass", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const doc = mk();
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       running: async () => {
         throw new Error("x");
       },
@@ -844,7 +915,7 @@ describe("the stale-format boot pass", () => {
       runs: s.runs,
     });
     await expect(starter.sweep()).resolves.toBe(1);
-    expect(s.started).toEqual([visualizeExecutionId(doc.userId, doc.documentId, 1, 1)]);
+    expect(s.started).toEqual([deterministicUser(doc.userId).visualize(doc.documentId, 1, 1)]);
     log.mockRestore();
   });
 });
@@ -892,6 +963,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const afterDone = new Set<string>();
     const reextract = new Set<string>();
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       unrecorded: page([headed, bare]),
       visualized: async (d) => d.documentId === headed.documentId,
       runs: s.runs,
@@ -900,7 +972,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     });
     expect(await starter.sweep()).toBe(1);
     expect(reextract.size).toBe(0); // a boot pass is not a user's press: never noted
-    const id = visualizeExecutionId(headed.userId, headed.documentId, 1, 1);
+    const id = deterministicUser(headed.userId).visualize(headed.documentId, 1, 1);
     expect(s.started).toEqual([id]);
     expect(afterDone.has(id)).toBe(true);
     expect(s.runs.record).toHaveBeenCalledTimes(1);
@@ -911,6 +983,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const doc = mk();
     let listed = true;
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       unrecorded: async (after, limit) => (listed ? page([doc])(after, limit) : []),
       visualized: async () => true,
       runs: s.runs,
@@ -926,16 +999,22 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const [bad, good] = [mk(), mk()];
     expect(
-      await loomVisualsStarter(s.runtime, flow, { unrecorded: page([bad]), runs: s.runs }).sweep(),
+      await loomVisualsStarter(s.runtime, flow, {
+        ids: testIdSource(),
+        unrecorded: page([bad]),
+        runs: s.runs,
+      }).sweep(),
     ).toBe(0);
     expect(
       await loomVisualsStarter(s.runtime, flow, {
+        ids: testIdSource(),
         unrecorded: page([bad]),
         visualized: async () => true,
         enabled: false,
       }).sweep(),
     ).toBe(0);
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       unrecorded: page([bad, good]),
       visualized: async (d) => {
         if (d.documentId === bad.documentId) throw new RangeError("unreadable");
@@ -944,7 +1023,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
       runs: s.runs,
     });
     expect(await starter.sweep()).toBe(1);
-    expect(s.started).toEqual([visualizeExecutionId(good.userId, good.documentId, 1, 1)]);
+    expect(s.started).toEqual([deterministicUser(good.userId).visualize(good.documentId, 1, 1)]);
     expect(log).toHaveBeenCalledWith("visuals head check failed", "RangeError");
     log.mockRestore();
   });
@@ -952,12 +1031,13 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
   it("a document with no head gets its run-0 outcome recorded from Loom's state, so it is neither listed nor read again", async () => {
     const s = setup();
     const bare = mk();
-    s.states.set(visualizeExecutionId(bare.userId, bare.documentId, 1), {
+    s.states.set(legacyVisualizeId(bare.userId, bare.documentId, 1), {
       status: "completed",
       variables: { _output: { outcome: "empty" } },
     });
     const visualized = vi.fn(async () => false);
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       // The real definer stops listing a document once it has a row.
       unrecorded: async (after, limit) =>
         s.rows.has(bare.documentId) ? [] : page([bare])(after, limit),
@@ -979,15 +1059,15 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const s = setup();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const [running, gone, ok] = [mk(), mk(), mk()];
-    s.states.set(visualizeExecutionId(running.userId, running.documentId, 1), {
+    s.states.set(legacyVisualizeId(running.userId, running.documentId, 1), {
       status: "running",
     });
     s.runtime.loadState = vi.fn(async (id: string) => {
-      if (id === visualizeExecutionId(gone.userId, gone.documentId, 1))
-        throw new RangeError("down");
+      if (id === legacyVisualizeId(gone.userId, gone.documentId, 1)) throw new RangeError("down");
       return (s.states.get(id) ?? null) as never;
     }) as never;
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       unrecorded: page([running, gone, ok]),
       visualized: async () => false,
       runs: s.runs,
@@ -1003,6 +1083,7 @@ describe("the unrecorded-documents boot pass (documents visualized before visual
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const fresh = mk();
     const starter = loomVisualsStarter(s.runtime, flow, {
+      ids: testIdSource(),
       ready: page([fresh]),
       unrecorded: async () => {
         throw new RangeError("down");
@@ -1026,25 +1107,31 @@ describe("hasVisualsHead", () => {
       },
     }) as never;
   it("is true for a head, false for none and for an erased line (refusal or error)", async () => {
-    expect(await hasVisualsHead(lineage({ ok: true, value: "x" }))(r)).toBe(true);
-    expect(await hasVisualsHead(lineage({ ok: true, value: null }))(r)).toBe(false);
+    expect(await hasVisualsHead(lineage({ ok: true, value: "x" }), testIdSource())(r)).toBe(true);
+    expect(await hasVisualsHead(lineage({ ok: true, value: null }), testIdSource())(r)).toBe(false);
     expect(
       await hasVisualsHead(
         lineage({ ok: false, refusal: { kind: "refused", finding: { code: "line-erased" } } }),
+        testIdSource(),
       )(r),
     ).toBe(false);
-    expect(await hasVisualsHead(lineage(null, new LineErasedError("e")))(r)).toBe(false);
+    expect(await hasVisualsHead(lineage(null, new LineErasedError("e")), testIdSource())(r)).toBe(
+      false,
+    );
   });
   it("throws (class only) on any other refusal or error", async () => {
     await expect(
       hasVisualsHead(
         lineage({ ok: false, refusal: { kind: "refused", finding: { code: "line-unreadable" } } }),
+        testIdSource(),
       )(r),
     ).rejects.toMatchObject({ name: "LineageRefusedError" });
     await expect(
-      hasVisualsHead(lineage({ ok: false, refusal: { kind: "head-moved" } }))(r),
+      hasVisualsHead(lineage({ ok: false, refusal: { kind: "head-moved" } }), testIdSource())(r),
     ).rejects.toThrow();
-    await expect(hasVisualsHead(lineage(null, new RangeError("x")))(r)).rejects.toThrow(RangeError);
+    await expect(
+      hasVisualsHead(lineage(null, new RangeError("x")), testIdSource())(r),
+    ).rejects.toThrow(RangeError);
   });
 });
 
@@ -1074,7 +1161,10 @@ describe("rerun: concurrency, numbering and settle", () => {
 
   it("two concurrent retries start exactly one run; the other answers running", async () => {
     const f = base();
-    const starter = loomVisualsStarter(f.runtime as never, flow, { runs: runsStore() });
+    const starter = loomVisualsStarter(f.runtime as never, flow, {
+      ids: testIdSource(),
+      runs: runsStore(),
+    });
     const r = ref();
     const answers = await Promise.all([starter.rerun(r, 1), starter.rerun(r, 1)]);
     expect(answers.map((a) => a.kind).sort()).toEqual(["running", "started"]);
@@ -1085,8 +1175,8 @@ describe("rerun: concurrency, numbering and settle", () => {
     const f = base();
     const r = ref();
     // Loom has -r1 already (started by another path), and this process tracks a run of the document: no probing on.
-    f.started.push(visualizeExecutionId(r.userId, r.documentId, 1, 1));
-    const starter = loomVisualsStarter(f.runtime as never, flow);
+    f.started.push(deterministicUser(r.userId).visualize(r.documentId, 1, 1));
+    const starter = loomVisualsStarter(f.runtime as never, flow, { ids: testIdSource() });
     await starter.start(r, 1); // the automatic run is in flight
     expect(await starter.rerun(r, 1)).toEqual({ kind: "running" });
     expect(f.started).toHaveLength(2);
@@ -1095,6 +1185,7 @@ describe("rerun: concurrency, numbering and settle", () => {
   it("numbers from the table's last run, with no probing of the numbers below it", async () => {
     const f = base();
     const starter = loomVisualsStarter(f.runtime as never, flow, {
+      ids: testIdSource(),
       runs: runsStore({ run: 5, state: "failed", code: "visuals-plan-invalid" }),
     });
     const r = ref();
@@ -1105,7 +1196,7 @@ describe("rerun: concurrency, numbering and settle", () => {
   it("records every start as running, the automatic run (run 0) included", async () => {
     const f = base();
     const runs = runsStore();
-    const starter = loomVisualsStarter(f.runtime as never, flow, { runs });
+    const starter = loomVisualsStarter(f.runtime as never, flow, { ids: testIdSource(), runs });
     const r = ref();
     await starter.start(r, 2);
     expect(runs.record).toHaveBeenCalledWith(
@@ -1120,7 +1211,7 @@ describe("rerun: concurrency, numbering and settle", () => {
     f.gate.wait = new Promise<void>((r) => {
       release = r;
     });
-    const starter = loomVisualsStarter(f.runtime as never, flow);
+    const starter = loomVisualsStarter(f.runtime as never, flow, { ids: testIdSource() });
     const r = ref();
     const answer = starter.rerun(r, 1);
     let settled = false;
@@ -1165,11 +1256,14 @@ describe("a lost end event never leaves a run stuck at running", () => {
 
   it("rerun repairs the row from the execution's output and then starts the next run", async () => {
     const s = setup(completed({ outcome: "failed", code: "visuals-model-unavailable" }));
-    const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+    const starter = loomVisualsStarter(s.runtime as never, flow, {
+      ids: testIdSource(),
+      runs: s.runs,
+    });
     const r = ref();
     expect(await starter.rerun(r, 1)).toEqual({ kind: "started", rerun: 2 });
     expect(s.runtime.loadState).toHaveBeenCalledWith(
-      visualizeExecutionId(r.userId, r.documentId, 1, 1),
+      legacyVisualizeId(r.userId, r.documentId, 1, 1),
       expect.anything(),
     );
     expect(s.record).toHaveBeenCalledWith(
@@ -1186,7 +1280,10 @@ describe("a lost end event never leaves a run stuck at running", () => {
       completed({ outcome: "done", extra: "x" }),
     ]) {
       const s = setup(load);
-      const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+      const starter = loomVisualsStarter(s.runtime as never, flow, {
+        ids: testIdSource(),
+        runs: s.runs,
+      });
       const r = ref();
       const fixed = await starter.reconcile(r, 1, runningRow);
       expect(fixed).toEqual({ run: 1, state: "failed", code: "internal" });
@@ -1206,6 +1303,7 @@ describe("a lost end event never leaves a run stuck at running", () => {
       const errors: unknown[] = [];
       const s = setup(load);
       const starter = loomVisualsStarter(s.runtime as never, flow, {
+        ids: testIdSource(),
         runs: s.runs,
         onError: (e) => errors.push(e),
       });
@@ -1214,7 +1312,10 @@ describe("a lost end event never leaves a run stuck at running", () => {
       expect(s.started).toEqual([]);
     }
     const s = setup(completed({ outcome: "done" }));
-    const starter = loomVisualsStarter(s.runtime as never, flow, { runs: s.runs });
+    const starter = loomVisualsStarter(s.runtime as never, flow, {
+      ids: testIdSource(),
+      runs: s.runs,
+    });
     await starter.start(r, 1);
     expect(await starter.reconcile(r, 1, runningRow)).toEqual(runningRow); // this process is on it: Loom is not asked
     expect(s.runtime.loadState).not.toHaveBeenCalled();
@@ -1237,6 +1338,7 @@ describe("a lost end event never leaves a run stuck at running", () => {
       return { executionId: o.executionId, waitForCompletion: async () => {} } as never;
     });
     const starter = loomVisualsStarter(s.runtime as never, flow, {
+      ids: testIdSource(),
       running: page,
       retry: async (after) =>
         after === "00000000-0000-0000-0000-000000000000" ? [docs[0] as never] : [],
@@ -1257,6 +1359,7 @@ describe("a lost end event never leaves a run stuck at running", () => {
         ({ executionId: o.executionId, waitForCompletion: async () => {} }) as never,
     );
     const starter = loomVisualsStarter(s.runtime as never, flow, {
+      ids: testIdSource(),
       running: async () => {
         throw new Error("lookup down");
       },
@@ -1266,5 +1369,142 @@ describe("a lost end event never leaves a run stuck at running", () => {
     });
     await expect(starter.sweep()).resolves.toBe(1);
     expect(s.runtime.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the visualize starter across the two id formats", () => {
+  const flow = visualizeDocumentFlow();
+  const fake = () => {
+    const events: string[] = [];
+    const runtime = {
+      start: vi.fn(async (_f: unknown, _i: unknown, o: { executionId: string }) => {
+        events.push(`start:${o.executionId}`);
+        return {
+          executionId: o.executionId,
+          waitForCompletion: () => new Promise<void>(() => {}),
+        } as never;
+      }),
+      cancel: vi.fn(async (id: string) => {
+        events.push(`cancel:${id}`);
+        throw new Error(`No execution found for id: ${id}`);
+      }),
+    };
+    return { runtime: runtime as unknown as Pick<WorkflowRuntime, "start" | "cancel">, events };
+  };
+
+  it("records the automatic run's id on the document BEFORE it starts, and never a re-run's", async () => {
+    const { runtime, events } = fake();
+    const executions = {
+      recordIngest: async () => {},
+      recordVisualize: async (_w: unknown, d: string, g: number, id: string) => {
+        events.push(`record:${d}:${g}:${id}`);
+      },
+    };
+    const starter = loomVisualsStarter(runtime, flow, { ids: testIdSource(), executions });
+    const r = ref();
+    const id = deterministicUser(r.userId).visualize(r.documentId, 2);
+    await starter.start(r, 2);
+    expect(events).toEqual([`record:${r.documentId}:2:${id}`, `start:${id}`]);
+    events.length = 0;
+    await starter.rerun(ref(), 2); // another document, so the first run's in-flight guard does not answer
+    expect(events.map((e) => e.split(":")[0])).toEqual(["start"]); // a re-run is never swept: nothing recorded
+  });
+
+  it("a key-store outage fails the start before Loom sees it", async () => {
+    const { runtime, events } = fake();
+    const ids = {
+      ensureUser: async () => {
+        throw new FieldKeyStoreError();
+      },
+      load: async () => false,
+      cached: () => undefined,
+    };
+    await expect(loomVisualsStarter(runtime, flow, { ids }).start(ref(), 2)).rejects.toBeInstanceOf(
+      FieldKeyStoreError,
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("cancel tries the old and the new id of the run, its generation and the one before, old first, when the user has a handle", async () => {
+    const { runtime, events } = fake();
+    const ids = testIdSource();
+    const starter = loomVisualsStarter(runtime, flow, { ids });
+    const r = ref();
+    await ids.ensureUser(r);
+    const user = deterministicUser(r.userId);
+    await starter.cancel(r, r.documentId.toUpperCase(), 3, "erased"); // a caller's spelling: ids are lower-case
+    expect(events).toEqual(
+      [2, 3].flatMap((g) => [
+        `cancel:${legacyVisualizeId(r.userId, r.documentId, g)}`,
+        `cancel:${user.visualize(r.documentId, g)}`,
+      ]),
+    );
+  });
+
+  it("cancel for a user with no handle tries the old format only and mints nothing", async () => {
+    const { runtime, events } = fake();
+    const ids = testIdSource();
+    const r = ref();
+    await loomVisualsStarter(runtime, flow, { ids }).cancel(r, r.documentId, 2, "erased");
+    expect(events).toEqual(
+      [1, 2].map((g) => `cancel:${legacyVisualizeId(r.userId, r.documentId, g)}`),
+    );
+    expect(ids.cached(r.userId)).toBeUndefined();
+  });
+
+  it("reconcile reads a new-format run's state, and an old-format run's, whichever the run started under", async () => {
+    const r = ref();
+    const ids = testIdSource();
+    await ids.ensureUser(r);
+    const states = new Map<string, unknown>([
+      [
+        deterministicUser(r.userId).visualize(r.documentId, 2),
+        { status: "completed", variables: { _output: { outcome: "done" } } },
+      ],
+    ]);
+    const loadState = vi.fn(async (id: string) => states.get(id) ?? null);
+    const record = vi.fn(async () => {});
+    const runtime = { start: vi.fn(), cancel: vi.fn(), loadState } as unknown as Pick<
+      WorkflowRuntime,
+      "start" | "cancel" | "loadState"
+    >;
+    const starter = loomVisualsStarter(runtime, flow, {
+      ids,
+      runs: { record, last: async () => null },
+    });
+    const repaired = await starter.reconcile(r, 2, { run: 0, state: "running", code: null });
+    expect(repaired).toMatchObject({ run: 0, state: "done" });
+    expect(loadState.mock.calls.map((c) => c[0])).toEqual([
+      legacyVisualizeId(r.userId, r.documentId, 2),
+      deterministicUser(r.userId).visualize(r.documentId, 2),
+    ]);
+  });
+});
+
+describe("hasVisualsHead across the two lineage lines", () => {
+  it("finds a head on the new line or on the old line, and none when neither has one", async () => {
+    const r = ref();
+    const ids = testIdSource();
+    await ids.ensureUser(r);
+    const newLine = deterministicUser(r.userId).documentLineage(r.documentId);
+    const oldLine = legacyIds.documentLineage(r.userId, r.documentId);
+    const lineageWith = (heads: Record<string, string | null>) =>
+      ({ head: async (id: string) => ({ ok: true, value: heads[id] ?? null }) }) as never;
+    expect(await hasVisualsHead(lineageWith({ [newLine]: "h" }), ids)(r)).toBe(true);
+    expect(await hasVisualsHead(lineageWith({ [oldLine]: "h" }), ids)(r)).toBe(true); // visualized before the deploy
+    expect(await hasVisualsHead(lineageWith({}), ids)(r)).toBe(false);
+  });
+
+  it("a user with no handle is looked up on the old line only", async () => {
+    const r = ref();
+    const asked: string[] = [];
+    const lineage = {
+      head: async (id: string) => {
+        asked.push(id);
+        return { ok: true, value: null };
+      },
+    } as never;
+    expect(await hasVisualsHead(lineage, testIdSource())(r)).toBe(false);
+    expect(asked).toEqual([legacyIds.documentLineage(r.userId, r.documentId)]);
   });
 });

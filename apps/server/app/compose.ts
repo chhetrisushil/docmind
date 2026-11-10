@@ -79,6 +79,8 @@ import { MAX_WAITING } from "./flows/visualize-turn/trigger";
 import { READY_PING_TIMEOUT_MS, createReadiness } from "./http/readiness";
 import { staticHandler } from "./http/staticFiles";
 import { composeDurableObservers } from "./observers";
+import { OpaqueIds, opaqueIds } from "./opaqueIds";
+import { PgHandleStore } from "./opaqueIds/pgHandles";
 import { createHttpServer } from "./server";
 import { StartupConfigError } from "./startupError";
 import type { UserExecutionLister } from "./status/forgetUser";
@@ -120,6 +122,8 @@ export interface ComposeOptions {
   /** The docmind_app pool: auth, documents and the ingest step read through it. */
   pool: Pool;
   keys: KeyStore;
+  /** Test seam: the id cache (default: one over `keys` and a `PgHandleStore` on `pool`; a test with a stub pool passes its own). */
+  ids?: OpaqueIds;
   storage: StorageConfig;
   crypto?: PrincipalCryptoOptions;
   limits: DocumentLimits;
@@ -172,6 +176,10 @@ export function buildServer(options: ComposeOptions) {
   // The sinks are built after defineConfig (the sensitive map needs it); onEvent reaches them through this holder.
   const feed: { sinks: Sink[] } = { sinks: [] };
   const fields = new FieldCrypto(keys);
+  // The id module (R14): the per-user key cache and the handle store. Installed process-wide so the synchronous parsers (the status fold, the
+  // stores' subject mapping) can read new-format ids; `bootIngest` warms it before anything runs. `executions` records each document's current ids.
+  const ids = options.ids ?? new OpaqueIds(keys, new PgHandleStore(pool));
+  opaqueIds.install(ids);
   // Each document's current ingest and visualize execution ids (migration 0038), which the boot sweeps and the connections reader compare with the status rows.
   const executions = new PgExecutionRecorder(pool);
   // The per-identity blob store, built the same way for the routes and the ingest source.
@@ -255,6 +263,7 @@ export function buildServer(options: ComposeOptions) {
       structure: new PgStructureReader(pool, fields),
       summaryMaxChars: options.ingest.summaryMaxChars,
       lineage: visualsLineageOf,
+      ids,
       bus: options.ingest.bus,
       now: () => new Date().toISOString(),
       shutdown: options.ingest.shutdown.signal,
@@ -343,15 +352,17 @@ export function buildServer(options: ComposeOptions) {
   const titles = options.chat && loomTitleStarter(app.runtime);
   // On-demand tag suggestions: one flow, one model call; off with the `summary` role.
   const suggestTags = loomSuggestTagsStarter(app.runtime, {
+    ids,
     enabled: () => options.ingest.llm.summary !== undefined,
   });
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
+    ids,
     executions,
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
     stale: pgStaleFormatDocuments(pool),
     unrecorded: pgUnrecordedDocuments(pool),
-    visualized: hasVisualsHead(visualsLineageOf),
+    visualized: hasVisualsHead(visualsLineageOf, ids),
     running: pgRunningRuns(pool),
     runs: visualRuns,
     afterDone,
@@ -416,8 +427,8 @@ export function buildServer(options: ComposeOptions) {
   });
   feed.sinks = [status.onEvent, activity.onEvent, visualRecorder.onEvent];
   const ingest = options.wrapIngest
-    ? options.wrapIngest(loomIngest(app.runtime, executions))
-    : loomIngest(app.runtime, executions);
+    ? options.wrapIngest(loomIngest(app.runtime, { ids, executions }))
+    : loomIngest(app.runtime, { ids, executions });
   const starts = new StartScheduler(ingest);
   // The keys are per process: a restart changes the handle revisions (a connected client sees one extra reload), and two
   // processes behind one balancer would answer different versionHash values. DocMind is single-process (spec section 10).
@@ -467,6 +478,7 @@ export function buildServer(options: ComposeOptions) {
               app,
               runtime: app.runtime,
               keys,
+              ids,
               store: erasureStore,
               sql: pgErasureSql({
                 app: pool,
@@ -569,6 +581,7 @@ export function buildServer(options: ComposeOptions) {
         authenticator,
         views,
         lineage: visualsLineageOf,
+        ids,
         visualsState: visualsStateReader({ pool, runs: visualRuns, starter: visuals }),
         readers: {
           pool,
@@ -611,6 +624,8 @@ export function buildServer(options: ComposeOptions) {
   return {
     app,
     server,
+    /** The id cache (installed process-wide): `bootIngest` warms it before the status model boots; tests build ids with it. */
+    ids,
     /**
      * The visuals lineage's artifact store: Postgres under the per-user sealing wrapper, built once. Task 9 builds
      * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.

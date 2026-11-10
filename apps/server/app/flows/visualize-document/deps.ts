@@ -2,6 +2,7 @@ import type { Lineage } from "@loom-ui/lineage";
 import type { Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
+import type { UserIdSource } from "../../documents/executionCandidates";
 import type { ProgressBus } from "../../documents/progress";
 import { visualizeGenerationOf } from "../../status/model";
 import { IngestGate } from "../ingest-document/gate";
@@ -27,6 +28,8 @@ export interface VisualizeDeps extends StepSeams {
   /** The extract step's read bound: the summary cap (DOCMIND_SUMMARY_MAX_CHARS). */
   summaryMaxChars: number;
   lineage: Lineage;
+  /** Builds the document's new-format lineage line (`visuals-<H>-<D>`) at commit. */
+  ids: Pick<UserIdSource, "ensureUser">;
   /** Tells the owner's open browsers the visuals are ready (the commit step publishes). */
   bus: ProgressBus;
   now: () => string;

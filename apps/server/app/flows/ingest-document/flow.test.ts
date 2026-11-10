@@ -8,7 +8,8 @@ import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflo
 import { recoverAbandoned } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
-import { INGEST_GENERATION, ingestExecutionId, loomIngest } from "../../documents/ingest";
+import { INGEST_GENERATION, loomIngest } from "../../documents/ingest";
+import { legacyIngestId, testIdSource } from "../../opaqueIds/testing";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { foldIngestStatus } from "../../status/model";
 import type { IngestDeps } from "./deps";
@@ -52,7 +53,7 @@ const fakeDeps = (over: Partial<IngestDeps> = {}) => {
 type App = ReturnType<typeof buildApp>;
 const run = (input: IngestStartInput, app: App) =>
   app.runtime.start(ingestDocumentFlow, input, {
-    executionId: ingestExecutionId(input.userId, input.documentId),
+    executionId: legacyIngestId(input.userId, input.documentId),
     principal: { tenant: input.tenantId, actor: input.userId },
   });
 const outputOf = async (deps: IngestDeps) => {
@@ -97,7 +98,7 @@ describe("ingest-document flow v2", () => {
     const eventStore = new InMemoryAsyncEventStore();
     const app = buildApp({ kind: "custom", eventStore }, undefined, { ingest: deps });
     const state = await (await run(input, app)).waitForCompletion();
-    const raw = await eventStore.read(ingestExecutionId(input.userId, input.documentId));
+    const raw = await eventStore.read(legacyIngestId(input.userId, input.documentId));
     await app.close();
     return { output: state.variables._output, status: foldIngestStatus(raw as never) };
   };
@@ -190,7 +191,7 @@ describe("ingest-document flow v2", () => {
     const app = buildApp({ kind: "memory" }, undefined, { ingest: deps });
     const handle = await run(input, app);
     await entered;
-    await loomIngest(app.runtime).cancel(
+    await loomIngest(app.runtime, { ids: testIdSource() }).cancel(
       { tenantId: input.tenantId, userId: input.userId },
       input.documentId,
       INGEST_GENERATION,
@@ -224,7 +225,7 @@ describe("ingest-document flow v2", () => {
     const input = ids();
     await expect(
       app.runtime.start(ingestDocumentFlow, input, {
-        executionId: ingestExecutionId(input.userId, input.documentId),
+        executionId: legacyIngestId(input.userId, input.documentId),
       }),
     ).rejects.toBeInstanceOf(ExecutionDeniedError);
     await app.close();
@@ -330,7 +331,7 @@ describe("the parse step's failures and restarts", () => {
       },
     });
     const input = ids();
-    const executionId = ingestExecutionId(input.userId, input.documentId);
+    const executionId = legacyIngestId(input.userId, input.documentId);
     // A runner that, like ParseRunner.close(), aborts its in-flight parse with ParseAbortedError.
     let entered: () => void = () => {};
     const inParse = new Promise<void>((resolve) => {
@@ -425,7 +426,7 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
 
   it("keeps the execution id free of content: u_<user>:ingest-<document uuid>.<generation> only", () => {
     const input = ids();
-    expect(ingestExecutionId(input.userId, input.documentId)).toMatch(
+    expect(legacyIngestId(input.userId, input.documentId)).toMatch(
       /^u_[0-9a-f-]{36}:ingest-[0-9a-f-]{36}\.\d+$/,
     );
   });

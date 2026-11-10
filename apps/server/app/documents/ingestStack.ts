@@ -76,6 +76,25 @@ export interface IngestStack {
   /** Present with the `visuals` option: the model behind the `visuals` role. */
   visualsClaude?: FakeAnthropic;
   composed: ReturnType<typeof buildServer>;
+  /** The ids of the runs the real code starts for a user (the new format): what a test reads a run's log or state by. */
+  runIds: {
+    ingest(
+      who: { tenantId: string; userId: string },
+      documentId: string,
+      generation?: number,
+    ): Promise<string>;
+    visualize(
+      who: { tenantId: string; userId: string },
+      documentId: string,
+      generation?: number,
+      rerun?: number,
+    ): Promise<string>;
+    suggestTags(
+      who: { tenantId: string; userId: string },
+      documentId: string,
+      run?: number,
+    ): Promise<string>;
+  };
   /** The composed eraser (always present on this stack). */
   eraser: Eraser;
   root: string;
@@ -303,6 +322,14 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       ...(claude && { claude }),
       ...(visualsClaude && { visualsClaude }),
       composed,
+      runIds: {
+        ingest: async (who, documentId, generation = 2) =>
+          (await composed.ids.ensureUser(who)).ingest(documentId, generation),
+        visualize: async (who, documentId, generation, rerun) =>
+          (await composed.ids.ensureUser(who)).visualize(documentId, generation ?? 2, rerun),
+        suggestTags: async (who, documentId, run = 1) =>
+          (await composed.ids.ensureUser(who)).suggestTags(documentId, run),
+      },
       eraser: erasing,
       root,
       signUpAndLogIn,
