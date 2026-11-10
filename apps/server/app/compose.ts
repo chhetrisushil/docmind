@@ -33,6 +33,7 @@ import { FieldCrypto } from "./crypto/fields";
 import { TagKeys } from "./crypto/tagKeys";
 import { withTenant } from "./db/tenant";
 import { documentEventRoutes } from "./documents/events";
+import { PgExecutionRecorder } from "./documents/executionIds";
 import { type IngestPort, loomIngest } from "./documents/ingest";
 import type { DocumentLimits } from "./documents/limits";
 import { documentRoutes } from "./documents/routes";
@@ -171,6 +172,8 @@ export function buildServer(options: ComposeOptions) {
   // The sinks are built after defineConfig (the sensitive map needs it); onEvent reaches them through this holder.
   const feed: { sinks: Sink[] } = { sinks: [] };
   const fields = new FieldCrypto(keys);
+  // Each document's current ingest and visualize execution ids (migration 0038), which the boot sweeps and the connections reader compare with the status rows.
+  const executions = new PgExecutionRecorder(pool);
   // The per-identity blob store, built the same way for the routes and the ingest source.
   const blobs = ({ tenantId, userId }: Identity) =>
     new EncryptedFsContentStore({
@@ -343,6 +346,7 @@ export function buildServer(options: ComposeOptions) {
     enabled: () => options.ingest.llm.summary !== undefined,
   });
   const visuals = loomVisualsStarter(app.runtime, visualize.flow, {
+    executions,
     ready: pgReadyDocuments(pool),
     retry: pgRetryDocuments(pool),
     stale: pgStaleFormatDocuments(pool),
@@ -412,8 +416,8 @@ export function buildServer(options: ComposeOptions) {
   });
   feed.sinks = [status.onEvent, activity.onEvent, visualRecorder.onEvent];
   const ingest = options.wrapIngest
-    ? options.wrapIngest(loomIngest(app.runtime))
-    : loomIngest(app.runtime);
+    ? options.wrapIngest(loomIngest(app.runtime, executions))
+    : loomIngest(app.runtime, executions);
   const starts = new StartScheduler(ingest);
   // The keys are per process: a restart changes the handle revisions (a connected client sees one extra reload), and two
   // processes behind one balancer would answer different versionHash values. DocMind is single-process (spec section 10).

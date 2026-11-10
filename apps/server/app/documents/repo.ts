@@ -203,7 +203,7 @@ export async function getDocument(
   return rows[0];
 }
 
-/** D1: moves the owner's document to the next generation if it is still at `from`. Also stamps updated_at (the sweep's clock) and clears the extraction format stamp, so the new generation's run extracts again. */
+/** D1: moves the owner's document to the next generation if it is still at `from`. Also stamps updated_at (the sweep's clock), clears the extraction format stamp (so the new generation's run extracts again) and clears the stored execution ids (the new generation has no execution yet: the next start records its own). */
 export async function bumpGeneration(
   tx: PoolClient,
   id: string,
@@ -211,7 +211,8 @@ export async function bumpGeneration(
   from: number,
 ): Promise<DocumentRow | null> {
   const { rows } = await tx.query<DocumentRow>(
-    `UPDATE documents SET ingest_generation = ingest_generation + 1, updated_at = now(), visual_extract_format = NULL
+    `UPDATE documents SET ingest_generation = ingest_generation + 1, updated_at = now(), visual_extract_format = NULL,
+           ingest_execution_id = NULL, visualize_execution_id = NULL
       WHERE id = $1 AND owner_id = $2 AND ingest_generation = $3
       RETURNING ${DOCUMENT_COLUMNS}`,
     [id, ownerId, from],

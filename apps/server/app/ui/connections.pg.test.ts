@@ -296,6 +296,7 @@ describe.skipIf(!PG_URL)(
                 d.id::text, d.owner_id::text, 0, '{"status":"ready"}'::jsonb
            FROM documents d`,
         );
+        await c.query("SELECT public.docmind_repair_execution_ids()");
         // Other tenants' status rows share the table (the app role sees none of them): the lookup must stay a key lookup.
         await c.query(
           `INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state)

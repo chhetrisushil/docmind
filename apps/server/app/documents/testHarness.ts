@@ -585,18 +585,25 @@ export async function seedDoc(
   );
   return d.id;
 }
-// What the status model's writer would have stored for an execution.
-export const seedRow = (
+/** The migration's backfill (0038, `docmind_repair_execution_ids`), run as the owner: a document whose current generation has an old-format status row and no stored id gets that id stored. It never overwrites a stored id. */
+export async function backfillExecutionIds(owner: Pool): Promise<void> {
+  await owner.query("SELECT public.docmind_repair_execution_ids()");
+}
+
+// What the status model's writer would have stored for an execution (and, as the migration's backfill would have, the id on its document).
+export const seedRow = async (
   owner: Pool,
   executionId: string,
   key: string,
   scope: string,
   state = "{}",
-) =>
-  owner.query(
+) => {
+  await owner.query(
     "INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state) VALUES ('ingest-status', $1, $2, $3, 0, $4)",
     [executionId, key, scope, state],
   );
+  await backfillExecutionIds(owner);
+};
 
 /** Opens a server-sent-event stream; `next()` resolves with the next complete frame, without its blank line. */
 export async function openSse(url: string, headers: Record<string, string>) {

@@ -10,6 +10,7 @@ import {
   ingestDocumentFlow,
 } from "../flows/ingest-document/flow";
 import { type UserExecutionId, executionIdFor } from "../subject";
+import type { ExecutionRecorder } from "./executionIds";
 
 /**
  * The one value everything about an ingest start derives from: the start input, the principal and
@@ -72,10 +73,21 @@ const target = (identity: Identity, documentId: string, generation: number) => {
 // A fixed reason: the cancel reason is recorded in the log, so it never names the document.
 const CANCEL_REASON = "document-deleted";
 
-export function loomIngest(runtime: Pick<WorkflowRuntime, "start" | "cancel">): IngestPort {
+export function loomIngest(
+  runtime: Pick<WorkflowRuntime, "start" | "cancel">,
+  /** Records the id of the generation's execution on the document before it starts (migration 0038); absent in tests that need no sweep. */
+  executions?: ExecutionRecorder,
+): IngestPort {
   return {
     async start(identity, documentId, generation) {
       const { ref, executionId, principal } = target(identity, documentId, generation);
+      // Recorded BEFORE the start: a crash in between leaves an id with no status row, which the stale-upload sweep lists and starts again.
+      await executions?.recordIngest(
+        { tenantId: ref.tenantId, userId: ref.userId },
+        ref.documentId,
+        generation,
+        executionId,
+      );
       try {
         return await runtime.start(ingestDocumentFlow, ref, { executionId, principal });
       } catch (err) {
