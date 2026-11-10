@@ -8,7 +8,7 @@ import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../chats/ids";
 import { loomWarn } from "../config";
-import { executionIdFor } from "../subject";
+import { legacyIds } from "../opaqueIds";
 import {
   complianceConfig,
   hydrateSubjectIndex,
@@ -18,6 +18,8 @@ import {
   warningFor,
 } from "./compliance";
 import { noSnapshots } from "./testing";
+
+const executionIdFor = legacyIds.named;
 
 const [A, B] = [randomUUID(), randomUUID()];
 const CHAT = randomUUID();

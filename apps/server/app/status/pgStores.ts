@@ -2,7 +2,7 @@ import { type PgConfig, PostgresReadModelStore } from "@loom/plugin-postgres";
 import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
-import { userPrefixes } from "../opaqueIds";
+import { prefixExtensions, userPrefixes } from "../opaqueIds";
 import type { UserExecutionLister } from "./forgetUser";
 
 // The tables are DocMind's own (migration 0012): no DDL runs here, and the schema is explicit
@@ -68,7 +68,7 @@ export const pgUserExecutions =
             AND (execution_id = $2 OR starts_with(execution_id, $3) OR starts_with(execution_id, $4))
           ORDER BY execution_id
           LIMIT ${LIST_BATCH}`,
-        [modelId, prefix, `${prefix}:`, `${prefix}.c-`],
+        [modelId, prefix, ...prefixExtensions(prefix)],
       );
       for (const r of rows) found.push(r.execution_id);
     }

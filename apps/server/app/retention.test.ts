@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { chatConversationId } from "./chats/ids";
 import { compactionExempt } from "./config";
-import { executionIdFor } from "./subject";
+import { legacyIds } from "./opaqueIds";
+
+const executionIdFor = legacyIds.named;
 
 const USER = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
 const DOC = "7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11";

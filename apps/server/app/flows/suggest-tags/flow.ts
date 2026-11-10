@@ -5,7 +5,7 @@ import { z } from "zod";
 
 export const SUGGEST_TAGS_FLOW_ID = "suggest-tags";
 
-/** Ids only. The execution id is `executionIdFor(userId, "suggest-tags-<documentId>-r<n>")`. */
+/** Ids only. The execution id is built by `opaqueIds`. */
 export const SuggestTagsInput = z
   .object({ tenantId: z.string().uuid(), userId: z.string().uuid(), documentId: z.string().uuid() })
   .strict();
