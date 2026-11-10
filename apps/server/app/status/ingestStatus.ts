@@ -212,13 +212,14 @@ export class IngestStatus implements DocumentStatusReads {
    * User erasure, after the shred and the rows: every row of the user is tombstoned, the NULL-scope rows of the user's
    * chat and title executions too (the table has no foreign key to `users`, so nothing cascades). Idempotent.
    */
-  forgetUser(userId: string): Promise<number> {
+  forgetUser(userId: string, handle?: string | null): Promise<number> {
     return forgetUserRows(
       this.service,
       INGEST_STATUS_MODEL,
       userId,
       this.o.userExecutions,
       this.o.source,
+      handle,
     );
   }
 

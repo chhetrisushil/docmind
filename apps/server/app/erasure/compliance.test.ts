@@ -12,6 +12,7 @@ import { executionIdFor } from "../subject";
 import {
   complianceConfig,
   hydrateSubjectIndex,
+  redactIds,
   userShredder,
   userSubjectOf,
   warningFor,
@@ -106,15 +107,32 @@ describe("hydrateSubjectIndex", () => {
     expect(idx.executionsOf(A)).toHaveLength(5);
   });
 
-  it("seeks to the user range and stops at its end, never walking the rest of the log", async () => {
+  it("seeks to each user range (u_, then h_) and stops at its end, never walking the rest of the log", async () => {
     const tail = Array.from({ length: 50 }, (_, i) => `zz-${String(i).padStart(3, "0")}`);
     const head = Array.from({ length: 50 }, (_, i) => `aa-${String(i).padStart(3, "0")}`);
     const seen = { cursors: [] as (string | undefined)[] };
     const idx = index();
     expect(await hydrateSubjectIndex(listOnly([...head, ...ids, ...tail], seen), idx, 4)).toBe(6);
     expect(seen.cursors[0]).toBe("u_"); // no scan from the start of the log
-    // 6 user ids at 4 per page: the second page reaches the first non-user id and ends the walk.
-    expect(seen.cursors).toHaveLength(2);
+    // 6 user ids at 4 per page: the u_ walk reads two pages (the second reaches the first non-user id and ends it), then the h_ walk reads one.
+    expect(seen.cursors).toHaveLength(3);
+    expect(seen.cursors[2]).toBe("h_");
+  });
+
+  it("attributes new-format executions to their h_<handle> subject from the id alone, and a user's two subjects stay apart", async () => {
+    const H = "a".repeat(26);
+    const T52 = "q".repeat(52);
+    const fresh = [
+      `h_${H}:ingest-${T52}.2`,
+      `h_${H}:visualize-${T52}.2-r1`,
+      `h_${H}.c-${T52}~2`,
+      `h_${H}-not-an-execution`, // the prefix, but not a user execution id
+    ];
+    const idx = index();
+    expect(await hydrateSubjectIndex(listOnly([...ids, ...fresh]), idx)).toBe(9);
+    expect(idx.executionsOf(`h_${H}`)).toEqual(fresh.slice(0, 3).sort());
+    expect(idx.executionsOf(A)).toHaveLength(5);
+    expect(idx.subjects()).toEqual([A, B, `h_${H}`].sort());
   });
 
   it("is idempotent, and merges with what the live feed already indexed", async () => {
@@ -239,5 +257,18 @@ describe("the onWarn sink of buildApp", () => {
     const block = /observability: \{([\s\S]*?)\n {4}\},/.exec(src)?.[1] ?? "";
     expect(block).toContain("onWarn: loomWarn,");
     expect(block).not.toContain("erasure");
+  });
+});
+
+describe("redactIds h_", () => {
+  it("redacts an h_ execution id like a u_ one, whatever follows it", () => {
+    const H = "a".repeat(26);
+    const T52 = "q".repeat(52);
+    for (const id of [`h_${H}:ingest-${T52}.2`, `h_${H}.c-${T52}~1`, `h_${H}`]) {
+      const out = redactIds(`erasure of ${id} failed: ${id}`);
+      expect(out).not.toContain(H);
+      expect(out).toContain("<id>");
+    }
+    expect(warningFor(`stuck h_${"i".repeat(26)}:x`)).not.toContain("i".repeat(26));
   });
 });

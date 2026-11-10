@@ -2,6 +2,7 @@ import { type PgConfig, PostgresReadModelStore } from "@loom/plugin-postgres";
 import type { ReadModelStore } from "@loom/plugin-read-model";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
+import { listerPrefixes } from "../opaqueIds";
 import type { UserExecutionLister } from "./forgetUser";
 
 // The tables are DocMind's own (migration 0012): no DDL runs here, and the schema is explicit
@@ -49,20 +50,23 @@ const LIST_BATCH = 500;
 
 /**
  * The Loom role's narrow read for user erasure: the execution ids (never the state) of one user's rows in a model
- * that are not tombstoned yet, by id prefix. The prefix is matched with `starts_with` and exact equality, never
+ * that are not tombstoned yet, by id prefix, and under `h_<handle>` when the user has a handle. The prefix is matched with `starts_with` and exact equality, never
  * `LIKE`, because `_` is a wildcard and a user id is bound text. The Loom pool's search_path is `loom`, so the
  * table is schema-qualified. `docmind_loom` may read every tenant's rows (policy `ingest_all`, migration 0012).
  */
 export const pgUserExecutions =
   (loomPool: Pick<Pool, "query">): UserExecutionLister =>
-  async (modelId, userId) => {
+  async (modelId, userId, handle) => {
+    // `exact` is the prefixes themselves, `starts` their `:` and `.c-` forms; one array per kind, so the statement is the same with or without a handle.
+    const { exact, starts } = listerPrefixes(userId, handle);
     const { rows } = await loomPool.query<{ execution_id: string }>(
       `SELECT execution_id FROM public.read_model_state
         WHERE model_id = $1 AND NOT erased
-          AND (execution_id = $2 OR starts_with(execution_id, $3) OR starts_with(execution_id, $4))
+          AND (execution_id = ANY($2::text[])
+            OR EXISTS (SELECT 1 FROM unnest($3::text[]) AS p WHERE starts_with(execution_id, p)))
         ORDER BY execution_id
         LIMIT ${LIST_BATCH}`,
-      [modelId, `u_${userId}`, `u_${userId}:`, `u_${userId}.c-`],
+      [modelId, exact, starts],
     );
     return rows.map((r) => r.execution_id);
   };

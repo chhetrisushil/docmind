@@ -210,3 +210,15 @@ describe("forgetUserRows", () => {
     expect([n, listed]).toEqual([0, 1]);
   });
 });
+
+describe("isUserExecution with a handle", () => {
+  it("isUserExecution takes the user's h_<handle> forms only when the handle is given", () => {
+    const U = "11111111-1111-4111-8111-111111111111";
+    const H = "a".repeat(26);
+    expect(isUserExecution(`h_${H}:ingest-x`, U, H)).toBe(true);
+    expect(isUserExecution(`h_${H}.c-x`, U, H)).toBe(true);
+    expect(isUserExecution(`h_${H}:ingest-x`, U)).toBe(false);
+    expect(isUserExecution(`h_${"e".repeat(26)}:ingest-x`, U, H)).toBe(false);
+    expect(isUserExecution(`u_${U}:ingest-x`, U, H)).toBe(true);
+  });
+});

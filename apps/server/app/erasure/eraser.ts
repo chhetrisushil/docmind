@@ -1,5 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import type { SessionLock } from "../db/sessionLock";
+import { opaqueIds } from "../opaqueIds";
 import { SHUTDOWN_DRAIN_MS, drainWithin } from "../shutdown";
 import { ERASURE_STEPS, type ErasureRequest, type ErasureStep, type ErasureStore } from "./types";
 
@@ -84,16 +85,22 @@ export interface ErasureDeps {
   stopChat(identity: Identity, chatId: string): Promise<void>;
   cancelTitle(identity: Identity, chatId: string): Promise<void>;
   /**
-   * `app.eraseSubject(userId, undefined, { parked: "shred" })`. The tenant argument is undefined on purpose:
-   * DocMind has no `tenantOf`, so Loom's subject index has one partition, and a tenant id would answer `unknown`.
+   * `app.eraseSubject(subjectId, undefined, { parked: "shred" })`, once per Loom subject: the user's `h_<handle>` (new-format runs) and the user's UUID
+   * (old-format runs). The tenant argument is undefined on purpose: DocMind has no `tenantOf`, so Loom's subject index has one partition, and a
+   * tenant id would answer `unknown`.
    */
-  eraseSubject(userId: string): Promise<{ outcome: "erased" | "parked" | "unknown" }>;
+  eraseSubject(subjectId: string): Promise<{ outcome: "erased" | "parked" | "unknown" }>;
+  /**
+   * The user's id handle (`users.id_handle`), or null (no new-format run was ever started, or the row is gone). Read while the row exists, so
+   * the steps before `rows` can name the `h_<handle>` subject and prefix. Absent: no handle.
+   */
+  handleOf?(req: ErasureRequest): Promise<string | null>;
   keys: {
     destroy(subjectId: string): Promise<void>;
     wasDestroyed(subjectId: string): Promise<boolean>;
   };
-  forgetStatus(userId: string): Promise<unknown>;
-  forgetActivity(userId: string): Promise<unknown>;
+  forgetStatus(userId: string, handle?: string | null): Promise<unknown>;
+  forgetActivity(userId: string, handle?: string | null): Promise<unknown>;
   /** The user row (cascade), leftover Loom timers and leases, the empty personal tenant. */
   rows(req: ErasureRequest): Promise<void>;
   blobs(req: ErasureRequest): Promise<void>;
@@ -397,23 +404,40 @@ export class Eraser {
       case "stop":
         return this.stopWork(req);
       case "shred": {
-        const { outcome } = await deps.eraseSubject(req.userId);
-        if (outcome === "parked") {
-          // A turn is still running. Stop whatever started since, then wait and ask again.
-          await this.stopWork(req);
-          throw new ErasureParkedError();
+        // The handle's subject first: while it is parked nothing else is erased, and a retry starts over at the same subject.
+        const handle = (await deps.handleOf?.(req)) ?? null;
+        const subjects = [
+          ...(handle === null ? [] : [opaqueIds.subjectOfHandle(handle)]),
+          req.userId,
+        ];
+        const erased: string[] = [];
+        for (const subject of subjects) {
+          const { outcome } = await deps.eraseSubject(subject);
+          if (outcome === "parked") {
+            // A turn is still running. Stop whatever started since, then wait and ask again.
+            await this.stopWork(req);
+            throw new ErasureParkedError();
+          }
+          // 'unknown': the subject owns no execution. 'erased': the shred destroyed the key itself (E2).
+          if (outcome === "erased") erased.push(subject);
         }
-        // 'unknown': the user owns no execution. 'erased': the shred destroyed the key itself (E2).
-        if (outcome === "erased" && !(await deps.keys.wasDestroyed(req.userId)))
-          throw new KeyNotDestroyedError();
+        for (const subject of erased)
+          if (!(await deps.keys.wasDestroyed(subject))) throw new KeyNotDestroyedError();
         return;
       }
-      case "readModels":
-        await deps.forgetStatus(req.userId);
-        await deps.forgetActivity(req.userId);
+      case "readModels": {
+        const handle = (await deps.handleOf?.(req)) ?? null;
+        await deps.forgetStatus(req.userId, handle);
+        await deps.forgetActivity(req.userId, handle);
         return;
-      case "rows":
+      }
+      case "rows": {
+        // The handle's key goes BEFORE the row that holds the handle: after the delete nothing can name `h_<handle>` any more (and the
+        // erasure request must not keep it: that would link the handle to the user for good). Destroying is idempotent.
+        const handle = (await deps.handleOf?.(req)) ?? null;
+        if (handle !== null) await deps.keys.destroy(opaqueIds.subjectOfHandle(handle));
         return deps.rows(req);
+      }
       case "blobs":
         return deps.blobs(req);
       case "key":
