@@ -695,14 +695,18 @@ describe("aggregate facts (timeline at 18, relations at 19)", () => {
 });
 
 describe("DocumentAnswer", () => {
-  it("keeps the aggregates unparsed so a bad one never costs the facts, but still refuses a bad fact or an unknown key", () => {
+  it("keeps the aggregates unparsed so a bad one never costs the facts, and drops an unknown key, but still refuses a bad fact", () => {
     expect(
       DocumentAnswer.safeParse({ facts: [], timeline: "nope", relations: [1, 2] }).success,
     ).toBe(true);
     expect(DocumentAnswer.safeParse({ facts: [] }).success).toBe(true);
     expect(DocumentAnswer.safeParse({ facts: [], timeline: null }).success).toBe(true);
     expect(DocumentAnswer.safeParse({ facts: [{ kind: "figure" }] }).success).toBe(false);
-    expect(DocumentAnswer.safeParse({ facts: [], extra: 1 }).success).toBe(false);
+    expect(DocumentAnswer.safeParse({ facts: [], extra: 1 })).toMatchObject({
+      success: true,
+      data: { facts: [] },
+    });
+    expect(Object.keys(DocumentAnswer.parse({ facts: [], extra: 1 }))).toEqual(["facts"]);
     expect(DocumentAnswer.safeParse({ timeline: { events: [] } }).success).toBe(false);
   });
 });

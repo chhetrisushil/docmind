@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import { tainted } from "@loom/classify";
 import {
@@ -581,5 +583,95 @@ describe("the timeline and relations of a document extraction", () => {
       });
       expect(requests).toEqual([]);
     });
+  });
+});
+
+describe("fix round 1: a lenient answer and a slow model", () => {
+  it("I1: an unknown or misnamed top-level key never costs the facts", async () => {
+    const { llm } = scripted(() =>
+      JSON.stringify({ facts: [GOOD], relationships: { links: LINKS }, events: EVENTS, note: "x" }),
+    );
+    const s = setup({ llm });
+    expect(await run(s)).toEqual({ outcome: "done", count: 1, model: "claude-test" });
+    expect(s.store.writes[0]?.map((f) => f.ordinal)).toEqual([0]);
+  });
+
+  it("I1: a fact that is malformed still fails its window (facts stay strict per item)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { llm } = scripted(() => JSON.stringify({ facts: [{ kind: "nope" }], extra: 1 }));
+    await expect(run(setup({ llm }))).rejects.toThrow(/^ingest step failed: visualize-extract$/);
+  });
+
+  /** A model that never answers until the step's clock aborts it (as a provider honours the abort signal). */
+  const hanging = (afterCalls = 0, answerText = () => JSON.stringify({ facts: [] })) => {
+    const calls = { n: 0 };
+    const llm = Object.assign(
+      {
+        complete: (r: LlmRequest) => {
+          calls.n++;
+          if (calls.n <= afterCalls)
+            return Promise.resolve({ content: answerText(), stopReason: "end_turn" as const });
+          return new Promise<never>((_ok, no) => {
+            r.signal?.addEventListener("abort", () => no(new Error("aborted")), { once: true });
+          });
+        },
+      },
+      { model: "claude-test" },
+    );
+    return { llm, calls };
+  };
+
+  it("I2: a model slower than the step clock on a single window ends visuals-model-unavailable", async () => {
+    const { llm } = hanging();
+    const s = setup({ llm });
+    expect(await extractEffect({ ...s.d, stepTimeoutMs: 30 }).execute(s.ref, {} as never)).toEqual({
+      outcome: "failed",
+      code: "visuals-model-unavailable",
+    });
+    expect(s.store.writes).toEqual([]);
+  });
+
+  it("I2: a multi-window document whose windows together outlast the step clock ends visuals-model-unavailable", async () => {
+    const ids = [randomUUID(), randomUUID(), randomUUID()];
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(10_000)]));
+    const { llm, calls } = hanging(1); // the first window answers, the second never does
+    const s = setup({ llm, texts });
+    expect(await extractEffect({ ...s.d, stepTimeoutMs: 30 }).execute(s.ref, {} as never)).toEqual({
+      outcome: "failed",
+      code: "visuals-model-unavailable",
+    });
+    expect(calls.n).toBeGreaterThan(2);
+    expect(s.store.writes).toEqual([]);
+  });
+
+  it("M2: one window's flood of items does not crowd out a later window's events", async () => {
+    const ids = [randomUUID(), randomUUID(), randomUUID()];
+    const texts = Object.fromEntries(ids.map((id) => [id, "x".repeat(10_000)]));
+    const junk = Array.from({ length: 200 }, (_, i) => ({
+      when: "x",
+      date: "bad",
+      label: `j${i}`,
+      chunkIds: [ids[0]],
+    }));
+    const good = [
+      { when: "2024", date: "2024", label: "A", chunkIds: [ids[2]] },
+      { when: "2025", date: "2025", label: "B", chunkIds: [ids[2]] },
+      { when: "2026", date: "2026", label: "C", chunkIds: [ids[2]] },
+    ];
+    const answers = [
+      { facts: [], timeline: { events: junk } },
+      { facts: [], timeline: { events: good } },
+    ];
+    let n = 0;
+    const { llm } = scripted(() => JSON.stringify(answers[n++]));
+    const s = setup({ llm, texts });
+    expect(await run(s)).toMatchObject({ aggregates: 1 });
+  });
+
+  it("M1: only the document flow's deps carry the extraction provider, never chat's or the planner's", () => {
+    const src = readFileSync(join(__dirname, "../../compose.ts"), "utf8");
+    expect(src.match(/extractLlm/g)).toHaveLength(1);
+    expect(src.indexOf("extractLlm")).toBeLessThan(src.indexOf("const visualizeTurn"));
+    expect(src).not.toMatch(/visualsPlanner\([^)]*visualsExtract/);
   });
 });

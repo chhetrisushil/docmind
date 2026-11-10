@@ -239,7 +239,7 @@ export const ExtractAnswer = z.object({ facts: z.array(DraftFact).max(32) }).str
 /**
  * The document extraction's answer: the facts (strict, as always) and two optional aggregates kept UNPARSED here. Each item
  * of `timeline` and `relations` is validated and dropped on its own (`buildTimeline`, `buildRelations`), so a bad one never
- * costs the facts. Chat keeps `ExtractAnswer`.
+ * costs the facts, and neither does an unknown top-level key (stripped). `facts` stays strict per item. Chat keeps `ExtractAnswer`.
  */
 export const DocumentAnswer = z
   .object({
@@ -247,7 +247,7 @@ export const DocumentAnswer = z
     timeline: z.unknown().optional(),
     relations: z.unknown().optional(),
   })
-  .strict();
+  .strip(); // a misnamed or stray top-level key is dropped, never a reason to lose the facts
 
 const SUFFIX: Record<string, number> = { k: 1e3, m: 1e6, b: 1e9, bn: 1e9 };
 // Groups: 1 "(" open, 2 sign, 3 currency, 4 whole part, 5 decimals, 6 suffix, 7 "%", 8 ")" close.

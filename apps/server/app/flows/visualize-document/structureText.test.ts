@@ -66,3 +66,12 @@ describe("isRecord", () => {
     for (const v of [null, [], "x", 1, undefined]) expect(isRecord(v)).toBe(false);
   });
 });
+
+describe("earliestPassage scan bound (M3)", () => {
+  it("reads at most the first 8 cited ids, so the scan is bounded whatever the provider returns", () => {
+    const position = new Map([["late", 0]]);
+    const ids = [...Array.from({ length: 8 }, (_, i) => `miss${i}`), "late"];
+    expect(earliestPassage(ids, position)).toBeNull();
+    expect(earliestPassage(["late", ...ids.slice(0, 7)], position)).toBe("late");
+  });
+});
