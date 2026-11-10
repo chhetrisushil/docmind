@@ -639,7 +639,10 @@ describe("Eraser", () => {
     expect(subjects).toEqual([`h_${"a".repeat(26)}`, USER]);
     expect(destroyed).toEqual([`h_${"a".repeat(26)}`, USER]); // the handle's key in `rows`, the user's in `key`
     expect(destroyed[0]).toBe(`h_${"a".repeat(26)}`);
-    expect(forgot).toEqual([[USER, "a".repeat(26)]]);
+    expect(forgot).toEqual([
+      [USER, "a".repeat(26)], // the readModels step
+      [USER, "a".repeat(26)], // again right before rows
+    ]);
     expect(calls).toContain("rows");
   });
 
@@ -666,5 +669,71 @@ describe("Eraser", () => {
     };
     await new Eraser(deps).run(USER);
     expect(subjects).toEqual([USER]);
+  });
+
+  it("destroys the handle's key before the users row is deleted, on one call log", async () => {
+    const { deps, calls } = fakeDeps([request()]);
+    deps.handleOf = async () => "a".repeat(26);
+    deps.keys = {
+      destroy: async (s) => void calls.push(`destroy:${s}`),
+      wasDestroyed: async () => true,
+    };
+    await new Eraser(deps).run(USER);
+    const h = `destroy:h_${"a".repeat(26)}`;
+    expect(calls.indexOf(h)).toBeGreaterThan(-1);
+    expect(calls.indexOf(h)).toBeLessThan(calls.indexOf("rows"));
+    expect(calls.indexOf(`destroy:${USER}`)).toBeGreaterThan(calls.indexOf("rows"));
+  });
+
+  it("forgets the handle's read-model rows again right before the rows step, so a live h_ row is a tombstone when it is scrubbed", async () => {
+    const { deps, calls } = fakeDeps([request()]);
+    deps.handleOf = async () => "a".repeat(26);
+    const forgot: unknown[] = [];
+    deps.forgetStatus = async (u, h) => {
+      calls.push("forgetStatus");
+      forgot.push([u, h]);
+    };
+    deps.forgetActivity = async (u, h) => {
+      calls.push("forgetActivity");
+      forgot.push([u, h]);
+    };
+    await new Eraser(deps).run(USER);
+    const rowsAt = calls.indexOf("rows");
+    expect(calls.slice(rowsAt - 3, rowsAt)).toEqual([
+      "forgetStatus",
+      "forgetActivity",
+      "keys.destroy",
+    ]);
+    expect(calls.filter((c) => c === "forgetStatus")).toHaveLength(2); // the readModels step, then before rows
+    expect(calls.filter((c) => c === "forgetActivity")).toHaveLength(2);
+    expect(forgot.every((f) => (f as string[])[1] === "a".repeat(26))).toBe(true);
+  });
+
+  it("a rows retry after the user row is gone (no handle any more) neither destroys nor erases h_ again, and finishes", async () => {
+    const { deps, calls } = fakeDeps([request()], { failOnce: { rows: 1 } });
+    let gone = false;
+    const rows = deps.rows;
+    deps.rows = async (r) => {
+      gone = true; // the row delete happened before the failure
+      return rows(r);
+    };
+    deps.handleOf = async () => (gone ? null : "a".repeat(26));
+    const subjects: string[] = [];
+    deps.eraseSubject = async (s) => {
+      subjects.push(s);
+      return { outcome: "erased" };
+    };
+    deps.keys = {
+      destroy: async (s) => void calls.push(`destroy:${s}`),
+      wasDestroyed: async () => true,
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await new Eraser(deps).run(USER);
+    const h = `h_${"a".repeat(26)}`;
+    expect(subjects).toEqual([h, USER]);
+    expect(calls.filter((c) => c === `destroy:${h}`)).toHaveLength(1);
+    expect(calls.filter((c) => c === "rows")).toHaveLength(2);
+    expect(calls).toContain(`destroy:${USER}`);
+    expect(calls).toContain("blobs");
   });
 });

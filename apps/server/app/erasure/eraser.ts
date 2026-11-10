@@ -435,7 +435,13 @@ export class Eraser {
         // The handle's key goes BEFORE the row that holds the handle: after the delete nothing can name `h_<handle>` any more (and the
         // erasure request must not keep it: that would link the handle to the user for good). Destroying is idempotent.
         const handle = (await deps.handleOf?.(req)) ?? null;
-        if (handle !== null) await deps.keys.destroy(opaqueIds.subjectOfHandle(handle));
+        if (handle !== null) {
+          // A row of `h_<handle>` that went live since `readModels` (a fold that landed late, a pass that missed it) must be a tombstone
+          // before the scrub, which touches erased rows only: after the handle is gone nothing can find it by prefix again.
+          await deps.forgetStatus(req.userId, handle);
+          await deps.forgetActivity(req.userId, handle);
+          await deps.keys.destroy(opaqueIds.subjectOfHandle(handle));
+        }
         return deps.rows(req);
       }
       case "blobs":

@@ -79,9 +79,14 @@ export function pgErasureSql(
       //    (`u_<uuid>` for runs before the deploy, `h_<handle>` after). This runs BEFORE the user row goes, because the handle that
       //    names the second prefix is on that row; a retry after the row is gone has no handle, and nothing left to find.
       const handle = await handleOf(req);
+      // Each prefix by equality and its `:` and `.c-` forms, so an id that merely extends a prefix is never matched. One statement per
+      // prefix, in the indexable `= OR starts_with OR starts_with` shape (no array of prefixes: that cannot use the index).
       for (const prefix of userPrefixes(req.userId, handle)) {
-        await loom.query("DELETE FROM loom.timers WHERE starts_with(execution_id, $1)", [prefix]);
-        await loom.query("DELETE FROM loom.leases WHERE starts_with(execution_id, $1)", [prefix]);
+        for (const table of ["timers", "leases"] as const)
+          await loom.query(
+            `DELETE FROM loom.${table} WHERE execution_id = $1 OR starts_with(execution_id, $2) OR starts_with(execution_id, $3)`,
+            [prefix, `${prefix}:`, `${prefix}.c-`],
+          );
       }
       // 1b. The read-model tombstones under `h_<handle>` (left by the `readModels` step: `state` NULL, `erased`) still carry `scope` (the user
       //     UUID) and `app_key` (the document or chat UUID) beside the handle: that row would link them for good. Scrub both while the handle
@@ -92,8 +97,8 @@ export function pgErasureSql(
         await loom.query(
           `UPDATE public.read_model_state SET scope = NULL, app_key = NULL
             WHERE model_id = ANY($1::text[]) AND erased
-              AND (execution_id = $2 OR EXISTS (SELECT 1 FROM unnest($3::text[]) AS p WHERE starts_with(execution_id, p)))`,
-          [[INGEST_STATUS_MODEL, CHAT_ACTIVITY_MODEL], mine.exact, mine.starts],
+              AND (execution_id = $2 OR starts_with(execution_id, $3) OR starts_with(execution_id, $4))`,
+          [[INGEST_STATUS_MODEL, CHAT_ACTIVITY_MODEL], mine.exact, ...mine.starts],
         );
       }
       // 2. The user row: the foreign keys cascade to sessions, documents (chunks, parsed text, links, entities, visual facts),

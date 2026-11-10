@@ -233,4 +233,41 @@ describe("erasureDeps", () => {
     await erasureDeps(p).keys.destroy(`h_${user.handle}`);
     expect(t.ids.cached(USER)).toBeUndefined();
   });
+
+  it("forwards the handle to the status and activity forgets", async () => {
+    const seen: unknown[] = [];
+    const { parts: p } = parts({
+      status: { forgetUser: async (u: string, h?: string | null) => void seen.push(["s", u, h]) },
+      activity: { forgetUser: async (u: string, h?: string | null) => void seen.push(["a", u, h]) },
+    });
+    const deps = erasureDeps(p);
+    await deps.forgetStatus(USER, "a".repeat(26));
+    await deps.forgetActivity(USER, "a".repeat(26));
+    expect(seen).toEqual([
+      ["s", USER, "a".repeat(26)],
+      ["a", USER, "a".repeat(26)],
+    ]);
+  });
+
+  it("evicts the cached id key of a subject Loom's shred erased, right after the shred", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({ ids: t.ids });
+    expect(t.ids.cached(USER)).toBeDefined();
+    await erasureDeps(p).eraseSubject(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeUndefined();
+  });
+
+  it("keeps the cached id key when the shred did not erase (parked or unknown)", async () => {
+    const t = testOpaqueIds();
+    t.store.add(USER, TENANT);
+    const user = await t.ids.ensureUser({ tenantId: TENANT, userId: USER });
+    const { parts: p } = parts({
+      ids: t.ids,
+      app: { eraseSubject: async () => ({ outcome: "parked" as const }) },
+    });
+    await erasureDeps(p).eraseSubject(`h_${user.handle}`);
+    expect(t.ids.cached(USER)).toBeDefined();
+  });
 });
