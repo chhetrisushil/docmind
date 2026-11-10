@@ -43,7 +43,7 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
   it("inserts a row and maps it to a DTO with decrypted title and filename", async () => {
     const doc = await newDoc(T1, U1, FP("1"), 1234);
     const dto = await withTenant(app, T1, async (tx) =>
-      toDto(await insertDocument(tx, doc), fields.forUser(U1), UPLOADED),
+      toDto(await insertDocument(tx, doc), fields.forUser(U1), UPLOADED, { tags: [] }),
     );
     expect(dto).toMatchObject({
       id: doc.id,
@@ -82,7 +82,7 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
     const swapped = { ...a, titleEnc: b.titleEnc };
     await expect(
       withTenant(app, T1, async (tx) =>
-        toDto(await insertDocument(tx, swapped), fields.forUser(U1), UPLOADED),
+        toDto(await insertDocument(tx, swapped), fields.forUser(U1), UPLOADED, { tags: [] }),
       ),
     ).rejects.toThrow();
   });
@@ -109,7 +109,7 @@ describe.skipIf(!PG_URL)("documents repository (needs DOCMIND_TEST_PG_URL)", () 
         `SELECT ${DOCUMENT_COLUMNS} FROM documents WHERE id = $1`,
         [doc.id],
       );
-      return toDto(rows[0] as DocumentRow, cipher, UPLOADED);
+      return toDto(rows[0] as DocumentRow, cipher, UPLOADED, { tags: [] });
     });
     expect(dto.stats).toEqual(stats);
     const raw = await db.owner.query("SELECT stats_enc::text AS s FROM documents WHERE id = $1", [

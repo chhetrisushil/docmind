@@ -65,7 +65,8 @@ export class PgDocumentReads implements DocumentReads {
       const page: Awaited<ReturnType<typeof listDocuments>> = await withTenant(
         this.pool,
         scope.tenantId,
-        (tx) => listDocuments(tx, scope.ownerId, { cursor: at, limit: PAGE }),
+        (tx) =>
+          listDocuments(tx, scope.ownerId, { cursor: at, limit: PAGE, tenantId: scope.tenantId }),
       );
       for (const row of page.rows) {
         scanned++;

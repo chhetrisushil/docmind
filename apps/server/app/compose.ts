@@ -30,6 +30,7 @@ import { lineageTurnHeads } from "./chats/turnHeads";
 import { connectChat, prepareChat } from "./chats/wiring";
 import { buildApp } from "./config";
 import { FieldCrypto } from "./crypto/fields";
+import { TagKeys } from "./crypto/tagKeys";
 import { withTenant } from "./db/tenant";
 import { documentEventRoutes } from "./documents/events";
 import { type IngestPort, loomIngest } from "./documents/ingest";
@@ -84,6 +85,8 @@ import { flowSteps, statusSensitive } from "./status/wire";
 import { sealedLineageContent } from "./storage";
 import { PgContentStore } from "./storage/pgContentStore";
 import { subjectOfExecution } from "./subject";
+import { tagRoutes } from "./tags/routes";
+import { TagService } from "./tags/service";
 import { uiRoutes } from "./ui/routes";
 
 /** The stores behind the ingest-status model: in production the Loom-pool writer and the tenant-bound reader. */
@@ -233,6 +236,7 @@ export function buildServer(options: ComposeOptions) {
   // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
   const visualizeGate = newVisualizeGate();
   const visualRuns = new PgVisualRuns(pool);
+  const tags = new TagService(pool, fields, new TagKeys(keys));
   const afterDone = new Set<string>();
   const legacyRuns = new Set<string>(); // executions the 1.0.0 flow ran: the recorder does not stamp them current
   const visualize = {
@@ -528,7 +532,9 @@ export function buildServer(options: ComposeOptions) {
         visualize: { starter: visuals, limiter: new UserRateLimit() },
         starts,
         status,
+        tags,
       }),
+      ...tagRoutes({ authenticator, tags }),
       ...uiRoutes({
         authenticator,
         views,
@@ -538,6 +544,7 @@ export function buildServer(options: ComposeOptions) {
           pool,
           fields,
           status,
+          tags,
           blobs,
           registry: options.ingest.registry,
           visualFacts: new PgVisualFacts(pool, fields),
@@ -594,6 +601,8 @@ export function buildServer(options: ComposeOptions) {
     bus: options.ingest.bus,
     status,
     activity,
+    /** The tag service; the erasure end-to-end seed writes a suggestion through it. */
+    tags,
     /** The chat wiring; absent when `options.chat` is. Its routes are mounted from `chatRoutes`. */
     chat,
     /** Starts a chat's auto title; absent when `options.chat` is. `idle()` is awaited at shutdown with the ingest starts. */

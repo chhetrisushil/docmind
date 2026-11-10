@@ -1,4 +1,9 @@
-import { type DocumentDto, DocumentStats, DocumentSummary } from "@docmind/contracts";
+import {
+  type DocumentDto,
+  DocumentStats,
+  DocumentSummary,
+  type DocumentTag,
+} from "@docmind/contracts";
 import type { PoolClient } from "pg";
 import type { UserFieldCipher } from "../crypto/fields";
 import { ENTITY_LOCK_EXCLUSIVE } from "../db/entityLock";
@@ -77,6 +82,7 @@ export async function toDto(
   row: DocumentRow,
   cipher: UserFieldCipher,
   view: StatusView,
+  extra: { tags: DocumentTag[]; suggestedTags?: string[] },
 ): Promise<DocumentDto> {
   return {
     id: row.id,
@@ -94,6 +100,8 @@ export async function toDto(
       row.summary_enc == null
         ? null
         : DocumentSummary.parse(await cipher.open(summaryBind(row.id), row.summary_enc)),
+    tags: extra.tags,
+    ...(extra.suggestedTags !== undefined && { suggestedTags: extra.suggestedTags }),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -121,19 +129,59 @@ export async function usageOfTenant(tx: PoolClient): Promise<{ documents: number
   return { documents: row.documents, bytes: Number(row.bytes) };
 }
 
+export interface TagFilter {
+  tagIds: readonly string[];
+  match: "any" | "all";
+}
+export interface ListPage {
+  cursor: { t: string; i: string } | null;
+  limit: number;
+  /** Named in every listing: the explicit tenant predicate, beside row-level security. */
+  tenantId: string;
+  filter?: TagFilter;
+}
+
+/**
+ * The library page query. The tag filter is part of the WHERE, before the cursor's page cut, so a page is always full and a
+ * cursor stays valid within one filter. Every predicate names the owner and the tenant. `any` is an EXISTS;
+ * `all` takes the documents holding as many of the ids as there are ids (one tag is `any`). No user text is in the SQL.
+ */
+export function listDocumentsQuery(
+  ownerId: string,
+  page: ListPage,
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [
+    ownerId,
+    page.cursor?.t ?? null,
+    page.cursor?.i ?? null,
+    page.limit + 1,
+    page.tenantId,
+  ];
+  let where =
+    "owner_id = $1 AND tenant_id = $5::uuid AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))";
+  const ids = [...new Set((page.filter?.tagIds ?? []).map((t) => t.toLowerCase()))];
+  if (ids.length > 0) {
+    params.push(ids);
+    const list = `$${params.length}::uuid[]`;
+    const mine = `dt.owner_id = $1 AND dt.tenant_id = $5::uuid AND dt.tag_id = ANY(${list})`;
+    where +=
+      ids.length > 1 && page.filter?.match === "all"
+        ? ` AND documents.id IN (SELECT dt.document_id FROM document_tags dt WHERE ${mine} GROUP BY dt.document_id HAVING count(*) = cardinality(${list}))`
+        : ` AND EXISTS (SELECT 1 FROM document_tags dt WHERE dt.document_id = documents.id AND ${mine})`;
+  }
+  return {
+    sql: `SELECT ${DOCUMENT_COLUMNS} FROM documents WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT $4`,
+    params,
+  };
+}
+
 export async function listDocuments(
   tx: PoolClient,
   ownerId: string,
-  page: { cursor: { t: string; i: string } | null; limit: number },
+  page: ListPage,
 ): Promise<{ rows: DocumentRow[]; next: { created_cursor: string; id: string } | null }> {
-  const { rows } = await tx.query<DocumentRow>(
-    `SELECT ${DOCUMENT_COLUMNS} FROM documents
-      WHERE owner_id = $1
-        AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
-      ORDER BY created_at DESC, id DESC
-      LIMIT $4`,
-    [ownerId, page.cursor?.t ?? null, page.cursor?.i ?? null, page.limit + 1],
-  );
+  const { sql, params } = listDocumentsQuery(ownerId, page);
+  const { rows } = await tx.query<DocumentRow>(sql, params);
   const more = rows.length > page.limit;
   const kept = more ? rows.slice(0, page.limit) : rows;
   const last = kept[kept.length - 1];

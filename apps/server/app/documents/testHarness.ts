@@ -20,6 +20,7 @@ import { Pool } from "pg";
 import { expect } from "vitest";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
+import { TagKeys } from "../crypto/tagKeys";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
@@ -40,6 +41,8 @@ import {
 import { createHttpServer } from "../server";
 import { runAll } from "../shutdown";
 import { IngestStatus } from "../status/ingestStatus";
+import { tagRoutes } from "../tags/routes";
+import { TagService } from "../tags/service";
 import { uiRoutes } from "../ui/routes";
 import { documentEventRoutes } from "./events";
 import { InFlight } from "./inFlight";
@@ -321,6 +324,8 @@ export interface DocumentHarness {
   wiring: IngestWiring;
   inFlight: InFlight;
   starts: StartScheduler;
+  /** The tag service the routes use. */
+  tags: TagService;
   /** The ingest-status model the routes read, its stores and the bus its publisher uses. */
   status: IngestStatus;
   statusStore: InMemoryReadModelStore;
@@ -365,6 +370,7 @@ export async function startDocumentServer(
   const keys = new InMemoryKeyStore();
   const limits = { ...DEFAULT_LIMITS, ...overrides.limits };
   const fields = new FieldCrypto(keys);
+  const tags = new TagService(app, fields, new TagKeys(keys));
   const blobs: DocumentRoutesDeps["blobs"] = (id) =>
     new EncryptedFsContentStore({
       root,
@@ -426,6 +432,7 @@ export async function startDocumentServer(
       ingest: ingest.port,
       status: ingest.status,
       starts: new StartScheduler(ingest.port),
+      tags,
       inFlight,
     });
     effectiveBlobs = wrapped.blobs;
@@ -440,6 +447,7 @@ export async function startDocumentServer(
     });
     const server = createHttpServer({
       ...documentRoutes({ ...wrapped, starts }),
+      ...tagRoutes({ authenticator: testAuthenticator, tags: wrapped.tags }),
       ...uiRoutes({
         authenticator: testAuthenticator,
         views,
@@ -452,6 +460,7 @@ export async function startDocumentServer(
           registry: wiring.registry,
           visualFacts: new PgVisualFacts(app, fields),
           turnFacts: new PgTurnVisualFacts(app, fields),
+          tags: wrapped.tags,
         },
       }),
       ...events.routes,
@@ -468,6 +477,7 @@ export async function startDocumentServer(
       wiring,
       inFlight,
       starts,
+      tags: wrapped.tags,
       status: ingest.status,
       statusStore: ingest.statusStore,
       bus: ingest.bus,
@@ -626,3 +636,40 @@ export const generationOf = async (owner: Pool, id: string) =>
       id,
     ])
   ).rows[0]?.g;
+
+/** A request to the harness server as a test user (`null`: no session). A string body is sent as it is. */
+export const callApi = (
+  h: Pick<DocumentHarness, "base">,
+  user: string | null,
+  method: string,
+  path: string,
+  body?: unknown,
+  type = "application/json",
+) =>
+  fetch(`${h.base}${path}`, {
+    method,
+    headers: {
+      ...(user && { "x-test-user": user }),
+      ...(body !== undefined && { "content-type": type }),
+    },
+    ...(body !== undefined && { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
+
+/** The `error.code` of a failed answer. */
+export const errorCode = async (res: Response) =>
+  ((await res.json()) as { error?: { code?: string } }).error?.code;
+
+let seeded = 0;
+/** One document of `who` with a content address no other document made by this helper shares (the counter is per test file). */
+export const seedNext = (
+  h: Pick<DocumentHarness, "owner" | "app" | "keys">,
+  who: Identity = ALICE,
+) =>
+  seedDoc(
+    h.owner,
+    h.app,
+    new FieldCrypto(h.keys),
+    who,
+    (++seeded).toString(16).padStart(64, "0"),
+    0,
+  );

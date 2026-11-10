@@ -29,6 +29,7 @@ const doc = (n: number): DocumentDto => ({
   error: null,
   stats: null,
   summary: null,
+  tags: [],
   createdAt: "2026-10-01T10:00:00.000Z",
   updatedAt: "2026-10-01T10:00:00.000Z",
 });
