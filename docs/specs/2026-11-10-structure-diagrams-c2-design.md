@@ -65,6 +65,11 @@ The prompt tells the model:
   - Relations need at least 3 links.
 - **A missing field** is the old behaviour: no timeline or relations fact.
 
+**Extraction limits.** The answer is longer (up to 40 events and 30 links beside the facts), so the document extraction does not share the planner's limits. The `visuals` role has one provider for the planner and for chat's extraction (8192 answer tokens, the role's request timeout `DOCMIND_LLM_TIMEOUT_MS`, 60 s by default), and an answer of up to about 14 000 tokens can pass that timeout, which would end the step `visuals-model-unavailable` and cost the facts. So the document extraction runs on a second provider of the same role and model with its own limits:
+- a 16 000-token answer cap (`VISUALS_EXTRACT_MAX_TOKENS`, as vision's);
+- its own request timeout, `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS`: default 180 s (vision's), at most 600 s, configured like the other timeouts;
+- the planner and chat's extraction keep the shared provider and its limits, unchanged.
+
 ## 4. Storage
 
 - New sealed fact kinds in `visual_facts`: `timeline` (ordinal 18) and `relations` (ordinal 19).
@@ -105,7 +110,7 @@ The prompt tells the model:
 - `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything.
 - Existing plans stay valid, because v3's entries are a subset of v4's.
 - The plan verifies that a stored plan from v3 still hydrates under v4.
-- **Re-extract once.** The route's re-run (never a boot pass) is marked as asked by the user. The extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2). The extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
+- **Re-extract once.** The route's re-run (never a boot pass) is marked as asked by the user. The extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2). The note is spent only after the extraction has been written (or when the step settles without extracting), so a step that fails and is retried still extracts. The extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
 
 ## 6. Privacy and cost
 

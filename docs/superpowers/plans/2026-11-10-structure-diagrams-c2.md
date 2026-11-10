@@ -18,9 +18,9 @@ Every existing name in this plan was verified against the code at `main` ae6e52a
 |---|---|---|
 | F1 | **Flow hash (D7) is unaffected.** Loom's `flowContentHash` (`packages/core/src/flowHash.ts`, identical at 4af27eaa and at Loom HEAD) covers only the flow id and version, the deadline and each step's `id`, tool id, timeout and retry. It reads nothing inside a step: not a prompt, not an output schema. Changing the extract step's prompt and output therefore leaves the `visualize-document` 1.1.0 hash at `sha256:d3bfb104f3d015ab8165a9784f5f958bd46a347f3a2fb66f4d0d7be6c4e25f9e` (computed with the real `flowContentHash` on `main`; the same method reproduces the already-pinned 1.0.0 hash `sha256:d8491324...`). No flow version bump, no new legacy definition. | Task 4 step 1 (pin test, new `flowHash.test.ts`, modelled on `ingest-document/flowHash.test.ts`) |
 | F2 | **The v4 catalogue id does NOT trigger a re-plan.** The boot stale pass (`pgStaleFormatDocuments`, migrations 0030/0032) compares `visual_runs.format` with `factFormatFingerprint()`, which is built from the three tool pins and `STRUCTURE_FORMAT` only; the catalogue id is not in it. Stored plans carry no catalogue id (compile checks node types against the catalogue it is given), and v3's eight entries are the first eight of v4 byte for byte (guarded by a sha256 of `VISUALS_CATALOG.entries.slice(0, 8)` = `26bc046f4768d49e9cc97ed29a5689e0d8857f229e7e5e810e22b072eea065aa`, computed on `main`). The id and the new entries do change a NEW planner decision's keyed id (loom-ui keys a decision on catalogue content, intent and capabilities), which only affects runs started after the deploy. A run in flight at the deploy replays its recorded decision or, if it had not decided yet, decides once under v4. | Task 3 (v4 guard, hydrate test), Task 6 steps 1 and 2 (e2e stamp and stale list, rollout test: a sweep starts only the stale document) |
-| F3 | **Spec gap, D5 (ruled by the user: re-extract once).** The spec said an existing document "gets them when the user presses re-run", but in the code a re-run (`-r<n>`) never extracts when the document has stored extracted facts, and skips extraction after a `done` run (`extract.ts`, the `rerun > 0` branch; docs/architecture.md "Retry"). Ruling: mark each document's extraction with a format, `docmind.extract@2`; a re-run the USER asks for (never a boot pass) extracts again only when the stored marker is missing or not the current one, and the extraction stamps it, so that costs one extraction call per document, once; every later re-run is a cheap re-plan. **Where the marker lives:** a nullable `documents.visual_extract_format` column added by migration 0037, set by `PgVisualFacts.replace` in the same transaction as the facts. Why there: it is per document, plain (a token, no content, so no sealing), and atomic with the extraction it describes; `visual_facts` cannot hold it (a document whose extraction found nothing has no rows); `visual_runs` cannot (one row per generation whose newest run replaces the last, stamped only by the lossy event feed after the fact, and it already carries the unrelated fact-format stamp that must not move). NULL on every existing document means "extracted before c2" with no backfill. Chat never writes or reads it (its extraction path has no store write, and a test guards the source). | Tasks 2 and 5 |
+| F3 | **Spec gap, D5 (ruled by the user: re-extract once).** The spec said an existing document "gets them when the user presses re-run", but in the code a re-run (`-r<n>`) never extracts when the document has stored extracted facts, and skips extraction after a `done` run (`extract.ts`, the `rerun > 0` branch; docs/architecture.md "Retry"). Ruling: mark each document's extraction with a format, `docmind.extract@2`; a re-run the USER asks for (never a boot pass) extracts again only when the stored marker is missing or not the current one, and the extraction stamps it, so that costs one extraction call per document, once; every later re-run is a cheap re-plan. **Where the marker lives:** a nullable `documents.visual_extract_format` column added by migration 0037, set by `PgVisualFacts.replace` in the same transaction as the facts. Why there: it is per document, plain (a token, no content, so no sealing), and atomic with the extraction it describes; `visual_facts` cannot hold it (a document whose extraction found nothing has no rows); `visual_runs` cannot (one row per generation whose newest run replaces the last, stamped only by the lossy event feed after the fact, and it already carries the unrelated fact-format stamp that must not move). NULL on every existing document means "extracted before c2" with no backfill. Chat never writes or reads it: its document store is typed `Pick<VisualFactStore, "list">` (the compile-time guard), a behavioural test proves chat's extraction reaches nothing but `list`, and a source grep is only a backstop. | Tasks 2 and 5 |
 | F4 | The extraction prompt, `askForFacts` and `ExtractAnswer` are shared with the chat turn (`visualize-turn/steps.ts`). Chat must not pay for a longer prompt or answer, and its request must stay byte-identical. The document path gets its own `EXTRACT_DOCUMENT_SYSTEM`, `DocumentAnswer` and `askForExtraction`; `askForFacts` and `EXTRACT_SYSTEM` are untouched. | Task 4 |
-| F5 | `VISUALS_MAX_TOKENS` is 8192 (`ingest-document/limits.ts`). A longer answer (up to 40 events and 30 links with citations, beside up to 16 facts) can exceed it, and a truncated answer is `LlmOutputError`, which would fail the whole extraction and so cost the existing facts. The cap moves to 16 000 (the `VISION_MAX_TOKENS` precedent), and the prompt asks for at most 2 cited passages per item. | Task 4 steps 3 and 5 |
+| F5 | `VISUALS_MAX_TOKENS` is 8192 (`ingest-document/limits.ts`). A longer answer (up to 40 events and 30 links with citations, beside up to 16 facts) can exceed it, and a truncated answer is `LlmOutputError`, which would fail the whole extraction and so cost the existing facts. The extraction gets its own provider on the `visuals` role with a 16 000-token cap (the `VISION_MAX_TOKENS` precedent) and its own request timeout, `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (default 180 s, the vision default): the role's shared timeout is `DOCMIND_LLM_TIMEOUT_MS` (60 s), and a 14 000-token answer can pass it, which would end `visuals-model-unavailable` and cost the facts. The planner and chat's extraction share the role's own provider and keep 8192 tokens and 60 s. The prompt asks for at most 2 cited passages per item. | Task 4 steps 3 and 5 |
 | F6 | `ExtractResult.count` is what the flow reads as "extracted facts" (a plan failure with none is `empty`, not `failed`). Aggregates are counted apart (`aggregates`, present only when above 0) so a timeline-only document is treated like a structure-only one, and the skip-extraction re-plan reports them so the load step still runs. | Task 4 steps 4 and 5 |
 | F7 | Rolling back to the c1 build after any document has a timeline or relations row is unsafe: the c1 `visual_facts` reader rejects unknown kinds, so the load step and the document page's reader fail for that document. The migration itself is safe under old code. | Task 6 (cloud-deploy note) |
 
@@ -37,6 +37,29 @@ Every existing name in this plan was verified against the code at `main` ae6e52a
 | Vacuous assertions | Every ratchet is paired with a control (a boundary just inside and just outside); counts are asserted with their contents; no `toHaveLength(n)` stands alone where the content matters. |
 | Redeclared constants | `MAX_FACTS`, `STRUCTURE_ORDINAL_BASE`, the two aggregate ordinals and the date precisions are declared once in `facts.ts` / `dates.ts` and imported everywhere (the experiences package keeps its own reserved-ordinal map, as c1 did, and `plan.test.ts` pins the copies equal). |
 | SQL without explicit owner and tenant predicates | Every new statement (`DELETE`, `aggregateCount`) names `tenant_id` and `owner_id`, plus `lockDocument`. |
+
+## Amendments (preflight)
+
+The pre-flight scan of this plan (22 checks, 16 findings) was applied by this amendment. Each finding was reproduced in a scratch copy outside the repo and the fix run there (tsc, biome, and the affected unit, pg and e2e tests).
+
+| Item | Finding | Fix | Task |
+|---|---|---|---|
+| 1 | Raw U+2028 and U+2029 in `cleanText`'s regex (TS1161) and in its test | Written as `\u2028` and `\u2029` escapes (the zero-width characters of the same test are escaped too) | 1 |
+| 2 | Task 2's `pnpm typecheck` failed in `flow.ts` and `plan.ts` until Task 3 built the experiences types | `TimelineFact`, `RelationsFact` and the `VisualFactRaw` union move to Task 2 step 8a, with `pnpm --filter @docmind/experiences build`; Task 3 step 4b only checks them; Task 3 step 6 builds first | 2, 3 |
+| 3 | `visuals.test.ts` asserts the exact entry list (8) | Step 1 item 2b appends `DocumentTimeline` and `Relationships` | 3 |
+| 4 | `requests` has 2 entries because the planner retries an empty plan | Assert that no request carries the extraction system prompt and that the first one holds `fact-18` | 4 |
+| 5 | `new URL(file, import.meta.url)` is TS1343 under CommonJS | `readFileSync(resolve(__dirname, file), "utf8")` | 5 |
+| 6 | Behaviour bug: the re-extract note was consumed by the first attempt, so a retried step re-planned unstamped | The note is read with `has`, spent after the write succeeded (or when settling without extraction); tests: a failed first answer then a valid one is stamped, and a failed write too | 5 |
+| 7 | `assertNoPlaintext` refuses secrets shorter than 12 characters | `Beta Works` and `Q3 2025` dropped from the narrative secrets (the rest are 12 or more) | 6 |
+| 8 | The e2e code block was never closed (odd fence count) | Closing fence and a blank line before "Step 2" | 6 |
+| 9 | Four fakes need `aggregateCount` and `extractFormat`, not three | `start.test.ts` added; the `stamped` flag is set as the first line of the `replace` fake (Task 4 adds `replaceError` above it) | 2 |
+| 10 | The stored `Timeline` and `Relations` schemas repeated the normalisers' limits | Imported (`MAX_EVENTS`, `MIN_EVENTS`, `MAX_WHEN`, `MAX_EVENT_LABEL`, `MAX_LINKS`, `MIN_LINKS`, `MAX_REL`, `MAX_PARTY`, new `MAX_ENTITIES`); one test builds the caps and parses them | 1, 2 |
+| 11 | Only the token cap moved; the `visuals` role times out at 60 s | A second provider on the role for the document extraction: 16 000 tokens, `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (default 180 s); `extractLlm` in the deps; tests (config, wiring, a slow server the planner's provider gives up on and the extraction's does not, the step prefers it); docs | 4 |
+| 12 | Seeded `when` and `rel` had no slack under their 40-character limits | Sentinels in labels and party names only; `when` and `rel` plain | 6 |
+| 13 | Chat's "never touches the stamp" was a grep, and the boot test covered only the unstamped document | A behavioural test (`visualize-turn/flow.test.ts`: only `list` is reached), the grep kept as a backstop, and the boot test runs for no stamp, an older stamp and the current stamp | 5 |
+| 14 | The architecture "Connections" replacement was ambiguous | The final sentence is given in full, old and new | 6 |
+| 15 | The v3-under-v4 test only adopted and compiled | It also runs each adopted provider's reshaper over a fact of its shape | 3 |
+| 16 | Spec 6 lists lineage but the e2e scanned only the event log and rows | The headline e2e scans `lineage_content` for the narrative secrets and runs `collectLineageContent` over the aggregate lineage | 6 |
 
 ## Global Constraints
 
@@ -68,6 +91,9 @@ Every task's requirements include these (values copied from the spec):
 - `VISUALS_INTENT` gains: use a timeline when the document narrates dated events, and a relationships diagram when it states how parties relate. Leave them out for a few scattered dates or links.
 - Rollout (D5): `factFormatFingerprint()` is unchanged, so the boot stale-format pass does not re-plan anything. Existing plans stay valid, because v3's entries are a subset of v4's. The plan verifies that a stored plan from v3 still hydrates under v4. Re-extract once: the route's re-run (never a boot pass) is marked as asked by the user; the extract step extracts again for such a re-run only when the document's `visual_extract_format` is not `docmind.extract@2` (NULL for a document extracted before c2); the extraction stamps it, so a second re-run, and the re-run of a document stamped by a c2 upload, re-plan without extracting. A boot pass never extracts over stored facts, as before. A future extraction change bumps the token and gets the same one-time behaviour.
 - Privacy: event labels, written dates, entity names and relation phrases are sealed per user. They never appear in logs, the event log, lineage or error text. The planner sees capability descriptions and counts only. Erasure shreds them. The erasure plaintext scan gains timeline and relation needles.
+- Extraction limits (pre-flight 11): the document extraction runs on its own provider of the `visuals` role (`llm.visualsExtract`, passed as `extractLlm`), with a 16 000-token answer cap (`VISUALS_EXTRACT_MAX_TOKENS`) and its own request timeout (`DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS`, default 180 000 ms, at most 600 000). The planner and chat's extraction keep the role's `llm.visuals` (`VISUALS_MAX_TOKENS` 8192, `DOCMIND_LLM_TIMEOUT_MS` 60 s): their limits do not move.
+- The user's re-extract note is spent only after an extraction write succeeded (or when the extract step settles without extracting), never on the first read: an attempt that fails and is retried must still extract (pre-flight 6).
+- Each task's own `pnpm typecheck && pnpm typecheck:tests && pnpm lint` passes on its own commit: Task 2 carries the experiences `TimelineFact`/`RelationsFact` types and rebuilds `packages/experiences/dist`, and every fake store of `VisualFactStore` (four) is updated in Task 2 (pre-flight 2 and 9).
 - Cost: no extra call (the extraction answer is longer); no boot spending; one extraction call per document, the first time the user re-runs it after c2.
 - Out of scope: an automatic backfill of existing documents; timelines or relationships in chat answers; cross-document timelines or relationship graphs; merging relationship nodes with the `entities` table, or with c1's entity map; editing extracted events or links.
 - Verification commands (run from the worktree root `/Users/such/workspace/docmind/.worktrees/structure-c2`): `pnpm typecheck`, `pnpm typecheck:tests`, `pnpm lint`, `pnpm build`, and the suites named in each task. Postgres suites need `set -a; . ./.env; set +a` first (it sets `DOCMIND_TEST_PG_URL`); **a skipped pg test is not a pass**: check the vitest summary shows the pg tests ran, not "skipped". The worktree has no `node_modules` of its own: run `pnpm install --frozen-lockfile` once at the root before the first command. The snippets in this plan are not pre-wrapped to biome's line width: run `pnpm exec biome check --write <the files you changed>` before each commit (and before `pnpm lint`), and keep the code's meaning exactly as written.
@@ -97,7 +123,7 @@ Each is repeated as a "Plan decision:" next to the step that applies it.
 - **Plan decision: timeline axis.** `timeFormat` is `{ granularity: "day" }` with no `timeZone` (loom-ui reads every granularity coarser than `datetime` in UTC and draws a date-only tick as the written date in every viewer zone), and node `at` is always an ISO date (`YYYY-MM-DD`), so `Date.parse` accepts it (`diagramProblems`: "a timeline node needs `at`" and "`at` must be a date").
 - **Plan decision: planner sample (placeholders).** Timeline: `{ kind: "timeline", events: <count>, nodes: [{ label: "Event", at: "2000-01-01" }, { label: "Event", at: "2000-06-01" }] }`. Relations: `{ kind: "relations", parties: <count>, links: <count>, nodes: [{ label: "Party", group: "party" }, { label: "Party", group: "party" }], edges: [{ from: "n0", to: "n1", label: "relation" }] }`. Descriptions state counts only. No document text, no real date.
 - **Plan decision: migration 0037 replaces all three CHECKs** (`visual_facts_kind_check`, `visual_facts_ordinal_check`, `visual_facts_kind_ordinal_check`, names kept), because the third is `(kind IN ('outline','cooccurrence')) = (ordinal >= 16)` in 0035 and would refuse `timeline` at 18 as an "extracted" row and let `outline` sit at 17. The new rule pins each kind to its own ordinal. Every existing row satisfies it (the c1 step writes outline at 16 and cooccurrence at 17 only, and `StoredEntry` is tightened the same way in Task 2). 0035 and 0026 are never edited.
-- **Plan decision: re-extract once (F3, the user's ruling).** The marker is `documents.visual_extract_format` (nullable `text`, at most 64 characters), `EXTRACT_FORMAT = "docmind.extract@2"` in `facts.ts`. `PgVisualFacts.replace` (extraction only: `replaceStructure` and chat never touch it) sets it under the document lock in the same transaction as the facts, also for an empty or refused extraction (the extraction ran under the c2 prompt), and `extractFormat(ref)` reads it. `VisualsStarterOptions.reextract` and `ExtractDeps.reextract` are one shared `Set<string>` created in `compose.ts` beside `afterDone`; only `starter.rerun` (the route) notes an id, `rerunWith` called by a boot pass does not. The extract step consumes its note and, for a noted re-run, extracts when `extractFormat(ref) !== EXTRACT_FORMAT` (missing or older: the rule is inequality, so a later bump of the token re-extracts once more). A noted re-run of a stamped document, and any un-noted re-run, keep today's rules. Accepted: the note is in-process, so a run recovered after a crash re-plans only (and the next press extracts). A re-ingest keeps the old stamp until its own first extraction restamps it, which always happens (the automatic run extracts).
+- **Plan decision: re-extract once (F3, the user's ruling).** The marker is `documents.visual_extract_format` (nullable `text`, at most 64 characters), `EXTRACT_FORMAT = "docmind.extract@2"` in `facts.ts`. `PgVisualFacts.replace` (extraction only: `replaceStructure` and chat never touch it) sets it under the document lock in the same transaction as the facts, also for an empty or refused extraction (the extraction ran under the c2 prompt), and `extractFormat(ref)` reads it. `VisualsStarterOptions.reextract` and `ExtractDeps.reextract` are one shared `Set<string>` created in `compose.ts` beside `afterDone`; only `starter.rerun` (the route) notes an id, `rerunWith` called by a boot pass does not. The extract step READS its note and spends it only after the extraction write succeeded (or when it settles without extracting, a stamped document), so an attempt that fails and is retried still finds it and extracts (pre-flight 6); for a noted re-run it extracts when `extractFormat(ref) !== EXTRACT_FORMAT` (missing or older: the rule is inequality, so a later bump of the token re-extracts once more). A noted re-run of a stamped document, and any un-noted re-run, keep today's rules. Accepted: the note is in-process, so a run recovered after a crash re-plans only (and the next press extracts). A re-ingest keeps the old stamp until its own first extraction restamps it, which always happens (the automatic run extracts).
 
 ## File Structure
 
@@ -135,7 +161,7 @@ Modified (docs): `docs/architecture.md`, `docs/specs/2026-11-08-document-visuals
   - `dates.ts`: `export const DATE_PRECISIONS = ["day", "month", "quarter", "year"] as const; export type DatePrecision = (typeof DATE_PRECISIONS)[number]; export interface EventDate { at: string; precision: DatePrecision } export function parseEventDate(raw: unknown): EventDate | null; export function isStoredAt(at: string, precision: DatePrecision): boolean`
   - `structureText.ts` (added to the existing exports `MAX_STRUCTURE_LABEL`, `clipLabel`): `export const MAX_RAW_ITEMS = 200; export const isRecord: (v: unknown) => v is Record<string, unknown>; export const cleanText: (raw: string, max: number) => string; export const nameKey: (raw: string) => string; export function earliestPassage(ids: unknown, position: ReadonlyMap<string, number>): string | null`
   - `timeline.ts`: `export const MAX_EVENTS = 40; MIN_EVENTS = 3; MAX_WHEN = 40; MAX_EVENT_LABEL = 80;` and a re-export of `MAX_RAW_ITEMS` (declared once, in `structureText.ts`); `export interface TimelineEvent { at: string; precision: DatePrecision; when: string; label: string; chunkId: string } export interface TimelineDraft { kind: "timeline"; events: TimelineEvent[]; chunkIds: string[] } export const rawEventsOf: (field: unknown) => unknown[]; export function buildTimeline(raw: readonly unknown[], position: ReadonlyMap<string, number>): TimelineDraft | null`
-  - `relations.ts`: `export const MAX_LINKS = 30; MIN_LINKS = 3; MAX_PARTY = 80; MAX_REL = 40; export interface RelationLink { from: number; to: number; rel: string; chunkId: string } export interface RelationsDraft { kind: "relations"; entities: string[]; links: RelationLink[]; chunkIds: string[] } export const rawLinksOf: (field: unknown) => unknown[]; export function buildRelations(raw: readonly unknown[], position: ReadonlyMap<string, number>): RelationsDraft | null`
+  - `relations.ts`: `export const MAX_LINKS = 30; MIN_LINKS = 3; MAX_PARTY = 80; MAX_REL = 40; MAX_ENTITIES = 60; export interface RelationLink { from: number; to: number; rel: string; chunkId: string } export interface RelationsDraft { kind: "relations"; entities: string[]; links: RelationLink[]; chunkIds: string[] } export const rawLinksOf: (field: unknown) => unknown[]; export function buildRelations(raw: readonly unknown[], position: ReadonlyMap<string, number>): RelationsDraft | null`
   - `position` is a map from a document's passage id (lowercase) to its index in passage order; its keys are "the passages of this document".
 
 - [ ] **Step 1: Write the failing tests**
@@ -228,8 +254,8 @@ describe("cleanText", () => {
   it("turns control characters and line breaks into one space and drops invisible format characters", () => {
     expect(cleanText("A\u0000B", 80)).toBe("A B");
     expect(cleanText("  x \n\t y  ", 80)).toBe("x y");
-    expect(cleanText("Ac​me⁠ Corp﻿", 80)).toBe("Acme Corp");
-    expect(cleanText("line break here", 80)).toBe("line break here");
+    expect(cleanText("Ac\u200bme\u2060 Corp\ufeff", 80)).toBe("Acme Corp");
+    expect(cleanText("line\u2028break\u2029here", 80)).toBe("line break here");
   });
 
   it("clips at the limit, never inside a surrogate pair, and trims after clipping", () => {
@@ -239,7 +265,7 @@ describe("cleanText", () => {
   });
 
   it("is empty when nothing visible is left", () => {
-    expect(cleanText(" ​\u0007 ", 80)).toBe("");
+    expect(cleanText(" \u200b\u0007 ", 80)).toBe("");
     expect(cleanText("", 80)).toBe("");
   });
 });
@@ -352,7 +378,7 @@ describe("buildTimeline", () => {
 
   it("drops an event with no usable label, and one that is not an object", () => {
     const t = buildTimeline(
-      [...GOOD, ev("2027", " ​ "), ev("2027", ""), ev("2027", "x", { label: 7 }), null, "x", 3],
+      [...GOOD, ev("2027", " \u200b "), ev("2027", ""), ev("2027", "x", { label: 7 }), null, "x", 3],
       POS,
     );
     expect(t?.events.map((e) => e.label)).toEqual(["Alpha", "Beta", "Gamma"]);
@@ -480,6 +506,7 @@ Create `apps/server/app/flows/visualize-document/relations.test.ts`:
 ```ts
 import { describe, expect, it } from "vitest";
 import {
+  MAX_ENTITIES,
   MAX_LINKS,
   MAX_PARTY,
   MAX_REL,
@@ -505,7 +532,7 @@ const GOOD = [
 
 describe("buildRelations", () => {
   it("keeps the limits the spec names", () => {
-    expect([MAX_LINKS, MIN_LINKS, MAX_PARTY, MAX_REL]).toEqual([30, 3, 80, 40]);
+    expect([MAX_LINKS, MIN_LINKS, MAX_PARTY, MAX_REL, MAX_ENTITIES]).toEqual([30, 3, 80, 40, 60]);
   });
 
   it("lists each party once in order of first appearance and joins links by index, directed from to to", () => {
@@ -581,7 +608,7 @@ describe("buildRelations", () => {
       [
         ...GOOD,
         link("", "r", "B"),
-        link("A", " ​", "B"),
+        link("A", " \u200b", "B"),
         link("A", "r", ""),
         { from: 1, rel: "r", to: "B", chunkIds: [ID(1)] },
         null,
@@ -738,7 +765,7 @@ export const isRecord = (v: unknown): v is Record<string, unknown> =>
 export const cleanText = (raw: string, max: number): string =>
   clipText(
     raw
-      .replace(/[\p{Cc}  ]/gu, " ")
+      .replace(/[\p{Cc}\u2028\u2029]/gu, " ")
       .replace(/\p{Cf}/gu, "")
       .replace(/\s+/g, " ")
       .trim(),
@@ -874,6 +901,8 @@ export const MIN_LINKS = 3;
 /** The longest party name; at most 30 links name at most 60 parties. */
 export const MAX_PARTY = 80;
 export const MAX_REL = 40;
+/** At most 30 links name at most 2 parties each; the stored schema (`facts.ts`) imports this, never repeats it. */
+export const MAX_ENTITIES = MAX_LINKS * 2;
 
 export interface RelationLink {
   /** Indexes into `RelationsDraft.entities`; the link is directed from to to. */
@@ -968,8 +997,9 @@ git commit -m "feat(visuals): c2 date, text and aggregate normalisers (timeline 
 - Modify: `apps/server/app/flows/visualize-document/pgFacts.ts`
 - Modify: `apps/server/app/flows/visualize-document/testing.ts` (the `aggregateFacts` fixture)
 - Modify: `apps/server/app/flows/visualize-document/plan.ts` (a comment only)
+- Modify: `packages/experiences/src/visuals.ts` (the `TimelineFact` and `RelationsFact` types and the `VisualFactRaw` union only; step 8), then rebuild `packages/experiences/dist`
 - Test: `apps/server/app/flows/visualize-document/facts.test.ts`, `pgFacts.pg.test.ts`, `plan.test.ts`
-- Modify (compile only, new store method): the fake stores of `flow.test.ts`, `recovery.test.ts`, `rollout.pg.test.ts` (step 8)
+- Modify (compile only, new store method): the fake stores of `flow.test.ts`, `recovery.test.ts`, `rollout.pg.test.ts`, `start.test.ts` (step 8)
 
 **Interfaces:**
 - Consumes: `TimelineDraft`, `RelationsDraft`, `DATE_PRECISIONS`, `isStoredAt`, `nameKey` (Task 1).
@@ -983,7 +1013,7 @@ git commit -m "feat(visuals): c2 date, text and aggregate normalisers (timeline 
 
 In `apps/server/app/flows/visualize-document/facts.test.ts`:
 
-1. Extend the existing import from `./facts` with `AGGREGATE_ORDINAL_BASE`, `DocumentAnswer`, `RELATIONS_ORDINAL`, `STRUCTURE_ORDINAL_BASE`, `TIMELINE_ORDINAL` and `isAggregateFact` (keep the rest), and add `import { buildRelations } from "./relations";` and `import { buildTimeline } from "./timeline";` beside `import { buildOutline } from "./outline";`.
+1. Extend the existing import from `./facts` with `AGGREGATE_ORDINAL_BASE`, `DocumentAnswer`, `RELATIONS_ORDINAL`, `STRUCTURE_ORDINAL_BASE`, `TIMELINE_ORDINAL` and `isAggregateFact` (keep the rest), and add `import { MAX_ENTITIES, MAX_LINKS, MAX_PARTY, MAX_REL, buildRelations } from "./relations";` and `import { MAX_EVENTS, MAX_EVENT_LABEL, MAX_WHEN, buildTimeline } from "./timeline";` beside `import { buildOutline } from "./outline";`.
 2. In the existing test "reserves ordinals 16 and 17 above the 16 extracted ones" change the last line to `expect(MAX_STORED_FACTS).toBe(MAX_FACTS + 4);` (extracted, outline, entity map, timeline, relations).
 3. Append this block:
 
@@ -1073,6 +1103,34 @@ describe("aggregate facts (timeline at 18, relations at 19)", () => {
     expect(r({ links: [{ ...l0, rel: "" }, ...R.links.slice(1)] })).toBe(false);
     expect(r({ entities: ["only one"] })).toBe(false);
     expect(r({ chunkIds: [] })).toBe(false);
+  });
+
+  it("accepts everything the normalisers can produce at their caps (the stored schema imports their limits, so they cannot drift)", () => {
+    const cap = 1 + MAX_EVENTS; // 41 candidate years; the builder keeps MAX_EVENTS
+    const manyPositions = new Map([1, 2, 3].map((n, i) => [cid(n), i] as const));
+    const events = buildTimeline(
+      Array.from({ length: cap }, (_, i) => ({
+        when: "w".repeat(MAX_WHEN),
+        date: String(2000 + i),
+        label: "l".repeat(MAX_EVENT_LABEL),
+        chunkIds: [cid(1 + (i % 3))],
+      })),
+      manyPositions,
+    );
+    expect(events?.events).toHaveLength(MAX_EVENTS);
+    expect(StoredEntry.safeParse({ ...events, ordinal: TIMELINE_ORDINAL }).success).toBe(true);
+    const relations = buildRelations(
+      Array.from({ length: MAX_LINKS + 1 }, (_, i) => ({
+        from: `${"f".repeat(MAX_PARTY - 3)}${String(i).padStart(3, "0")}`,
+        rel: "r".repeat(MAX_REL),
+        to: `${"t".repeat(MAX_PARTY - 3)}${String(i).padStart(3, "0")}`,
+        chunkIds: [cid(1 + (i % 3))],
+      })),
+      manyPositions,
+    );
+    expect(relations?.links).toHaveLength(MAX_LINKS);
+    expect(relations?.entities).toHaveLength(MAX_ENTITIES);
+    expect(StoredEntry.safeParse({ ...relations, ordinal: RELATIONS_ORDINAL }).success).toBe(true);
   });
 
   it("refuses an event date that is not real at its precision", () => {
@@ -1386,9 +1444,22 @@ import { ENTITY_KINDS } from "../../crypto/entityKeys";
 import type { CooccurrenceDraft } from "./cooccurrence";
 import { DATE_PRECISIONS, isStoredAt } from "./dates";
 import type { OutlineDraft } from "./outline";
-import type { RelationsDraft } from "./relations";
+import {
+  MAX_ENTITIES,
+  MAX_LINKS,
+  MAX_PARTY,
+  MAX_REL,
+  MIN_LINKS,
+  type RelationsDraft,
+} from "./relations";
 import { nameKey } from "./structureText";
-import type { TimelineDraft } from "./timeline";
+import {
+  MAX_EVENT_LABEL,
+  MAX_EVENTS,
+  MAX_WHEN,
+  MIN_EVENTS,
+  type TimelineDraft,
+} from "./timeline";
 
 export const MAX_FACTS = 16;
 /**
@@ -1420,36 +1491,40 @@ const Timeline = z
           .object({
             at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
             precision: z.enum(DATE_PRECISIONS),
-            when: z.string().trim().min(1).max(40),
-            label: StructureLabel,
+            when: z.string().trim().min(1).max(MAX_WHEN),
+            label: z.string().trim().min(1).max(MAX_EVENT_LABEL),
             chunkId: PassageId,
           })
           .strict(),
       )
-      .min(3)
-      .max(40),
-    chunkIds: z.array(PassageId).min(1).max(40),
+      .min(MIN_EVENTS)
+      .max(MAX_EVENTS),
+    chunkIds: z.array(PassageId).min(1).max(MAX_EVENTS),
   })
   .strict();
-const PartyIndex = z.number().int().min(0).max(59);
+const PartyIndex = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_ENTITIES - 1);
 const Relations = z
   .object({
     kind: z.literal("relations"),
-    entities: z.array(StructureLabel).min(2).max(60),
+    entities: z.array(z.string().trim().min(1).max(MAX_PARTY)).min(2).max(MAX_ENTITIES),
     links: z
       .array(
         z
           .object({
             from: PartyIndex,
             to: PartyIndex,
-            rel: z.string().trim().min(1).max(40),
+            rel: z.string().trim().min(1).max(MAX_REL),
             chunkId: PassageId,
           })
           .strict(),
       )
-      .min(3)
-      .max(30),
-    chunkIds: z.array(PassageId).min(1).max(30),
+      .min(MIN_LINKS)
+      .max(MAX_LINKS),
+    chunkIds: z.array(PassageId).min(1).max(MAX_LINKS),
   })
   .strict();
 ```
@@ -1839,9 +1914,35 @@ export class PgVisualFacts implements VisualFactStore {
 Run: `set -a; . ./.env; set +a; pnpm --filter @docmind/server exec vitest run app/flows/visualize-document/pgFacts.pg.test.ts`
 Expected: PASS, and the summary lists the pg tests as passed (not skipped). The new migration is applied by the test fixture's `migrate`.
 
-- [ ] **Step 8: Make the fake stores compile (a new method on the interface)**
+- [ ] **Step 8: Make every typecheck gate pass in this task (the experiences types, and the fake stores)**
 
-`VisualizeDeps.facts` is a full `VisualFactStore`, so every fake that builds it needs `aggregateCount` and `extractFormat`, and a fake whose `replace` now receives `ExtractionWrite[]` needs a wider `held`. Run `pnpm typecheck:tests`: it names each place. The expected three:
+**8a. The experiences types (pre-flight 2).** `plan.ts` hands `listAll`'s facts (now `AnyFact`, which includes the aggregates) to `capabilitiesOf(facts: readonly VisualFactRaw[])`, and `flow.ts` hands a fact to `fitsShape`, both through `packages/experiences/dist`. Until `VisualFactRaw` can hold a timeline and a relations fact, `pnpm typecheck` fails in `flow.ts` and `plan.ts` (TS2322, TS2345). So the types move here from Task 3: in `packages/experiences/src/visuals.ts`, directly after the `EntityMapFact` interface add
+
+```ts
+export interface TimelineFact {
+  kind: "timeline";
+  events: {
+    at: string;
+    precision: "day" | "month" | "quarter" | "year";
+    when: string;
+    label: string;
+    chunkId: string;
+  }[];
+  chunkIds: string[];
+  ordinal: number;
+}
+export interface RelationsFact {
+  kind: "relations";
+  entities: string[];
+  links: { from: number; to: number; rel: string; chunkId: string }[];
+  chunkIds: string[];
+  ordinal: number;
+}
+```
+
+and add `| TimelineFact` and `| RelationsFact` after `| EntityMapFact` in the `VisualFactRaw` union. Nothing else in `visuals.ts` changes here (`describeFact`, `sampleOf`, the catalogue and the shapes are Task 3, and no aggregate fact exists before Task 4, so nothing can reach the planner in between). Then build, so the server sees the types: `pnpm --filter @docmind/experiences build`.
+
+**8b. The fake stores.** `VisualizeDeps.facts` is a full `VisualFactStore`, so every fake that builds it needs `aggregateCount` and `extractFormat`, and a fake whose `replace` now receives `ExtractionWrite[]` needs a wider `held`. Run `pnpm typecheck:tests`: it names each place. The expected four:
 
 - `apps/server/app/flows/visualize-document/flow.test.ts`: change the import `import type { Fact, StructureFact } from "./facts";` to `import { AGGREGATE_ORDINAL_BASE, type ExtractionWrite, type Fact, STRUCTURE_ORDINAL_BASE, type StructureFact } from "./facts";`; in `stack` change `let held: Fact[] = [];` to `let held: ExtractionWrite[] = [];`; replace the `list` and `listAll` entries of the `facts` fake with
 
@@ -1855,7 +1956,7 @@ Expected: PASS, and the summary lists the pg tests as passed (not skipped). The 
       extractFormat: async () => (stamped ? EXTRACT_FORMAT : null),
 ```
 
-(and declare `let stamped = false;` beside `held`, set `stamped = true;` as the first line after the `replaceError` check inside the `replace` fake; add `EXTRACT_FORMAT` to the `./facts` import), and change `hold: (facts: Fact[]) => {` to `hold: (facts: ExtractionWrite[]) => {`. (Keep `Fact` imported: other lines of the file use it.)
+(and declare `let stamped = false;` beside `held`, set `stamped = true;` as the first line of the `replace` fake (Task 4 step 1 later adds a `replaceError` check above it, so that a failed write never stamps); add `EXTRACT_FORMAT` to the `./facts` import), and change `hold: (facts: Fact[]) => {` to `hold: (facts: ExtractionWrite[]) => {`. (Keep `Fact` imported: other lines of the file use it.)
 
 - `apps/server/app/flows/visualize-document/recovery.test.ts`: import `AGGREGATE_ORDINAL_BASE`, `type ExtractionWrite`, `STRUCTURE_ORDINAL_BASE` from `./facts` beside `Fact`; `let held: Fact[] = [];` becomes `let held: ExtractionWrite[] = [];`; the fake's `list`/`listAll` become
 
@@ -1868,13 +1969,15 @@ Expected: PASS, and the summary lists the pg tests as passed (not skipped). The 
 
 - `apps/server/app/flows/visualize-document/rollout.pg.test.ts`: the same changes (`let held: ExtractionWrite[]`, the `list` filter, and `aggregateCount` and `extractFormat: async () => null` beside `listAll: async () => [...held, ...structured]`).
 
+- `apps/server/app/flows/visualize-document/start.test.ts` (the "a start still pending when the cancel runs" test, whose `facts` fake sits in `deps`): add `aggregateCount: async () => 0,` and `extractFormat: async () => null,` after `listAll: async () => [],` (without them `pnpm typecheck:tests` reports TS2739, "missing aggregateCount, extractFormat").
+
 Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: clean. Then run `pnpm --filter @docmind/server exec vitest run app/flows/visualize-document` (with the pg env set) and confirm everything passes: the only behavioural change so far is the stricter `StoredEntry` and the wider ranges.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add infra/migrations/0037_visual_facts_aggregate_kinds.sql apps/server/app/flows/visualize-document/facts.ts apps/server/app/flows/visualize-document/facts.test.ts apps/server/app/flows/visualize-document/pgFacts.ts apps/server/app/flows/visualize-document/pgFacts.pg.test.ts apps/server/app/flows/visualize-document/testing.ts apps/server/app/flows/visualize-document/plan.ts apps/server/app/flows/visualize-document/plan.test.ts apps/server/app/flows/visualize-document/flow.test.ts apps/server/app/flows/visualize-document/recovery.test.ts apps/server/app/flows/visualize-document/rollout.pg.test.ts
+git add infra/migrations/0037_visual_facts_aggregate_kinds.sql packages/experiences/src/visuals.ts apps/server/app/flows/visualize-document/facts.ts apps/server/app/flows/visualize-document/facts.test.ts apps/server/app/flows/visualize-document/pgFacts.ts apps/server/app/flows/visualize-document/pgFacts.pg.test.ts apps/server/app/flows/visualize-document/testing.ts apps/server/app/flows/visualize-document/plan.ts apps/server/app/flows/visualize-document/plan.test.ts apps/server/app/flows/visualize-document/flow.test.ts apps/server/app/flows/visualize-document/recovery.test.ts apps/server/app/flows/visualize-document/rollout.pg.test.ts apps/server/app/flows/visualize-document/start.test.ts
 git commit -m "feat(visuals): c2 timeline and relations fact kinds, migration 0037, ordinal ownership"
 ```
 
@@ -2009,6 +2112,13 @@ In `packages/experiences/src/visuals.test.ts`:
 
 1. Extend the import from `./visuals` with `type RelationsFact` and `type TimelineFact`.
 2. Edit the two assertions `expect(VISUALS_CATALOG.id).toBe("docmind.visuals.v3");` (line 140, inside the chat catalogue test, and line 689, inside "structure widgets") to `"docmind.visuals.v4"`, and rename the line-689 test to "the document catalogue is v4 and has the two diagram entries of c1; the chat catalogue has neither".
+2b. (Pre-flight 3.) In the test "resolves every entry on web and terminal to a framework kind" (the `describe("the visuals catalogue", ...)` block, line 147), the expected list of `[name, web kind]` pairs is the exact entry list, so it fails with ten entries. Append the two new pairs after `["EntityMap", "Diagram"],`:
+
+```ts
+      ["DocumentTimeline", "Diagram"],
+      ["Relationships", "Diagram"],
+```
+
 3. Edit the test "register all 66 names ..." to:
 
 ```ts
@@ -2223,7 +2333,7 @@ describe("timeline and relationships widgets", () => {
 
 The existing fixtures `OUTLINE`, `MAP`, `FIGURE`, `SERIES`, `TABLE`, `cid`, `shape`, `PINS`, `jsonPathSelect`, `createHash`, `checkKindValue`, `capabilitiesOf`, `entryFitsOrdinal`, `factProvider`, `factRefOfPin` are all already defined or imported at the top of that file.
 
-In `packages/experiences/src/views.test.ts`, inside `describe("detailWithVisuals", ...)` after the test "adopts the outline at fact-16 ...", add:
+In `packages/experiences/src/views.test.ts`, first change the import `import { factProvider, mergedCatalog } from "./visuals";` to `import { VISUAL_SHAPES, type VisualFactRaw, factProvider, mergedCatalog } from "./visuals";`. Then, inside `describe("detailWithVisuals", ...)` after the test "adopts the outline at fact-16 ...", add:
 
 ```ts
   it("adopts the timeline at fact-18 and the relations at fact-19 with their own reshapers, and no other pairing", () => {
@@ -2252,7 +2362,7 @@ In `packages/experiences/src/views.test.ts`, inside `describe("detailWithVisuals
       expect(exp.providers[h], h).toBeUndefined();
   });
 
-  it("a plan stored under catalogue v3 (every fact and structure entry it offered) still adopts and compiles under v4, as does one with the new entries", () => {
+  it("a plan stored under catalogue v3 (every fact and structure entry it offered) still adopts, compiles and hydrates under v4, as does one with the new entries", () => {
     const v3 = [
       kf("a", "KeyFigure", "fact-0"),
       kf("b", "FigureChart", "fact-1"),
@@ -2279,6 +2389,59 @@ In `packages/experiences/src/views.test.ts`, inside `describe("detailWithVisuals
         });
         expect(r.findings, `${surface} ${ids.length}`).toEqual([]);
       }
+    }
+    // Hydrate once (pre-flight 15): each provider a v3 plan adopts still names a reshaper that runs over a fact of its
+    // own shape, so the outline and the map hydrate as before, and the two new entries hydrate beside them.
+    const c = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+    const facts: Record<string, VisualFactRaw> = {
+      "fact-16": {
+        kind: "outline",
+        title: "Report",
+        nodes: [
+          { id: "o1", label: "A", level: 1, passageCount: 1, firstChunkId: c(1) },
+          { id: "o2", label: "B", level: 1, passageCount: 1, firstChunkId: c(2) },
+          { id: "o3", label: "C", level: 1, passageCount: 1, firstChunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 16,
+      },
+      "fact-17": {
+        kind: "cooccurrence",
+        entities: [
+          { name: "Acme", entityKind: "organization", passages: 2 },
+          { name: "Cora", entityKind: "person", passages: 2 },
+        ],
+        edges: [{ a: 0, b: 1, weight: 2, firstChunkId: c(1) }],
+        chunkIds: [c(1)],
+        ordinal: 17,
+      },
+      "fact-18": {
+        kind: "timeline",
+        events: [
+          { at: "2024-01-01", precision: "year", when: "2024", label: "A", chunkId: c(1) },
+          { at: "2025-01-01", precision: "year", when: "2025", label: "B", chunkId: c(2) },
+          { at: "2026-01-01", precision: "year", when: "2026", label: "C", chunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 18,
+      },
+      "fact-19": {
+        kind: "relations",
+        entities: ["Acme", "Beta", "Cora"],
+        links: [
+          { from: 0, to: 1, rel: "owns", chunkId: c(1) },
+          { from: 2, to: 0, rel: "leads", chunkId: c(2) },
+          { from: 2, to: 1, rel: "sits on", chunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 19,
+      },
+    };
+    const exp4 = detailWithVisuals(visualsOf(v4), DOC);
+    for (const [handle, fact] of Object.entries(facts)) {
+      const scriptRef = (exp4.providers[handle]?.reshaping as { scriptRef: string }).scriptRef;
+      const run = VISUAL_SHAPES[scriptRef] as (raw: VisualFactRaw[]) => { nodes: unknown[] };
+      expect(run([fact]).nodes.length, handle).toBeGreaterThan(0);
     }
   });
 ```
@@ -2514,7 +2677,7 @@ In `packages/experiences/src/visuals.ts`:
 
 4a. Import: `import { entityMapDiagram, outlineDiagram, relationshipsDiagram, timelineDiagram } from "./structureShapes";`
 
-4b. After the `EntityMapFact` interface add the `TimelineFact` and `RelationsFact` interfaces exactly as in this task's Interfaces block, and add `| TimelineFact | RelationsFact` after `| EntityMapFact` in the `VisualFactRaw` union.
+4b. (Already done in Task 2 step 8a: the `TimelineFact` and `RelationsFact` interfaces and their place in the `VisualFactRaw` union. Check they are there and match this task's Interfaces block; add nothing.)
 
 4c. In `ENTRIES`, append after `["EntityMap", "Diagram"],`:
 
@@ -2663,8 +2826,8 @@ Expected: PASS, including the unchanged chat guard (`createHash("sha256").update
 
 - [ ] **Step 6: Whole-repo verification and commit**
 
-Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm build`
-Expected: clean. (`pnpm build` matters here: the server resolves `@docmind/experiences` through its build in production.)
+Run: `pnpm build && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
+Expected: clean. (`pnpm build` goes first: the server's typecheck resolves `@docmind/experiences` through `packages/experiences/dist`, which must carry this task's exports; its tests load the source.)
 
 ```bash
 git add packages/experiences/src apps/server/app/flows/visualize-document/plan.ts apps/server/app/flows/visualize-document/plan.test.ts apps/server/app/flows/visualize-document/fit.test.ts
@@ -2680,7 +2843,10 @@ git commit -m "feat(visuals): c2 catalogue v4, timeline and relationships diagra
 - Modify: `apps/server/app/flows/visualize-document/prompts.ts`
 - Modify: `apps/server/app/flows/visualize-document/extract.ts`
 - Modify: `apps/server/app/flows/visualize-document/flow.ts`
-- Modify: `apps/server/app/flows/ingest-document/limits.ts`
+- Modify: `apps/server/app/flows/ingest-document/limits.ts` (the extraction's own provider, answer cap and timeout)
+- Modify: `apps/server/app/flows/visualize-document/deps.ts` (`extractLlm`)
+- Modify: `apps/server/app/compose.ts` (passes `extractLlm`)
+- Modify (docs): `README.org`, `.env.example`, `docs/operations/llm-providers.md` (the new variable)
 - Create: `apps/server/app/flows/visualize-document/flowHash.test.ts`
 - Test: `apps/server/app/flows/visualize-document/extract.test.ts`, `flow.test.ts`; `apps/server/app/flows/ingest-document/limits.test.ts`
 
@@ -2690,7 +2856,8 @@ git commit -m "feat(visuals): c2 catalogue v4, timeline and relationships diagra
   - `prompts.ts`: `EXTRACT_DOCUMENT_SYSTEM` (starts with the unchanged first sentence of `EXTRACT_SYSTEM`, which the e2e stubs match on); `EXTRACT_SYSTEM` and `EXTRACT_INSTRUCTION` unchanged.
   - `extract.ts`: `interface Extraction { drafts: DraftFact[]; events: unknown[]; links: unknown[] }`; `askForExtraction(llm: LlmProvider, chunks: Chunk[], signal?: AbortSignal): Promise<Extraction>`; `askForFacts` unchanged in signature and request (chat); `ExtractResult` gains `aggregates?: number` (0..2, present only above 0); `ExtractDeps.facts` is `Pick<VisualFactStore, "replace" | "list" | "aggregateCount">`; the extraction write is `replace(ref, [...facts, ...aggregates], signal, generation)`.
   - `flow.ts`: the zero-fact rule counts `extracted.count + extracted.aggregates + derived`.
-  - `limits.ts`: `VISUALS_MAX_TOKENS = 16_000`.
+  - `limits.ts` (pre-flight 11): `VISUALS_MAX_TOKENS` stays 8192 and the `visuals` provider keeps `DOCMIND_LLM_TIMEOUT_MS` (the planner's and chat's, shared with chat's extraction); new `VISUALS_EXTRACT_MAX_TOKENS = 16_000`, `LlmSettings.visualsExtractTimeoutMs` (`DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS`, default 180 000, at most 600 000) and `IngestWiring.llm.visualsExtract?: LlmProvider`, the same role built with those two values.
+  - `deps.ts` and `extract.ts`: `VisualizeDeps.extractLlm?: LlmProvider` and `ExtractDeps.extractLlm?: LlmProvider`; the extract step uses `deps.extractLlm ?? deps.llm`. `compose.ts` passes `options.ingest.llm.visualsExtract` as `extractLlm`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2773,6 +2940,19 @@ describe("the timeline and relations of a document extraction", () => {
       ],
       chunkIds: [C0, C1],
     });
+  });
+
+  it("asks the extraction's own provider (a longer answer and timeout) when there is one, and the shared one otherwise", async () => {
+    const shared = scripted(() => answer());
+    const own = scripted(() => answer());
+    const s = setup({ llm: shared.llm });
+    expect(
+      await extractEffect({ ...s.d, extractLlm: own.llm }).execute(s.ref, {} as never),
+    ).toMatchObject({ outcome: "done", aggregates: 2 });
+    expect(own.requests).toHaveLength(1);
+    expect(shared.requests).toEqual([]);
+    await run(s); // no extraction provider: the shared one answers
+    expect(shared.requests).toHaveLength(1);
   });
 
   it("keeps the old behaviour when the answer has neither field: the facts only, no aggregates key", async () => {
@@ -3068,8 +3248,10 @@ describe("visualize-document flow: timeline and relations", () => {
     s.hold([aggregateFacts(CHUNK).timeline]);
     const rerun = visualizeExecutionId(s.ref.userId, s.ref.documentId, 2, 1);
     expect(await s.run(rerun)).toEqual({ outcome: "empty" });
-    expect(s.model?.requests).toHaveLength(1); // no extraction
-    expect(JSON.stringify(s.model?.requests[0])).toContain("fact-18");
+    // No extraction: the planner retries an empty plan, so count requests by what they ask, not how many there are.
+    const requests = (s.model?.requests ?? []).map((r) => JSON.stringify(r));
+    expect(requests.some((r) => r.includes("You extract facts"))).toBe(false);
+    expect(requests[0]).toContain("fact-18");
   });
 });
 ```
@@ -3107,11 +3289,12 @@ describe("the visualize-document flow identity", () => {
 });
 ```
 
-In `apps/server/app/flows/ingest-document/limits.test.ts` add `VISUALS_MAX_TOKENS` to the existing import from `./limits` and append:
+In `apps/server/app/flows/ingest-document/limits.test.ts` (pre-flight 11): add `import { createServer } from "node:http";` and `import type { AddressInfo } from "node:net";` above the `node:util` import, change the `@docmind/llm-anthropic` import to `import { type AnthropicMessagesProvider, LlmUnavailableError } from "@docmind/llm-anthropic";`, add `import { startFakeOpenAiCompat } from "../../llm/testing";` after the `../../documents/limits` import, add `VISUALS_EXTRACT_MAX_TOKENS` and `VISUALS_MAX_TOKENS` to the existing import from `./limits`, and append:
 
 ```ts
-describe("VISUALS_MAX_TOKENS", () => {
-  it("leaves room for a document extraction's timeline and relations on top of the room its facts had", () => {
+describe("the visuals role's limits: the planner's and chat's, and the document extraction's own", () => {
+  it("leaves the planner and chat at their cap and gives a document extraction room for its timeline and relations", () => {
+    expect(VISUALS_MAX_TOKENS).toBe(8192); // unchanged: the planner's and chat's answers are short
     // Worst case of the two new fields alone: 40 events and 30 links, each citing two passages (36-character ids), at about
     // 3 characters per token. A truncated answer is an LlmOutputError that fails the whole extraction, facts included.
     const id = "00000000-0000-4000-8000-000000000001";
@@ -3129,7 +3312,77 @@ describe("VISUALS_MAX_TOKENS", () => {
     });
     const extra = Math.ceil((40 * event.length + 30 * link.length) / 3);
     expect(extra).toBeGreaterThan(5_000); // the control: the new fields alone are most of the old 8192 cap
-    expect(VISUALS_MAX_TOKENS).toBeGreaterThanOrEqual(8192 + extra);
+    expect(VISUALS_EXTRACT_MAX_TOKENS).toBeGreaterThanOrEqual(8192 + extra);
+  });
+
+  it("reads the extraction timeout: default as long as a vision request's, a ceiling of 600000, and the planner's timeout is not moved by it", () => {
+    expect(loadLlmConfig({})).toMatchObject({
+      timeoutMs: 60_000, // the planner's and chat's, unchanged
+      visualsExtractTimeoutMs: 180_000,
+    });
+    expect(loadLlmConfig({}).visualsExtractTimeoutMs).toBeGreaterThanOrEqual(180_000);
+    expect(
+      loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "600000" }).visualsExtractTimeoutMs,
+    ).toBe(600_000);
+    expect(
+      loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "90000", DOCMIND_LLM_TIMEOUT_MS: "1000" }),
+    ).toMatchObject({ timeoutMs: 1000, visualsExtractTimeoutMs: 90_000 });
+    for (const v of ["0", "600001", "abc"])
+      expect(() => loadLlmConfig({ DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: v })).toThrow(
+        new RegExp(`^DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS must be`),
+      );
+  });
+
+  it("wires a second provider on the same role for the extraction, and none when the role is off", () => {
+    const off = createIngestWiring({ DOCMIND_LLM_PROVIDER: "off" });
+    expect(off.llm.visuals).toBeUndefined();
+    expect(off.llm.visualsExtract).toBeUndefined();
+    const on = createIngestWiring({ DOCMIND_LLM_PROVIDER: "off", DOCMIND_VISUALS_PROVIDER: "ollama" });
+    expect(on.llm.visuals).toBeDefined();
+    expect(on.llm.visualsExtract).toBeDefined();
+    expect(on.llm.visualsExtract).not.toBe(on.llm.visuals);
+    expect((on.llm.visualsExtract as { model?: string }).model).toBe(
+      (on.llm.visuals as { model?: string }).model,
+    );
+  });
+
+  it("an extraction request outlives the timeout the planner's provider gives up at (an answer of up to 16 000 tokens is slow)", async () => {
+    const fake = await startFakeOpenAiCompat();
+    fake.reply(() => ({ kind: "text", text: "{}" }));
+    // A server that answers after 400 ms: slower than the planner's 100 ms, quicker than the extraction's 5 s.
+    const slow = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        setTimeout(async () => {
+          const r = await fetch(`${fake.url}${req.url ?? ""}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: Buffer.concat(chunks),
+          });
+          res.writeHead(r.status, { "content-type": "application/json" });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        }, 400);
+      });
+    });
+    await new Promise<void>((ok) => slow.listen(0, "127.0.0.1", ok));
+    try {
+      const { port } = slow.address() as AddressInfo;
+      const w = createIngestWiring({
+        DOCMIND_LLM_PROVIDER: "off",
+        DOCMIND_VISUALS_PROVIDER: "ollama",
+        DOCMIND_OLLAMA_URL: `http://127.0.0.1:${port}`,
+        DOCMIND_LLM_TIMEOUT_MS: "100",
+        DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS: "5000",
+      });
+      const ask = { messages: [{ role: "user" as const, content: "q" }] };
+      await expect(w.llm.visuals?.complete(ask)).rejects.toBeInstanceOf(LlmUnavailableError);
+      expect((await w.llm.visualsExtract?.complete(ask))?.content).toBe("{}");
+    } finally {
+      slow.closeAllConnections();
+      await new Promise<void>((ok) => slow.close(() => ok()));
+      await fake.close();
+    }
   });
 });
 ```
@@ -3223,6 +3476,8 @@ export interface ExtractDeps extends StepSeams {
   summaryMaxChars: number;
   /** Absent when the visuals role is off: the step is then done with no facts. */
   llm?: LlmProvider;
+  /** The same role sized for this step's longer answer and longer timeout (`visualsExtract`); preferred over `llm` when present. */
+  extractLlm?: LlmProvider;
   /** The run reader: a re-run of a document whose previous run ended `done` re-plans over its stored facts even when there are none. */
   runs?: Pick<VisualRuns, "last">;
   /**
@@ -3381,7 +3636,7 @@ export function extractEffect(deps: ExtractDeps): Effect<VisualizeRef, ExtractRe
     "visualize-extract",
     deps.guard,
     async (ref, signal, _progress, executionId) => {
-      const llm = deps.llm;
+      const llm = deps.extractLlm ?? deps.llm;
       if (!llm) return { model: "none" };
       const generation =
         executionId === undefined
@@ -3472,12 +3727,81 @@ with
 
 and extend the comment above it: after "No facts at all (none extracted and none derived)" add " (the timeline and relations count as stored facts: a document with only those still loads them)". The `(extracted.count ?? 0) === 0` empty-plan rule below it is deliberately unchanged: a document whose only facts are aggregates ends `empty`, not `failed`, when the planner emits nothing, like a structure-only one.
 
-In `apps/server/app/flows/ingest-document/limits.ts` change `export const VISUALS_MAX_TOKENS = 8192;` to
+**The extraction's own provider (pre-flight 11).** Only the answer cap moved in the first draft; the `visuals` role's request timeout is `DOCMIND_LLM_TIMEOUT_MS` (60 s by default, `limits.ts` `loadLlmConfig`), and an answer of up to about 14 000 tokens can take longer than that. A timeout is `visuals-model-unavailable` and would cost the facts. The planner and chat's extraction share the `visuals` provider, so raising its cap or timeout would move both. Instead the extraction gets its own provider on the same role (same model, same provider kind), and the shared one is untouched.
+
+In `apps/server/app/flows/ingest-document/limits.ts`:
+
+- replace `export const VISUALS_MAX_TOKENS = 8192;` with
 
 ```ts
-/** The `visuals` role's answer cap. 16 000 (as `VISION_MAX_TOKENS`): a document extraction may add up to 40 events and 30 links to its facts, and a truncated answer fails the whole extraction (`limits.test.ts` measures the worst case). */
-export const VISUALS_MAX_TOKENS = 16_000;
+/** The `visuals` role's answer cap for the planner and chat's extraction: unchanged by c2. */
+export const VISUALS_MAX_TOKENS = 8192;
+/**
+ * The cap of a DOCUMENT extraction's answer (`visualsExtract`, below): it may add up to 40 events and 30 links to its
+ * facts, and a truncated answer is an `LlmOutputError` that fails the whole extraction, facts included. 16 000 as
+ * `VISION_MAX_TOKENS`; `limits.test.ts` measures the worst case.
+ */
+export const VISUALS_EXTRACT_MAX_TOKENS = 16_000;
 ```
+
+- in `LlmSettings` add, after `visionTimeoutMs: number;`:
+
+```ts
+  /** One document extraction request (up to `VISUALS_EXTRACT_MAX_TOKENS` of answer): far slower than the planner's, which keeps `timeoutMs`. */
+  visualsExtractTimeoutMs: number;
+```
+
+- in `loadLlmConfig`'s returned object add, after the `visionTimeoutMs` line:
+
+```ts
+    // The same 16 000-token answer as a vision request, so the same default: at the 60 s of `timeoutMs` a long answer
+    // would end `visuals-model-unavailable` and cost the facts.
+    visualsExtractTimeoutMs: positiveInt(
+      env,
+      "DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS",
+      180_000,
+      MAX_VISION_TIMEOUT_MS,
+    ),
+```
+
+- in `createLlm`, after `const visuals = make("visuals", VISUALS_MAX_TOKENS, config.timeoutMs);` add
+
+```ts
+  // The same role and model, sized for a document extraction's longer answer; the planner and chat keep `visuals`.
+  const visualsExtract = make("visuals", VISUALS_EXTRACT_MAX_TOKENS, config.visualsExtractTimeoutMs);
+```
+
+  and in the returned object, after `...(visuals && { visuals }),` add `...(visualsExtract && { visualsExtract }),`;
+
+- in `IngestWiring.llm` add after `visuals?: LlmProvider;`:
+
+```ts
+    /** The `visuals` role again, with a longer answer cap and timeout, for the document extraction only. */
+    visualsExtract?: LlmProvider;
+```
+
+In `apps/server/app/flows/visualize-document/deps.ts`, after `llm?: LlmProvider;` in `VisualizeDeps` add:
+
+```ts
+  /** The `visuals` role sized for a document extraction (longer answer, longer timeout); the extract step prefers it over `llm`, which the planner and chat keep. */
+  extractLlm?: LlmProvider;
+```
+
+In `apps/server/app/compose.ts`, in `visualize.deps` (the object that has `...(visualsLlm && { llm: visualsLlm }),`), add directly after that line:
+
+```ts
+      // The document extraction's own provider: a longer answer cap and timeout than the planner's and chat's.
+      ...(options.ingest.llm.visualsExtract && { extractLlm: options.ingest.llm.visualsExtract }),
+```
+
+(`visualizeTurn.deps` is not touched: chat keeps `visualsLlm`.) Document the variable: in `README.org` add after the `=DOCMIND_VISION_TIMEOUT_MS=` row `| =DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS=         | Per-request timeout for a document's visuals extraction, which answers at length (default 180000, max 600000) |`; in `.env.example` after `# DOCMIND_VISION_TIMEOUT_MS=180000` add
+
+```
+# A document's visuals extraction answers at length (timeline and relations beside the facts): its own timeout (max 600000).
+# DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS=180000
+```
+
+and in `docs/operations/llm-providers.md` change `` `DOCMIND_VISION_TIMEOUT_MS` (default 180000, at most 600000)`` to `` `DOCMIND_VISION_TIMEOUT_MS` and `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (a document's visuals extraction; both default 180000, at most 600000)`` (the `visuals` planner and chat keep `DOCMIND_LLM_TIMEOUT_MS`).
 
 - [ ] **Step 6: Run to verify pass**
 
@@ -3490,7 +3814,7 @@ Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint && pnpm build`
 Expected: clean.
 
 ```bash
-git add apps/server/app/flows/visualize-document/prompts.ts apps/server/app/flows/visualize-document/extract.ts apps/server/app/flows/visualize-document/extract.test.ts apps/server/app/flows/visualize-document/flow.ts apps/server/app/flows/visualize-document/flow.test.ts apps/server/app/flows/visualize-document/flowHash.test.ts apps/server/app/flows/ingest-document/limits.ts apps/server/app/flows/ingest-document/limits.test.ts
+git add apps/server/app/flows/visualize-document/prompts.ts apps/server/app/flows/visualize-document/extract.ts apps/server/app/flows/visualize-document/extract.test.ts apps/server/app/flows/visualize-document/flow.ts apps/server/app/flows/visualize-document/flow.test.ts apps/server/app/flows/visualize-document/flowHash.test.ts apps/server/app/flows/visualize-document/deps.ts apps/server/app/compose.ts apps/server/app/flows/ingest-document/limits.ts apps/server/app/flows/ingest-document/limits.test.ts README.org .env.example docs/operations/llm-providers.md
 git commit -m "feat(visuals): c2 extraction returns a timeline and relations; flow hash pinned"
 ```
 
@@ -3506,7 +3830,7 @@ Without this task a re-run would never produce a timeline: the extract step re-p
 - Modify: `apps/server/app/flows/visualize-document/start.ts`
 - Modify: `apps/server/app/flows/visualize-document/deps.ts`
 - Modify: `apps/server/app/compose.ts`
-- Test: `apps/server/app/flows/visualize-document/extract.test.ts`, `start.test.ts`
+- Test: `apps/server/app/flows/visualize-document/extract.test.ts`, `start.test.ts`, `apps/server/app/flows/visualize-turn/flow.test.ts`
 
 **Interfaces:**
 - Consumes: `ExtractDeps` (Task 4); `EXTRACT_FORMAT`, `VisualFactStore.extractFormat` and the stamping `replace` (Task 2).
@@ -3516,7 +3840,7 @@ Without this task a re-run would never produce a timeline: the extract step re-p
 
 In `apps/server/app/flows/visualize-document/extract.test.ts`:
 
-1. Add `import { readFileSync } from "node:fs";` and extend the `./facts` import with `EXTRACT_FORMAT`.
+1. Add `import { readFileSync } from "node:fs";` and `import { resolve } from "node:path";` (a `new URL(file, import.meta.url)` is TS1343 under `module: CommonJS`; `executionIds.test.ts` uses `resolve(__dirname, ...)` the same way), and extend the `./facts` import with `EXTRACT_FORMAT`.
 2. In `setup`'s `store` fake add a stamp that behaves like the real store (the extraction write stamps it): add the field and method, and make `replace` set it:
 
 ```ts
@@ -3606,10 +3930,15 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
     expect(requests).toHaveLength(1); // the stamped one re-planned
   });
 
-  it("a boot pass never extracts: an un-noted re-run of a pre-c2 document re-plans over its stored facts, and another run's note is left alone", async () => {
+  it.each([
+    ["a pre-c2 document (no stamp)", null],
+    ["a document an older format stamped", "docmind.extract@1"],
+    ["a document the current format stamped", EXTRACT_FORMAT],
+  ])("a boot pass never extracts: an un-noted re-run of %s re-plans over its stored facts, and another run's note is left alone", async (_name, format) => {
     const { llm, requests } = scripted(() => answer());
     const s = setup({ llm });
-    s.store.held = [existing]; // no stamp: the user's press would extract
+    s.store.held = [existing];
+    s.store.format = format; // the user's press would extract the first two; a boot pass is not a press
     const reextract = noteFor(s, 7); // a note for another run of this document
     expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s, 1))).toEqual({
       outcome: "done",
@@ -3617,8 +3946,53 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
       model: "claude-test",
     });
     expect(requests).toEqual([]);
-    expect(s.store.format).toBeNull(); // nothing was extracted, so nothing was stamped
+    expect(s.store.writes).toEqual([]);
+    expect(s.store.format).toBe(format); // nothing was extracted, so the stamp is as it was
     expect(reextract.size).toBe(1);
+  });
+
+  it("a first attempt that fails keeps the note: the retried step extracts again, stamps the document and only then spends the note", async () => {
+    // The first answer is not JSON (a failed attempt that the step retries); the second is valid.
+    const replies = ["not json", answer()];
+    const noteSeen: boolean[] = [];
+    const { llm, requests } = scripted(() => {
+      const reply = replies.shift() as string;
+      noteSeen.push(reextract.has(id));
+      return reply;
+    });
+    const s = setup({ llm });
+    s.store.held = [existing]; // extracted before c2: no stamp
+    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const reextract = new Set([id]);
+    expect(await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s))).toEqual({
+      outcome: "done",
+      count: 1,
+      aggregates: 2,
+      model: "claude-test",
+    });
+    expect(requests).toHaveLength(2); // the failed attempt and its retry, both extractions
+    expect(noteSeen).toEqual([true, true]); // the note survived the failed attempt
+    expect(s.store.held.map((f) => f.ordinal)).toEqual([0, 18, 19]);
+    expect(s.store.format).toBe(EXTRACT_FORMAT); // stamped, with the timeline and relations
+    expect(reextract.size).toBe(0); // spent only after the write
+  });
+
+  it("a write that fails keeps the note too: the retry extracts again", async () => {
+    const { llm, requests } = scripted(() => answer());
+    const s = setup({ llm });
+    s.store.held = [existing];
+    const id = visualizeExecutionId(s.ref.userId, s.ref.documentId, 1, 1);
+    const reextract = new Set([id]);
+    const write = s.store.replace;
+    let failures = 1;
+    s.store.replace = async (r, facts) => {
+      if (failures-- > 0) throw new LlmUnavailableError(); // any transient error the step retries
+      return write(r, facts);
+    };
+    await extractEffect({ ...s.d, reextract }).execute(s.ref, ctxOf(s));
+    expect(requests).toHaveLength(2);
+    expect(s.store.format).toBe(EXTRACT_FORMAT);
+    expect(reextract.size).toBe(0);
   });
 
   it("the automatic run extracts as before and stamps the format (a new upload or re-ingest)", async () => {
@@ -3630,13 +4004,46 @@ describe("re-extract once (spec D5): a re-run the user asked for extracts a pre-
     expect(s.store.format).toBe(EXTRACT_FORMAT);
   });
 
-  it("chat's extraction code never writes or reads the stamp: its sources do not mention it", () => {
-    for (const file of ["../visualize-turn/steps.ts", "../visualize-turn/deps.ts", "../visualize-turn/pgTurnFacts.ts"]) {
-      const source = readFileSync(new URL(file, import.meta.url), "utf8");
+  it("backstop (the real guard is the type, `Pick<VisualFactStore, \"list\">`, and the behavioural test in `visualize-turn/flow.test.ts`): chat's sources do not mention the stamp", () => {
+    for (const file of [
+      "../visualize-turn/steps.ts",
+      "../visualize-turn/deps.ts",
+      "../visualize-turn/pgTurnFacts.ts",
+    ]) {
+      const source = readFileSync(resolve(__dirname, file), "utf8");
       expect(source, file).not.toMatch(/extractFormat|EXTRACT_FORMAT|visual_extract_format|aggregateCount/);
     }
   });
 });
+```
+
+In `apps/server/app/flows/visualize-turn/flow.test.ts` (the behavioural proof that chat never touches the document store's extraction stamp; the type `stored: Pick<VisualFactStore, "list">` in `visualize-turn/deps.ts` is the compile-time guard, and the source grep above is only a backstop): in `stack`, replace the line `stored: { list: async () => o.storedFacts ?? [] },` with `stored: storedDocumentFacts,`, add this directly above `const deps: TurnVisualizeDeps = {`:
+
+```ts
+  // The document store chat reads is typed `Pick<VisualFactStore, "list">`; at run time every member it touches is recorded,
+  // so a test can prove chat never reaches `replace`, `extractFormat` or `aggregateCount` (the c2 extraction stamp).
+  const touched: string[] = [];
+  const storedDocumentFacts = new Proxy(
+    { list: async () => o.storedFacts ?? [] } as Record<string, unknown>,
+    {
+      get: (target, key) => {
+        touched.push(String(key));
+        return target[key as string];
+      },
+    },
+  ) as unknown as TurnVisualizeDeps["stored"];
+```
+
+add `touched,` to the object `stack` returns (after `heldFacts: () => held`), and add before the test "a re-run ending nothing keeps the head's facts: ...":
+
+```ts
+  it("chat's extraction never writes or reads the document store's extraction stamp (spec D5: it only lists stored facts)", async () => {
+    const s = stack({ replies: [EXTRACTED, plan()], storedFacts: [] });
+    expect(await s.run()).toEqual({ outcome: "visualized" });
+    expect(s.model.requests).toHaveLength(2); // chat extracted (one window) and planned
+    expect(s.heldFacts()).toHaveLength(1); // into its own turn store
+    expect(new Set(s.touched)).toEqual(new Set(["list"])); // nothing else of the document store was reached
+  });
 ```
 
 In `apps/server/app/flows/visualize-document/start.test.ts`, inside `describe("rerun and the retry sweep", ...)` after its first test, add:
@@ -3691,19 +4098,33 @@ In `apps/server/app/flows/visualize-document/extract.ts`: add `EXTRACT_FORMAT` t
   /**
    * Execution ids of re-runs the USER asked for (the starter's `rerun`; a boot pass never notes one). A noted re-run extracts
    * again when the document's stored extraction predates this format (`extractFormat` is missing or not `EXTRACT_FORMAT`),
-   * which is how an existing document gets its timeline and relations once (spec D5). In-process only: a run recovered after a
+   * which is how an existing document gets its timeline and relations once (spec D5). The step reads the note and spends it
+   * only after the extraction write succeeded (or when it settles without extracting), so a retried attempt still finds it. A
+   * step that fails for good leaves its id behind (ids only, bounded by the starter). In-process only: a run recovered after a
    * crash has no note and re-plans over what is stored.
    */
   reextract?: Set<string>;
 ```
 
-and replace the `if (executionId !== undefined && id && rerun > 0) { ... }` block with:
+add, directly after the `const model = String(...)` line, the helper that spends the user's note:
+
+```ts
+      const spend = () => {
+        if (executionId !== undefined) deps.reextract?.delete(executionId);
+      };
+```
+
+call it right after each successful write: in the refusal branch, after `await deps.facts.replace(ref, [], signal, generation);` add `spend(); // written (and stamped): the user's note is spent`, and after `await deps.facts.replace(ref, [...facts, ...aggregates], signal, generation);` add the same line; and replace the `if (executionId !== undefined && id && rerun > 0) { ... }` block with:
 
 ```ts
       if (executionId !== undefined && id && rerun > 0) {
-        // The starter's notes are read once and removed here (stored facts or not), so the sets never fill up over a large boot.
+        // The starter's afterDone note is read once and removed here (stored facts or not), so the set never fills up over a large boot.
         const noted = deps.afterDone?.delete(executionId) === true;
-        const asked = deps.reextract?.delete(executionId) === true;
+        // The user's note is only READ here: it is spent after an extraction has been WRITTEN (`spend`, below) or when this
+        // step settles without one. An attempt that fails (invalid JSON, an unreachable model, a key-store outage) and is
+        // retried must find it again, or the retry would re-plan without extracting and the run would end `done` unstamped
+        // (pre-flight 6).
+        const asked = deps.reextract?.has(executionId) === true;
         const stored = await deps.facts.list(ref);
         // A timeline or relations fact is a stored fact too: the model already answered for this document.
         const held = await deps.facts.aggregateCount(ref);
@@ -3711,6 +4132,7 @@ and replace the `if (executionId !== undefined && id && rerun > 0) { ... }` bloc
         // more, and the extraction stamps it (spec D5: re-extract once). Every other re-run re-plans over what is stored,
         // a boot pass's included; so does a second press, and the re-run of a document a c2 extraction stamped.
         const predates = asked && (await deps.facts.extractFormat(ref)) !== EXTRACT_FORMAT;
+        if (asked && !predates) spend(); // stamped already: nothing to extract, the note is spent
         if (!predates) {
           if (stored.length > 0 || held > 0)
             return { count: stored.length, ...(held > 0 && { aggregates: held }), model };
@@ -3795,7 +4217,7 @@ Run: `pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: clean.
 
 ```bash
-git add apps/server/app/flows/visualize-document/extract.ts apps/server/app/flows/visualize-document/extract.test.ts apps/server/app/flows/visualize-document/start.ts apps/server/app/flows/visualize-document/start.test.ts apps/server/app/flows/visualize-document/deps.ts apps/server/app/compose.ts
+git add apps/server/app/flows/visualize-document/extract.ts apps/server/app/flows/visualize-document/extract.test.ts apps/server/app/flows/visualize-document/start.ts apps/server/app/flows/visualize-document/start.test.ts apps/server/app/flows/visualize-document/deps.ts apps/server/app/flows/visualize-turn/flow.test.ts apps/server/app/compose.ts
 git commit -m "feat(visuals): re-extract once, on a user's re-run of a pre-c2 document"
 ```
 
@@ -3833,9 +4255,7 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
     "Lisbon office opens",
     "Cora Lindqvist",
     "Project Orion",
-    "Beta Works",
     "January 2024",
-    "Q3 2025",
     "14 February 2026",
   ];
 
@@ -3999,6 +4419,27 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
     const log = await eventLog(st);
     expect(log.length).toBeGreaterThan(0);
     assertNoPlaintext(log, NARRATIVE_SECRETS);
+
+    // Lineage (spec 6): the artifact store holds ciphertext only. Not vacuous: it holds this run's blobs.
+    const stored = await st.db.owner.query("SELECT count(*)::int AS n FROM lineage_content");
+    expect(stored.rows[0].n).toBeGreaterThan(0);
+    for (const needle of NARRATIVE_SECRETS) {
+      const found = await st.db.owner.query(
+        "SELECT 1 FROM lineage_content WHERE position(convert_to($1, 'UTF8') in bytes) > 0",
+        [needle],
+      );
+      expect(found.rowCount, `lineage_content has ${needle}`).toBe(0);
+    }
+    // ...and the production collector runs over the aggregate lineage: no refusal, and nothing of this run is reclaimed.
+    const report = await collectLineageContent(
+      lineageGcDeps(st.composed.lineageGc, st.durable.pool, st.app, 86_400_000),
+    );
+    expect(report.refused).toBeUndefined();
+    expect(report.roots).toBeGreaterThan(0);
+    expect(report).toMatchObject({ failed: 0, notDue: false });
+    expect((await st.app.query("SELECT count(*)::int AS n FROM lineage_content")).rows[0].n).toBe(
+      stored.rows[0].n,
+    );
   }, 180_000);
 
   it("a flat document gets neither a timeline nor relationships", async () => {
@@ -4073,6 +4514,8 @@ In `apps/server/app/documents/visuals.e2e.pg.test.ts`:
     expect(state.extractions).toBe(2);
     expect(await facts.aggregateCount(ref)).toBe(2);
   }, 300_000);
+```
+
 - [ ] **Step 2: Write the rollout proof**
 
 In `apps/server/app/flows/visualize-document/rollout.pg.test.ts` add `vi` to the vitest import, and append inside the `describe.skipIf(!PG_URL)` block:
@@ -4148,11 +4591,13 @@ In `apps/server/app/erasure/e2eSupport.ts`:
 ```ts
   // A timeline and relations the model found: sealed under the user's key, so no event label, written date, party name or
   // relation phrase may be anywhere once the key is gone. The row count proves the scan has something to find the absence of.
+  // The sentinels sit in the labels and the party names only (the longest texts); `when` and `rel` stay short, because a
+  // sentinel and its prefix would leave no slack under their 40-character limits (a longer one would be refused as unexpected).
   await new PgVisualFacts(st.app, st.fields).replace(ref, [
     {
       kind: "timeline",
       events: [
-        { at: "2024-03-01", precision: "month", when: `March 2024 ${inEvent}`, label: `Launch ${inEvent}`, chunkId: passageId },
+        { at: "2024-03-01", precision: "month", when: "March 2024", label: `Launch ${inEvent}`, chunkId: passageId },
         { at: "2025-07-01", precision: "quarter", when: "Q3 2025", label: `Review ${inEvent}`, chunkId: passageId },
         { at: "2026-02-14", precision: "day", when: "14 February 2026", label: `Close ${inEvent}`, chunkId: passageId },
       ],
@@ -4163,7 +4608,7 @@ In `apps/server/app/erasure/e2eSupport.ts`:
       kind: "relations",
       entities: [`Acme ${inParty}`, `Beta ${inParty}`, "Gamma"],
       links: [
-        { from: 0, to: 1, rel: `acquired ${inParty}`, chunkId: passageId },
+        { from: 0, to: 1, rel: "acquired", chunkId: passageId },
         { from: 1, to: 2, rel: "supplies", chunkId: passageId },
         { from: 0, to: 2, rel: "owns", chunkId: passageId },
       ],
@@ -4231,12 +4676,22 @@ Expected: PASS, the summary showing the pg and e2e tests passed (not skipped). T
 - Insert this bullet immediately before the line that begins `- **Plan.** A loom-ui planner decides the nodes`:
 
 ```
-- **Timeline and relations.** The document extraction call (`askForExtraction`; chat keeps `askForFacts` and its own prompt, so a chat request is unchanged) also returns two optional top-level fields next to `facts`: `timeline` (at most 40 events: the date as written, the date as `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`, a label, the cited passages) and `relations` (at most 30 links: from, a short relation phrase, to, the cited passages). They are validated item by item on the server (`dates.ts`, `timeline.ts`, `relations.ts`): a date must be real at its precision (year 1000 to 9999), relative or undated phrases are dropped, text is stripped of control and invisible characters and clipped (label 80, relation 40, party 80, written date 40), every citation must be a passage of this document, events are deduped by date, precision and label and sorted by date then by the first cited passage, links are deduped by (from, relation, to) with self-links dropped, parties are deduped by normalised name, and fewer than 3 events or 3 links is none. A bad item never fails the run or costs another fact. The survivors are two sealed facts in `visual_facts`: the **timeline** at ordinal 18 and the **relations** at ordinal 19. Ordinal ownership: `PgVisualFacts.replace` (extraction) owns 0..15 and 18..19 together, so a new extraction with no timeline removes the old one, `replaceStructure` owns 16..17, and a re-plan that skips extraction never writes, so 18..19 survive it. Migration 0037 widens the `visual_facts` ordinal CHECK to 0..19 and pins every kind to its own ordinal (`visual_facts_kind_ordinal_check`: extracted kinds below 16, `outline` 16, `cooccurrence` 17, `timeline` 18, `relations` 19). `list` (chat, the extraction re-plan check) still returns ordinals below 16 only; `aggregateCount` counts the rows without opening them. The answer is longer, so `VISUALS_MAX_TOKENS` is 16 000. The extract step's prompt and output are not part of Loom's flow hash (which covers the flow id, version, steps, retry and timeout), so `visualize-document` stays 1.1.0 with an unchanged hash (`flowHash.test.ts` pins it). The reshapers (`structureShapes.ts`) turn the timeline into a loom-ui `Diagram` with the `timeline` layout (a node per event, `at` the ISO first day, the label prefixed with the written date unless the event is dated to the day, `timeFormat` date-only) and the relations into a `network` (a node per party, a directed edge per link labelled with the relation); both pass `diagramProblems`, and `refs` carry at most 16 cited passages. Rollout is on demand: a new upload or re-ingest gets them from its own extraction, and `factFormatFingerprint()` is unchanged, so the boot stale pass re-plans nothing. An existing document gets them when the user presses re-run, once: the route's re-run (never a boot pass) notes its execution id, and the extract step then extracts again only when the document's `documents.visual_extract_format` (added by migration 0037, set by the extraction write in its own transaction, NULL for a document extracted before c2) is missing or is not `docmind.extract@2`; the extraction stamps it, so every later re-run is a re-plan. Chat's turn extraction never writes or reads the stamp.
+- **Timeline and relations.** The document extraction call (`askForExtraction`; chat keeps `askForFacts` and its own prompt, so a chat request is unchanged) also returns two optional top-level fields next to `facts`: `timeline` (at most 40 events: the date as written, the date as `YYYY`, `YYYY-Qn`, `YYYY-MM` or `YYYY-MM-DD`, a label, the cited passages) and `relations` (at most 30 links: from, a short relation phrase, to, the cited passages). They are validated item by item on the server (`dates.ts`, `timeline.ts`, `relations.ts`): a date must be real at its precision (year 1000 to 9999), relative or undated phrases are dropped, text is stripped of control and invisible characters and clipped (label 80, relation 40, party 80, written date 40), every citation must be a passage of this document, events are deduped by date, precision and label and sorted by date then by the first cited passage, links are deduped by (from, relation, to) with self-links dropped, parties are deduped by normalised name, and fewer than 3 events or 3 links is none. A bad item never fails the run or costs another fact. The survivors are two sealed facts in `visual_facts`: the **timeline** at ordinal 18 and the **relations** at ordinal 19. Ordinal ownership: `PgVisualFacts.replace` (extraction) owns 0..15 and 18..19 together, so a new extraction with no timeline removes the old one, `replaceStructure` owns 16..17, and a re-plan that skips extraction never writes, so 18..19 survive it. Migration 0037 widens the `visual_facts` ordinal CHECK to 0..19 and pins every kind to its own ordinal (`visual_facts_kind_ordinal_check`: extracted kinds below 16, `outline` 16, `cooccurrence` 17, `timeline` 18, `relations` 19). `list` (chat, the extraction re-plan check) still returns ordinals below 16 only; `aggregateCount` counts the rows without opening them. The answer is longer, so a document extraction has its own provider on the `visuals` role (`llm.visualsExtract`: a 16 000-token answer cap and `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS`, default 180 s); the planner and chat keep `VISUALS_MAX_TOKENS` (8192) and `DOCMIND_LLM_TIMEOUT_MS`. The extract step's prompt and output are not part of Loom's flow hash (which covers the flow id, version, steps, retry and timeout), so `visualize-document` stays 1.1.0 with an unchanged hash (`flowHash.test.ts` pins it). The reshapers (`structureShapes.ts`) turn the timeline into a loom-ui `Diagram` with the `timeline` layout (a node per event, `at` the ISO first day, the label prefixed with the written date unless the event is dated to the day, `timeFormat` date-only) and the relations into a `network` (a node per party, a directed edge per link labelled with the relation); both pass `diagramProblems`, and `refs` carry at most 16 cited passages. Rollout is on demand: a new upload or re-ingest gets them from its own extraction, and `factFormatFingerprint()` is unchanged, so the boot stale pass re-plans nothing. An existing document gets them when the user presses re-run, once: the route's re-run (never a boot pass) notes its execution id, and the extract step then extracts again only when the document's `documents.visual_extract_format` (added by migration 0037, set by the extraction write in its own transaction, NULL for a document extracted before c2) is missing or is not `docmind.extract@2`; the extraction stamps it, so every later re-run is a re-plan. Chat's turn extraction never writes or reads the stamp.
 ```
 
 - In the **Plan.** bullet, append at its end: ` The timeline and relations are offered the same way (counts only; the sample holds placeholder nodes and edges, with a neutral date for the timeline), and `VISUALS_INTENT` says to show a timeline when the document narrates dated events and a relationships diagram when it states how parties relate, and to leave them out for a few scattered dates or links.`
 - In the **Fact-format re-plan.** bullet, append: ` The timeline and relations release changes neither the fingerprint nor the flow hash, so it re-plans nothing at boot (`rollout.pg.test.ts` pins the fingerprint and that the stale pass and a boot sweep start nothing for a document stamped with it).`
-- In the **Connections.** bullet replace `(both loom-ui `Diagram`), is `docmind.visuals.v3`.` with `and `DocumentOutline`, `EntityMap`, `DocumentTimeline` (the `timeline` layout) and `Relationships` (the `network` layout), all loom-ui `Diagram`, is `docmind.visuals.v4`; its first eight entries are byte for byte v3's (a stored plan carries no catalogue id, so a v3 plan still hydrates under v4, and the catalogue id is not part of the fingerprint).` — and remove the now-duplicated words `and `DocumentOutline` and `EntityMap`` just before it, so the sentence reads: "the document catalogue, which adds the two connections types, `DocumentOutline`, `EntityMap`, `DocumentTimeline` (the `timeline` layout) and `Relationships` (the `network` layout), all loom-ui `Diagram`, is `docmind.visuals.v4`; ...".
+- In the **Connections.** bullet replace its final sentence in full, that is exactly
+
+```
+the document catalogue, which adds the two connections types and `DocumentOutline` and `EntityMap` (both loom-ui `Diagram`), is `docmind.visuals.v3`.
+```
+
+with
+
+```
+the document catalogue, which adds the two connections types, `DocumentOutline`, `EntityMap`, `DocumentTimeline` (the `timeline` layout) and `Relationships` (the `network` layout), all loom-ui `Diagram`, is `docmind.visuals.v4`; its first eight entries are byte for byte v3's (a stored plan carries no catalogue id, so a v3 plan still hydrates under v4, and the catalogue id is not part of the fingerprint).
+```
 - In the **Retry.** bullet replace `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none; it also skips extraction` with `A re-run re-plans over the stored `visual_facts` and extracts only when the document has none, except a re-run the user asked for (the route, not a boot pass), which also extracts when the document's `visual_extract_format` is missing or older than `docmind.extract@2` (once: the extraction stamps it); a re-run also skips extraction`.
 
 6b. `docs/specs/2026-11-08-document-visuals-design.md`: append at the end of the file:
@@ -4257,7 +4712,9 @@ Expected: PASS, the summary showing the pg and e2e tests passed (not skipped). T
   its own extraction; an existing document gets them when the user presses re-run (the route's re-run extracts once more when
   the document's `documents.visual_extract_format` is missing or older than `docmind.extract@2`, and the extraction stamps it, so
   later re-runs only re-plan; a boot pass never extracts).
-- `VISUALS_MAX_TOKENS` is 16 000 for the longer answer. Do not roll back to the c1 build while any document has a timeline or
+- The longer answer has its own provider on the `visuals` role (`llm.visualsExtract`): a 16 000-token cap and
+  `DOCMIND_VISUALS_EXTRACT_TIMEOUT_MS` (default 180 s), so a long answer is not cut off at the planner's 60 s; the planner and
+  chat keep 8192 tokens and `DOCMIND_LLM_TIMEOUT_MS`. Do not roll back to the c1 build while any document has a timeline or
   relations row (`docs/operations/cloud-deploy.md`).
 - Not done in c2: an automatic backfill, timelines or relationships in chat, cross-document timelines or relationship graphs,
   merging relationship nodes with the `entities` table, editing extracted events or links.
@@ -4309,7 +4766,7 @@ git commit -m "test(visuals): c2 end to end, rollout proof and erasure scan; doc
 | 2 D2 (aggregates at 18 and 19, outside the 16-fact pool) | Task 2 (ordinals, `StoredEntry`, pg tests); Plan decisions (ordinal ownership table) |
 | 2 D3 (precision, as written, relative phrases dropped) | Task 1 (`dates.ts`, `timeline.ts`); Task 3 (label shows `when`) |
 | 2 D4 (relationships get their own entry, c1's map unchanged) | Task 3 (`Relationships` entry; the map's tests untouched) |
-| 2 D5 (on demand, re-extract once, fingerprint unchanged) | Task 2 (the `documents.visual_extract_format` column and the stamping write, pg tests), Task 3 (fingerprint literal, v3 subset guard, v3 hydrate test), Task 5 (a user's re-run of a pre-c2 document extracts; a second re-run, a stamped document and a boot pass do not; chat never touches the stamp), Task 6 (`rollout.pg.test.ts`, e2e stamp and stale pass, e2e re-extract once) |
+| 2 D5 (on demand, re-extract once, fingerprint unchanged) | Task 2 (the `documents.visual_extract_format` column and the stamping write, pg tests), Task 3 (fingerprint literal, v3 subset guard, v3 hydrate test), Task 5 (a user's re-run of a pre-c2 document extracts; a retried attempt still extracts because the note is spent only after the write; a second re-run, a stamped document and a boot pass, stamped or not, do not; chat never touches the stamp: a type, a behavioural test and a grep backstop), Task 6 (`rollout.pg.test.ts`, e2e stamp and stale pass, e2e re-extract once) |
 | 2 D6 (migration 0037) | Task 2 steps 5 and 7 (`pgFacts.pg.test.ts`: `timeline@3` and `figure@18` refused) |
 | 2 D7 (flow version unchanged, hash pinned) | Task 4 step 1 (`flowHash.test.ts`) and finding F1 |
 | 3 extraction answer and prompt | Task 4 (prompt test asserts every instruction: never infer, relative, 40, 30, cite) |
@@ -4320,13 +4777,13 @@ git commit -m "test(visuals): c2 end to end, rollout proof and erasure scan; doc
 | 5 `Relationships` (nodes deduped, edges labelled, refs 16) | Task 1 (dedupe by normalised name, at most 60), Task 3 (shape, refs) |
 | 5 reshapers pass `diagramProblems`; fit; placeholders | Task 3 (`DiagramValue.safeParse`, `fitsShape`, `fit.test.ts`, sample tests, plan with no `reshape-invalid`) |
 | 5 catalogue v4, chat guard, intent | Task 3 (v4 id, chat sha256 unchanged, intent test) |
-| 5 rollout: fingerprint unchanged, v3 plan hydrates under v4 | Task 3 (views test: v3 plan adopts and compiles), Task 6 (rollout pg test) |
+| 5 rollout: fingerprint unchanged, v3 plan hydrates under v4 | Task 3 (views test: a v3 plan adopts, compiles on both surfaces and each adopted provider's reshaper runs over a fact of its shape), Task 6 (rollout pg test) |
 | 6 privacy: sealed, no plaintext in logs/event log, planner counts only | Task 2 (sealed), Task 3 (no text in capabilities), Task 4 (planner request has no text), Task 6 (e2e event-log scan, erasure) |
 | 6 erasure scan gains needles | Task 6 step 3 (`inEvent`, `inParty`, `visual_facts` scanned and emptied) |
-| 6 cost: no extra call, no boot spending, one extraction per document once | Task 4 (one call), Task 6 (stale list empty, sweep starts nothing; the first re-run of a pre-c2 document extracts, later ones do not) |
+| 6 cost: no extra call, no boot spending, one extraction per document once; a long answer is not cut off | Task 4 (one call; the extraction's own provider, answer cap and timeout, tested against a slow server), Task 6 (stale list empty, sweep starts nothing; the first re-run of a pre-c2 document extracts, later ones do not) |
 | 7 testing: unit, reshapers, Postgres, flow, chat, e2e, browser | Tasks 1 to 6 (the flow's "key-store outage is retried" is in Task 4; the browser check is Task 6 step 7) |
 | 8 out of scope | Not implemented: no backfill, no chat timelines, no cross-document graphs, no entity merge, no editing |
 
 **Placeholder scan:** no "TBD", "TODO", "similar to" or "add appropriate"; every code step carries its code. The only non-code step is the browser check (a manual verification with exact input and expected results), which the workflow requires.
 
-**Type consistency:** `TimelineDraft` and `RelationsDraft` (Task 1) match the zod `Timeline` and `Relations` (Task 2: `events` with `at/precision/when/label/chunkId`, `entities: string[]`, `links` with `from/to/rel/chunkId`), `AggregateFact`, `aggregateFacts` (Task 2) and `TimelineFact` and `RelationsFact` (Task 3) field for field; `TIMELINE_ORDINAL` 18 and `RELATIONS_ORDINAL` 19 are used by `extract.ts` (Task 4), the capability handles `fact-18` and `fact-19` (Tasks 3, 4, 6), the experiences `STRUCTURE_ORDINAL` map (Task 3, pinned equal by a `plan.test.ts` test) and the e2e hydrate handles (Task 6); `ExtractionWrite` is what `replace` takes (Task 2) and what `extract.ts` passes (Task 4); `aggregateCount` and `extractFormat` are declared in Task 2 (with `EXTRACT_FORMAT`, which only `PgVisualFacts.replace` writes and only the extract step's re-run branch reads), used by `extract.ts` (Tasks 4 and 5) and the e2e (Task 6); `ExtractResult.aggregates` (Task 4) is read by `flow.ts` (Task 4); `reextract` is one name in `ExtractDeps`, `VisualizeDeps`, `VisualsStarterOptions` and `compose.ts` (Task 5); `timelineDiagram` and `relationshipsDiagram` (Task 3) are called only from `visuals.ts` `TO` families `visual-timeline` and `visual-relations`, registered at 18 and 19 only.
+**Type consistency:** `TimelineDraft` and `RelationsDraft` (Task 1) match the zod `Timeline` and `Relations` (Task 2: `events` with `at/precision/when/label/chunkId`, `entities: string[]`, `links` with `from/to/rel/chunkId`), `AggregateFact`, `aggregateFacts` (Task 2) and `TimelineFact` and `RelationsFact` (Task 3) field for field; `TIMELINE_ORDINAL` 18 and `RELATIONS_ORDINAL` 19 are used by `extract.ts` (Task 4), the capability handles `fact-18` and `fact-19` (Tasks 3, 4, 6), the experiences `STRUCTURE_ORDINAL` map (Task 3, pinned equal by a `plan.test.ts` test) and the e2e hydrate handles (Task 6); `ExtractionWrite` is what `replace` takes (Task 2) and what `extract.ts` passes (Task 4); `TimelineFact`, `RelationsFact` and the `VisualFactRaw` union are declared in Task 2 step 8a (Task 3 builds on them); `extractLlm` (`VisualizeDeps`, `ExtractDeps`) and `llm.visualsExtract` (`IngestWiring`) are declared in Task 4 and wired in `compose.ts`; `MAX_ENTITIES` (Task 1) is imported by the stored schema (Task 2); `aggregateCount` and `extractFormat` are declared in Task 2 (with `EXTRACT_FORMAT`, which only `PgVisualFacts.replace` writes and only the extract step's re-run branch reads), used by `extract.ts` (Tasks 4 and 5) and the e2e (Task 6); `ExtractResult.aggregates` (Task 4) is read by `flow.ts` (Task 4); `reextract` is one name in `ExtractDeps`, `VisualizeDeps`, `VisualsStarterOptions` and `compose.ts` (Task 5); `timelineDiagram` and `relationshipsDiagram` (Task 3) are called only from `visuals.ts` `TO` families `visual-timeline` and `visual-relations`, registered at 18 and 19 only.
