@@ -36,8 +36,6 @@ import { buildTimeline, rawEventsOf } from "./timeline";
 /** The most chunk text sent to the model in one request; a window never splits a chunk. */
 export const EXTRACT_WINDOW_CHARS = 24_000;
 const READ_BATCH = 200;
-/** The fewest raw events (and links) one window may contribute, whatever the window count. */
-const MIN_WINDOW_ITEMS = 40;
 export const EXTRACT_STEP_TIMEOUT_MS = 600_000;
 
 /**
@@ -191,8 +189,9 @@ export async function askForExtraction(
     (content) => jsonAnswer(content, DocumentAnswer),
     signal,
   );
-  // Each window gets a share of the raw-item bound, so one window's flood cannot crowd out the later windows' items.
-  const share = Math.max(Math.floor(MAX_RAW_ITEMS / Math.max(answers.length, 1)), MIN_WINDOW_ITEMS);
+  // Each window gets an equal share of the raw-item bound (at least one item), so early windows' floods cannot crowd out
+  // the later windows' items: the shares never add up to more than the bound.
+  const share = Math.max(Math.floor(MAX_RAW_ITEMS / Math.max(answers.length, 1)), 1);
   return {
     drafts: answers.flatMap((a) => a.facts),
     events: answers.flatMap((a) => rawEventsOf(a.timeline).slice(0, share)),
