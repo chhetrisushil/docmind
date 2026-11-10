@@ -22,6 +22,8 @@ export class DmDocTags extends LitElement {
     tags: { state: true },
     suggested: { state: true },
     hasSummary: { state: true },
+    loadState: { state: true },
+    announce: { state: true },
     all: { state: true },
     draft: { state: true },
     suggesting: { state: true },
@@ -39,6 +41,7 @@ export class DmDocTags extends LitElement {
       .chip.suggested { border-style: dashed; }
       .chip button { border: 0; background: transparent; cursor: pointer; color: var(--dm-muted); min-width: 24px; min-height: 24px; border-radius: 999px; }
       .chip button:hover { color: var(--dm-text); background: color-mix(in srgb, var(--dm-text) 8%, transparent); }
+      .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
       input { min-width: 18ch; }
       [role="alert"] { color: var(--dm-danger, #b3261e); margin: 0; }
     `,
@@ -47,6 +50,8 @@ export class DmDocTags extends LitElement {
   declare tags: DocumentTag[];
   declare suggested: string[];
   declare hasSummary: boolean;
+  declare loadState: "loading" | "ready" | "error";
+  declare announce: string;
   declare all: TagSummary[] | null;
   declare draft: string;
   declare suggesting: boolean;
@@ -57,6 +62,7 @@ export class DmDocTags extends LitElement {
   timeoutMs = TAG_SUGGEST_TIMEOUT_MS;
   private readonly ctx = new ServicesController(this);
   private timer: ReturnType<typeof setTimeout> | undefined;
+  private seq = 0;
   private loadedFor: string | undefined;
   constructor() {
     super();
@@ -64,6 +70,8 @@ export class DmDocTags extends LitElement {
     this.tags = [];
     this.suggested = [];
     this.hasSummary = false;
+    this.loadState = "loading";
+    this.announce = "";
     this.all = null;
     this.draft = "";
     this.suggesting = false;
@@ -78,6 +86,14 @@ export class DmDocTags extends LitElement {
       this.tags = [];
       this.suggested = [];
       this.all = null;
+      this.hasSummary = false;
+      this.loadState = "loading";
+      this.draft = "";
+      this.note = null;
+      this.suggestNote = null;
+      this.failed = false;
+      this.announce = "";
+      this.seq++;
       this.stopWaiting();
       void this.reload();
     }
@@ -98,8 +114,10 @@ export class DmDocTags extends LitElement {
       this.tags = doc.tags;
       this.suggested = doc.suggestedTags ?? [];
       this.hasSummary = doc.summary !== null;
+      this.loadState = "ready";
     } catch {
-      // The row keeps what it had; the next event or action reads again.
+      // Before the first read there is nothing to show but the error; later the row keeps what it had.
+      if (id === this.documentId && this.loadState !== "ready") this.loadState = "error";
     }
   }
   private take(r: DocumentTagsResponse): void {
@@ -135,25 +153,42 @@ export class DmDocTags extends LitElement {
     await this.reload();
   }
 
-  private async act(work: (api: Api, id: string) => Promise<DocumentTagsResponse>): Promise<void> {
+  /** Runs one tag action; true when it succeeded. A response is taken only if no later action began (no out-of-order overwrite). */
+  private async act(
+    work: (api: Api, id: string) => Promise<DocumentTagsResponse>,
+    said: string,
+  ): Promise<boolean> {
     const api = this.ctx.services?.api;
-    if (!api) return;
+    if (!api) return false;
     const id = this.documentId;
+    const mine = ++this.seq;
     try {
       const r = await work(api, id);
-      if (id === this.documentId) this.take(r);
+      if (id === this.documentId && mine === this.seq) {
+        this.take(r);
+        this.announce = said;
+      }
+      return true;
     } catch (err) {
+      if (id !== this.documentId) return false;
       this.note =
         err instanceof ApiError && NOTES[err.code ?? ""]
           ? (NOTES[err.code ?? ""] as string)
           : "Couldn't update the tags. Try again.";
+      // A 404 means the document or tag changed elsewhere: show what is there now.
+      if (err instanceof ApiError && err.status === 404) void this.reload();
+      return false;
     }
   }
   private add(): void {
     const name = this.draft.trim();
     if (name === "") return;
     this.draft = "";
-    void this.act((api, id) => api.addDocumentTag(id, name));
+    void this.act((api, id) => api.addDocumentTag(id, name), `Added tag ${name}`).then((ok) => {
+      if (ok)
+        this.all = null; // a new tag is offered next time
+      else if (this.draft === "") this.draft = name; // keep what was typed
+    });
   }
   private async loadAll(): Promise<void> {
     const api = this.ctx.services?.api;
@@ -190,11 +225,12 @@ export class DmDocTags extends LitElement {
   render() {
     const have = new Set(this.tags.map((t) => t.name.toLowerCase()));
     const options = (this.all ?? []).filter((t) => !have.has(t.name.toLowerCase()));
+    const noSummary = this.loadState === "ready" && !this.hasSummary;
     const reasonId = "suggest-reason";
     return html`
       <div class="row" role="group" aria-label="Tags" data-tags>
         <span class="label">Tags</span>
-        ${this.tags.map((t) => html`<span class="chip"><span data-name>${t.name}</span><button type="button" aria-label=${`Remove tag ${t.name}`} @click=${() => void this.act((api, id) => api.removeDocumentTag(id, t.id))}>×</button></span>`)}
+        ${this.tags.map((t) => html`<span class="chip"><span data-name>${t.name}</span><button type="button" aria-label=${`Remove tag ${t.name}`} @click=${() => void this.act((api, id) => api.removeDocumentTag(id, t.id), `Removed tag ${t.name}`)}>×</button></span>`)}
         <input aria-label="Add a tag" list="doc-tag-options" autocomplete="off" maxlength="40" .value=${live(this.draft)}
           @focus=${() => void this.loadAll()}
           @input=${(e: Event) => {
@@ -208,12 +244,21 @@ export class DmDocTags extends LitElement {
           }} />
         <datalist id="doc-tag-options">${options.map((t) => html`<option value=${t.name}></option>`)}</datalist>
       </div>
+      <span class="sr" role="status" data-announce>${this.announce}</span>
       ${this.note ? html`<p role="alert" data-note>${this.note}</p>` : null}
       <div class="row" role="group" aria-label="Suggested tags" data-suggested-row>
         <span class="label">Suggested</span>
-        <span class="row" data-suggested>${this.suggested.map((name) => html`<span class="chip suggested"><span data-name>${name}</span><button type="button" aria-label=${`Accept suggested tag ${name}`} @click=${() => void this.act((api, id) => api.acceptTagSuggestion(id, name))}>✓</button><button type="button" aria-label=${`Dismiss suggested tag ${name}`} @click=${() => void this.act((api, id) => api.dismissTagSuggestion(id, name))}>×</button></span>`)}</span>
-        <button type="button" class="btn secondary" data-suggest ?disabled=${this.suggesting || !this.hasSummary} aria-busy=${this.suggesting ? "true" : "false"} aria-describedby=${ifDefined(this.hasSummary ? undefined : reasonId)} @click=${() => this.suggest()}>${this.suggesting ? "Suggesting…" : "Suggest tags"}</button>
-        ${this.hasSummary ? null : html`<span class="muted" id=${reasonId} data-reason>Available once the document has a summary.</span>`}
+        <span class="row" data-suggested>${this.suggested.map((name) => html`<span class="chip suggested"><span data-name>${name}</span><button type="button" aria-label=${`Accept suggested tag ${name}`} @click=${() => void this.act((api, id) => api.acceptTagSuggestion(id, name), `Added tag ${name}`)}>✓</button><button type="button" aria-label=${`Dismiss suggested tag ${name}`} @click=${() => void this.act((api, id) => api.dismissTagSuggestion(id, name), `Dismissed suggestion ${name}`)}>×</button></span>`)}</span>
+        ${
+          this.loadState === "error"
+            ? html`<span role="alert" data-load-failed>Couldn't load the tags. <button type="button" class="btn secondary" data-load-retry @click=${() => {
+                this.loadState = "loading";
+                void this.reload();
+              }}>Retry</button></span>`
+            : null
+        }
+        <button type="button" class="btn secondary" data-suggest ?disabled=${this.suggesting || !this.hasSummary} aria-busy=${this.suggesting ? "true" : "false"} aria-describedby=${ifDefined(noSummary ? reasonId : undefined)} @click=${() => this.suggest()}>${this.suggesting ? "Suggesting…" : "Suggest tags"}</button>
+        ${noSummary ? html`<span class="muted" id=${reasonId} data-reason>Available once the document has a summary.</span>` : null}
         ${this.suggestNote ? html`<span data-suggest-note role="status">${this.suggestNote}</span>` : null}
       </div>
       ${this.failed ? html`<p class="muted" role="status" data-suggest-failed>Couldn't suggest tags. <button type="button" class="btn secondary" data-suggest-retry @click=${() => this.suggest()}>Retry</button></p>` : null}`;

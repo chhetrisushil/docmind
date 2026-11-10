@@ -811,9 +811,7 @@ describe("dm-doc-detail tags", () => {
     const row = page.shadowRoot?.querySelector("dm-doc-tags");
     t.progress(id(1), "ready", { tags: "suggested" });
     await vi.waitFor(() => expect(t.api.getDocument).toHaveBeenCalledTimes(2));
-    for (let i = 0; i < 5; i++) {
-      await Promise.resolve();
-      expect(page.shadowRoot?.querySelector("dm-doc-tags")).toBe(row);
-    }
+    await new Promise((r) => setTimeout(r, 50)); // the refresh settles
+    expect(page.shadowRoot?.querySelector("dm-doc-tags")).toBe(row);
   });
 });

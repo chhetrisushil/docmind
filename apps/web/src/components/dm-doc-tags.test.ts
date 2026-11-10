@@ -37,14 +37,20 @@ type El = HTMLElement & {
   timeoutMs: number;
 };
 
-async function setup(initial: DocumentDto) {
+async function setup(initial: DocumentDto, failFirst = false) {
   const state = { doc: initial };
   const respond = async (): Promise<DocumentTagsResponse> => ({
     tags: state.doc.tags,
     suggestedTags: state.doc.suggestedTags ?? [],
   });
   const api = {
-    getDocument: vi.fn(async () => state.doc),
+    getDocument: vi.fn(async () => {
+      if (failFirst) {
+        failFirst = false;
+        throw new Error("down");
+      }
+      return state.doc;
+    }),
     listTags: vi.fn(async () => ({
       tags: [t(1, "Finance"), t(2, "Legal"), t(3, "Spare")].map((x) => ({ ...x, documents: 1 })),
     })),
@@ -76,8 +82,13 @@ async function setup(initial: DocumentDto) {
   const services = createServices({ api: api as never });
   const el = await mountWith<El>(services, "dm-doc-tags", { documentId: DOC });
   await vi.waitFor(() => expect(api.getDocument).toHaveBeenCalled());
+  await Promise.resolve();
   await el.updateComplete;
   return { el, api, state };
+}
+async function setupFailing() {
+  const f = await setup(dto([], []), true);
+  return f;
 }
 const settle = async (el: El) => {
   await Promise.resolve();
@@ -235,5 +246,91 @@ describe("dm-doc-tags", () => {
     expect(s.api.getDocument.mock.calls.length).toBe(reads + 1);
     await settle(s.el);
     expect(unnamedControls(s.el)).toEqual([]);
+  });
+
+  it("before the first read shows no reason, and a failed read shows an error with Retry, not 'no summary'", async () => {
+    const failing = await setupFailing();
+    await vi.waitFor(() => expect(q(failing.el, "[data-load-failed]")).not.toBeNull());
+    expect(q(failing.el, "[data-reason]")).toBeNull();
+    expect(q(failing.el, "[data-suggest]").getAttribute("aria-describedby")).toBeNull();
+    q<HTMLButtonElement>(failing.el, "[data-load-retry]").click();
+    await vi.waitFor(() => expect(q(failing.el, "[data-load-failed]")).toBeNull());
+    expect(q<HTMLButtonElement>(failing.el, "[data-suggest]").disabled).toBe(false);
+  });
+
+  it("a document change resets busy, draft, notes and suggestions, and reads the new document", async () => {
+    const s = await setup(dto([t(1, "Finance")], ["Legal"]));
+    q<HTMLButtonElement>(s.el, "[data-suggest]").click();
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    input.value = "typed";
+    input.dispatchEvent(new Event("input"));
+    await settle(s.el);
+    s.state.doc = { ...dto([], []), id: "00000000-0000-4000-8000-000000000002" };
+    (s.el as unknown as { documentId: string }).documentId = "00000000-0000-4000-8000-000000000002";
+    await vi.waitFor(() =>
+      expect(s.api.getDocument).toHaveBeenLastCalledWith("00000000-0000-4000-8000-000000000002"),
+    );
+    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip")).toHaveLength(0));
+    expect(all(s.el, "[data-suggested] .chip")).toHaveLength(0);
+    expect(q<HTMLButtonElement>(s.el, "[data-suggest]").getAttribute("aria-busy")).not.toBe("true");
+    expect(q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']").value).toBe("");
+  });
+
+  it("keeps the typed name when an add fails, and shows the error", async () => {
+    const s = await setup(dto([], []));
+    s.api.addDocumentTag.mockRejectedValueOnce(new ApiError(409, "tag_limit"));
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    input.value = "one more";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await vi.waitFor(() => expect(q(s.el, "[role=alert]")).not.toBeNull());
+    await settle(s.el);
+    expect(q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']").value).toBe("one more");
+  });
+
+  it("a 404 on remove or accept reloads the row; the autocomplete reloads after a tag is added", async () => {
+    const s = await setup(dto([t(1, "Finance")], ["Legal"]));
+    s.api.removeDocumentTag.mockRejectedValueOnce(new ApiError(404, "not_found"));
+    s.state.doc = dto([], ["Legal"]);
+    q<HTMLButtonElement>(s.el, "button[aria-label='Remove tag Finance']").click();
+    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip")).toHaveLength(0));
+    expect(q(s.el, "[role=alert]")).not.toBeNull();
+    s.api.acceptTagSuggestion.mockRejectedValueOnce(new ApiError(404, "not_found"));
+    s.state.doc = dto([], []);
+    q<HTMLButtonElement>(s.el, "button[aria-label='Accept suggested tag Legal']").click();
+    await vi.waitFor(() => expect(all(s.el, "[data-suggested] .chip")).toHaveLength(0));
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    input.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(s.api.listTags).toHaveBeenCalledTimes(1));
+    input.value = "New";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await vi.waitFor(() => expect(s.api.addDocumentTag).toHaveBeenCalled());
+    await settle(s.el);
+    input.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(s.api.listTags).toHaveBeenCalledTimes(2));
+  });
+
+  it("announces actions in a status region, and a double press makes one request", async () => {
+    const s = await setup(dto([], []));
+    const input = q<HTMLInputElement>(s.el, "input[aria-label='Add a tag']");
+    input.value = "Alpha";
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+    await vi.waitFor(() =>
+      expect(q(s.el, "[data-announce]").textContent).toContain("Added tag Alpha"),
+    );
+    const b = q<HTMLButtonElement>(s.el, "[data-suggest]");
+    b.click();
+    b.click();
+    await settle(s.el);
+    expect(s.api.refreshTagSuggestions).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders a tag name containing markup as text", async () => {
+    const s = await setup(dto([t(1, "<img src=x onerror=alert(1)>")], ["<b>hi</b>"]));
+    await vi.waitFor(() => expect(all(s.el, "[data-tags] .chip")).toHaveLength(1));
+    expect(root(s.el).querySelector("img, b")).toBeNull();
+    expect(q(s.el, "[data-tags] [data-name]").textContent).toBe("<img src=x onerror=alert(1)>");
   });
 });
