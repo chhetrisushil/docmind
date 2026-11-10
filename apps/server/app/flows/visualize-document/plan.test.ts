@@ -16,7 +16,9 @@ import {
   MAX_FACTS,
   MAX_STORED_FACTS,
   OUTLINE_ORDINAL,
+  RELATIONS_ORDINAL,
   type StructureFact,
+  TIMELINE_ORDINAL,
 } from "./facts";
 import type { VisualizeRef } from "./pgFacts";
 import { LoadOutput, VISUALS_INTENT, loadEffect, planVisuals, plannerUnavailable } from "./plan";
@@ -408,5 +410,67 @@ describe("LoadOutput.facts holds every row a document can have", () => {
     expect(LoadOutput.safeParse({ outcome: "done", facts: [...all, figures[0]] }).success).toBe(
       false,
     );
+  });
+});
+
+describe("planning the timeline and relations", () => {
+  const chunk = FIGURE.chunkIds[0] as string;
+  const { timeline, relations } = aggregateFacts(chunk);
+  const bind = (id: string, type: string, capability: string, path: string) => ({
+    id,
+    type,
+    label: id,
+    span: 12,
+    props: {},
+    binding: { capability, arguments: {}, path, priority: "P1" },
+  });
+
+  it("plans a timeline bound at nodes and relations bound at edges, with no reshape-invalid", async () => {
+    const planner = new ReferencePlanner({
+      model: scriptedPlannerModel([
+        draft(
+          [
+            bind("timeline", "DocumentTimeline", "fact-18", "nodes"),
+            bind("relations", "Relationships", "fact-19", "edges"),
+          ],
+          "The story",
+        ),
+      ]),
+      modelId: "t",
+    });
+    const plan = await planVisuals(planner, [FIGURE, timeline, relations], recording());
+    expect(plan.findings.map((f) => f.code)).not.toContain("reshape-invalid");
+    expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
+    expect(insertedIds(plan.ops)).toEqual(["timeline", "relations"]);
+  });
+
+  it("offers the aggregates as capabilities between the facts and the connections, and shows the planner no text", () => {
+    expect(visualCapabilities([FIGURE, timeline, relations]).map((c) => c.handle)).toEqual([
+      "fact-0",
+      "fact-18",
+      "fact-19",
+      "connections",
+    ]);
+    const shown = JSON.stringify(visualCapabilities([timeline, relations]));
+    expect(shown).not.toContain("Zebra");
+    expect(shown).not.toContain("March 2024");
+  });
+
+  it("the server's aggregate ordinals are the ones the experiences reshapers serve", () => {
+    expect(() => shape(`visual-timeline-${TIMELINE_ORDINAL}`, [timeline])).not.toThrow();
+    expect(() => shape(`visual-relations-${RELATIONS_ORDINAL}`, [relations])).not.toThrow();
+    expect(() => shape(`visual-timeline-${RELATIONS_ORDINAL}`, [timeline])).toThrow();
+  });
+
+  it("tells the planner when to show a timeline and a relationships diagram, and when to leave them out", () => {
+    const o = VISUALS_INTENT.objective;
+    expect(o).toContain("DocumentTimeline");
+    expect(o).toContain("Relationships");
+    expect(o).toMatch(/narrates dated events/);
+    expect(o).toMatch(/states how parties relate/);
+    expect(o).toMatch(/few scattered dates or links/);
+    // c1's guidance and the connections guidance are still there
+    expect(o).toMatch(/long, sectioned documents/);
+    expect(o).toContain("compact Connections section");
   });
 });

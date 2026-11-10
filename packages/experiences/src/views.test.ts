@@ -18,7 +18,7 @@ import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { createViewPayloads } from "./payload";
 import { provider } from "./providers";
 import { EXPERIENCES, detailWithVisuals, documentsOfVisuals, turnWithVisuals } from "./views";
-import { factProvider, mergedCatalog } from "./visuals";
+import { VISUAL_SHAPES, type VisualFactRaw, factProvider, mergedCatalog } from "./visuals";
 
 const NAMES = ["library", "library-empty", "detail", "sessions", "chat", "sources"] as const;
 const views = createViewPayloads({ placeholderKey: "k".repeat(32), revisionKey: "r".repeat(32) });
@@ -405,6 +405,115 @@ describe("detailWithVisuals", () => {
       expect(exp.providers[h], h).toBeUndefined();
   });
 
+  it("adopts the timeline at fact-18 and the relations at fact-19 with their own reshapers, and no other pairing", () => {
+    const exp = detailWithVisuals(
+      visualsOf([
+        kf("t", "DocumentTimeline", "fact-18"),
+        kf("r", "Relationships", "fact-19"),
+        kf("swap", "DocumentTimeline", "fact-19"), // an aggregate entry on the other aggregate
+        kf("low", "Relationships", "fact-3"), // an aggregate entry on an extracted fact
+        kf("struct", "DocumentTimeline", "fact-16"), // an aggregate entry on a structure fact
+        kf("high", "KeyFigure", "fact-18"), // a fact entry on an aggregate
+        kf("outline", "DocumentOutline", "fact-18"), // a structure entry on an aggregate
+      ]),
+      DOC,
+    );
+    expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(["v-t", "v-r"]);
+    expect(exp.providers["fact-18"]).toEqual(factProvider(18, DOC, "DocumentTimeline"));
+    expect(exp.providers["fact-19"]).toEqual(factProvider(19, DOC, "Relationships"));
+    expect((exp.providers["fact-18"]?.reshaping as { scriptRef: string }).scriptRef).toBe(
+      "visual-timeline-18",
+    );
+    expect((exp.providers["fact-19"]?.reshaping as { scriptRef: string }).scriptRef).toBe(
+      "visual-relations-19",
+    );
+    for (const h of ["fact-18-b", "fact-19-b", "fact-3", "fact-16"])
+      expect(exp.providers[h], h).toBeUndefined();
+  });
+
+  it("a plan stored under catalogue v3 (every fact and structure entry it offered) still adopts, compiles and hydrates under v4, as does one with the new entries", () => {
+    const v3 = [
+      kf("a", "KeyFigure", "fact-0"),
+      kf("b", "FigureChart", "fact-1"),
+      kf("c", "FigureTrend", "fact-2"),
+      kf("d", "FactTable", "fact-3"),
+      kf("e", "DocumentOutline", "fact-16"),
+      kf("f", "EntityMap", "fact-17"),
+    ];
+    const v4 = [...v3, kf("g", "DocumentTimeline", "fact-18"), kf("h", "Relationships", "fact-19")];
+    for (const [nodes, ids] of [
+      [v3, ["v-a", "v-b", "v-c", "v-d", "v-e", "v-f"]],
+      [v4, ["v-a", "v-b", "v-c", "v-d", "v-e", "v-f", "v-g", "v-h"]],
+    ] as const) {
+      const exp = detailWithVisuals(visualsOf([...nodes]), DOC);
+      expect(node(exp, "visuals").children.map((c) => c.id)).toEqual(ids);
+      for (const surface of ["web", "terminal"] as const) {
+        const r = compile(exp, {
+          surface,
+          catalog: mergedCatalog(),
+          hydrationProjectionId: HYDRATION_PROJECTION_ID,
+          hydrationProjectionVersion: HYDRATION_PROJECTION_VERSION,
+          viewer: {},
+          placeholderKey: KEY,
+        });
+        expect(r.findings, `${surface} ${ids.length}`).toEqual([]);
+      }
+    }
+    // Hydrate once (pre-flight 15): each provider a v3 plan adopts still names a reshaper that runs over a fact of its
+    // own shape, so the outline and the map hydrate as before, and the two new entries hydrate beside them.
+    const c = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+    const facts: Record<string, VisualFactRaw> = {
+      "fact-16": {
+        kind: "outline",
+        title: "Report",
+        nodes: [
+          { id: "o1", label: "A", level: 1, passageCount: 1, firstChunkId: c(1) },
+          { id: "o2", label: "B", level: 1, passageCount: 1, firstChunkId: c(2) },
+          { id: "o3", label: "C", level: 1, passageCount: 1, firstChunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 16,
+      },
+      "fact-17": {
+        kind: "cooccurrence",
+        entities: [
+          { name: "Acme", entityKind: "organization", passages: 2 },
+          { name: "Cora", entityKind: "person", passages: 2 },
+        ],
+        edges: [{ a: 0, b: 1, weight: 2, firstChunkId: c(1) }],
+        chunkIds: [c(1)],
+        ordinal: 17,
+      },
+      "fact-18": {
+        kind: "timeline",
+        events: [
+          { at: "2024-01-01", precision: "year", when: "2024", label: "A", chunkId: c(1) },
+          { at: "2025-01-01", precision: "year", when: "2025", label: "B", chunkId: c(2) },
+          { at: "2026-01-01", precision: "year", when: "2026", label: "C", chunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 18,
+      },
+      "fact-19": {
+        kind: "relations",
+        entities: ["Acme", "Beta", "Cora"],
+        links: [
+          { from: 0, to: 1, rel: "owns", chunkId: c(1) },
+          { from: 2, to: 0, rel: "leads", chunkId: c(2) },
+          { from: 2, to: 1, rel: "sits on", chunkId: c(3) },
+        ],
+        chunkIds: [c(1)],
+        ordinal: 19,
+      },
+    };
+    const exp4 = detailWithVisuals(visualsOf(v4), DOC);
+    for (const [handle, fact] of Object.entries(facts)) {
+      const scriptRef = (exp4.providers[handle]?.reshaping as { scriptRef: string }).scriptRef;
+      const run = VISUAL_SHAPES[scriptRef] as (raw: VisualFactRaw[]) => { nodes: unknown[] };
+      expect(run([fact]).nodes.length, handle).toBeGreaterThan(0);
+    }
+  });
+
   it("compiles for web and terminal with no findings", () => {
     for (const surface of ["web", "terminal"] as const) {
       const r = compile(
@@ -581,6 +690,24 @@ describe("turnWithVisuals", () => {
       ],
     );
     // a structure entry is not a chat entry, and a fact entry may not read a structure ordinal: nothing is left
+    expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
+  });
+
+  it("never adopts a timeline or relations widget, or an aggregate ordinal, in chat", () => {
+    const e = experience(
+      [
+        node("n1", "DocumentTimeline", "p-a"),
+        node("n2", "Relationships", "p-b"),
+        node("n3", "KeyFigure", "p-c"),
+        node("n4", "FactTable", "p-d"),
+      ],
+      [
+        planned("p-a", "visual.facts", `docmind:visual.facts@1#${A}/fact-18`),
+        planned("p-b", "visual.facts", `docmind:visual.facts@1#${A}/fact-19`),
+        planned("p-c", "visual.facts", `docmind:visual.facts@1#${A}/fact-18`),
+        planned("p-d", "visual.facts", `docmind:visual.facts@1#${A}/fact-19`),
+      ],
+    );
     expect(turnWithVisuals(e, { chatId: CHAT, ord: 6 }, live)).toBeNull();
   });
 });

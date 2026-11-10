@@ -198,8 +198,14 @@ const detail = (): Experience =>
   });
 
 const FACT_ENTRIES = ["FigureChart", "FigureTrend", "KeyFigure", "FactTable"];
-/** A document's page can draw the fact widgets and the two structure widgets; chat only the fact widgets (S5). */
-const DETAIL_ENTRIES = new Set<string>([...FACT_ENTRIES, "DocumentOutline", "EntityMap"]);
+/** A document's page can draw the fact widgets and the four structure widgets (outline, entity map, timeline, relationships); chat only the fact widgets (S5). */
+const DETAIL_ENTRIES = new Set<string>([
+  ...FACT_ENTRIES,
+  "DocumentOutline",
+  "EntityMap",
+  "DocumentTimeline",
+  "Relationships",
+]);
 const TURN_ENTRIES = new Set<string>(FACT_ENTRIES);
 const MAX_SIBLINGS = 26;
 const FACT_HANDLE = /^fact-(0|[1-9]\d*)$/;
