@@ -1033,7 +1033,10 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     for (const c of cited) expect(passages).toContain(c);
     const source = await get(st, ada.cookie, `/api/documents/${id}/source?passage=${cited[0]}`);
     expect(source.status).toBe(200);
-    expect(await source.json()).toMatchObject({ focus: expect.anything() });
+    const body = (await source.json()) as { text: string; focus: { from: number; to: number } };
+    const focused = body.text.slice(body.focus.from, body.focus.to);
+    expect(focused.length).toBeGreaterThan(0); // the cited passage, as characters of the document text
+    expect(NARRATIVE).toContain(focused);
 
     const relations = (await hydrate(st, ada.cookie, id, "fact-19")) as {
       state: string;
@@ -1109,6 +1112,7 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     const state = { aggregates: true, extractions: 0 };
     stubNarrative(st.visualsClaude as FakeAnthropic, state);
     const ada = await st.signUpAndLogIn("ada@example.com");
+    // `visuals: false`: no visuals-ready event follows a document that gets none; the run itself is awaited below.
     const id = await upload(
       st,
       ada.cookie,
@@ -1128,6 +1132,55 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
     expect(left.rowCount).toBe(0);
     expect(await (await detail(st, ada.cookie, id)).text()).not.toContain('"id":"visuals"');
   }, 120_000);
+
+  it("rollout proof: a boot over stamped and unstamped visualized documents sends no extraction request and no planner request; only a stale format re-plans, and never extracts", async () => {
+    const first = await startIngestStack({ visuals: true });
+    stacks.push(first);
+    const state = { aggregates: true, extractions: 0 };
+    stubNarrative(first.visualsClaude as FakeAnthropic, state);
+    const ada = await first.signUpAndLogIn("ada@example.com");
+    const stamped = await upload(first, ada.cookie, NARRATIVE, { visuals: true, name: "a.txt" });
+    expect(await visualizeOutcome(first, ada.userId, stamped)).toBe("done");
+    // A document extracted before c2: its run carries the current fingerprint, its extraction stamp is missing.
+    const old = await upload(first, ada.cookie, `${NARRATIVE} Second.`, {
+      visuals: true,
+      name: "b.txt",
+    });
+    expect(await visualizeOutcome(first, ada.userId, old)).toBe("done");
+    await first.db.owner.query("UPDATE documents SET visual_extract_format = NULL WHERE id = $1", [
+      old,
+    ]);
+    await first.close({ keepDb: true });
+    stacks.splice(stacks.indexOf(first), 1);
+
+    const second = await startIngestStack({
+      visuals: true,
+      resume: { db: first.db, kek: first.kek, root: first.root },
+    });
+    stacks.push(second);
+    const claude = second.visualsClaude as FakeAnthropic;
+    stubNarrative(claude, { aggregates: true, extractions: 0 });
+    const kinds = () =>
+      claude.requests.map((r) => {
+        const body = r.body as { system?: unknown };
+        const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
+        return system.includes("You extract facts") ? "extract" : "plan";
+      });
+    // The boot already ran its passes; run the sweep again and let everything settle.
+    expect(await second.composed.visuals.sweep()).toBe(0);
+    await second.composed.visuals.idle();
+    expect(kinds()).toEqual([]); // not one extraction request, not one planner request
+
+    // The control: the same unstamped document under an older fact format is re-planned by the pass, and still not extracted.
+    await second.db.owner.query(
+      "UPDATE visual_runs SET format = 'docmind:visual.facts@1' WHERE document_id = $1",
+      [old],
+    );
+    expect(await second.composed.visuals.sweep()).toBe(1);
+    await second.composed.visuals.idle();
+    expect(kinds().length).toBeGreaterThan(0);
+    expect(kinds()).not.toContain("extract");
+  }, 300_000);
 
   it("re-extract once: a pre-c2 document gets both diagrams on the user's first re-run; a stamped document, and every later re-run, only re-plan", async () => {
     const st = await startIngestStack({ visuals: true });

@@ -1,4 +1,4 @@
-import { mergedCatalog } from "@docmind/experiences";
+import { mergedCatalog, shape } from "@docmind/experiences";
 import { describe, expect, it } from "vitest";
 import "./elements";
 import { createViewRegistry } from "./session";
@@ -68,5 +68,89 @@ describe("the structure widgets", () => {
       expect(kind).toBe("Diagram");
       expect(customElements.get(TAG[kind] as string)).toBeDefined();
     }
+  });
+});
+
+describe("lu-diagram draws the reshaped timeline and relationships (real reshaper output)", () => {
+  type El = HTMLElement & { updateComplete: Promise<boolean>; value: unknown };
+  const cid = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  const mount = async (value: unknown): Promise<ShadowRoot> => {
+    document.body.innerHTML = "";
+    const el = document.createElement("lu-diagram") as El;
+    Object.assign(el, {
+      widget: {
+        kind: "Diagram",
+        id: "d",
+        title: "Chart",
+        binding: { projectionId: "hydration", path: "values.d" },
+        props: {},
+      },
+      value,
+    });
+    document.body.appendChild(el);
+    for (let i = 0; i < 3; i++) await el.updateComplete;
+    return el.shadowRoot as ShadowRoot;
+  };
+  const texts = (root: ShadowRoot, selector: string) =>
+    [...root.querySelectorAll(selector)].map((t) => t.textContent);
+
+  it("a timeline: one node per event in date order, a quarter event labelled as written, a day event as its text", async () => {
+    const value = shape("visual-timeline-18", [
+      {
+        kind: "timeline",
+        ordinal: 18,
+        chunkIds: [cid(1), cid(2), cid(3)],
+        events: [
+          {
+            at: "2024-03-01",
+            precision: "month",
+            when: "March 2024",
+            label: "Acme buys Beta",
+            chunkId: cid(1),
+          },
+          {
+            at: "2025-07-01",
+            precision: "quarter",
+            when: "Q3 2025",
+            label: "Launch",
+            chunkId: cid(2),
+          },
+          {
+            at: "2026-02-14",
+            precision: "day",
+            when: "14 February 2026",
+            label: "Office opens",
+            chunkId: cid(3),
+          },
+        ],
+      },
+    ]);
+    const root = await mount(value);
+    expect(root.querySelector('[data-layout="timeline"]')).not.toBeNull();
+    expect(texts(root, "svg .node text")).toEqual([
+      "March 2024 · Acme buys Beta",
+      "Q3 2025 · Launch",
+      "Office opens",
+    ]);
+  });
+
+  it("relationships: a node per party and a labelled arrow per relation, as text", async () => {
+    const value = shape("visual-relations-19", [
+      {
+        kind: "relations",
+        ordinal: 19,
+        chunkIds: [cid(1)],
+        entities: ["Acme", "Beta Works", "Cora"],
+        links: [
+          { from: 0, to: 1, rel: "acquired", chunkId: cid(1) },
+          { from: 2, to: 0, rel: "leads", chunkId: cid(1) },
+          { from: 2, to: 1, rel: "advises", chunkId: cid(1) },
+        ],
+      },
+    ]);
+    const root = await mount(value);
+    expect(root.querySelector('[data-layout="network"]')).not.toBeNull();
+    expect(texts(root, "svg .node text").sort()).toEqual(["Acme", "Beta Works", "Cora"]);
+    expect(texts(root, "svg .edge text").sort()).toEqual(["acquired", "advises", "leads"]);
   });
 });
