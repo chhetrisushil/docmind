@@ -6,12 +6,33 @@ export type Route =
   | { name: "sign-up" }
   | { name: "account-deleted" }
   | { name: "chat"; chatId?: string }
-  | { name: "documents" }
+  | { name: "documents"; tags?: string[]; match?: "all" }
   | { name: "document"; id: string; passage?: string }
   | { name: "settings" }
   | { name: "not-found" };
 
 const isUuid = (s: string) => Uuid.safeParse(s).success;
+
+const MAX_TAGS = 10;
+
+/** The library's `?tags=<id>,<id>&match=all`: valid ids only, lower-cased, deduplicated, at most 10; match is All or (omitted) Any. */
+function libraryRoute(search: string): Route {
+  const p = new URLSearchParams(search);
+  const ids = [
+    ...new Set(
+      (p.get("tags") ?? "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(isUuid),
+    ),
+  ].slice(0, MAX_TAGS);
+  if (ids.length === 0) return { name: "documents" };
+  return {
+    name: "documents",
+    tags: ids,
+    ...(p.get("match") === "all" && { match: "all" as const }),
+  };
+}
 
 export function parseRoute(path: string, search = ""): Route {
   const p = path.replace(/\/+$/, "") || "/";
@@ -20,7 +41,7 @@ export function parseRoute(path: string, search = ""): Route {
     case "/chats":
       return { name: "chat" };
     case "/documents":
-      return { name: "documents" };
+      return libraryRoute(search);
     case "/sign-in":
       return { name: "sign-in" };
     case "/sign-up":
@@ -51,6 +72,10 @@ export function hrefOf(r: Route): string {
       return r.chatId ? `/chats/${r.chatId}` : "/chats";
     case "document":
       return `/documents/${r.id}${r.passage ? `?passage=${r.passage}` : ""}`;
+    case "documents": {
+      if (!r.tags || r.tags.length === 0) return "/documents";
+      return `/documents?tags=${r.tags.join(",")}${r.match === "all" ? "&match=all" : ""}`;
+    }
     case "not-found":
       return "/chats";
     default:

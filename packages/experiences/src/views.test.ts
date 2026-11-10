@@ -123,7 +123,7 @@ describe("the experiences", () => {
       Object.fromEntries(
         views.payload(n, "web").inventory.handles.map((h) => [h.handle, h.params]),
       );
-    expect(params("library").documents).toEqual(["status"]);
+    expect(params("library").documents).toEqual(["match", "status", "tags"]);
     expect(params("library")["doc-total"]).toEqual([]);
     expect(params("detail")["doc-summary"]).toEqual(["id"]);
     expect(params("detail")["doc-content"]).toEqual(["id", "passage", "upto"]);

@@ -2,6 +2,7 @@ import {
   ChatMessageDto,
   ChatSessionDto,
   DeleteAccountResponse,
+  type DocumentDto,
   ErasureStatusResponse,
   ListDocumentsResponse,
   ListMessagesResponse,
@@ -237,5 +238,50 @@ describe("FakeServer: chat", () => {
     const seen = frames(s, "/api/documents/events");
     await vi.waitFor(() => expect(seen.map((f) => f.event)).toEqual(["progress"]));
     expect(() => s.push("/api/documents/events", "progress", { documentId: "x" })).toThrow();
+  });
+  it("serves tags: create or reuse by name, link, accept, dismiss, rename, delete, and suggestions", async () => {
+    const s = await signedIn();
+    const fakeDoc = (id: string): DocumentDto => ({
+      id,
+      title: id,
+      filename: id,
+      mime: "text/plain",
+      sizeBytes: 1,
+      status: "ready",
+      error: null,
+      stats: null,
+      summary: null,
+      tags: [],
+      createdAt: "2026-11-10T10:00:00.000Z",
+      updatedAt: "2026-11-10T10:00:00.000Z",
+    });
+    s.docs = [fakeDoc("d1"), fakeDoc("d2")];
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await post(s, path, body, method);
+      return { status: res.status, body: res.status === 204 ? null : await res.json() };
+    };
+    const a = await call("POST", "/api/documents/d1/tags", { name: "Finance" });
+    expect(a.body.tags.map((t: { name: string }) => t.name)).toEqual(["Finance"]);
+    expect(
+      (await call("POST", "/api/documents/d1/tags", { name: " finance " })).body.tags,
+    ).toHaveLength(1);
+    expect((await call("GET", "/api/tags")).body.tags).toEqual([
+      { id: a.body.tags[0].id, name: "Finance", documents: 1 },
+    ]);
+    s.suggestions.set("d1", ["Legal", "Misc"]);
+    expect(
+      (await call("POST", "/api/documents/d1/tag-suggestions/accept", { name: "legal" })).body,
+    ).toMatchObject({ suggestedTags: ["Misc"] });
+    expect(
+      (await call("POST", "/api/documents/d1/tag-suggestions/dismiss", { name: "Misc" })).body
+        .suggestedTags,
+    ).toEqual([]);
+    const id = a.body.tags[0].id;
+    expect((await call("PATCH", `/api/tags/${id}`, { name: "Money" })).body.tag.name).toBe("Money");
+    expect((await call("PATCH", `/api/tags/${id}`, { name: "legal" })).status).toBe(409);
+    expect((await call("DELETE", `/api/tags/${id}`)).status).toBe(204);
+    expect(s.docs[0]?.tags.map((t) => t.name)).toEqual(["legal"]);
+    expect((await call("POST", "/api/documents/d1/tag-suggestions/refresh")).status).toBe(202);
+    expect(s.refreshes).toEqual(["d1"]);
   });
 });

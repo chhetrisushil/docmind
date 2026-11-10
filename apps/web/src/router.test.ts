@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type Route, Router, hrefOf, parseRoute } from "./router";
 
 const ID = "0b4f7d52-6c53-4c6e-9d49-2b0e7a3f9a10";
+const ID2 = "1c5e8a63-7d64-4d7f-8e5a-3c1f8b4a0b21";
 
 describe("parseRoute / hrefOf", () => {
   const table: [string, string, Route][] = [
@@ -11,6 +12,16 @@ describe("parseRoute / hrefOf", () => {
     [`/chats/${ID}`, "", { name: "chat", chatId: ID }],
     [`/chats/${ID.toUpperCase()}`, "", { name: "chat", chatId: ID }],
     ["/documents", "", { name: "documents" }],
+    ["/documents", `?tags=${ID}`, { name: "documents", tags: [ID] }],
+    [
+      "/documents",
+      `?tags=${ID},${ID2}&match=all`,
+      { name: "documents", tags: [ID, ID2], match: "all" },
+    ],
+    ["/documents", `?tags=${ID.toUpperCase()},${ID}`, { name: "documents", tags: [ID] }],
+    ["/documents", "?tags=nope,&match=all", { name: "documents" }],
+    ["/documents", "?match=all", { name: "documents" }],
+    ["/documents", `?tags=${ID}&match=any`, { name: "documents", tags: [ID] }],
     [`/documents/${ID}`, "", { name: "document", id: ID }],
     [`/documents/${ID}`, `?passage=${ID}`, { name: "document", id: ID, passage: ID }],
     [`/documents/${ID}`, "?passage=not-an-id", { name: "document", id: ID }],
@@ -38,12 +49,36 @@ describe("parseRoute / hrefOf", () => {
         path === "/" ||
         path.endsWith("/") ||
         path.includes(ID.toUpperCase()) ||
-        search === "?passage=not-an-id"
+        search === "?passage=not-an-id" ||
+        // Non-canonical addresses that parse to a route which writes itself differently.
+        search.includes(ID.toUpperCase()) ||
+        search === "?tags=nope,&match=all" ||
+        search === "?match=all" ||
+        search.endsWith("&match=any")
       )
         continue;
       expect(hrefOf(route)).toBe(path + search);
     }
     expect(hrefOf({ name: "not-found" })).toBe("/chats");
+  });
+});
+
+describe("the library route's tag filter in the address", () => {
+  it("round-trips: Any is omitted, All and the ids are written", () => {
+    expect(hrefOf({ name: "documents" })).toBe("/documents");
+    expect(hrefOf({ name: "documents", tags: [ID] })).toBe(`/documents?tags=${ID}`);
+    expect(hrefOf({ name: "documents", tags: [ID, ID2], match: "all" })).toBe(
+      `/documents?tags=${ID},${ID2}&match=all`,
+    );
+    expect(hrefOf({ name: "documents", tags: [], match: "all" })).toBe("/documents");
+  });
+  it("keeps at most 10 distinct valid ids", () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `1c5e8a63-7d64-4d7f-8e5a-${String(i).padStart(12, "0")}`,
+    );
+    const r = parseRoute("/documents", `?tags=${ids.join(",")}`);
+    expect(r).toEqual({ name: "documents", tags: ids.slice(0, 10) });
   });
 });
 

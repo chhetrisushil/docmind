@@ -1,9 +1,11 @@
-import type { DocumentDto } from "@docmind/contracts";
-import { describe, expect, it, vi } from "vitest";
+import type { DocumentDto, TagSummary } from "@docmind/contracts";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createServices } from "../services";
 import { UploadsStore } from "../state/uploads";
+import { deepAll, unnamedControls } from "../testing/dom";
 import { fakeUi } from "../testing/fakeUi";
 import { mountWith } from "../testing/mount";
+import { tag } from "../testing/tags";
 import "./dm-documents-page";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -24,16 +26,20 @@ const doc = (n: number, over: Partial<DocumentDto> = {}): DocumentDto => ({
 });
 type Page = HTMLElement & { schedule: (fn: () => void) => void; updateComplete: Promise<unknown> };
 
-async function setup(items: DocumentDto[]) {
-  const live = { items };
+async function setup(items: DocumentDto[], tagList: TagSummary[] = [], url = "/documents") {
+  const live = { items, tagList };
   const ui = fakeUi({
-    documents: async ({ status }) => ({
+    documents: async ({ status, tags, match }) => ({
       items: live.items.filter(
         (d) =>
-          status === "all" ||
-          (status === "processing"
-            ? ["uploaded", "parsing", "embedding"].includes(d.status)
-            : d.status === status),
+          (status === "all" ||
+            (status === "processing"
+              ? ["uploaded", "parsing", "embedding"].includes(d.status)
+              : d.status === status)) &&
+          (tags.length === 0 ||
+            (match === "all"
+              ? tags.every((t) => d.tags.some((x) => x.id === t))
+              : tags.some((t) => d.tags.some((x) => x.id === t)))),
       ),
       truncated: false,
     }),
@@ -57,6 +63,7 @@ async function setup(items: DocumentDto[]) {
   });
   const api = {
     ...ui.api,
+    listTags: vi.fn(async () => ({ tags: live.tagList })),
     deleteDocument: vi.fn(async () => {
       live.items = live.items.filter((d) => d.id !== id(1));
     }),
@@ -65,7 +72,10 @@ async function setup(items: DocumentDto[]) {
     uploadDocument: vi.fn(),
   };
   const uploads = new UploadsStore(api as never, open as never);
+  window.history.replaceState(null, "", url);
   const services = createServices({ api: api as never, uploads, open: open as never });
+  services.router.start(); // as dm-app does: back and forward reach the page through popstate
+  onTestFinished(() => services.router.stop());
   const page = await mountWith<Page>(services, "dm-documents-page", {
     schedule: (fn: () => void) => fn(),
   });
@@ -327,5 +337,169 @@ describe("dm-documents-page", () => {
     // nothing more should happen: give a wrongly late navigation the chance to run
     await new Promise((r) => setTimeout(r, 30));
     expect(t.services.router.route).not.toMatchObject({ name: "chat" });
+  });
+});
+
+const tg = (n: number, name: string, documents: number): TagSummary =>
+  tag(900 + n, name, documents);
+const withTags = (d: DocumentDto, ...t: TagSummary[]): DocumentDto => ({
+  ...d,
+  tags: t.map(({ id: i, name }) => ({ id: i, name })),
+});
+const bar = (p: Element) => p.shadowRoot?.querySelector("dm-tag-bar") as HTMLElement | null;
+const chip = (p: Element, t: TagSummary) =>
+  bar(p)?.shadowRoot?.querySelector(`button[data-tag='${t.id}']`) as HTMLButtonElement;
+const tableText = (p: Element) => table(p)?.shadowRoot?.textContent ?? "";
+/** The chips of the Tags cells (loom-ui token buttons) in the served table, for one tag. */
+const rowChips = (p: Element, t: TagSummary) =>
+  deepAll(p, `button[data-token='${t.id}']`) as HTMLButtonElement[];
+
+describe("dm-documents-page tag filter", () => {
+  const fin = tg(1, "Finance", 2);
+  const leg = tg(2, "Legal", 1);
+  const items = () => [withTags(doc(1), fin), withTags(doc(2), fin, leg), doc(3)];
+
+  it("draws the tag bar with the user's tags, and each row's tags as chips in the table", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    await vi.waitFor(() => expect(rowChips(t.page, fin)).toHaveLength(2)); // rows 1 and 2
+    expect(rowChips(t.page, leg)).toHaveLength(1); // row 2 only
+    expect(rowChips(t.page, leg)[0]?.textContent?.trim()).toBe("Legal");
+    expect(chip(t.page, fin).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("clicking a chip in a row filters the list to that tag alone and writes it to the address (spec section 6)", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(1));
+    rowChips(t.page, leg)[0]?.click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2"); // the only document with Legal
+    expect(tableText(t.page)).not.toContain("Title 3");
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("a chip click replaces the selection: one tag alone, Any and All reset", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1")); // All: only document 2
+    await vi.waitFor(() => expect(rowChips(t.page, fin)).toHaveLength(1));
+    rowChips(t.page, fin)[0]?.click();
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 1")); // Finance alone: documents 1 and 2
+    expect(window.location.search).toBe(`?tags=${fin.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("refuses a chip action for a tag or a row the served table does not hold", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(rowChips(t.page, leg)).toHaveLength(1));
+    const act = (t.page as unknown as { act: (a: unknown) => Promise<unknown> }).act;
+    const forge = (rowKey: string, tokenId: string) =>
+      act.call(t.page, { type: "TABLE_TOKEN", widgetId: "w", payload: { rowKey, tokenId } });
+    expect(await forge(id(1), leg.id)).toEqual({ ok: false, reason: "refused" }); // row 1 has no Legal
+    expect(await forge(id(77), fin.id)).toEqual({ ok: false, reason: "refused" }); // not a served row
+    expect(await forge(id(2), "not-a-tag")).toEqual({ ok: false, reason: "refused" });
+    expect(window.location.search).toBe("");
+    expect(await forge(id(2), leg.id)).toEqual({ ok: true });
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+  });
+
+  it("does not show the bar for a library that has no tags yet", async () => {
+    const t = await setup([doc(1)], []);
+    await vi.waitFor(() => expect(view(t.page).getAttribute("name")).toBe("library"));
+    expect(bar(t.page)).toBeNull();
+  });
+
+  it("pressing a chip filters the table, writes ?tags= to the address and announces the count", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, leg).click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2");
+    expect(tableText(t.page)).not.toContain("Title 3");
+    expect(window.location.search).toBe(`?tags=${leg.id}`);
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("true");
+    await vi.waitFor(() =>
+      expect(bar(t.page)?.shadowRoot?.querySelector("[role=status]")?.textContent?.trim()).toBe(
+        "1 document matches",
+      ),
+    );
+  });
+
+  it("Any and All: two tags, then All keeps only the document with both, and match=all is in the address", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, fin).click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    chip(t.page, leg).click();
+    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}`)); // Any: omitted
+    expect(tableText(t.page)).toContain("Title 1");
+    const all = bar(t.page)?.shadowRoot?.querySelector<HTMLInputElement>(
+      "input[value=all]",
+    ) as HTMLInputElement;
+    await vi.waitFor(() => expect(all.disabled).toBe(false));
+    all.click();
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 1"));
+    expect(tableText(t.page)).toContain("Title 2");
+    expect(window.location.search).toBe(`?tags=${fin.id},${leg.id}&match=all`);
+  });
+
+  it("starts from the address (a bookmark) and follows back and forward", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${leg.id}`);
+    await vi.waitFor(() => expect(chip(t.page, leg)?.getAttribute("aria-pressed")).toBe("true"));
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    window.history.replaceState(null, "", "/documents");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    expect(chip(t.page, leg).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("Clear removes the filter and the address", async () => {
+    const t = await setup(items(), [fin, leg], `/documents?tags=${fin.id},${leg.id}&match=all`);
+    await vi.waitFor(() => expect(tableText(t.page)).not.toContain("Title 3"));
+    (bar(t.page)?.shadowRoot?.querySelector("[data-clear]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    expect(window.location.search).toBe("");
+  });
+
+  it("says no document matches, with Clear, when the filter finds nothing", async () => {
+    const lonely = tg(3, "Lonely", 0);
+    const t = await setup(items(), [fin, leg, lonely]);
+    await vi.waitFor(() => expect(tableText(t.page)).toContain("Title 3"));
+    chip(t.page, lonely).click();
+    await vi.waitFor(() =>
+      expect(t.page.shadowRoot?.querySelector("[data-no-match]")?.textContent).toContain(
+        "No documents match these tags",
+      ),
+    );
+    (t.page.shadowRoot?.querySelector("[data-clear-filter]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(t.page.shadowRoot?.querySelector("[data-no-match]")).toBeNull());
+    expect(view(t.page).getAttribute("name")).toBe("library"); // never the empty-library view
+  });
+
+  it("drops a tag from the address once the server no longer has it", async () => {
+    const ghost = tg(9, "Gone", 0);
+    const t = await setup(items(), [fin, leg], `/documents?tags=${ghost.id},${fin.id}`);
+    await vi.waitFor(() => expect(window.location.search).toBe(`?tags=${fin.id}`));
+    expect(t.services.router.get()).toEqual({ name: "documents", tags: [fin.id] });
+  });
+
+  it("opens Manage tags, and refreshes the bar after a rename", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    (bar(t.page)?.shadowRoot?.querySelector("[data-manage]") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(t.page.shadowRoot?.querySelector("dm-tag-manage")).not.toBeNull(),
+    );
+    t.page.shadowRoot
+      ?.querySelector("dm-tag-manage")
+      ?.dispatchEvent(new CustomEvent("tags-changed", { bubbles: true, composed: true }));
+    await vi.waitFor(() => expect(t.api.listTags).toHaveBeenCalledTimes(2));
+  });
+
+  it("leaves no control without an accessible name", async () => {
+    const t = await setup(items(), [fin, leg]);
+    await vi.waitFor(() => expect(bar(t.page)).not.toBeNull());
+    expect(unnamedControls(bar(t.page) as Element)).toEqual([]);
   });
 });

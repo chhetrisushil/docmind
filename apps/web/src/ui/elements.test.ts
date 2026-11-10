@@ -5,7 +5,7 @@ import { createViewRegistry } from "./session";
 
 /**
  * The tag loom-ui's registry draws each widget kind with (litRegistry and the chat registry). Hand-copied on purpose:
- * loom-ui (pinned 3b4d046) exports no kind-to-tag map; litRegistry.ts registers each tag inline, so none can be read.
+ * loom-ui (pinned fc34435) exports no kind-to-tag map; litRegistry.ts registers each tag inline, so none can be read.
  */
 const TAG: Record<string, string> = {
   Kpi: "lu-kpi",

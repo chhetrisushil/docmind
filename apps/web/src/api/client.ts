@@ -4,9 +4,12 @@ import {
   type DeleteAccountRequest,
   DeleteAccountResponse,
   DocumentDto,
+  type DocumentTag,
+  DocumentTagsResponse,
   ErasureStatusResponse,
   ListDocumentsResponse,
   ListMessagesResponse,
+  ListTagsResponse,
   type LoginRequest,
   MeResponse,
   type PatchChatRequest,
@@ -17,6 +20,8 @@ import {
   type SignUpRequest,
   SignUpResponse,
   StopChatResponse,
+  SuggestTagsResponse,
+  TagResponse,
   UiHydrateResponse,
   UiViewResponse,
   UploadDocumentResponse,
@@ -51,6 +56,16 @@ export interface Api {
   retryDocument(id: string): Promise<DocumentDto>;
   listDocuments(cursor?: string): Promise<ListDocumentsResponse>;
   getDocument(id: string): Promise<DocumentDto>;
+  listTags(): Promise<ListTagsResponse>;
+  createTag(name: string): Promise<TagResponse>;
+  renameTag(id: string, name: string): Promise<DocumentTag>;
+  deleteTag(id: string): Promise<void>;
+  addDocumentTag(documentId: string, name: string): Promise<DocumentTagsResponse>;
+  removeDocumentTag(documentId: string, tagId: string): Promise<DocumentTagsResponse>;
+  acceptTagSuggestion(documentId: string, name: string): Promise<DocumentTagsResponse>;
+  dismissTagSuggestion(documentId: string, name: string): Promise<DocumentTagsResponse>;
+  /** Starts the on-demand suggestions (202). Rejects with `ApiError`: 409 `no_summary` / `suggest_running` / `suggest_unavailable`, 429. */
+  refreshTagSuggestions(documentId: string): Promise<void>;
   uploadDocument(
     file: File,
     o?: { onProgress?(percent: number): void; signal?: AbortSignal },
@@ -109,6 +124,40 @@ export function createApi(
         schema: ListDocumentsResponse,
       }),
     getDocument: (id) => http.request("GET", `/api/documents/${seg(id)}`, { schema: DocumentDto }),
+    listTags: () => http.request("GET", "/api/tags", { schema: ListTagsResponse }),
+    createTag: (name) => http.request("POST", "/api/tags", { body: { name }, schema: TagResponse }),
+    renameTag: async (id, name) =>
+      (
+        await http.request("PATCH", `/api/tags/${seg(id)}`, {
+          body: { name },
+          schema: TagResponse,
+        })
+      ).tag,
+    deleteTag: (id) => http.request("DELETE", `/api/tags/${seg(id)}`),
+    addDocumentTag: (id, name) =>
+      http.request("POST", `/api/documents/${seg(id)}/tags`, {
+        body: { name },
+        schema: DocumentTagsResponse,
+      }),
+    removeDocumentTag: (id, tagId) =>
+      http.request("DELETE", `/api/documents/${seg(id)}/tags/${seg(tagId)}`, {
+        schema: DocumentTagsResponse,
+      }),
+    acceptTagSuggestion: (id, name) =>
+      http.request("POST", `/api/documents/${seg(id)}/tag-suggestions/accept`, {
+        body: { name },
+        schema: DocumentTagsResponse,
+      }),
+    dismissTagSuggestion: (id, name) =>
+      http.request("POST", `/api/documents/${seg(id)}/tag-suggestions/dismiss`, {
+        body: { name },
+        schema: DocumentTagsResponse,
+      }),
+    refreshTagSuggestions: async (id) => {
+      await http.request("POST", `/api/documents/${seg(id)}/tag-suggestions/refresh`, {
+        schema: SuggestTagsResponse,
+      });
+    },
     uploadDocument: (file, o = {}) =>
       new Promise((resolve, reject) => {
         if (o.signal?.aborted) return reject(new DOMException("aborted", "AbortError"));

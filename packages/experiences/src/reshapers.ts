@@ -77,9 +77,11 @@ const SHAPES: Record<string, (raw: never) => unknown> = {
     };
   },
   "library-table": (raw: RawDocuments) => ({
-    columns: ["Name", "Type", "Size", "Status", "Added"],
+    columns: ["Name", "Tags", "Type", "Size", "Status", "Added"],
     rows: raw.items.map((d) => [
       d.title,
+      // A loom-ui token cell: one chip per tag (a document has at most 20, the cell cap; a tag id is a uuid, a name 1 to 40 characters).
+      { tokens: d.tags.map((t) => ({ id: t.id, label: t.name })) },
       typeOf(d.mime),
       formatBytes(d.sizeBytes),
       STATUS_TEXT[d.status],

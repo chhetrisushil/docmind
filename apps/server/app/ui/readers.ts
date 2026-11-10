@@ -87,7 +87,7 @@ async function withCites(
 export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
   const cipher = () => deps.fields.forUser(identity.userId);
   return {
-    async documents({ limit, status }) {
+    async documents({ limit, status, tags, match }) {
       const keep = matches(status);
       const items: DocumentDto[] = [];
       let after: { t: string; i: string } | null = null;
@@ -102,6 +102,7 @@ export function readersFor(deps: UiReaderDeps, identity: Identity): UiReaders {
               cursor,
               limit: PAGE,
               tenantId: identity.tenantId,
+              ...(tags.length > 0 && { filter: { tagIds: tags, match } }),
             }),
         );
         const views = await deps.status.forPage(

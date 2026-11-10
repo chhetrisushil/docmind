@@ -16,8 +16,8 @@ export const KIND = "docmind";
  * its pin; the data provider refuses a different one (`schemaDrift`), which is how a stale view is noticed.
  */
 export const PINS = {
-  "documents.list": "docmind:documents.list@1",
-  "document.get": "docmind:document.get@1",
+  "documents.list": "docmind:documents.list@2",
+  "document.get": "docmind:document.get@2",
   "document.content": "docmind:document.content@1",
   "document.source": "docmind:document.source@1",
   "chats.list": "docmind:chats.list@1",
