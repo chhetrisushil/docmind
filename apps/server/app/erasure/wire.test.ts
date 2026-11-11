@@ -1,7 +1,7 @@
 import { ConversationNotFoundError } from "@loom/conversation";
 import { InboxClosedError } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { existingUser } from "../documents/executionCandidates";
 import { OpaqueIds, legacyIds } from "../opaqueIds";
 import { testOpaqueIds } from "../opaqueIds/testing";
@@ -71,8 +71,8 @@ describe("erasureDeps", () => {
     await deps.stopChat(who, CHAT);
     await deps.cancelTitle(who, CHAT);
     expect(calls).toEqual([
-      `stop:${chatConversationId(USER, CHAT)}`,
-      `close:${chatConversationId(USER, CHAT)}`,
+      `stop:${legacyChatConversationId(USER, CHAT)}`,
+      `close:${legacyChatConversationId(USER, CHAT)}`,
       `cancel:${executionIdFor(USER, `chat-title-${CHAT}`)}`,
     ]);
   });
@@ -400,5 +400,26 @@ describe("erasureDeps", () => {
     });
     await erasureDeps(p).eraseSubject(`h_${user.handle}`);
     expect(t.ids.cached(USER)).toBeDefined();
+  });
+
+  it("evicts the chat id resolver's memory of the user whenever the user's chat activity is forgotten, even if that throws", async () => {
+    const forgotten: string[] = [];
+    const chatIds = { forgetUser: (userId: string) => void forgotten.push(userId) };
+    await erasureDeps(parts({ chatIds }).parts).forgetActivity(USER, "h");
+    expect(forgotten).toEqual([USER]);
+    const failing = parts({
+      chatIds,
+      activity: {
+        forgetUser: async () => {
+          throw new Error("down");
+        },
+      },
+    }).parts;
+    await expect(erasureDeps(failing).forgetActivity(USER)).rejects.toThrow("down");
+    expect(forgotten).toEqual([USER, USER]); // a retried step evicts again
+  });
+
+  it("forgets no chat ids when the resolver is not wired", async () => {
+    await expect(erasureDeps(parts().parts).forgetActivity(USER, null)).resolves.toBe(0); // the activity port's own answer, no resolver involved
   });
 });

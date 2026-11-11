@@ -19,7 +19,7 @@ import {
   waitErased,
 } from "../erasure/e2eSupport";
 import { DOC, collectUntil, isReply } from "./e2eSupport";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 
 const SUMMARY = "Rolling-summary-sentinel: the reader asked about payment terms, repeatedly.";
 const SMALL_WINDOW = { DOCMIND_CHAT_CONTEXT_TOKENS: "4000", DOCMIND_CHAT_MAX_TOKENS: "1000" };
@@ -145,7 +145,7 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     expect(JSON.stringify(allFrames)).not.toContain("Rolling-summary-sentinel");
     expect(await eventsMentioning(first, "Rolling-summary-sentinel")).toBe(0);
     // the read path: the sealed store hands Loom the plain string back, the stored row is the sealed object form
-    const conversationId = chatConversationId(user.userId, chat.id) as string;
+    const conversationId = legacyChatConversationId(user.userId, chat.id) as string;
     const events = await first.durable.sealed.eventStore.read(conversationId);
     const fit = events.find(
       (e) =>
@@ -249,7 +249,7 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     script(st, () => (failing ? { status: 400 } : summarizes()));
     const user = await signUpWithDocument(st, "bob@example.com");
     const chat = await newChat(st, user);
-    const conversation = chatConversationId(user.userId, chat.id) as string;
+    const conversation = legacyChatConversationId(user.userId, chat.id) as string;
     const seen = new Set<string>();
     for (let n = 1; n <= 8 && summarizerRequests(st).length === 0; n++) {
       const { reply } = await turn(st, user, chat.id, long(n), seen);
@@ -283,7 +283,7 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     script(old, summarizes);
     const user = await signUpWithDocument(old, "cy@example.com");
     const chat = await newChat(old, user);
-    const conversation = chatConversationId(user.userId, chat.id) as string;
+    const conversation = legacyChatConversationId(user.userId, chat.id) as string;
     const seen = new Set<string>();
     let n = 0;
     while (n < 5) {
@@ -327,7 +327,10 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     n++;
     expect((await turn(fresh, user, chat.id, long(n), seen)).reply.status).toBe("complete");
     const successor = await startedAs(fresh, `${conversation}~1`);
-    const current = await startedAs(fresh, chatConversationId(user.userId, chat2.id) as string);
+    const current = await startedAs(
+      fresh,
+      legacyChatConversationId(user.userId, chat2.id) as string,
+    );
     expect(successor?.flowHash).toBeDefined();
     expect(current?.flowHash).toBeDefined();
     expect(successor?.flowHash).toBe(current?.flowHash); // the 1.1.0 hash, which a new chat records

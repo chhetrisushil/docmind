@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { CHAT_ACTIVITY_MODEL, ChatActivity } from "../chats/activity";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { InMemoryProgressBus } from "../documents/progress";
 import { type UserExecutionLister, forgetUserRows, isUserExecution } from "./forgetUser";
 import { IngestStatus } from "./ingestStatus";
@@ -47,7 +47,7 @@ function setup() {
     userExecutions,
     onError: () => {},
   });
-  const conv = (u: string, c: string) => chatConversationId(u, c);
+  const conv = (u: string, c: string) => legacyChatConversationId(u, c);
   log.append(
     ...ingestRun(ingestOf(A, docA), "ready"),
     ...ingestRun(ingestOf(B, docB), "ready"),
@@ -105,7 +105,7 @@ describe("forgetUser over both models", () => {
     await status.boot();
     await activity.boot();
     await activity.forgetUser(A);
-    const late = evt(chatConversationId(A, chatA), 1, "DECISION_RECORDED", {
+    const late = evt(legacyChatConversationId(A, chatA), 1, "DECISION_RECORDED", {
       decisionId: "conv#o1:user",
       source: "conversation-record",
       choice: {},

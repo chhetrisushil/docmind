@@ -1,7 +1,7 @@
 import { LlmAbortedError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { chatTitleBind, setTitle } from "../../chats/sessions";
 import { type ChatHarness, seedChat, startChatServer } from "../../chats/testHarness";
 import { withTenant } from "../../db/tenant";
@@ -68,7 +68,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
       ])
     ).rows[0];
   const exchange = (chatId: string) =>
-    h.fake.addTurn(chatConversationId(U1, chatId), {
+    h.fake.addTurn(legacyChatConversationId(U1, chatId), {
       question: "When is payment due?",
       answer: "In 30 days [[0b0e7c9a-1111-4222-8333-444455556666]].",
     });
@@ -87,7 +87,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
   it("titles a chat from its first question, sealed, as the automatic title", async () => {
     const chatId = await seedChat(h, ALICE);
     exchange(chatId);
-    h.fake.addTurn(chatConversationId(U1, chatId), {
+    h.fake.addTurn(legacyChatConversationId(U1, chatId), {
       question: "A later question",
       answer: "A later answer",
     });

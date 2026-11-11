@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { chatConversationId } from "./chats/ids";
+import { legacyChatConversationId } from "./chats/ids";
 import { compactionExempt } from "./config";
 import { legacyIds } from "./opaqueIds";
 
@@ -15,7 +15,7 @@ describe("compaction (M5 carry d: guards for the Loom residual)", () => {
   it("exempts every execution family that can be suspended or that the read models fold from its first event", () => {
     expect(compactionExempt(executionIdFor(USER, `ingest-${DOC}`))).toBe(true);
     expect(compactionExempt(`${executionIdFor(USER, `ingest-${DOC}`)}.2`)).toBe(true);
-    expect(compactionExempt(chatConversationId(USER, CHAT))).toBe(true); // parked on its inbox: suspendable
+    expect(compactionExempt(legacyChatConversationId(USER, CHAT))).toBe(true); // parked on its inbox: suspendable
   });
 
   it("leaves only the one-step, always-terminal chat-title flow compactable, and nothing unknown is exempt by accident", () => {

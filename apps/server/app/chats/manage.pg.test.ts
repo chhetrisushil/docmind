@@ -4,11 +4,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, T1, U1, seedDoc } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { chatTitleBind, setTitle } from "./sessions";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 
-const convOf = (chatId: string) => chatConversationId(ALICE.userId, chatId);
+const convOf = (chatId: string) => legacyChatConversationId(ALICE.userId, chatId);
 const rowOf = async (h: ChatHarness, id: string) =>
   (
     await h.owner.query(

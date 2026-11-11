@@ -3,7 +3,7 @@ import { ConversationNotFoundError, InvalidCursorError } from "@loom/conversatio
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf } from "./access";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { reasoningBody } from "./reasoningRead";
 import type { ChatRouteDeps } from "./routes";
 
@@ -32,7 +32,7 @@ export function chatReasoningRoutes(deps: ChatRouteDeps): Record<string, Handler
             store: deps.chat.reasoning,
           },
           { tenantId: identity.tenantId, userId: identity.userId, chatId: chat.id },
-          chatConversationId(identity.userId, chat.id),
+          legacyChatConversationId(identity.userId, chat.id),
           query.data.cursor,
           { principal: principalOf(identity) },
         );

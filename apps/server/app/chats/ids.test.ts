@@ -4,19 +4,19 @@ import { testOpaqueIds } from "../opaqueIds/testing";
 import {
   CHAT_EFFECT_IDS,
   CHAT_TOOL_IDS,
-  chatConversationId,
   chatIdOfConversation,
   isChatFlowId,
   isChatTitleExecution,
   isRecoverableChatExecution,
+  legacyChatConversationId,
 } from "./ids";
 
 const USER = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const CHAT = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
 
-describe("chatConversationId", () => {
+describe("legacyChatConversationId", () => {
   it("is u_<user>.c-<chat> and is a valid Loom conversation id", () => {
-    expect(chatConversationId(USER, CHAT)).toBe(`u_${USER}.c-${CHAT}`);
+    expect(legacyChatConversationId(USER, CHAT)).toBe(`u_${USER}.c-${CHAT}`);
   });
 
   it.each([
@@ -27,13 +27,13 @@ describe("chatConversationId", () => {
     ["a separator in the user", `${USER}:x`, CHAT],
     ["a generation suffix in the chat", USER, `${CHAT}~1`],
   ])("refuses %s", (_name, user, chat) => {
-    expect(() => chatConversationId(user, chat)).toThrow(RangeError);
+    expect(() => legacyChatConversationId(user, chat)).toThrow(RangeError);
   });
 });
 
 describe("chatIdOfConversation", () => {
   it("reads the user and the chat back, with or without a generation", () => {
-    const id = chatConversationId(USER, CHAT);
+    const id = legacyChatConversationId(USER, CHAT);
     expect(chatIdOfConversation(id)).toEqual({ userId: USER, chatId: CHAT });
     expect(chatIdOfConversation(`${id}~1`)).toEqual({ userId: USER, chatId: CHAT });
     expect(chatIdOfConversation(`${id}~123456789`)).toEqual({ userId: USER, chatId: CHAT });
@@ -56,7 +56,7 @@ describe("chatIdOfConversation", () => {
 
 describe("isChatTitleExecution and isRecoverableChatExecution", () => {
   it("knows a title execution, a conversation and its generations, and nothing else", () => {
-    const conv = chatConversationId(USER, CHAT);
+    const conv = legacyChatConversationId(USER, CHAT);
     const title = `u_${USER}:chat-title-${CHAT}`;
     expect(isChatTitleExecution(title)).toBe(true);
     expect([conv, `${conv}~2`, title].every(isRecoverableChatExecution)).toBe(true);

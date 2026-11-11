@@ -1,6 +1,8 @@
 import type { ChatReasoningDto } from "@docmind/contracts";
 import type { EffectContext } from "@loom/effect-runtime";
-import { chatConversationId } from "./ids";
+import { type UserIdSource, existingUser } from "../documents/executionCandidates";
+import { type ChatIdFormat, type ChatIdResolver, legacyBuilders, opaqueBuilders } from "./chatIds";
+import { legacyChatConversationId } from "./ids";
 import type { ReplyReasoning, ReplyRef } from "./reasoningRead";
 import type { ReasoningRows } from "./reasoningStore";
 import type { ChatRef, PgTurnItems, TurnItem } from "./turnItems";
@@ -11,7 +13,7 @@ export const C = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
 
 /** The context Loom gives a model frame of turn key 3 in chat C, attempt 1. */
 export const modelCtx = (over: Partial<EffectContext> = {}): EffectContext => ({
-  executionId: chatConversationId(U, C),
+  executionId: legacyChatConversationId(U, C),
   stepId: "conv#o3#turn:1",
   workflowId: "doc-chat",
   attempt: 1,
@@ -78,4 +80,32 @@ export class FakeReplyReasoning implements ReplyReasoning {
     this.calls.push([...replies]);
     return new Map(replies.map((r) => [r.cursor, this.byCursor.get(r.cursor) ?? null]));
   }
+}
+
+/**
+ * A resolver with no database: `format` decides per chat (default legacy, what every existing test assumes), `forRow` trusts the row, and an
+ * opaque chat needs `ids`. For unit tests that pass a resolver to a route, a starter or a step.
+ */
+export function fixedChatIds(
+  format: (userId: string, chatId: string) => ChatIdFormat = () => "legacy",
+  ids?: UserIdSource,
+): ChatIdResolver {
+  const build = async (
+    who: { tenantId: string; userId: string },
+    chatId: string,
+    f: ChatIdFormat,
+  ) => {
+    if (f === "legacy") return legacyBuilders(who.userId, chatId);
+    const user = ids && (await existingUser(ids, who));
+    return user ? opaqueBuilders(user, chatId) : null;
+  };
+  return {
+    forRow: (who, chat) => build(who, chat.id, chat.id_format),
+    forRef: (ref) => build(ref, ref.chatId, format(ref.userId, ref.chatId)),
+    forNew: async (who, chatId) => {
+      if (!ids) throw new Error("fixedChatIds: forNew needs an id source");
+      return opaqueBuilders(await ids.ensureUser(who), chatId);
+    },
+    forgetUser: () => {},
+  };
 }

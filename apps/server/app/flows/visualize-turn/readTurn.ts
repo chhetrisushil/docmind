@@ -1,7 +1,7 @@
 import type { ConversationReader, HistoryEntry } from "@loom/conversation";
 import type { Pool } from "pg";
 import { citeReply, documentTitles } from "../../chats/citations";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { turnKeyOfRecord } from "../../chats/scope";
 import type { PgTurnItems, StoredPassage } from "../../chats/turnItems";
 import type { FieldCrypto } from "../../crypto/fields";
@@ -45,7 +45,7 @@ async function findReply(
   ref: TurnRef,
   signal?: AbortSignal,
 ): Promise<HistoryEntry | null | "too_old"> {
-  const conversationId = chatConversationId(ref.userId, ref.chatId);
+  const conversationId = legacyChatConversationId(ref.userId, ref.chatId);
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const res = await deps.reader.read(conversationId, {

@@ -29,7 +29,7 @@ import {
 } from "./access";
 import { chatActivityOf } from "./activityRead";
 import { toChatDto } from "./dto";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { chatManageRoutes } from "./manageRoutes";
 import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
@@ -152,7 +152,7 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       try {
         // The only place a chat conversation starts (startRatchet.test.ts checks this exact argument).
         await deps.chat.conversations.start({
-          conversationId: chatConversationId(identity.userId, id),
+          conversationId: legacyChatConversationId(identity.userId, id),
           principal: principalOf(identity),
         });
       } catch (err) {

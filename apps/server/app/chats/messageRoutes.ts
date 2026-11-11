@@ -13,7 +13,7 @@ import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf, unavailable } from "./access";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { HISTORY_PAGE, readHistoryPage, toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
 
@@ -51,7 +51,7 @@ export function chatMessageRoutes(deps: ChatRouteDeps): Record<string, Handler> 
         try {
           const page = await readHistoryPage(
             deps.chat.conversations,
-            chatConversationId(identity.userId, chat.id),
+            legacyChatConversationId(identity.userId, chat.id),
             principalOf(identity),
             query.data.cursor,
             HISTORY_PAGE,
@@ -84,7 +84,7 @@ export function chatMessageRoutes(deps: ChatRouteDeps): Record<string, Handler> 
         let sent: { messageId: string };
         try {
           sent = await deps.chat.conversations.sendTurn(
-            chatConversationId(identity.userId, chat.id),
+            legacyChatConversationId(identity.userId, chat.id),
             body.text,
             {
               principal: principalOf(identity),

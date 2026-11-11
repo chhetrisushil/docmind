@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { visualizeTurnFlow } from "./flow";
 import { turnExecutionId } from "./ids";
 import { loomTurnStarter } from "./start";
@@ -45,8 +45,8 @@ const options = (over = {}) => ({
   ...over,
 });
 const settled = () => ({
-  conversationId: chatConversationId(user, chat),
-  executionId: chatConversationId(user, chat),
+  conversationId: legacyChatConversationId(user, chat),
+  executionId: legacyChatConversationId(user, chat),
   turn: 2,
   ord: 4,
   status: "complete" as const,

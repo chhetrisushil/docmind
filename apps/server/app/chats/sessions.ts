@@ -1,5 +1,6 @@
 import { ChatScope } from "@docmind/contracts";
 import type { PoolClient } from "pg";
+import type { ChatIdFormat } from "./chatIds";
 
 /** The seal bind of `chat_sessions.title_enc` (spec 4.4). */
 export const chatTitleBind = (id: string) => `chat:${id}:title`;
@@ -12,12 +13,14 @@ export interface ChatSessionRow {
   title_enc: unknown | null;
   title_source: "none" | "auto" | "user";
   scope: ChatScope;
+  /** Which id format all of this chat's Loom ids use (migration 0039): fixed at creation, never changed. */
+  id_format: ChatIdFormat;
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
 }
 
-const COLUMNS = "id, title_enc, title_source, scope, created_at, updated_at, deleted_at";
+const COLUMNS = "id, title_enc, title_source, scope, id_format, created_at, updated_at, deleted_at";
 
 /** A fixed message: a scope can name documents, and a driver or zod error would echo them. */
 function checked<T extends { scope: unknown }>(row: T): T & { scope: ChatScope } {
@@ -33,11 +36,13 @@ export async function insertChat(
   userId: string,
   id: string,
   scope: ChatScope,
+  /** `"opaque"` from the create route; a row without it is `legacy`, the column default (Decision 5). */
+  idFormat: ChatIdFormat = "legacy",
 ): Promise<ChatSessionRow> {
   const { rows } = await tx.query<ChatSessionRow>(
-    `INSERT INTO chat_sessions (id, tenant_id, user_id, scope) VALUES ($1, $2, $3, $4::jsonb)
+    `INSERT INTO chat_sessions (id, tenant_id, user_id, scope, id_format) VALUES ($1, $2, $3, $4::jsonb, $5)
      RETURNING ${COLUMNS}`,
-    [id, tenantId, userId, JSON.stringify(scope)],
+    [id, tenantId, userId, JSON.stringify(scope), idFormat],
   );
   return checked(rows[0] as ChatSessionRow);
 }
@@ -86,7 +91,7 @@ export async function listChats(
   page: { cursor?: { t: string; i: string }; limit: number },
 ): Promise<ChatListRow[]> {
   const { rows } = await tx.query<ChatListRow>(
-    `SELECT c.id, c.title_enc, c.title_source, c.scope, c.created_at, c.updated_at, c.deleted_at,
+    `SELECT c.id, c.title_enc, c.title_source, c.scope, c.id_format, c.created_at, c.updated_at, c.deleted_at,
             COALESCE(a.messages, 0)::int AS messages, a.last_at,
             COALESCE(a.last_at, c.created_at) AS sort_at,
             to_char(COALESCE(a.last_at, c.created_at) AT TIME ZONE 'UTC',

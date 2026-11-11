@@ -1,6 +1,6 @@
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { chatTitleBind } from "../../chats/sessions";
 import { type ChatHarness, seedChat, startChatServer } from "../../chats/testHarness";
 import { buildApp } from "../../config";
@@ -19,7 +19,7 @@ describe.skipIf(!PG_URL)("chat-title through Loom (needs DOCMIND_TEST_PG_URL)", 
 
   it("runs the one-step flow durably, titles the chat once, and a second start does nothing", async () => {
     const chatId = await seedChat(h, ALICE);
-    h.fake.addTurn(chatConversationId(U1, chatId), {
+    h.fake.addTurn(legacyChatConversationId(U1, chatId), {
       question: "When is payment due?",
       answer: "In 30 days.",
     });

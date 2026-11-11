@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, openSse } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { seedChat, startChatServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("chat streams closeUser (needs DOCMIND_TEST_PG_URL)", () => {
@@ -21,8 +21,8 @@ describe.skipIf(!PG_URL)("chat streams closeUser (needs DOCMIND_TEST_PG_URL)", (
         return s;
       };
       const [a, b] = [await open(chatA, "alice"), await open(chatB, "alice2")];
-      const convA = chatConversationId(ALICE.userId, chatA);
-      const convB = chatConversationId(ALICE2.userId, chatB);
+      const convA = legacyChatConversationId(ALICE.userId, chatA);
+      const convB = legacyChatConversationId(ALICE2.userId, chatB);
       expect(h.wiring.hub.subscriberCount(convA)).toBe(1);
 
       const gone = nextEnd();

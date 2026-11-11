@@ -7,7 +7,7 @@ import type { LlmProvider } from "@loom/llm";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { loadChatSettings } from "../../chats/settings";
 import { buildServer } from "../../compose";
 import { loadBlobRoot, loadLimits } from "../../documents/limits";
@@ -55,7 +55,7 @@ function compose(o: { chat: boolean; visuals: boolean; query?: ReturnType<typeof
 const settled = () => {
   const user = randomUUID();
   const chat = randomUUID();
-  const id = chatConversationId(user, chat);
+  const id = legacyChatConversationId(user, chat);
   return {
     user,
     chat,

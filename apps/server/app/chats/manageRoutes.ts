@@ -9,7 +9,7 @@ import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, normalizeScope, notFound, principalOf, scopeIsOwned } from "./access";
 import { chatActivityOf } from "./activityRead";
 import { toChatDto } from "./dto";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import type { ChatRouteDeps } from "./routes";
 import { chatTitleBind, getChat, setScope, setTitle, softDeleteChat } from "./sessions";
 
@@ -61,7 +61,7 @@ export function chatManageRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       if (!removed) return notFound(res); // a concurrent delete won
       // The row is gone from every read now (open streams end on their next heartbeat). Failures below are
       // logged by class only and never undo the delete.
-      const conversationId = chatConversationId(identity.userId, chat.id);
+      const conversationId = legacyChatConversationId(identity.userId, chat.id);
       try {
         deps.chat.stops.stop(conversationId);
       } catch (err) {
@@ -92,7 +92,7 @@ export function chatManageRoutes(deps: ChatRouteDeps): Record<string, Handler> {
         if (!chat) return notFound(res);
         // True when a turn was listening. It can be true for a turn that finished an instant ago (its listener is
         // removed just after the turn ends), in which case the stop is a no-op.
-        const stopped = deps.chat.stops.stop(chatConversationId(identity.userId, chat.id));
+        const stopped = deps.chat.stops.stop(legacyChatConversationId(identity.userId, chat.id));
         json(res, 202, { stopped } satisfies StopChatResponse);
       },
     ),

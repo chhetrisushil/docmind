@@ -1,12 +1,12 @@
 import type { EffectContext } from "@loom/effect-runtime";
 import { describe, expect, it } from "vitest";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { ChatScopeError, chatScope, scopeOfEffect, turnKeyOfRecord } from "./scope";
 
 const T = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const C = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
-const EXEC = chatConversationId(U, C);
+const EXEC = legacyChatConversationId(U, C);
 
 const ctx = (over: Partial<EffectContext> = {}): EffectContext => ({
   executionId: EXEC,

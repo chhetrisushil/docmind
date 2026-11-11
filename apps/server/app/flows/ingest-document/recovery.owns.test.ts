@@ -29,7 +29,7 @@ vi.mock("@loom/workflow-runtime", async (orig) => ({
 }));
 
 import { FlowCodeMismatchError } from "@loom/workflow-runtime";
-import { chatConversationId, isRecoverableChatExecution } from "../../chats/ids";
+import { isRecoverableChatExecution, legacyChatConversationId } from "../../chats/ids";
 import { recoverIngest } from "./recovery";
 
 const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
@@ -53,15 +53,15 @@ describe("recoverIngest owns", () => {
     await recoverIngest(runtime, source, { graceMs: 10, now: () => 1_000 });
     const claim = seen[0]?.isAbandoned;
     expect(claim?.({ executionId: `u_${U}:ingest-${C}`, ...OLD })).toBe(true);
-    expect(claim?.({ executionId: chatConversationId(U, C), ...OLD })).toBe(false);
+    expect(claim?.({ executionId: legacyChatConversationId(U, C), ...OLD })).toBe(false);
   });
 
   it("claims a chat conversation, and a later generation of one, when told to", async () => {
     const owns = (id: string) => id.includes(":ingest-") || isRecoverableChatExecution(id);
     await recoverIngest(runtime, source, { graceMs: 10, now: () => 1_000, owns });
     const claim = seen[0]?.isAbandoned;
-    expect(claim?.({ executionId: chatConversationId(U, C), ...OLD })).toBe(true);
-    expect(claim?.({ executionId: `${chatConversationId(U, C)}~3`, ...OLD })).toBe(true);
+    expect(claim?.({ executionId: legacyChatConversationId(U, C), ...OLD })).toBe(true);
+    expect(claim?.({ executionId: `${legacyChatConversationId(U, C)}~3`, ...OLD })).toBe(true);
     expect(claim?.({ executionId: "x-other", ...OLD })).toBe(false);
   });
 
@@ -83,7 +83,7 @@ describe("recoverIngest owns", () => {
     await recoverIngest(runtime, source, { graceMs: 10, owns: () => true });
     const onError = seen[0]?.onError;
     const mismatch = () => new FlowCodeMismatchError("x", "doc-chat", "1.0.0", "2.0.0", "code");
-    onError?.(chatConversationId(U, C), mismatch());
+    onError?.(legacyChatConversationId(U, C), mismatch());
     onError?.(`u_${U}:chat-title-${C}`, mismatch());
     expect(cancel).not.toHaveBeenCalled();
     expect(errors).toHaveBeenCalledWith(

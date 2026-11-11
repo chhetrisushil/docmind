@@ -9,7 +9,7 @@ import {
 import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import {
   ChatReasoningStore,
   MAX_REASONING_BYTES,
@@ -21,7 +21,7 @@ import { C, MemoryReasoningRows, T, U, modelCtx } from "./testing";
 
 const C2 = "c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4";
 const U2 = "a2a2a2a2-a2a2-4a2a-8a2a-a2a2a2a2a2a2";
-const EXEC = chatConversationId(U, C);
+const EXEC = legacyChatConversationId(U, C);
 const SCOPE: ChatCallScope = {
   tenantId: T,
   userId: U,
@@ -93,8 +93,8 @@ describe("ChatReasoningStore", () => {
     const s = setup();
     const enc = new TextEncoder();
     for (const bytes of [
-      sealReasoningText(TEXT, chatConversationId(U, C2)), // another chat of the same owner
-      sealReasoningText(TEXT, chatConversationId(U2, C)), // another owner
+      sealReasoningText(TEXT, legacyChatConversationId(U, C2)), // another chat of the same owner
+      sealReasoningText(TEXT, legacyChatConversationId(U2, C)), // another owner
       sealReasoningText(TEXT, "u_a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1:ingest-x.1"), // not a conversation
       enc.encode("plain text, not an envelope"),
       enc.encode(JSON.stringify({ e: EXEC })),
@@ -207,7 +207,7 @@ describe("ChatReasoningStore with Loom's capture, resolver and audit reader", ()
     // a resolver call from another execution is "not yours"
     const foreign = await s.inScope(() =>
       reasoningStoreResolver(s.store)(part.textRef as { address: string }, {
-        executionId: chatConversationId(U, C2),
+        executionId: legacyChatConversationId(U, C2),
         origin: "reasoning",
         maxBytes: 1024 * 1024,
       }),

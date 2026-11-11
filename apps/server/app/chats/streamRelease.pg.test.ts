@@ -4,11 +4,11 @@ import type { Authenticator } from "@docmind/auth";
 import { describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, openSse, testAuthenticator } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { CHAT_STREAM_ROUTE, type ChatStreamDeps, chatStreamRoutes } from "./stream";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 
-const convOf = (chatId: string) => chatConversationId(ALICE.userId, chatId);
+const convOf = (chatId: string) => legacyChatConversationId(ALICE.userId, chatId);
 
 /** A server of its own whose streams report their end, so a test awaits the release instead of sleeping. */
 async function own(stream: Partial<ChatStreamDeps> = {}) {

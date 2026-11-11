@@ -28,11 +28,11 @@ export const CHAT_EFFECT_IDS: readonly string[] = [
 export const isChatFlowId = (id: string): boolean => id === CHAT_FLOW_ID || id === CHAT_GK_FLOW_ID;
 
 /**
- * The Loom conversation id of a chat. PHASE 2 switches this to `UserIds.conversation` (`h_<H>.c-<C>`); until then chats keep the old
- * `u_<user>.c-<chat>` (Loom ids may not contain a colon, so the `u_<uuid>:` form is not available). `subjectOfExecution` and
- * `chatIdOfConversation` read both formats, so every event of the chat (its generations `~n`, its inbox) is sealed under the owner's key.
+ * The OLD-format Loom conversation id of a chat, `u_<user>.c-<chat>`: what every chat created before phase 2 runs under, and what
+ * `ChatIds` (`chats/chatIds.ts`) builds for a chat whose `id_format` is `legacy`. Production code gets a chat's ids from the resolver, never
+ * from here. Loom ids may not contain a colon, so the `u_<uuid>:` form is not available.
  */
-export function chatConversationId(userId: string, chatId: string): ChatConversationId {
+export function legacyChatConversationId(userId: string, chatId: string): ChatConversationId {
   // The id module lower-cases a chat id it is given; this builder has always refused one that is not already canonical.
   if (!CANONICAL_CHAT.test(chatId)) {
     throw new RangeError(

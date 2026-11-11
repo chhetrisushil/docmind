@@ -5,7 +5,7 @@ import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { T1, T2, U1, U1B, U2 } from "../documents/testHarness";
 import { type PgFixture, startPgFixture } from "../flows/ingest-document/pgFixture";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
 import { ChatReasoningStore } from "./reasoningStore";
 import { type ChatCallScope, chatScope } from "./scope";
@@ -28,7 +28,7 @@ describe.skipIf(!PG_URL)("chat reasoning texts (needs DOCMIND_TEST_PG_URL)", () 
   });
   const put = (ref: ChatRef, text = TEXT) =>
     chatScope.run(scopeOf(ref), () =>
-      store.put(sealReasoningText(text, chatConversationId(ref.userId, ref.chatId))),
+      store.put(sealReasoningText(text, legacyChatConversationId(ref.userId, ref.chatId))),
     );
   const raw = async (sql: string, values: unknown[] = []) =>
     (await fx.db.owner.query(sql, values)).rows;
@@ -82,7 +82,7 @@ describe.skipIf(!PG_URL)("chat reasoning texts (needs DOCMIND_TEST_PG_URL)", () 
     // the composite foreign key (tenant, user, chat) has no such chat
     await expect(
       chatScope.run(scopeOf({ ...theirs, userId: U1 }), () =>
-        store.put(sealReasoningText(TEXT, chatConversationId(U1, theirs.chatId))),
+        store.put(sealReasoningText(TEXT, legacyChatConversationId(U1, theirs.chatId))),
       ),
     ).rejects.toMatchObject({ code: "23503" });
   });
