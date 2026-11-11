@@ -112,101 +112,39 @@ describe("recoverIngest owns", () => {
 });
 
 describe("recoverIngest erased", () => {
-  const erasedId = `h_${"a".repeat(26)}:ingest-x.2`;
-  const liveChat = chatConversationId(U, C);
-  const subjectOf = (id: string) =>
-    id.startsWith("h_") ? id.slice(0, 28) : id.startsWith("u_") ? U : undefined;
-
-  it("hands Loom no execution of an erased subject, keeps the cursor, and asks the key store once per subject", async () => {
-    const destroyed = vi.fn(async (subject: string) => subject.startsWith("h_"));
-    const pages = vi.fn(async (o?: { cursor?: string }) =>
-      o?.cursor === undefined
-        ? { executionIds: ["__loom_inbox__:x", erasedId, `${erasedId}-r1`], nextCursor: "c1" }
-        : { executionIds: [liveChat] },
-    );
-    await recoverIngest(
-      runtime,
-      { listExecutionsPage: pages, listExecutions: async () => [erasedId, liveChat] } as never,
-      {
-        graceMs: 0,
-        owns: () => true,
-        erased: { subjectOf, destroyed },
-      },
-    );
-    const source = seen[0]?.source;
-    // A page the filter empties of executions still carries the store's cursor, so the walk reaches the live chat after it.
-    expect(await source?.listExecutionsPage?.()).toEqual({
-      executionIds: ["__loom_inbox__:x"],
-      nextCursor: "c1",
-    });
-    expect(await source?.listExecutionsPage?.({ cursor: "c1" })).toEqual({
-      executionIds: [liveChat],
-    });
-    expect(await source?.listExecutions?.()).toEqual([liveChat]);
-    expect(destroyed.mock.calls.map(([s]) => s).sort()).toEqual([U, `h_${"a".repeat(26)}`]);
-  });
-
-  it("a key-store lookup that fails keeps the execution, and logs the error class once per pass, no id", async () => {
+  it("an erased execution left unfinished is logged without its id, cancels nothing, and is never 'recovery failed'", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    await recoverIngest(
-      runtime,
-      { listExecutions: async () => [erasedId, `${erasedId}-r1`, liveChat] } as never,
-      {
-        graceMs: 0,
-        erased: { subjectOf, destroyed: async () => Promise.reject(new Error(`down ${U}`)) },
-      },
-    );
-    expect(await seen[0]?.source?.listExecutions?.()).toEqual([
-      erasedId,
-      `${erasedId}-r1`,
-      liveChat,
-    ]);
-    expect(await seen[0]?.source?.listExecutions?.()).toHaveLength(3);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith("recovery erased-check failed", "Error");
-    expect(JSON.stringify(warn.mock.calls)).not.toContain(U);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await recoverIngest(runtime, source, { graceMs: 10, owns: () => true });
+    const id = `h_${"a".repeat(26)}:ingest-x.2`;
+    // The shape Loom reports (recoverAbandoned `noteErased`): a plain Error named ErasedNotTerminalError, its message naming the id.
+    const err = Object.assign(new Error(`execution ${id} was erased while running`), {
+      name: "ErasedNotTerminalError",
+      status: "running",
+    });
+    seen[0]?.onError?.(id, err);
+    expect(warn).toHaveBeenCalledWith("recovery found an erased execution left unfinished");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(id);
+    expect(errors).not.toHaveBeenCalled();
+    expect(cancel).not.toHaveBeenCalled();
+    warn.mockClear();
+    // A stopped pass still says it: the erased branch comes before the stopped suppression.
+    await recoverIngest(runtime, source, { graceMs: 10, owns: () => true, stopped: () => true });
+    seen[1]?.onError?.(id, err);
+    expect(warn).toHaveBeenCalledWith("recovery found an erased execution left unfinished");
     warn.mockRestore();
+    errors.mockRestore();
   });
 
-  it("runs at most 16 key-store lookups at once", async () => {
-    let active = 0;
-    let peak = 0;
-    const destroyed = async () => {
-      peak = Math.max(peak, ++active);
-      await new Promise((r) => setTimeout(r, 2));
-      active--;
-      return false;
-    };
-    const ids = Array.from({ length: 50 }, (_, i) => `h_${String(i).padStart(26, "0")}:ingest-x.2`);
-    await recoverIngest(runtime, { listExecutions: async () => ids } as never, {
-      graceMs: 0,
-      erased: { subjectOf, destroyed },
-    });
-    expect(await seen[0]?.source?.listExecutions?.()).toEqual(ids);
-    expect(peak).toBe(16);
-  });
-
-  it("filters the expired leases too, and leaves every other lease call to the store", async () => {
-    const acquire = vi.fn(async () => "held");
-    const store = {
-      expired: async () => [{ executionId: erasedId }, { executionId: liveChat }],
-      acquire,
-    };
+  it("hands Loom the source and the leases as given: Loom itself skips erased executions", async () => {
+    const leases = { owner: "n1", store: { expired: vi.fn(), acquire: vi.fn() } };
+    await recoverIngest(runtime, source, { graceMs: 10, owns: () => true });
+    expect(seen[0]?.source).toBe(source);
     await recoverIngest(runtime, source, {
-      graceMs: 0,
-      leases: { store: store as never, owner: "o" },
-      erased: { subjectOf, destroyed: async (s) => s.startsWith("h_") },
+      graceMs: 10,
+      owns: () => true,
+      leases: leases as never,
     });
-    const leases = seen[0]?.leases;
-    expect(leases?.owner).toBe("o");
-    expect(await leases?.store.expired()).toEqual([{ executionId: liveChat }]);
-    expect(await leases?.store.acquire(liveChat, "o", 1)).toBe("held");
-    expect(acquire).toHaveBeenCalledWith(liveChat, "o", 1);
-  });
-
-  it("without `erased` the source and the leases go to Loom as given", async () => {
-    const given = { listExecutions: async () => [erasedId] };
-    await recoverIngest(runtime, given as never, { graceMs: 0 });
-    expect(seen[0]?.source).toBe(given);
+    expect(seen[1]?.leases).toBe(leases);
   });
 });
