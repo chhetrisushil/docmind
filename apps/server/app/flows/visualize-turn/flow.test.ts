@@ -8,6 +8,7 @@ import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatBus, type LiveChatEvent } from "../../chats/bus";
+import { fixedChatIds } from "../../chats/testing";
 import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { subjectOfExecution } from "../../subject";
@@ -17,9 +18,12 @@ import { visualsPlanner } from "../visualize-document/planner";
 import { childrenOf } from "../visualize-document/testing";
 import type { TurnVisualizeDeps } from "./deps";
 import { TURN_STEPS, TurnOutput, visualizeTurnFlow } from "./flow";
-import { turnExecutionId, turnExperienceId } from "./ids";
 import { TURN_RETRY } from "./model";
 import type { TurnRead } from "./readTurn";
+import {
+  legacyTurnExecutionId as turnExecutionId,
+  legacyTurnExperienceId as turnExperienceId,
+} from "./testing";
 
 const LABEL = "Zebra-Secret-Revenue";
 const SUMMARY = "Zebra-Secret-Summary-Text";
@@ -106,6 +110,7 @@ function stack(o: {
   ) as unknown as TurnVisualizeDeps["stored"];
   const deps: TurnVisualizeDeps = {
     guard: { begin: async () => {} },
+    chatIds: fixedChatIds(),
     turn: { read: async () => (o.turn === undefined ? CITED : o.turn) },
     stored: storedDocumentFacts,
     turnFacts: {

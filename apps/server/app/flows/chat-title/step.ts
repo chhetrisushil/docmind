@@ -9,7 +9,7 @@ import type { ConversationReader } from "@loom/conversation";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { Pool } from "pg";
-import { legacyChatConversationId } from "../../chats/ids";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import { chatTitleBind, getChat, setTitle } from "../../chats/sessions";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
@@ -20,6 +20,8 @@ import { cleanTitle, titleRequest } from "./title";
 export interface ChatTitleDeps {
   pool: Pool;
   fields: FieldCrypto;
+  /** The chat's own id format for its conversation. */
+  chatIds: Pick<ChatIdResolver, "forRow">;
   /** The decrypting reader of the conversation log (`createConversationReader(eventStore)`); it does not authorize. */
   reader: Pick<ConversationReader, "read">;
   /** Absent when the title role is off: the step then skips. */
@@ -72,7 +74,9 @@ export function chatTitleEffect(deps: ChatTitleDeps): Effect<ChatTitleInput, Cha
         getChat(tx, ref.userId, ref.chatId),
       );
       if (!row || row.title_source !== "none") return SKIPPED;
-      const conversationId = legacyChatConversationId(ref.userId, ref.chatId);
+      const ids = await deps.chatIds.forRow(ref, row);
+      if (!ids) return SKIPPED; // an opaque chat whose owner's key is gone
+      const conversationId = ids.conversationId();
       const wait = async (attempt: number) => {
         await sleep(
           (CHAT_TITLE_RETRY.backoffMs ?? 0) *

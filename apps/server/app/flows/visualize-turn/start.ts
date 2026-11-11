@@ -5,8 +5,10 @@ import {
   type RegisteredFlow,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import { rerunTracker } from "../rerunTracker";
-import { type TurnRef, turnExecutionId } from "./ids";
+import { TurnGoneError } from "./errors";
+import type { TurnRef } from "./ids";
 import { TurnInput } from "./model";
 import { type TriggerDeps, turnToVisualize } from "./trigger";
 
@@ -27,6 +29,8 @@ export interface TurnVisualsStarter {
 }
 
 export interface TurnStarterOptions extends TriggerDeps {
+  /** Builds the turn's run id in its chat's own format. */
+  chatIds: Pick<ChatIdResolver, "forRef">;
   onError?: (err: unknown) => void;
 }
 
@@ -55,7 +59,9 @@ export function loomTurnStarter(
       chatId: ref.chatId,
       ord: ref.ord,
     });
-    const executionId = turnExecutionId(input.userId, input.chatId, input.ord, rerun);
+    const ids = await o.chatIds.forRef(ref);
+    if (!ids) throw new TurnGoneError(); // the chat went (erased): a number probe must not treat it as "id taken"
+    const executionId = ids.turnExecutionId(input.ord, rerun);
     try {
       const handle = await runtime.start(flow, input, {
         executionId,
@@ -85,7 +91,12 @@ export function loomTurnStarter(
       // everything after that first await runs later.
       enqueue(
         turnToVisualize(e, o).then(async (ref) => {
-          if (ref) await startOne(ref);
+          if (!ref) return;
+          try {
+            await startOne(ref);
+          } catch (err) {
+            if (!(err instanceof TurnGoneError)) throw err; // the chat went (erased): nothing to start, nothing to report
+          }
         }),
       );
     },

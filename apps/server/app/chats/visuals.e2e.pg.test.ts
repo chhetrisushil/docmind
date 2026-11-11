@@ -4,7 +4,7 @@ import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
-import { isTurnVisualizeExecution, turnExecutionId } from "../flows/visualize-turn/ids";
+import { isTurnVisualizeExecution } from "../flows/visualize-turn/ids";
 import { isVisualizeExecution } from "../status/model";
 import { DOC, collectUntil, isReply, scriptChat } from "./e2eSupport";
 import { assertNoPlaintext } from "./eventLogProof";
@@ -142,17 +142,20 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
 
   const outcomeOf = async (
     st: IngestStack,
-    userId: string,
+    who: { userId: string; tenantId: string },
     chatId: string,
     ord: number,
     rerun?: number,
   ) => {
     let outcome = "";
+    // The turn run's id is in the chat's own format (a chat made through the API is opaque).
+    const ids = await st.composed.chatIds.forRef({ ...who, chatId });
+    if (!ids) throw new Error("no ids for the chat");
     await vi.waitFor(
       async () => {
-        const end = (
-          await st.durable.raw.eventStore.read(turnExecutionId(userId, chatId, ord, rerun))
-        ).find((e) => e.eventType === "EXECUTION_COMPLETED");
+        const end = (await st.durable.raw.eventStore.read(ids.turnExecutionId(ord, rerun))).find(
+          (e) => e.eventType === "EXECUTION_COMPLETED",
+        );
         expect(end).toBeDefined();
         outcome = (end?.payload as { output: { outcome: string } }).output.outcome;
       },
@@ -222,7 +225,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
         ord,
         outcome: "visualized",
       });
-      expect(await outcomeOf(st, ada.userId, chat.id, ord)).toBe("visualized");
+      expect(await outcomeOf(st, ada, chat.id, ord)).toBe("visualized");
       expect(state.calls - before).toBe(1); // the planner only: the stored fact covered the citation, no extraction
 
       // history now says so, and the widgets hydrate from the document's fact
@@ -256,7 +259,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
         `/api/chats/${chat.id}/turns/${ord}/visualize`,
       );
       expect(again.status).toBe(202);
-      expect(await outcomeOf(st, ada.userId, chat.id, ord, 1)).toBe("visualized");
+      expect(await outcomeOf(st, ada, chat.id, ord, 1)).toBe("visualized");
       // the re-run decided the same plan from the same fact, so the head is kept as it was (the commit is idempotent), and still served
       const headAfter = UiViewResponse.parse(
         await (await view(st, ada.cookie, chat.id, ord)).json(),
@@ -296,7 +299,7 @@ describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", 
       const before = state.calls;
       const reply = await ask(st, ada.cookie, chat.id, "What were the takings?");
       const ord = Number(reply.id);
-      expect(await outcomeOf(st, ada.userId, chat.id, ord)).toBe("visualized");
+      expect(await outcomeOf(st, ada, chat.id, ord)).toBe("visualized");
       expect(state.calls - before).toBe(2); // one extraction, one planner call
       const rows = await st.db.owner.query(
         "SELECT fact_enc::text AS t FROM turn_visual_facts WHERE chat_id = $1",

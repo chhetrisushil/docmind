@@ -10,7 +10,15 @@ import {
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
-import { DOC, SIG, collectUntil, hasToolResult, isReply, scriptChat } from "./e2eSupport";
+import {
+  DOC,
+  SIG,
+  collectUntil,
+  createLegacyChat,
+  hasToolResult,
+  isReply,
+  scriptChat,
+} from "./e2eSupport";
 
 describe.skipIf(!PG_URL)(
   "M4 acceptance: a restarted server continues the chat (needs DOCMIND_TEST_PG_URL)",
@@ -189,82 +197,105 @@ describe.skipIf(!PG_URL)(
       }
     }, 240_000);
 
-    it("a restart in the middle of a tool loop keeps the thinking block: the recovered model call sends it back with its text and signature", async () => {
-      const errors = vi.spyOn(console, "error");
-      const first = track(await startIngestStack({ chat: true }));
-      const claude1 = first.claude;
-      if (!claude1) throw new Error("no fake Claude");
-      const ada = await first.signUpAndLogIn("ada@example.com");
-      const events = await first.events(ada.cookie);
-      const up = await first.upload(ada.cookie, "terms.txt", Buffer.from(DOC));
-      const documentId = ((await up.json()) as UploadDocumentResponse).document.id;
-      await first.until(events, documentId, (s) => s === "ready" || s === "failed");
-      events.close();
-      // the first request thinks and searches; the second parks mid-answer, so the server stops with the tool loop unfinished
-      scriptChat(claude1, () => ({
-        stream: {
-          steps: [{ text: "Due " }, { hold: true }, { text: "in 30 days." }, { stop: "end_turn" }],
-        },
-      }));
-      const chat = ChatSessionDto.parse(
-        await (await first.chatReq(ada.cookie, "POST", "/api/chats", {})).json(),
-      );
-      const sent = await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
-        text: "When is payment due?",
-      });
-      expect(sent.status).toBe(202);
-      const gate = await claude1.streamHold(); // the second model call is under way
-      expect(gate).toBeDefined();
-      try {
-        await first.close({ keepDb: true });
-      } finally {
-        gate.release();
-      }
-      stacks.pop();
+    // The "a u_ chat" variant is a regression guard (green before and after the flip); the "an h_ chat" variant is the one that fails first.
+    it.each([
+      ["an h_ chat", "opaque"],
+      ["a u_ chat", "legacy"],
+    ] as const)(
+      "a restart in the middle of a tool loop keeps the thinking block (%s): the recovered model call sends it back with its text and signature",
+      async (_name, format) => {
+        const errors = vi.spyOn(console, "error");
+        const first = track(await startIngestStack({ chat: true }));
+        const claude1 = first.claude;
+        if (!claude1) throw new Error("no fake Claude");
+        const ada = await first.signUpAndLogIn("ada@example.com");
+        const events = await first.events(ada.cookie);
+        const up = await first.upload(ada.cookie, "terms.txt", Buffer.from(DOC));
+        const documentId = ((await up.json()) as UploadDocumentResponse).document.id;
+        await first.until(events, documentId, (s) => s === "ready" || s === "failed");
+        events.close();
+        // the first request thinks and searches; the second parks mid-answer, so the server stops with the tool loop unfinished
+        scriptChat(claude1, () => ({
+          stream: {
+            steps: [
+              { text: "Due " },
+              { hold: true },
+              { text: "in 30 days." },
+              { stop: "end_turn" },
+            ],
+          },
+        }));
+        const chat =
+          format === "legacy"
+            ? await createLegacyChat(first, ada)
+            : ChatSessionDto.parse(
+                await (await first.chatReq(ada.cookie, "POST", "/api/chats", {})).json(),
+              );
+        const sent = await first.chatReq(ada.cookie, "POST", `/api/chats/${chat.id}/messages`, {
+          text: "When is payment due?",
+        });
+        expect(sent.status).toBe(202);
+        const gate = await claude1.streamHold(); // the second model call is under way
+        expect(gate).toBeDefined();
+        try {
+          await first.close({ keepDb: true });
+        } finally {
+          gate.release();
+        }
+        stacks.pop();
 
-      const second = track(
-        await startIngestStack({
-          chat: true,
-          resume: { db: first.db, kek: first.kek, root: first.root },
-        }),
-      );
-      const claude2 = second.claude;
-      if (!claude2) throw new Error("no fake Claude");
-      scriptChat(claude2, () => ({
-        stream: { steps: [{ text: "Due in 30 days." }, { stop: "end_turn" }] },
-      }));
-      const stream2 = await second.openChat(ada.cookie, chat.id);
-      let reply: ChatMessageDto;
-      try {
-        reply = ChatMessageDto.parse((await collectUntil(stream2, isReply)).at(-1)?.data);
-      } finally {
-        stream2.close();
-      }
-      expect(reply).toMatchObject({ status: "complete", text: "Due in 30 days." });
-      // the recovered call is a live call: Loom resolved the first block's text from OUR store through the owner's key
-      const resumed = claude2.requests.filter((r) => r.body.model !== "title-model")[0];
-      const assistantTurn = resumed?.body.messages.find((m) => m.role === "assistant");
-      expect(assistantTurn?.content[0]).toMatchObject({
-        type: "thinking",
-        thinking: "I should look for the payment terms.",
-        signature: SIG,
-      });
-      expect(
-        resumed?.body.messages.some((m) => m.content.some((b) => b.type === "tool_result")),
-      ).toBe(true);
-      // the interrupted turn was left pending, not failed: one question, one answer, nothing else
-      const history = ListMessagesResponse.parse(
-        await (await second.chatReq(ada.cookie, "GET", `/api/chats/${chat.id}/messages`)).json(),
-      );
-      expect(history.items.map((m) => [m.role, m.status])).toEqual([
-        ["user", "complete"],
-        ["assistant", "complete"],
-      ]);
-      expect(errors).not.toHaveBeenCalledWith(
-        "chat turn failed",
-        expect.anything(),
-        expect.anything(),
-      );
-    }, 120_000);
+        const second = track(
+          await startIngestStack({
+            chat: true,
+            resume: { db: first.db, kek: first.kek, root: first.root },
+          }),
+        );
+        const claude2 = second.claude;
+        if (!claude2) throw new Error("no fake Claude");
+        scriptChat(claude2, () => ({
+          stream: { steps: [{ text: "Due in 30 days." }, { stop: "end_turn" }] },
+        }));
+        // The recovery ran on a cold cache: the one conversation of the log has the chat's own format.
+        const conversations = (
+          (await second.durable.raw.eventStore.listExecutions?.()) ?? []
+        ).filter((id) => id.includes(".c-") && !id.startsWith("__loom") && !id.includes("::"));
+        expect(conversations).toHaveLength(1);
+        expect(conversations[0]?.startsWith(format === "legacy" ? "u_" : "h_")).toBe(true);
+        expect(second.composed.ids.cached(ada.userId)).toBeDefined(); // warmed at boot, before recovery (the uploaded document gave ada a handle in both variants)
+        const stream2 = await second.openChat(ada.cookie, chat.id);
+        let reply: ChatMessageDto;
+        try {
+          reply = ChatMessageDto.parse((await collectUntil(stream2, isReply)).at(-1)?.data);
+        } finally {
+          stream2.close();
+        }
+        expect(reply).toMatchObject({ status: "complete", text: "Due in 30 days." });
+        // the recovered call is a live call: Loom resolved the first block's text from OUR store through the owner's key
+        const resumed = claude2.requests.filter((r) => r.body.model !== "title-model")[0];
+        const assistantTurn = resumed?.body.messages.find((m) => m.role === "assistant");
+        expect(assistantTurn?.content[0]).toMatchObject({
+          type: "thinking",
+          thinking: "I should look for the payment terms.",
+          signature: SIG,
+        });
+        expect(
+          resumed?.body.messages.some((m) => m.content.some((b) => b.type === "tool_result")),
+        ).toBe(true);
+        // the interrupted turn was left pending, not failed: one question, one answer, nothing else
+        const history = ListMessagesResponse.parse(
+          await (await second.chatReq(ada.cookie, "GET", `/api/chats/${chat.id}/messages`)).json(),
+        );
+        expect(history.items.map((m) => [m.role, m.status])).toEqual([
+          ["user", "complete"],
+          ["assistant", "complete"],
+        ]);
+        expect(errors).not.toHaveBeenCalledWith(
+          "chat turn failed",
+          expect.anything(),
+          expect.anything(),
+        );
+      },
+      120_000,
+    );
   },
 );

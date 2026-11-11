@@ -2,12 +2,11 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { legacyIds } from "../../opaqueIds";
 import { isVisualizeExecution } from "../../status/model";
+import { isTurnVisualizeExecution, parseTurnExecution } from "./ids";
 import {
-  isTurnVisualizeExecution,
-  parseTurnExecution,
-  turnExecutionId,
-  turnExperienceId,
-} from "./ids";
+  legacyTurnExecutionId as turnExecutionId,
+  legacyTurnExperienceId as turnExperienceId,
+} from "./testing";
 
 const executionIdFor = legacyIds.named;
 

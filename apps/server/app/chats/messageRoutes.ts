@@ -12,8 +12,7 @@ import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
-import { loadChat, notFound, principalOf, unavailable } from "./access";
-import { legacyChatConversationId } from "./ids";
+import { loadChatWithIds, notFound, principalOf, unavailable } from "./access";
 import { HISTORY_PAGE, readHistoryPage, toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
 
@@ -43,21 +42,27 @@ export function chatMessageRoutes(deps: ChatRouteDeps): Record<string, Handler> 
     "GET /api/chats/:id/messages": requireAuth(
       deps.authenticator,
       async (req, res, identity, ctx) => {
-        const chat = await loadChat(deps, identity, ctx);
-        if (!chat) return notFound(res);
+        const loaded = await loadChatWithIds(deps, identity, ctx);
+        if (!loaded) return notFound(res);
+        const { chat, ids } = loaded;
         const url = new URL(req.url ?? "/", "http://localhost");
         const query = ListMessagesQuery.safeParse(Object.fromEntries(url.searchParams));
         if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
         try {
           const page = await readHistoryPage(
             deps.chat.conversations,
-            legacyChatConversationId(identity.userId, chat.id),
+            ids.conversationId(),
             principalOf(identity),
             query.data.cursor,
             HISTORY_PAGE,
           );
           json(res, 200, {
-            items: await toMessageDtos(deps, identity, chat.id, page.entries),
+            items: await toMessageDtos(
+              deps,
+              identity,
+              { id: chat.id, conversationId: ids.conversationId() },
+              page.entries,
+            ),
             nextCursor: page.nextCursor,
           } satisfies ListMessagesResponse);
         } catch (err) {
@@ -77,21 +82,18 @@ export function chatMessageRoutes(deps: ChatRouteDeps): Record<string, Handler> 
           req.resume(); // the body is not read: let the socket move on
           return unavailable(res);
         }
-        const chat = await loadChat(deps, identity, ctx);
-        if (!chat) return notFound(res);
+        const loaded = await loadChatWithIds(deps, identity, ctx);
+        if (!loaded) return notFound(res);
+        const { chat, ids } = loaded;
         const body = await readJson(req, res, SendMessageRequest, { maxBytes: SEND_MAX_BYTES });
         if (!body) return;
         let sent: { messageId: string };
         try {
-          sent = await deps.chat.conversations.sendTurn(
-            legacyChatConversationId(identity.userId, chat.id),
-            body.text,
-            {
-              principal: principalOf(identity),
-              ...(body.messageId !== undefined && { messageId: body.messageId }),
-              ...(body.editOf !== undefined && { editOf: body.editOf }),
-            },
-          );
+          sent = await deps.chat.conversations.sendTurn(ids.conversationId(), body.text, {
+            principal: principalOf(identity),
+            ...(body.messageId !== undefined && { messageId: body.messageId }),
+            ...(body.editOf !== undefined && { editOf: body.editOf }),
+          });
         } catch (err) {
           sendFailure(res, err);
           return;

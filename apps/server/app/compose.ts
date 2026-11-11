@@ -250,7 +250,7 @@ export function buildServer(options: ComposeOptions) {
   });
   // Read-only, so it serves whenever chat is on: a deployment that turned the visuals role off still shows earlier visuals.
   // Not free: `hasVisuals` loads and unseals each head (`resolveLatest`), at most 30 per history page, 8 in flight (chats/turnHeads.ts).
-  const heads = lineageTurnHeads(visualsLineageOf);
+  const heads = lineageTurnHeads(visualsLineageOf, chatIds);
   // Visuals never share ingest's gate: one slot per tenant, so an ingest step never queues behind a visualize step.
   const visualizeGate = newVisualizeGate();
   const visualRuns = new PgVisualRuns(pool);
@@ -293,6 +293,7 @@ export function buildServer(options: ComposeOptions) {
           items: chatParts.collaborators.items,
           pool,
           fields,
+          chatIds,
         },
         ref,
         signal,
@@ -310,6 +311,7 @@ export function buildServer(options: ComposeOptions) {
         summaryMaxChars: options.ingest.summaryMaxChars,
         lineage: visualsLineageOf, // sealed (visualsLineage fails closed without a sealing content store)
         bus: chatParts.bus,
+        chatIds,
         now: () => new Date().toISOString(),
         shutdown: options.ingest.shutdown.signal,
         gate: visualizeGate, // the SAME gate as visualize-document: at most 2 visuals executions in flight
@@ -328,6 +330,7 @@ export function buildServer(options: ComposeOptions) {
       chatTitle: {
         pool,
         fields,
+        chatIds,
         reader: createConversationReader(options.status.source), // a reader is only the decrypting event store
         ...(titleLlm && { llm: titleLlm }),
       },
@@ -360,7 +363,7 @@ export function buildServer(options: ComposeOptions) {
       }
     },
   });
-  const titles = options.chat && loomTitleStarter(app.runtime);
+  const titles = options.chat && loomTitleStarter(app.runtime, chatIds);
   // On-demand tag suggestions: one flow, one model call; off with the `summary` role.
   const suggestTags = loomSuggestTagsStarter(app.runtime, {
     ids,
@@ -393,6 +396,7 @@ export function buildServer(options: ComposeOptions) {
           ])
         ).rows[0]?.t as string | null) ?? null,
       turn: turnRead,
+      chatIds,
       backlog: () => visualizeGate.waiting,
       maxWaiting: MAX_WAITING,
     });
@@ -468,6 +472,7 @@ export function buildServer(options: ComposeOptions) {
       fields,
       chat,
       eventStore: options.status.source,
+      chatIds,
       reasoning,
       heads,
       visualsOn: visualsLlm !== undefined,
@@ -595,6 +600,7 @@ export function buildServer(options: ComposeOptions) {
         views,
         lineage: visualsLineageOf,
         ids,
+        chatIds,
         visualsState: visualsStateReader({ pool, runs: visualRuns, starter: visuals }),
         readers: {
           pool,
@@ -615,6 +621,7 @@ export function buildServer(options: ComposeOptions) {
           fields,
           chat,
           eventStore: options.status.source,
+          chatIds,
           reasoning,
           heads,
           visualsOn: visualsLlm !== undefined,

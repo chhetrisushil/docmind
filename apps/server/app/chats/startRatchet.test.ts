@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const APP = resolve(__dirname, "..");
 const ROOT = resolve(APP, "..");
-const IDS = join(APP, "chats", "ids.ts");
+const IDS = join(APP, "chats", "chatIds.ts");
 
 const CONFIG = ts.findConfigFile(ROOT, ts.sys.fileExists, "tsconfig.json") as string;
 
@@ -18,7 +18,7 @@ function sources(): string[] {
   return parsed.fileNames.filter((f) => !f.endsWith(".d.ts"));
 }
 
-/** Every call the checker resolves to `Conversations.start`, with whether its `conversationId` is `legacyChatConversationId(...)`. */
+/** Every call the checker resolves to `Conversations.start`, with whether its `conversationId` is `ChatIdBuilders.conversationId()`. */
 function scanStarts(files: string[], virtual = new Map<string, string>()) {
   const options = ts.parseJsonConfigFileContent(
     ts.readConfigFile(CONFIG, ts.sys.readFile).config,
@@ -36,15 +36,16 @@ function scanStarts(files: string[], virtual = new Map<string, string>()) {
   const program = ts.createProgram([...files, ...virtual.keys()], options, host);
   const checker = program.getTypeChecker();
   const found: { at: string; ok: boolean }[] = [];
-  /** The callee is the function declared in app/chats/ids.ts, however it is imported or renamed. */
+  /** The callee is the `conversationId` member of `ChatIdBuilders` declared in app/chats/chatIds.ts, however it is reached. */
   const isChatConversationId = (callee: ts.Expression): boolean => {
     let symbol = checker.getSymbolAtLocation(callee);
     if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
     return (
       symbol?.declarations?.some(
         (d) =>
-          ts.isFunctionDeclaration(d) &&
-          d.name?.text === "legacyChatConversationId" &&
+          (ts.isMethodSignature(d) || ts.isPropertyAssignment(d) || ts.isMethodDeclaration(d)) &&
+          ts.isIdentifier(d.name) &&
+          d.name.text === "conversationId" &&
           d.getSourceFile().fileName === IDS,
       ) ?? false
     );
@@ -106,7 +107,9 @@ const snippet = (body: string) =>
       [
         VIRTUAL,
         `import type { Conversations } from "@loom/conversation";
-         import { legacyChatConversationId } from "./chats/ids";
+         import { legacyIds } from "./opaqueIds";
+         declare const ids: import("./chats/chatIds").ChatIdBuilders;
+         declare const userIds: import("./opaqueIds").UserIds;
          declare const c: Conversations; declare const user: string; declare const chat: string; declare const p: never;
          export async function f() { ${body} }`,
       ],
@@ -114,32 +117,32 @@ const snippet = (body: string) =>
   );
 
 describe("Conversations.start", () => {
-  it("accepts a start whose conversationId is legacyChatConversationId(...)", () => {
+  it("accepts a start whose conversationId is ids.conversationId()", () => {
     expect(
-      snippet(
-        "await c.start({ conversationId: legacyChatConversationId(user, chat), principal: p });",
-      ),
-    ).toEqual([{ at: "__virtual_chat__.ts:4", ok: true }]);
+      snippet("await c.start({ conversationId: ids.conversationId(), principal: p });"),
+    ).toEqual([{ at: "__virtual_chat__.ts:6", ok: true }]);
   });
 
   it.each([
     ["no argument", "await c.start();"],
     ["no conversationId (Loom would mint a conv-<uuid>)", "await c.start({ principal: p });"],
     ["a literal id", `await c.start({ conversationId: "conv-1" });`],
-    [
-      "a variable",
-      "const id = legacyChatConversationId(user, chat); await c.start({ conversationId: id });",
-    ],
+    ["a variable", "const id = ids.conversationId(); await c.start({ conversationId: id });"],
     ["a cast", "await c.start({ conversationId: `u_${user}` as never });"],
     [
-      "a spread",
-      "const o = { conversationId: legacyChatConversationId(user, chat) }; await c.start({ ...o });",
+      "the legacy builder directly",
+      "await c.start({ conversationId: legacyIds.conversation(user, chat), principal: p });",
     ],
+    [
+      "the user builder directly",
+      "await c.start({ conversationId: userIds.conversation(chat), principal: p });",
+    ],
+    ["a spread", "const o = { conversationId: ids.conversationId() }; await c.start({ ...o });"],
   ])("flags %s", (_name, body) => {
     expect(snippet(body).map((c) => c.ok)).toEqual([false]);
   });
 
-  // Only the create route (POST /api/chats) may call `Conversations.start`, with a legacyChatConversationId.
+  // Only the create route (POST /api/chats) may call `Conversations.start`, with `ids.conversationId()`.
   it("passes for every start in the real sources, and finds the create route's", () => {
     const found = scanStarts(sources());
     expect(found.filter((c) => !c.ok).map((c) => c.at)).toEqual([]);
@@ -149,22 +152,20 @@ describe("Conversations.start", () => {
 
   it("flags a start without a principal", () => {
     expect(
-      snippet("await c.start({ conversationId: legacyChatConversationId(user, chat) });").map(
-        (c) => c.ok,
-      ),
+      snippet("await c.start({ conversationId: ids.conversationId() });").map((c) => c.ok),
     ).toEqual([false]);
   });
 
-  it("flags a start whose callee only looks like legacyChatConversationId", () => {
+  it("flags a start whose callee only looks like ChatIdBuilders.conversationId", () => {
     const fake = scanStarts(
       [],
       new Map([
         [
           VIRTUAL,
           `import type { Conversations } from "@loom/conversation";
-           declare const legacyChatConversationId: (a: string, b: string) => string;
+           declare const ids: { conversationId(): string };
            declare const c: Conversations; declare const p: never;
-           export async function f() { await c.start({ conversationId: legacyChatConversationId("a", "b") as never, principal: p }); }`,
+           export async function f() { await c.start({ conversationId: ids.conversationId() as never, principal: p }); }`,
         ],
       ]),
     );

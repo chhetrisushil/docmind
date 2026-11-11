@@ -1,8 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { ChatSessionDto } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, T1, U1, U1B, seedDoc } from "../documents/testHarness";
+import { deterministicUser } from "../opaqueIds/testing";
+import { legacyChatConversationId } from "./ids";
+import { insertChat } from "./sessions";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)(
@@ -19,7 +23,7 @@ describe.skipIf(!PG_URL)(
       await hNoKey.close();
     });
 
-    it("creates a chat: 201, an untitled empty session, and a conversation started for its owner under the derived id", async () => {
+    it("creates a chat: 201, an untitled empty session, and a conversation started for its owner under the opaque id", async () => {
       const res = await h.req("alice", "POST", "/api/chats", {});
       expect(res.status).toBe(201);
       const dto = ChatSessionDto.parse(await res.json());
@@ -29,7 +33,7 @@ describe.skipIf(!PG_URL)(
         lastMessageAt: null,
         messageCount: 0,
       });
-      const conversationId = `u_${U1}.c-${dto.id}`;
+      const conversationId = deterministicUser(U1).conversation(dto.id); // a new chat starts under h_<H>.c-<token>
       expect(h.fake.calls).toContain(`start:${conversationId}`);
       expect(h.fake.ownerOf(conversationId)).toBe(`${T1}|${U1}`);
       const row = await h.owner.query(
@@ -37,6 +41,34 @@ describe.skipIf(!PG_URL)(
         [dto.id],
       );
       expect(row.rows).toEqual([{ tenant_id: T1, user_id: U1, deleted_at: null }]);
+    });
+
+    it("makes a new chat opaque: the row says so, the conversation is h_<H>.c-<token>, and no id holds a uuid", async () => {
+      const res = await h.req("alice", "POST", "/api/chats", {});
+      expect(res.status).toBe(201);
+      const { id } = ChatSessionDto.parse(await res.json());
+      const row = await h.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [id]);
+      expect(row.rows).toEqual([{ id_format: "opaque" }]);
+      const handle = deterministicUser(U1).handle; // the harness's id source is deterministic, so the test can name the handle
+      expect(handle).toMatch(/^[a-z2-7]{25}[aeimquy4]$/);
+      expect(h.ids.cached(U1)?.handle).toBe(handle); // the create route minted it
+      const conversationId = deterministicUser(U1).conversation(id);
+      expect(h.fake.calls).toContain(`start:${conversationId}`);
+      expect(conversationId).toMatch(/^h_[a-z2-7]{25}[aeimquy4]\.c-[a-z2-7]{51}[aq]$/);
+      expect(h.fake.calls.filter((c) => c.includes(id) || c.includes(U1))).toEqual([]); // no call names a uuid
+    });
+
+    it("regression guard (green before and after the flip): a chat inserted without a format stays on the old ids, u_<user>.c-<chat>", async () => {
+      const id = randomUUID();
+      await withTenant(h.app, T1, (tx) => insertChat(tx, T1, U1, id, "all"));
+      await h.fake.api.start({
+        conversationId: legacyChatConversationId(U1, id),
+        principal: { tenant: T1, actor: U1 },
+      });
+      const row = await h.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [id]);
+      expect(row.rows).toEqual([{ id_format: "legacy" }]);
+      const messages = await h.req("alice", "GET", `/api/chats/${id}/messages`);
+      expect(messages.status).toBe(200); // the route found the conversation under the old id
     });
 
     it("keeps a scope of the caller's own documents, lower-cased", async () => {

@@ -57,6 +57,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
     chatTitleEffect({
       pool: h.app,
       fields: h.fields,
+      chatIds: h.deps.chatIds,
       reader: h.fake.api.reader,
       ...(p && { llm: p.llm }),
       sleep: async () => {},
@@ -122,6 +123,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
     const effect = chatTitleEffect({
       pool: h.app,
       fields: h.fields,
+      chatIds: h.deps.chatIds,
       reader: reader as never,
       llm: p.llm,
       sleep: async () => {},
@@ -135,6 +137,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
     const giveUp = chatTitleEffect({
       pool: h.app,
       fields: h.fields,
+      chatIds: h.deps.chatIds,
       reader: waiting as never,
       llm: none.llm,
       sleep: async () => {},
@@ -228,6 +231,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
     const effect = chatTitleEffect({
       pool: h.app,
       fields: h.fields,
+      chatIds: h.deps.chatIds,
       reader: reader as never,
       llm: provider([]).llm,
       sleep: async (_ms, signal) => {
@@ -246,6 +250,7 @@ describe.skipIf(!PG_URL)("the chat-title step (needs DOCMIND_TEST_PG_URL)", () =
       chatTitleEffect({
         pool: h.app,
         fields: h.fields,
+        chatIds: h.deps.chatIds,
         reader: h.fake.api.reader,
         llm: provider(["x"]).llm,
       }).execute(ref(waiting), { signal: before.signal } as never),

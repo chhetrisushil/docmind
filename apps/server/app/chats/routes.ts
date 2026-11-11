@@ -28,8 +28,8 @@ import {
   unavailable,
 } from "./access";
 import { chatActivityOf } from "./activityRead";
+import type { ChatIdResolver } from "./chatIds";
 import { toChatDto } from "./dto";
-import { legacyChatConversationId } from "./ids";
 import { chatManageRoutes } from "./manageRoutes";
 import { chatMessageRoutes } from "./messageRoutes";
 import type { ReplyReasoning } from "./reasoningRead";
@@ -48,6 +48,8 @@ export interface ChatRouteDeps {
   chat: ChatWiring;
   /** The decrypting event store the stream follows (`followConversation`). */
   eventStore: EventStore;
+  /** Builds a chat's Loom ids in its own format (migration 0039). */
+  chatIds: ChatIdResolver;
   /** Reads a reply's reasoning (history, endpoint); the create and get routes do not use it. */
   reasoning: ReplyReasoning;
   /** Called by the send route for an untitled chat after a message was accepted. Absent without a title model. */
@@ -142,9 +144,12 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       if (!body) return;
       const scope = normalizeScope(body.scope);
       const id = randomUUID();
+      // The new chat's ids: the new format, minting the user's id key and handle on their first chat. A key-store outage throws here,
+      // before any row exists, and is retried like any other (spec section 5); nothing falls back to a plaintext-UUID id.
+      const ids = await deps.chatIds.forNew(identity, id);
       const row = await withTenant(deps.pool, identity.tenantId, async (tx) =>
         (await scopeIsOwned(tx, identity.userId, scope))
-          ? insertChat(tx, identity.tenantId, identity.userId, id, scope)
+          ? insertChat(tx, identity.tenantId, identity.userId, id, scope, "opaque")
           : null,
       );
       if (!row)
@@ -152,7 +157,7 @@ export function chatRoutes(deps: ChatRouteDeps): Record<string, Handler> {
       try {
         // The only place a chat conversation starts (startRatchet.test.ts checks this exact argument).
         await deps.chat.conversations.start({
-          conversationId: legacyChatConversationId(identity.userId, id),
+          conversationId: ids.conversationId(),
           principal: principalOf(identity),
         });
       } catch (err) {

@@ -2,8 +2,8 @@ import type { Identity } from "@docmind/auth";
 import { ChatFailureReason, type ChatMessageDto } from "@docmind/contracts";
 import type { Conversations, HistoryEntry } from "@loom/conversation";
 import type { PrincipalChain } from "@loom/effect-runtime";
+import type { ChatConversationId } from "../opaqueIds";
 import { citeReply, documentTitles } from "./citations";
-import { legacyChatConversationId } from "./ids";
 import type { ChatRouteDeps } from "./routes";
 import { turnKeyOfRecord } from "./scope";
 import type { StoredPassage, TurnItem } from "./turnItems";
@@ -73,9 +73,10 @@ const failureReasonOf = (reason: string | undefined): ChatFailureReason =>
 export async function toMessageDtos(
   deps: MessageDeps,
   identity: Identity,
-  chatId: string,
+  chat: { id: string; conversationId: ChatConversationId },
   history: readonly HistoryEntry[],
 ): Promise<ChatMessageDto[]> {
+  const chatId = chat.id;
   const entries = history.filter((e) => e.ord !== undefined);
   // A rejected record has turn 0 and no turn of its own: it has no items.
   const keyOf = (e: HistoryEntry) =>
@@ -90,11 +91,7 @@ export async function toMessageDtos(
     const turnKey = keyOf(e);
     return turnKey === undefined ? [] : [{ cursor: e.cursor, turnKey }];
   });
-  const reasoning = await deps.reasoning.forReplies(
-    ref,
-    legacyChatConversationId(identity.userId, chatId),
-    replies,
-  );
+  const reasoning = await deps.reasoning.forReplies(ref, chat.conversationId, replies);
   const documentIds = new Set<string>();
   for (const list of items.values())
     for (const item of list)
@@ -152,7 +149,7 @@ export async function toMessageDtos(
     };
   });
   if (!deps.heads || citedOrds.length === 0) return dtos;
-  const visualised = await deps.heads.has({ userId: identity.userId, chatId }, citedOrds);
+  const visualised = await deps.heads.has(ref, citedOrds);
   return dtos.map((m) =>
     m.role === "assistant" && visualised.has(Number(m.id)) ? { ...m, hasVisuals: true } : m,
   );

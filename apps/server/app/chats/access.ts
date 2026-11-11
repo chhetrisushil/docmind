@@ -4,6 +4,7 @@ import type { PrincipalChain } from "@loom/effect-runtime";
 import type { PoolClient } from "pg";
 import { withTenant } from "../db/tenant";
 import { type RouteContext, sendError } from "../http/respond";
+import type { ChatIdBuilders } from "./chatIds";
 import type { ChatRouteDeps } from "./routes";
 import { type ChatSessionRow, getChat } from "./sessions";
 
@@ -37,6 +38,21 @@ export async function loadChat(
   const id = chatIdParam(ctx);
   if (id === null) return null;
   return withTenant(deps.pool, identity.tenantId, (tx) => getChat(tx, identity.userId, id));
+}
+
+/**
+ * The caller's live chat with the id builders of its own format, or null for anything `loadChat` refuses and for an opaque chat whose owner
+ * has no live id key (erased): all alike a 404.
+ */
+export async function loadChatWithIds(
+  deps: Pick<ChatRouteDeps, "pool" | "chatIds">,
+  identity: Identity,
+  ctx: RouteContext,
+): Promise<{ chat: ChatSessionRow; ids: ChatIdBuilders } | null> {
+  const chat = await loadChat(deps, identity, ctx);
+  if (!chat) return null;
+  const ids = await deps.chatIds.forRow(identity, chat);
+  return ids ? { chat, ids } : null;
 }
 
 /** Lower-cased and deduplicated ids, so the stored scope and the check agree. */

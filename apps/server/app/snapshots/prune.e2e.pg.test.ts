@@ -3,7 +3,6 @@ import { ChatSessionDto, type UploadDocumentResponse } from "@docmind/contracts"
 import { LogLifecycle } from "@loom/workflow-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { DOC, collectUntil, isReply, scriptChat } from "../chats/e2eSupport";
-import { legacyChatConversationId } from "../chats/ids";
 import { pgSessionLock } from "../db/sessionLock";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
@@ -89,7 +88,14 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
     } finally {
       stream.close();
     }
-    const conversation = legacyChatConversationId(user.userId, chat.id) as string;
+    // The chat's own id format (a chat made through the API is opaque), read while its owner still has a key.
+    const ids = await st.composed.chatIds.forRef({
+      tenantId: user.tenantId,
+      userId: user.userId,
+      chatId: chat.id,
+    });
+    if (!ids) throw new Error("no ids for the chat");
+    const conversation = ids.conversationId() as string;
     await settled(st, conversation); // the park after the last turn has committed its snapshot
     return { user, chat, conversation };
   }

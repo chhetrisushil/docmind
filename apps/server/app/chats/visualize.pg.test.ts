@@ -9,6 +9,7 @@ import { UserRateLimit } from "../flows/visualize-turn/limiter";
 import type { TurnRead } from "../flows/visualize-turn/readTurn";
 import { type VisualizeStart, loomTurnStarter } from "../flows/visualize-turn/start";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
+import { fixedChatIds } from "./testing";
 
 const CITED: TurnRead = {
   status: "complete",
@@ -155,6 +156,7 @@ describe.skipIf(!PG_URL)(
           turn: { read: async () => CITED },
           backlog: () => 0,
           maxWaiting: 20,
+          chatIds: fixedChatIds(),
           onError: () => {},
         },
       );

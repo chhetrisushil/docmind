@@ -10,6 +10,7 @@ import { ORD_PATTERN, Uuid } from "@docmind/contracts";
 import { type UiReaders, type Views, documentsOfVisuals } from "@docmind/experiences";
 import type { Experience } from "@loom-ui/core";
 import type { Lineage } from "@loom-ui/lineage";
+import type { ChatIdResolver } from "../chats/chatIds";
 import { getChat } from "../chats/sessions";
 import { withTenant } from "../db/tenant";
 import {
@@ -19,7 +20,6 @@ import {
 } from "../documents/executionCandidates";
 import { getDocument } from "../documents/repo";
 import type { VisualsStateReader } from "../flows/visualize-document/state";
-import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
@@ -33,6 +33,8 @@ export interface UiRouteDeps {
   lineage: Lineage;
   /** The document's line is looked up under both id formats, the new one first. */
   ids: Pick<UserIdSource, "load" | "cached">;
+  /** Builds a turn's lineage id in its chat's own format. */
+  chatIds: Pick<ChatIdResolver, "forRef">;
   /** Where the document's visuals stand (`visuals: { state }` on its detail). Absent: the detail carries none (a deployment without the visuals flow). */
   visualsState?: VisualsStateReader;
   /** Test seam: replaces the owner check (default: the document is the caller's, tenant-scoped, as `GET /api/documents/:id`). */
@@ -115,9 +117,13 @@ export function uiRoutes(deps: UiRouteDeps): Record<string, Handler> {
   const turnHead = async (identity: Identity, chatId: string, ord: number) => {
     let visuals: Experience;
     try {
-      const latest = await deps.lineage.resolveLatest(
-        turnExperienceId({ userId: identity.userId, chatId, ord }),
-      );
+      const ids = await deps.chatIds.forRef({
+        tenantId: identity.tenantId,
+        userId: identity.userId,
+        chatId,
+      });
+      if (!ids) return null; // not the owner's chat: no head
+      const latest = await deps.lineage.resolveLatest(ids.turnExperienceId(ord));
       if (!latest.ok) return null;
       visuals = latest.value;
     } catch (err) {

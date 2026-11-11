@@ -11,8 +11,8 @@ import {
 } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { subjectOfExecution } from "../../subject";
-import { turnExperienceId } from "../visualize-turn/ids";
 import { TURN_INTENT } from "../visualize-turn/plan";
+import { legacyTurnExperienceId as turnExperienceId } from "../visualize-turn/testing";
 import { aTurnPlan } from "../visualize-turn/testing";
 import { HeadMovedError, commitPlan, commitPlanTo, visualsLineage } from "./lineage";
 import type { VisualizeRef } from "./pgFacts";

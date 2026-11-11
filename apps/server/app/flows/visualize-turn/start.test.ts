@@ -2,9 +2,12 @@ import { randomUUID } from "node:crypto";
 import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { legacyChatConversationId } from "../../chats/ids";
+import { fixedChatIds } from "../../chats/testing";
+import { testIdSource } from "../../opaqueIds/testing";
+import { TurnGoneError } from "./errors";
 import { visualizeTurnFlow } from "./flow";
-import { turnExecutionId } from "./ids";
 import { loomTurnStarter } from "./start";
+import { legacyTurnExecutionId as turnExecutionId } from "./testing";
 
 const user = randomUUID();
 const chat = randomUUID();
@@ -42,6 +45,7 @@ const options = (over = {}) => ({
   backlog: () => 0,
   maxWaiting: 20,
   onError: vi.fn(),
+  chatIds: fixedChatIds(),
   ...over,
 });
 const settled = () => ({
@@ -150,5 +154,44 @@ describe("the turn starter: on demand", () => {
     s.onSettled(settled());
     await s.idle();
     expect(s.running(ref)).toBe(true);
+  });
+});
+
+describe("the turn starter: the chat's own format", () => {
+  it("starts the turn run under the chat's own format: u_ for a legacy chat, h_ for an opaque one", async () => {
+    const f = fake();
+    const ids = testIdSource();
+    await ids.ensureUser(ref);
+    const legacy = loomTurnStarter(
+      f.runtime,
+      flow,
+      options({ chatIds: fixedChatIds(() => "legacy", ids) }),
+    );
+    const opaque = loomTurnStarter(
+      f.runtime,
+      flow,
+      options({ chatIds: fixedChatIds(() => "opaque", ids) }),
+    );
+    await legacy.visualize(ref);
+    await opaque.visualize({ ...ref, chatId: randomUUID() });
+    const [first, second] = [...f.started];
+    expect(first).toBe(turnExecutionId(user, chat, 4, 1));
+    expect(second).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:visualize-turn-[a-z2-7]{51}[aq]-4-r1$/);
+    expect(second).not.toContain(user);
+  });
+
+  it("starts nothing for a chat the resolver does not know: a request is refused as gone, a settled turn is dropped without a log line", async () => {
+    const f = fake();
+    const onError = vi.fn();
+    const s = loomTurnStarter(
+      f.runtime,
+      flow,
+      options({ onError, chatIds: { forRef: async () => null } }),
+    );
+    await expect(s.visualize(ref)).rejects.toBeInstanceOf(TurnGoneError);
+    s.onSettled(settled());
+    await s.idle();
+    expect(f.start).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled(); // an erased chat is not an error on every settle (M6)
   });
 });

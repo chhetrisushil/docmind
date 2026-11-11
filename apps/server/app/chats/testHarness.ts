@@ -13,10 +13,13 @@ import { withTenant } from "../db/tenant";
 import { APP_PASSWORD, createTestDb } from "../db/testSupport";
 import { seedUsers, testAuthenticator } from "../documents/testHarness";
 import type { TitleStarter } from "../flows/chat-title/start";
+import type { OpaqueIds } from "../opaqueIds";
+import { testIdSource } from "../opaqueIds/testing";
 import { createHttpServer } from "../server";
 import { MemoryLog } from "../status/testing";
 import { ChatActivity } from "./activity";
 import { ChatBus } from "./bus";
+import { PgChatIds } from "./chatIds";
 import { type FakeConversations, fakeConversations } from "./fakeConversations";
 import { legacyChatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
@@ -38,6 +41,8 @@ export interface ChatHarness {
   keys: InMemoryKeyStore;
   fields: FieldCrypto;
   fake: FakeConversations;
+  /** The harness's id source (deterministic: `deterministicUser(id)` names what it gives a user). */
+  ids: OpaqueIds;
   wiring: ChatWiring;
   activity: ChatActivity;
   reasoning: FakeReplyReasoning;
@@ -68,6 +73,8 @@ export async function startChatServer(
   const app = new Pool({ connectionString: db.appUrl });
   const keys = new InMemoryKeyStore();
   const fields = new FieldCrypto(keys);
+  const ids = testIdSource();
+  const chatIds = new PgChatIds(app, ids);
   const fake = fakeConversations(o.pageCap === undefined ? {} : { pageCap: o.pageCap });
   const activity = new ChatActivity({
     writer: new InMemoryReadModelStore(),
@@ -99,6 +106,7 @@ export async function startChatServer(
     fields,
     chat: wiring,
     eventStore,
+    chatIds,
     reasoning,
     ...(o.titles && { titles: o.titles }),
     ...(o.visualize && { visualize: o.visualize }),
@@ -115,6 +123,7 @@ export async function startChatServer(
     keys,
     fields,
     fake,
+    ids,
     wiring,
     activity,
     reasoning,

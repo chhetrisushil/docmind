@@ -3,6 +3,7 @@ import type { Planner } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { ChatBus } from "../../chats/bus";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import type { StepGuard, StepSeams } from "../ingest-document/stepEffect";
 import type { VisualFactStore } from "../visualize-document/pgFacts";
 import { type TurnCommitInput, turnCommitEffect } from "./commit";
@@ -22,6 +23,8 @@ export interface TurnVisualizeDeps extends StepSeams {
   summaryMaxChars: number;
   lineage: Lineage;
   bus: Pick<ChatBus, "publish">;
+  /** The chat's own id format for the lineage line the commit step writes. */
+  chatIds: Pick<ChatIdResolver, "forRef">;
   now: () => string;
   /** The `visuals` role's provider; absent when the role is off. */
   llm?: LlmProvider;

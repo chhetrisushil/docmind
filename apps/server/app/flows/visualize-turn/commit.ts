@@ -3,6 +3,7 @@ import type { Lineage } from "@loom-ui/lineage";
 import type { PlanReport, PlanResult } from "@loom-ui/planner";
 import type { Effect } from "@loom/effect-runtime";
 import type { ChatBus } from "../../chats/bus";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import { VisualsLineageError } from "../ingest-document/errors";
 import {
   type StepGuard,
@@ -14,7 +15,7 @@ import {
 import { committing } from "../visualize-document/commit";
 import { commitPlanTo } from "../visualize-document/lineage";
 import { TurnGoneError } from "./errors";
-import { type TurnRef, turnExperienceId } from "./ids";
+import type { TurnRef } from "./ids";
 import { TURN_RETRY } from "./model";
 import { TURN_INTENT } from "./plan";
 
@@ -46,6 +47,7 @@ export function turnCommitEffect(
     lineage: Lineage;
     now: () => string;
     bus: Pick<ChatBus, "publish">;
+    chatIds: Pick<ChatIdResolver, "forRef">;
   } & StepSeams,
 ): Effect<TurnCommitInput, StepResult> {
   return stepEffectOf<StepResult, TurnCommitInput>(
@@ -55,8 +57,10 @@ export function turnCommitEffect(
       if (input.outcome === "visualized") {
         const { report } = input; // type-optional: a hand-made input without one is the lineage error below
         if (!report) throw new VisualsLineageError(); // the flow always sends it; without one there is nothing to commit
+        const ids = await deps.chatIds.forRef(input);
+        if (!ids) throw new TurnGoneError();
         const target = {
-          experienceId: turnExperienceId(input),
+          experienceId: ids.turnExperienceId(input.ord),
           intent: TURN_INTENT,
           sourceKind: "turn-visuals",
         };

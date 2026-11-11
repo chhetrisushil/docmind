@@ -29,6 +29,7 @@ describe.skipIf(!PG_URL)("chat-title through Loom (needs DOCMIND_TEST_PG_URL)", 
       chatTitle: {
         pool: h.app,
         fields: h.fields,
+        chatIds: h.deps.chatIds,
         reader: h.fake.api.reader,
         llm: {
           complete: async (r: unknown) => {
@@ -39,7 +40,7 @@ describe.skipIf(!PG_URL)("chat-title through Loom (needs DOCMIND_TEST_PG_URL)", 
       },
     });
     try {
-      const starter = loomTitleStarter(app.runtime);
+      const starter = loomTitleStarter(app.runtime, h.deps.chatIds);
       const ref = { tenantId: T1, userId: U1, chatId };
       const handle = await starter.start(ref);
       expect((await handle?.waitForCompletion())?.status).toBe("completed");

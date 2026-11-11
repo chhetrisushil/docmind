@@ -13,9 +13,9 @@ import { withTenant } from "../db/tenant";
 import { type Schedule, intervalSchedule } from "../documents/events";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
-import { loadChat, notFound, principalOf } from "./access";
+import type { ChatConversationId } from "../opaqueIds";
+import { loadChatWithIds, notFound, principalOf } from "./access";
 import { ChatBusLimitError, type LiveChatEvent } from "./bus";
-import { legacyChatConversationId } from "./ids";
 import { toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
 import { getChat } from "./sessions";
@@ -34,6 +34,7 @@ export interface ChatStreamDeps
     | "fields"
     | "chat"
     | "eventStore"
+    | "chatIds"
     | "reasoning"
     | "heads"
     | "visualsOn"
@@ -127,9 +128,10 @@ export function chatStreamRoutes(deps: ChatStreamDeps): {
 
   const routes: Record<string, Handler> = {
     [CHAT_STREAM_ROUTE]: requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
-      const chat = await loadChat(deps, identity, ctx);
-      if (!chat) return notFound(res);
-      const conversationId = legacyChatConversationId(identity.userId, chat.id);
+      const loaded = await loadChatWithIds(deps, identity, ctx);
+      if (!loaded) return notFound(res);
+      const { chat, ids } = loaded;
+      const conversationId = ids.conversationId();
       const principal = principalOf(identity);
       let status: Awaited<ReturnType<ChatRouteDeps["chat"]["conversations"]["status"]>>;
       try {
@@ -191,7 +193,7 @@ interface StreamCall {
   res: ServerResponse;
   identity: Identity;
   chatId: string;
-  conversationId: string;
+  conversationId: ChatConversationId;
   cursor: string | undefined;
   status: { state: string; running: boolean; turns: number };
   open: Map<string, number>;
@@ -285,7 +287,12 @@ function stream(deps: ChatStreamDeps, c: StreamCall): void {
       for await (const batch of batches(follow)) {
         const entries = batch.flatMap((item) => (item.type === "message" ? [item.entry] : []));
         if (entries.length > 0) {
-          for (const message of await toMessageDtos(deps, identity, chatId, entries))
+          for (const message of await toMessageDtos(
+            deps,
+            identity,
+            { id: chatId, conversationId },
+            entries,
+          ))
             sink.send(frame("message", message, message.cursor));
         }
         if (batch.some((item) => item.type === "closed")) {

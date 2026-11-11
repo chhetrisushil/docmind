@@ -6,10 +6,16 @@ import { withTenant } from "../db/tenant";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
-import { loadChat, normalizeScope, notFound, principalOf, scopeIsOwned } from "./access";
+import {
+  loadChat,
+  loadChatWithIds,
+  normalizeScope,
+  notFound,
+  principalOf,
+  scopeIsOwned,
+} from "./access";
 import { chatActivityOf } from "./activityRead";
 import { toChatDto } from "./dto";
-import { legacyChatConversationId } from "./ids";
 import type { ChatRouteDeps } from "./routes";
 import { chatTitleBind, getChat, setScope, setTitle, softDeleteChat } from "./sessions";
 
@@ -53,15 +59,16 @@ export function chatManageRoutes(deps: ChatRouteDeps): Record<string, Handler> {
     }),
 
     "DELETE /api/chats/:id": requireAuth(deps.authenticator, async (_req, res, identity, ctx) => {
-      const chat = await loadChat(deps, identity, ctx);
-      if (!chat) return notFound(res);
+      const loaded = await loadChatWithIds(deps, identity, ctx);
+      if (!loaded) return notFound(res);
+      const { chat, ids } = loaded;
       const removed = await withTenant(deps.pool, identity.tenantId, (tx) =>
         softDeleteChat(tx, identity.userId, chat.id),
       );
       if (!removed) return notFound(res); // a concurrent delete won
       // The row is gone from every read now (open streams end on their next heartbeat). Failures below are
       // logged by class only and never undo the delete.
-      const conversationId = legacyChatConversationId(identity.userId, chat.id);
+      const conversationId = ids.conversationId();
       try {
         deps.chat.stops.stop(conversationId);
       } catch (err) {
@@ -88,11 +95,11 @@ export function chatManageRoutes(deps: ChatRouteDeps): Record<string, Handler> {
     "POST /api/chats/:id/stop": requireAuth(
       deps.authenticator,
       async (_req, res, identity, ctx) => {
-        const chat = await loadChat(deps, identity, ctx);
-        if (!chat) return notFound(res);
+        const loaded = await loadChatWithIds(deps, identity, ctx);
+        if (!loaded) return notFound(res);
         // True when a turn was listening. It can be true for a turn that finished an instant ago (its listener is
         // removed just after the turn ends), in which case the stop is a no-op.
-        const stopped = deps.chat.stops.stop(legacyChatConversationId(identity.userId, chat.id));
+        const stopped = deps.chat.stops.stop(loaded.ids.conversationId());
         json(res, 202, { stopped } satisfies StopChatResponse);
       },
     ),
