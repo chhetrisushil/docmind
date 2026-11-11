@@ -20,12 +20,14 @@ Everything below was verified against `main` 78e34cc (this worktree's base; `pnp
 | F2 | **`@loom/conversation` and the charset question (settled).** `isValidConversationId` is `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` and not `__loom_`-prefixed; a generation is `<chainId>~<n>` (`conversationIdOf` splits at the first `~`); `::` is the child separator. Loom never lower-cases or otherwise folds an id, and derives no subject: the erasure subject comes from DocMind's `subjectOfExecution` (shape only: `^h_(H)(?::\|\.c-\|$)`), and the principal is whatever the route passes (`{ tenant, actor: userId }`). A new conversation id is `h_` + 26 + `.c-` + 52 = 83 characters, 93 with a nine-digit generation: under the 128 limit. Base32 lower-case `[a-z2-7]` has no `~`, `:` or `.` and starts with `h`: **no conflict.** `UserIds.conversation` (phase 1) already throws if `isValidConversationId` is false, and `opaqueIds.test.ts` already pins the shape. The open question is closed; the only thing the conversation id forces is that the `u_<uuid>:` form is unavailable (a colon), which both formats already respect. | Global Constraints, Task 4 |
 | F3 | **An existing chat cannot be recognised from its row, so the format is stored (decision 1).** `chat_sessions` has no conversation id and the old id is a pure function of `(user, chat)`; the new id is a pure function of `(user key, chat)`. Nothing in the row says which one a chat started under, and probing Loom for "does `h_<H>.c-<C>` exist, else try `u_`" would be an async lookup in every route and a race at creation. A chat's generations (`~n`), its inbox streams, its title and its turn visuals all hang off the one id. So migration 0039 adds `id_format text NOT NULL DEFAULT 'legacy' CHECK (id_format IN ('legacy','opaque'))`: the default is exactly right for every row that exists (they were all created under `u_`), the create route writes `'opaque'`, and a row inserted without the column (a test, an old pod during a deploy) is legacy, which matches what old code starts. The column holds no id (nothing links it to a handle). A metadata-only `ADD COLUMN` (constant default): no rewrite. | Task 1 |
 | F4 | **Routes map the URL's chat UUID to the conversation id in one place.** Every route calls `loadChat` (a `chat_sessions` read by `(id, user_id)`) first, so the row (with `id_format`) is in hand; the id is then `await deps.chatIds.forRow(identity, row)`. For an opaque chat `forRow` calls `existingUser` (`opaqueIds.load`, never mints) and builds synchronously from the cached `UserIds`; for a legacy chat it needs nothing. Callers that hold only a `ChatRef` (the title starter, the turn starter, the turn commit, the turn reader, the turn heads, the visuals head route) use `forRef`, which reads `id_format` once per chat (cached: a chat's format never changes) and returns `null` for a chat that is not the owner's. Only the create route mints (`forNew` → `ensureUser`). The title step already reads the row, so it uses `forRow`. | Tasks 1, 4 |
-| F5 | **The conversation writes the owner's plain ids into its own log (experiment).** With the builders switched, the erasure scan failed on `loom.events.payload` for the `h_<H>.c-<C>` execution only: `EXECUTION_STARTED` `input.owner = { actor, tenant }` and `MESSAGE_CONSUMED` `sender = { actor, tenant }` hold the user and tenant UUID in plaintext. Loom seals `principal` and the inbox `payload` itself, not these two. Beside the new handle they link it to the user and the tenant after the key is gone: the exact link spec section 1 removes. **Decision:** register `input.owner` (`EXECUTION_STARTED`) and `sender` (`MESSAGE_CONSUMED`, `INBOX_MESSAGE`) in `SENSITIVE_EVENT_PATHS`. Tried in the scratch copy: the chat, title, turn-visuals and erasure suites pass with them sealed (a log that mixes plaintext and sealed consumptions reads fine, as Loom documents for `MESSAGE_CONSUMED.payload`), and the one test that pins the exact path map (`flows/ingest-document/flow.test.ts`, "the map holds only the conversation event types") must list the two new types. Sealing applies to legacy chats' new events too; their old events stay plaintext (O7). | Task 2 |
+| F5 | **The conversation writes the owner's plain ids into its own log (experiment).** With the builders switched, the erasure scan failed on `loom.events.payload` for the `h_<H>.c-<C>` execution only: `EXECUTION_STARTED` `input.owner = { actor, tenant }` and `MESSAGE_CONSUMED` `sender = { actor, tenant }` hold the user and tenant UUID in plaintext. Loom seals `principal`, the inbox `payload` and the inbox `sender` (sender-handle sealing) itself, not these two. Beside the new handle they link it to the user and the tenant after the key is gone: the exact link spec section 1 removes. **Decision:** register `input.owner` (`EXECUTION_STARTED`) and `sender` (`MESSAGE_CONSUMED`) in `SENSITIVE_EVENT_PATHS`. `INBOX_MESSAGE.sender` is not registered: Loom already seals it under the sender subject (`SenderHandles`, ADR 0139 N6, on by default), which is why the scan found only these two (I1). Tried in the scratch copy: the chat, title, turn-visuals and erasure suites pass with them sealed (a log that mixes plaintext and sealed consumptions reads fine, as Loom documents for `MESSAGE_CONSUMED.payload`), and the one test that pins the exact path map (`flows/ingest-document/flow.test.ts`, "the map holds only the conversation event types") must list the one new type (`MESSAGE_CONSUMED`). Sealing applies to legacy chats' new events too; their old events stay plaintext (O7). | Task 2 |
 | F6 | **The erasure harness assumes a `u_` chat in six places (experiment).** After the flip the scan itself was clean once F5 was fixed, but: (a) `assertErased` expects `u_` tombstones for `chat-activity` and `ingest-status`; a new chat leaves none under `u_` (its rows are under `h_<H>`); (b) `assertLogUnreadable` insists every execution it lists contains the user UUID or starts with `h_<H>`, which fails for `__loom_inbox__:h_<H>.c-...` and `__loom_ui_lineage__:turnvisuals-<H>-...`; (c) `leafOk` refuses any UUID-shaped leaf on an `h_` row, and the chat's fixed system prompt (`chats/agent.ts:23`) contains the nil UUID as a citation example (`[[00000000-0000-0000-0000-000000000000]]`); (d) `golden.e2e.pg.test.ts:246` expects subjects `[ada, h_<H>]`, and `erasure.resume.e2e.pg.test.ts:69,287`, `erasure.noPair.e2e.pg.test.ts:119` and `opaqueIds.e2e.pg.test.ts:296` rely on the user's UUID subject owning a running turn, which only a `u_` chat gives. | Task 3 |
-| F7 | **Erasure already covers `h_` chats.** `eraser.ts:475-477` (`stopWork`) walks `work.chatIds` (every `chat_sessions` row of the user, deleted ones included: `pgSteps.ts:58`) and calls `stopChat` and `cancelTitle`; `wire.ts:92-122` builds BOTH the old id and (when `existingUser` finds the handle) the new id for each and stops/closes/cancels both, ignoring "not found". The chat's turn-visualize runs are not cancelled by id: they end through `PgTurnGuard` (`visualize-turn/guard.ts`: `users.erasing_at IS NOT NULL` makes the next step "gone"), and a running one parks the shred, which the repeated stop and `record: false` park (phase 1) already handle. The subject index, `forgetUser`, the `rows` step's timers and leases, the snapshot pruner and the `chat-activity` tombstone scrub (`scope`, `app_key` set to NULL under `h_<H>`) are phase 1 and prefix- or range-based, so they cover `h_<H>.c-...`, `h_<H>:chat-title-...` and `h_<H>:visualize-turn-...` as they are. **No eraser change is needed;** Task 5 proves it with a chat that is parked mid-turn. | Task 5 |
-| F8 | **What the e2e scan's chat allow-list becomes.** `e2eSupport.ts` `ALLOWED` has one chat entry from phase 1 ("phase 1: the old-format id of the user's own chat-turn visuals lineage", `__loom_ui_lineage__:turnvisuals-<user>-`). It stays only for a user who has a legacy chat (`Who.legacyChats`), under the reason "O7: a legacy chat's turn visuals line"; for a user with new chats only, the entry does not apply and any `turnvisuals-<userId>-` row fails the scan. `ownExecution`/`isUserExecution` already accept both prefixes. The scan has no needle for the bare handle, so `turnvisuals-<H>-<C>-<ord>` produces no hit; Task 5 asserts the new lines exist, hold no UUID, and refuse as `line-erased` afterwards. | Tasks 3, 5 |
+| F7 | **Erasure already covers `h_` chats.** `eraser.ts:475-477` (`stopWork`) walks `work.chatIds` (every `chat_sessions` row of the user, deleted ones included: `pgSteps.ts:58`) and calls `stopChat` and `cancelTitle`; `wire.ts:92-122` builds BOTH the old id and (when `existingUser` finds the handle) the new id for each and stops/closes/cancels both, ignoring "not found". The chat's turn-visualize runs are not cancelled by id: they end through `PgTurnGuard` (`visualize-turn/guard.ts`: `users.erasing_at IS NOT NULL` makes the next step "gone"), and a running one parks the shred, which the repeated stop and `record: false` park (phase 1) already handle. The subject index, `forgetUser`, the `rows` step's timers and leases, the snapshot pruner and the `chat-activity` tombstone scrub (`scope`, `app_key` set to NULL under `h_<H>`) are phase 1 and prefix- or range-based, so they cover `h_<H>.c-...`, `h_<H>:chat-title-...` and `h_<H>:visualize-turn-...` as they are. **No change to what the erasure steps stop, close or cancel is needed;** the one eraser-side change is evicting the user from the resolver's format cache after the shred (I2, Task 1: `ChatIdResolver.forgetUser`, called from `forgetActivity` in `erasure/wire.ts`). Task 5 proves the rest with a chat that is parked mid-turn. | Task 5 |
+| F8 | **What the e2e scan's chat allow-list becomes.** `e2eSupport.ts` `ALLOWED` has one chat entry from phase 1 ("phase 1: the old-format id of the user's own chat-turn visuals lineage", `__loom_ui_lineage__:turnvisuals-<user>-`). It stays only for a user who has a legacy chat (`Who.legacyChats`), under the reason "O7: a legacy chat's turn visuals line"; for a user with new chats only, the entry does not apply and any `turnvisuals-<userId>-` row fails the scan. `ownExecution`/`isUserExecution` already accept both prefixes. `needlesOf` does include `h_<H>`, but a lineage id holds the bare `<H>` after `turnvisuals-` (no `h_` prefix), so the scan does not hit `turnvisuals-<H>-<C>-<ord>`; Task 5 asserts the new lines exist, hold no UUID, and refuse as `line-erased` afterwards. | Tasks 3, 5 |
 | F9 | **Flow hashes do not move.** `flowContentHash` hashes the definition id, version, deadline and steps only (phase 1 F5): `chat-title` 1.0.0 stays `sha256:f56568832761a1d68e89a5daf6b8edcf299eeadce26c916438f5f83a2cfa2007` (pinned in `flows/chat-title/flowHash.test.ts`); no flow version changes. | none |
 | F10 | **Turn lineage needs no new-then-old fallback (a change from the phase 1 handoff).** The handoff said turn-lineage reads should try the new line then fall back to the old, as the document line does. A document is re-visualized in place, so its head moves from the old line to the new one; a chat never changes format, so its lines are all in one format and the read goes straight to the chat's own line. This is simpler and cannot show a stale line. | Task 4 |
+
+**Pre-flight rulings applied** (the second pre-flight scan, `.superpowers/sdd/2026-11-11-opaque-ids-phase2/preflight.md`; every suggested ruling was accepted and is written into the tasks above): C1 (ratchet allow-list of four files), C2 (`sealedIds.pg.test.ts` judges payloads only), C3 (format cache keyed by tenant), C4 (`hasOpaqueChat` in the harness), I1 (`INBOX_MESSAGE.sender` not registered, Loom seals it), I2 (`ChatIdResolver.forgetUser`, called from `forgetActivity` in `erasure/wire.ts`, tested in Task 1), I3 (the exact `seedUser` calls to pin, and the phase 1 comment kept), I4 (`stubPaymentVisuals` in the new e2e tests), I5 (the real chat harness in Task 4 step 1), I6 (`visualsE2eSupport.ts` excluded from the production tsconfig), M1 (regression guards labelled), M2 (tautology test dropped), M3 (`oldChatToken` assertion that can fail), M4 (`TitleStarter.start` doc), M5 (`legacyChatConversationId` flagged by the ratchet, with its own allow-list of the resolver and the chat test support), M6 (`TurnGoneError` swallowed in `onSettled`), M7 (F8 wording), M8 (Amendments A and C), M9 (the test-only legacy turn builders keep the old strictness), M10 (rolling-deploy note), M11 (`deniedOnHandle` in the parked test).
 
 ## How the earlier scans' defects are avoided here
 
@@ -76,7 +78,7 @@ Every task's requirements include these (copied verbatim from the spec as amende
 - A handle is exactly `^[a-z2-7]{25}[aeimquy4]$` (26 characters, the one canonical spelling of 128 bits). A token is exactly 52 characters, `[a-z2-7]{51}[aq]` (the one canonical spelling of 256 bits). Generation `[1-9][0-9]{0,8}`, run `[1-9][0-9]{0,2}`, ordinal up to 15 digits (`ORD_PATTERN`). A new-format `~n` is the same `GEN` as the old.
 - Loom's execution id limit is `MAX_EXECUTION_ID_BYTES` (1024). A Loom conversation id must satisfy `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` and not start with `__loom_` (`isValidConversationId`): the new conversation id is 83 characters before a generation.
 - **No plaintext user, tenant, document or chat UUID in any execution id, lineage id, timer or lease row, or log line** a new chat produces. Log lines name errors by class only, never an id.
-- Only `apps/server/app/opaqueIds/` builds or parses an id's shape; `chats/chatIds.ts` and `erasure/wire.ts` are the only other files that may call a chat family's builder (Task 5's ratchet).
+- Only `apps/server/app/opaqueIds/` builds or parses an id's shape; `chats/chatIds.ts`, `erasure/wire.ts`, `chats/ids.ts` (the legacy conversation builder) and `flows/visualize-turn/testing.ts` (the test-only legacy turn builders) are the only other files that may call a chat family's builder (Task 5's ratchet), and `legacyChatConversationId` is called only by `chats/chatIds.ts` and the chat test support (M5).
 - Readers and cancellers never mint a key or a handle (`existingUser`/`load`); only a create or a start mints (`ensureUser`).
 
 **Environment rules (every task):**
@@ -97,15 +99,15 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6
 - **Decision 3: the builders are a resolver, not globals.** `ChatIdResolver` (`forRow`, `forRef`, `forNew`) returns `ChatIdBuilders` (`conversationId()`, `titleExecutionId()`, `turnExecutionId(ord, rerun?)`, `turnExperienceId(ord)`). The method names differ from `UserIds`/`legacyIds` (`conversation`, `chatTitle`, `turnVisualize`, `turnLineage`) so Task 5's ratchet can flag a direct call by name.
 - **Decision 4: `chatConversationId` is renamed `legacyChatConversationId`** (same body: it still refuses a non-canonical chat id), in one mechanical step in Task 1. Production code stops using it in Task 4; tests keep it to build the id of a legacy chat. `turnExecutionId` and `turnExperienceId` are removed in Task 4 and re-exported with their old signatures from `flows/visualize-turn/testing.ts` as `legacyTurnExecutionId` and `legacyTurnExperienceId`.
 - **Decision 5: `insertChat` takes the format as an optional last argument defaulting to `"legacy"`** (the column default). The create route passes `"opaque"` explicitly; `create.pg.test.ts` pins that, and the default keeps the dozen test helpers that insert rows unchanged.
-- **Decision 6: seal both `MESSAGE_CONSUMED.sender` and `INBOX_MESSAGE.sender`.** The scan found only the first; the second is the same field on the same message while it is in flight in the inbox stream (`__loom_inbox__:<chain>`, which the crypto plugin already seals under the chain's subject). Registered together so no window is left. The suites passed with both sealed.
+- **Decision 6: seal `MESSAGE_CONSUMED.sender`; leave `INBOX_MESSAGE.sender` to Loom.** The scan found `MESSAGE_CONSUMED.sender` in plaintext. `INBOX_MESSAGE.sender` is already sealed by Loom under the sender-handle subject (ADR 0139 N6, default on), so registering it would nest a second envelope inside the first, and `archive.ts` (`maskSender`, `senderDigestOf`, `sameReservedEnvelope`) was never exercised against that. It is not registered (I1).
 - **Decision 7: the harness is made format-agnostic before the flip** (Task 3), so Task 4 is a pure behaviour change with green tests on both sides. A test that needs a `u_` chat asks for one (`seedUser(..., { chat: "legacy" })`, `createLegacyChat`).
-- **Decision 8: no eraser change** (F7). The erasure e2e in Task 5 includes a chat parked mid-turn to prove it.
+- **Decision 8: no change to what the eraser stops or cancels** (F7); the only eraser-side change is that `forgetActivity` also calls the resolver's `forgetUser` (I2, Task 1), because the resolver caches `tenant:user:chat` formats that must not outlive the user. The erasure e2e in Task 5 includes a chat parked mid-turn to prove the rest.
 
 **Spec amendments** (written into the spec in Task 6):
 
-- **Spec amendment A (section 6, residual bullet).** The sentence "Until phase 2, a chat's executions and its turn visuals lineage ... keep old-format ids ..." becomes: a chat created before the phase 2 deploy keeps `u_<user>` ids for all of its executions and its turn visuals lineage for its whole life (conversation and generations, title, turn visuals, lineage); a chat created after it is opaque. The end-to-end scan proves "no linkable id" for new chats; a legacy chat's ids are an allow-listed residual in the scan (only for a user who has one).
-- **Spec amendment B (section 6, flow inputs).** The conversation's `EXECUTION_STARTED.input.owner` and `MESSAGE_CONSUMED`/`INBOX_MESSAGE` `sender` carry `{ actor, tenant }` in plaintext; they are sealed under the subject key like the flow inputs (F5).
-- **Spec amendment C (sections 3 and 4).** A chat's id format is stored (`chat_sessions.id_format`, migration 0039) and all of a chat's ids follow it (Decisions 1 and 2); turn lineage is read from the chat's own line with no fallback (F10).
+- **Spec amendment A (section 6, residual bullet).** The sentence "Until phase 2, a chat's executions and its turn visuals lineage ... keep old-format ids ..." becomes: a chat created before the phase 2 deploy keeps `u_<user>` ids for all of its executions and its turn visuals lineage for its whole life, including the executions it creates after the deploy (conversation and generations, title, turn visuals, reruns, lineage); a chat created after it is opaque. The end-to-end scan proves "no linkable id" for new chats; a legacy chat's ids are an allow-listed residual in the scan (only for a user who has one).
+- **Spec amendment B (section 6, flow inputs).** The conversation's `EXECUTION_STARTED.input.owner` and `MESSAGE_CONSUMED.sender` carry `{ actor, tenant }` in plaintext; they are sealed under the subject key like the flow inputs (F5). `INBOX_MESSAGE.sender` is already sealed by Loom (ADR 0139 N6) and is not registered.
+- **Spec amendment C (sections 3 and 4).** A chat's id format is stored (`chat_sessions.id_format`, migration 0039) and all of a chat's ids follow it (Decisions 1 and 2); turn lineage is read from the chat's own line with no fallback (F10). O7's "new runs use the new format from deploy" applies per chat: a legacy chat's new runs stay old-format.
 - **Spec amendment D (section 8, mixed history).** Phase 2 tests the mixed history as one scenario (an old chat that continues in the old format beside a new chat), because a chat can be made legacy by a test helper; phase 1's piecewise tests stay.
 
 ## File Structure
@@ -115,11 +117,11 @@ Created:
 - `apps/server/app/chats/chatIds.ts`: `ChatIdFormat`, `ChatIdBuilders`, `ChatIdResolver`, `legacyBuilders`, `opaqueBuilders`, `PgChatIds`.
 - `apps/server/app/chats/chatIds.test.ts`, `apps/server/app/chats/chatIds.pg.test.ts`, `apps/server/app/db/chatIdFormat.pg.test.ts`.
 - `apps/server/app/chats/sealedIds.pg.test.ts` (the conversation log holds no plain owner or sender).
-- `apps/server/app/chats/visualsE2eSupport.ts` (shared by the old visuals e2e and the phase 2 e2e).
+- `apps/server/app/chats/visualsE2eSupport.ts` (the visuals e2e helpers, moved out of `visuals.e2e.pg.test.ts` so other e2e tests can reuse them; test-only, excluded from the production tsconfig).
 
-Modified (production): `chats/{ids,sessions,access,routes,messages,messageRoutes,reasoningRoutes,stream,manageRoutes,turnHeads,testing}.ts`, `flows/visualize-turn/{ids,start,commit,readTurn,testing}.ts`, `flows/chat-title/{start,step}.ts`, `ui/routes.ts`, `subject.ts`, `sensitive.ts`, `compose.ts`, `docs/architecture.md`, `docs/specs/2026-11-10-opaque-ids-design.md`, `docs/operations/cloud-deploy.md`.
+Modified (production): `apps/server/tsconfig.json` (exclude), `chats/{ids,sessions,access,routes,messages,messageRoutes,reasoningRoutes,stream,manageRoutes,turnHeads,testing}.ts`, `flows/visualize-turn/{ids,start,commit,readTurn,testing}.ts`, `flows/chat-title/{start,step}.ts`, `ui/routes.ts`, `subject.ts`, `sensitive.ts`, `compose.ts`, `erasure/wire.ts`, `docs/architecture.md`, `docs/specs/2026-11-10-opaque-ids-design.md`, `docs/operations/cloud-deploy.md`.
 
-Modified (tests and support): `erasure/e2eSupport.ts`, `erasure/{opaqueIds.e2e,erasure.resume.e2e,erasure.noPair.e2e}.pg.test.ts`, `chats/{golden.e2e,restart.e2e,visuals.e2e,startRatchet,e2eSupport,testHarness,testStack,messages}...`, `executionIds.test.ts`, `flows/ingest-document/flow.test.ts`, `db/chatSessions.pg.test.ts`, `chats/create.pg.test.ts`, and the tests named per task.
+Modified (tests and support): `erasure/e2eSupport.ts`, `erasure/{opaqueIds.e2e,erasure.resume.e2e,erasure.noPair.e2e}.pg.test.ts`, `chats/{golden.e2e,restart.e2e,visuals.e2e,startRatchet,e2eSupport,testHarness,testStack,messages}...`, `executionIds.test.ts`, `flows/ingest-document/flow.test.ts`, `erasure/wire.test.ts`, `db/chatSessions.pg.test.ts`, `chats/create.pg.test.ts`, and the tests named per task.
 
 ---
 
@@ -127,16 +129,17 @@ Modified (tests and support): `erasure/e2eSupport.ts`, `erasure/{opaqueIds.e2e,e
 
 **Files:**
 - Create: `infra/migrations/0039_chat_id_format.sql`, `apps/server/app/chats/chatIds.ts`, `apps/server/app/chats/chatIds.test.ts`, `apps/server/app/chats/chatIds.pg.test.ts`, `apps/server/app/db/chatIdFormat.pg.test.ts`
-- Modify: `apps/server/app/chats/ids.ts` (rename), `apps/server/app/chats/sessions.ts` (`id_format` in the row, `COLUMNS`, `insertChat`, `listChats`), `apps/server/app/subject.ts` (re-export), `apps/server/app/chats/testing.ts` (`fixedChatIds`), `apps/server/app/compose.ts` (build and expose `chatIds`), every file that names `chatConversationId` (rename script)
-- Test: the three new test files
+- Modify: `apps/server/app/chats/ids.ts` (rename), `apps/server/app/chats/sessions.ts` (`id_format` in the row, `COLUMNS`, `insertChat`, `listChats`), `apps/server/app/subject.ts` (re-export), `apps/server/app/chats/testing.ts` (`fixedChatIds`), `apps/server/app/compose.ts` (build and expose `chatIds`; hand it to the eraser), `apps/server/app/erasure/wire.ts` (evict the resolver's cache of the user after the shred, I2), `apps/server/app/erasure/wire.test.ts`, every file that names `chatConversationId` (rename script)
+- Test: the three new test files and `erasure/wire.test.ts`
 
 **Interfaces:**
 - Consumes: phase 1: `UserIds` (`conversation`, `chatTitle`, `turnVisualize`, `turnLineage`), `legacyIds`, `OpaqueIds` (`ensureUser`, `load`, `cached`), `existingUser` and `UserIdSource` (`documents/executionCandidates.ts`), `withTenant`, `ChatRef` (`chats/turnItems.ts`).
 - Produces (later tasks rely on these exact names):
   - `type ChatIdFormat = "legacy" | "opaque"`.
   - `interface ChatIdBuilders { readonly format: ChatIdFormat; conversationId(): ChatConversationId; titleExecutionId(): UserExecutionId; turnExecutionId(ord: number, rerun?: number): UserExecutionId; turnExperienceId(ord: number): string }`.
-  - `interface ChatIdResolver { forRow(who: ChatOwner, chat: { id: string; id_format: ChatIdFormat }): Promise<ChatIdBuilders | null>; forRef(ref: ChatRef): Promise<ChatIdBuilders | null>; forNew(who: ChatOwner, chatId: string): Promise<ChatIdBuilders> }` with `ChatOwner = { tenantId: string; userId: string }`.
-  - `legacyBuilders(userId, chatId)`, `opaqueBuilders(user: UserIds, chatId)`, `class PgChatIds implements ChatIdResolver` (constructor `(pool: Pool, ids: UserIdSource)`).
+  - `interface ChatIdResolver { forRow(who: ChatOwner, chat: { id: string; id_format: ChatIdFormat }): Promise<ChatIdBuilders | null>; forRef(ref: ChatRef): Promise<ChatIdBuilders | null>; forNew(who: ChatOwner, chatId: string): Promise<ChatIdBuilders>; forgetUser(userId: string): void }` with `ChatOwner = { tenantId: string; userId: string }`. `forgetUser` drops every format the resolver cached for that user (the eraser calls it after the shred, I2).
+  - `legacyBuilders(userId, chatId)`, `opaqueBuilders(user: UserIds, chatId)`, `class PgChatIds implements ChatIdResolver` (constructor `(pool: Pool, ids: UserIdSource)`; its format cache is keyed `tenantId:userId:chatId`).
+  - `ErasureParts.chatIds?: Pick<ChatIdResolver, "forgetUser">` (`erasure/wire.ts`): `forgetActivity` evicts the user from it.
   - `ChatSessionRow.id_format: ChatIdFormat`; `insertChat(tx, tenantId, userId, id, scope, idFormat: ChatIdFormat = "legacy")`.
   - `legacyChatConversationId(userId, chatId): ChatConversationId` (the old `chatConversationId`).
   - `fixedChatIds(format?, ids?)` in `chats/testing.ts`; `composed.chatIds: ChatIdResolver`.
@@ -232,7 +235,6 @@ Create `apps/server/app/chats/chatIds.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { legacyIds } from "../opaqueIds";
 import { deterministicUser } from "../opaqueIds/testing";
 import { legacyBuilders, opaqueBuilders } from "./chatIds";
 
@@ -250,10 +252,6 @@ describe("legacyBuilders", () => {
     expect(b.turnExecutionId(7)).toBe(`u_${U}:visualize-turn-${C}-7`);
     expect(b.turnExecutionId(7, 2)).toBe(`u_${U}:visualize-turn-${C}-7-r2`);
     expect(b.turnExperienceId(7)).toBe(`turnvisuals-${U}-${C}-7`);
-  });
-  it("is the same as the phase 1 builders", () => {
-    expect(b.titleExecutionId()).toBe(legacyIds.chatTitle(U, C));
-    expect(b.turnExperienceId(7)).toBe(legacyIds.turnLineage(U, C, 7));
   });
   it.each([
     ["an upper-case chat", () => legacyBuilders(U, C.toUpperCase()).conversationId()],
@@ -366,9 +364,27 @@ describe.skipIf(!PG_URL)("PgChatIds (needs DOCMIND_TEST_PG_URL)", () => {
     // another user, another tenant: the same answer as an unknown chat
     expect(await chatIds.forRef(ref(legacy, T1, U2))).toBeNull();
     expect(await chatIds.forRef(ref(legacy, T2, U1))).toBeNull();
-    // the format is cached: the row can go and the answer stays
-    await fx.db.owner.query("DELETE FROM chat_sessions WHERE id = $1", [legacy.id]);
-    expect((await chatIds.forRef(ref(legacy)))?.format).toBe("legacy");
+  });
+
+  it("keys its format cache by tenant too: a hit for (T1, U1) does not answer for (T2, U1)", async () => {
+    const { chatIds } = make();
+    const row = await chat(T1, U1, "legacy");
+    expect((await chatIds.forRef({ tenantId: T1, userId: U1, chatId: row.id }))?.format).toBe("legacy"); // fills the cache
+    expect(await chatIds.forRef({ tenantId: T2, userId: U1, chatId: row.id })).toBeNull(); // not a cache hit
+  });
+
+  it("forgetUser drops a user's cached formats: a cached answer may outlive a deleted row for one process, and no longer after the eraser forgets the user", async () => {
+    const { chatIds } = make();
+    const mine = await chat(T1, U1, "legacy");
+    const theirs = await chat(T1, U2, "legacy");
+    const ref = (c: { id: string }, userId: string) => ({ tenantId: T1, userId, chatId: c.id });
+    expect((await chatIds.forRef(ref(mine, U1)))?.format).toBe("legacy");
+    expect((await chatIds.forRef(ref(theirs, U2)))?.format).toBe("legacy");
+    await fx.db.owner.query("DELETE FROM chat_sessions WHERE id = ANY($1)", [[mine.id, theirs.id]]);
+    expect((await chatIds.forRef(ref(mine, U1)))?.format).toBe("legacy"); // cached: the row is gone, the answer stays
+    chatIds.forgetUser(U1);
+    expect(await chatIds.forRef(ref(mine, U1))).toBeNull(); // forgotten: asks the database, finds nothing
+    expect((await chatIds.forRef(ref(theirs, U2)))?.format).toBe("legacy"); // another user's entry is untouched
   });
 
   it("answers null for an opaque chat whose owner's key is destroyed, and the legacy chat of that owner still builds", async () => {
@@ -394,10 +410,35 @@ describe.skipIf(!PG_URL)("PgChatIds (needs DOCMIND_TEST_PG_URL)", () => {
 });
 ```
 
+Append to `apps/server/app/erasure/wire.test.ts` inside its `describe("erasureDeps", ...)` (it already has `parts`, `USER`; I2):
+
+```ts
+  it("evicts the chat id resolver's memory of the user whenever the user's chat activity is forgotten, even if that throws", async () => {
+    const forgotten: string[] = [];
+    const chatIds = { forgetUser: (userId: string) => void forgotten.push(userId) };
+    await erasureDeps(parts({ chatIds }).parts).forgetActivity(USER, "h");
+    expect(forgotten).toEqual([USER]);
+    const failing = parts({
+      chatIds,
+      activity: {
+        forgetUser: async () => {
+          throw new Error("down");
+        },
+      },
+    }).parts;
+    await expect(erasureDeps(failing).forgetActivity(USER)).rejects.toThrow("down");
+    expect(forgotten).toEqual([USER, USER]); // a retried step evicts again
+  });
+
+  it("forgets no chat ids when the resolver is not wired", async () => {
+    await expect(erasureDeps(parts().parts).forgetActivity(USER, null)).resolves.toBe(0); // the activity port's own answer, no resolver involved
+  });
+```
+
 - [ ] **Step 6: Run the resolver tests to see them fail**
 
-Run: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats/chatIds`
-Expected: FAIL (module `./chatIds` not found).
+Run: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats/chatIds app/erasure/wire`
+Expected: FAIL (module `./chatIds` not found; `ErasureParts` has no `chatIds`, so `forgetActivity` evicts nothing).
 
 - [ ] **Step 7: Rename the legacy builder everywhere**
 
@@ -514,10 +555,12 @@ export interface ChatIdBuilders {
 export interface ChatIdResolver {
   /** The builders of a chat the caller has loaded (its row carries the format). Null: an opaque chat whose owner has no live id key (erased, or never given one). Never mints. */
   forRow(who: ChatOwner, chat: { id: string; id_format: ChatIdFormat }): Promise<ChatIdBuilders | null>;
-  /** The builders of a chat the caller only has a reference to: reads the format. Null: no such chat for this owner, or as `forRow`. Never mints. */
+  /** The builders of a chat the caller only has a reference to: reads the format. Null when the chat row is not found for this owner (a cached answer may outlive a deleted row for one process), or as `forRow`. Never mints. */
   forRef(ref: ChatRef): Promise<ChatIdBuilders | null>;
   /** The builders of a chat about to be created: always the new format, minting the user's key and handle on their first use. A key-store outage throws. */
   forNew(who: ChatOwner, chatId: string): Promise<ChatIdBuilders>;
+  /** Drops everything remembered about a user's chats (the eraser calls it after the shred, so a cached answer cannot outlive the user's rows). Never throws. */
+  forgetUser(userId: string): void;
 }
 
 export const legacyBuilders = (userId: string, chatId: string): ChatIdBuilders => ({
@@ -538,7 +581,10 @@ export const opaqueBuilders = (user: UserIds, chatId: string): ChatIdBuilders =>
 
 const FORMAT_CACHE_MAX = 5000;
 
-/** The Postgres resolver. A chat's format never changes, so a found format is cached (bounded, oldest first out); a missing chat is never cached. */
+/**
+ * The Postgres resolver. A chat's format never changes, so a found format is cached (bounded, oldest first out), keyed by tenant, user and
+ * chat; a missing chat is never cached. The cache holds ids of people, so `forgetUser` evicts a user's entries when they are erased.
+ */
 export class PgChatIds implements ChatIdResolver {
   private readonly formats = new Map<string, ChatIdFormat>();
 
@@ -547,8 +593,12 @@ export class PgChatIds implements ChatIdResolver {
     private readonly ids: UserIdSource,
   ) {}
 
-  private remember(userId: string, chatId: string, format: ChatIdFormat): void {
-    const key = `${userId}:${chatId}`;
+  /** `tenant:user:chat` (UUIDs hold no colon, so `forgetUser` can read the user back from the key). */
+  private key(ref: { tenantId: string; userId: string }, chatId: string): string {
+    return `${ref.tenantId}:${ref.userId}:${chatId}`;
+  }
+
+  private remember(key: string, format: ChatIdFormat): void {
     this.formats.delete(key);
     if (this.formats.size >= FORMAT_CACHE_MAX) {
       const oldest = this.formats.keys().next().value;
@@ -571,12 +621,13 @@ export class PgChatIds implements ChatIdResolver {
     who: ChatOwner,
     chat: { id: string; id_format: ChatIdFormat },
   ): Promise<ChatIdBuilders | null> {
-    this.remember(who.userId, chat.id, chat.id_format);
+    this.remember(this.key(who, chat.id), chat.id_format);
     return this.build(who, chat.id, chat.id_format);
   }
 
   async forRef(ref: ChatRef): Promise<ChatIdBuilders | null> {
-    let format = this.formats.get(`${ref.userId}:${ref.chatId}`);
+    const key = this.key(ref, ref.chatId);
+    let format = this.formats.get(key);
     if (format === undefined) {
       const row = await withTenant(this.pool, ref.tenantId, async (tx) =>
         (
@@ -588,7 +639,7 @@ export class PgChatIds implements ChatIdResolver {
       );
       if (!row) return null;
       format = row.id_format;
-      this.remember(ref.userId, ref.chatId, format);
+      this.remember(key, format);
     }
     return this.build(ref, ref.chatId, format);
   }
@@ -596,12 +647,16 @@ export class PgChatIds implements ChatIdResolver {
   async forNew(who: ChatOwner, chatId: string): Promise<ChatIdBuilders> {
     return opaqueBuilders(await this.ids.ensureUser(who), chatId);
   }
+
+  forgetUser(userId: string): void {
+    for (const key of [...this.formats.keys()]) if (key.split(":")[1] === userId) this.formats.delete(key);
+  }
 }
 ```
 
 (The query deliberately has no `deleted_at` predicate: a deleted chat's turn runs, title and erasure still need its ids.)
 
-- [ ] **Step 10: Add the test resolver and wire the resolver into `compose.ts`**
+- [ ] **Step 10: Add the test resolver, wire the resolver into `compose.ts` and the eviction into the eraser**
 
 Append to `apps/server/app/chats/testing.ts` (add the imports it needs: `ChatIdFormat`, `ChatIdResolver`, `legacyBuilders`, `opaqueBuilders` from `./chatIds`, `UserIdSource` from `../documents/executionCandidates`, `existingUser` likewise):
 
@@ -626,15 +681,36 @@ export function fixedChatIds(
       if (!ids) throw new Error("fixedChatIds: forNew needs an id source");
       return opaqueBuilders(await ids.ensureUser(who), chatId);
     },
+    forgetUser: () => {},
   };
 }
 ```
 
-In `apps/server/app/compose.ts`, import `PgChatIds` and, right after `const ids = options.ids ?? new OpaqueIds(...)` (line ~184) add `const chatIds = new PgChatIds(pool, ids);`; add `/** Builds a chat's Loom ids in the chat's own format (migration 0039). */ chatIds,` to the returned object next to `ids` (line ~638). Nothing uses it yet.
+In `apps/server/app/compose.ts`, import `PgChatIds` and, right after `const ids = options.ids ?? new OpaqueIds(...)` (line ~184) add `const chatIds = new PgChatIds(pool, ids);`; add `/** Builds a chat's Loom ids in the chat's own format (migration 0039). */ chatIds,` to the returned object next to `ids` (line ~638), and pass `chatIds` to the `erasureDeps({ ... })` call (next to `ids,`, line ~490). Nothing else uses it yet.
+
+The eviction (I2). The resolver's format cache holds `tenant:user:chat` keys, and `ids.forgetSubject` (called in `erasure/wire.ts` `eraseSubject` and `keys.destroy`) only knows a subject, never the user's UUID, so the eviction hangs on the one eraser hook that is keyed by user and runs after the shred: `forgetActivity(userId, handle)` (the Eraser calls it in the `readModels` step and again in `rows`, both after the `shred` step). In `apps/server/app/erasure/wire.ts` add `import type { ChatIdResolver } from "../chats/chatIds";`, add to `ErasureParts` after `ids?`:
+
+```ts
+  /** The chat id resolver: its cached chat formats name a user's chats, so the user is evicted from it after the shred (a late `forRef` must ask the database, which no longer has the rows). Absent: nothing to evict. */
+  chatIds?: Pick<ChatIdResolver, "forgetUser">;
+```
+
+and replace the `forgetActivity` line of `erasureDeps` with:
+
+```ts
+    forgetActivity: async (userId, handle) => {
+      try {
+        return await p.activity.forgetUser(userId, handle);
+      } finally {
+        // After the shred and the activity tombstones, and even if they threw (the step is retried and evicts again).
+        p.chatIds?.forgetUser(userId);
+      }
+    },
+```
 
 - [ ] **Step 11: Run the tests, typecheck, lint, commit**
 
-Run: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats/chatIds app/db app/chats/ids app/chats/sessions app/chats/startRatchet`
+Run: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats/chatIds app/erasure/wire app/db app/chats/ids app/chats/sessions app/chats/startRatchet`
 Expected: PASS. Then `cd ../.. && pnpm exec biome check --write apps/server/app && pnpm typecheck && pnpm typecheck:tests && pnpm lint` (no errors), and the focused suites that touch the rename: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats app/erasure app/flows/chat-title app/flows/visualize-turn` (all pass: nothing changed behaviour).
 
 ```bash
@@ -654,7 +730,7 @@ git commit -m "feat(ids): a chat's id format is stored (0039) and a resolver bui
 
 **Interfaces:**
 - Consumes: `SENSITIVE_EVENT_PATHS` (`sensitive.ts`), the chat test stack `startIngestStack({ chat: true })`.
-- Produces: `EXECUTION_STARTED` seals `input.owner`; `MESSAGE_CONSUMED` and `INBOX_MESSAGE` seal `sender`. Applies to every conversation (legacy included) from now on.
+- Produces: `EXECUTION_STARTED` seals `input.owner`; `MESSAGE_CONSUMED` seals `sender` (`INBOX_MESSAGE.sender` is already sealed by Loom and is not registered). Applies to every conversation (legacy included) from now on.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -662,10 +738,11 @@ Append to `apps/server/app/sensitive.test.ts` (inside its top-level `describe`, 
 
 ```ts
 describe("the conversation's own ids (R14 phase 2)", () => {
-  it("seals the owner of a conversation's start and the sender of its messages", () => {
+  it("seals the owner of a conversation's start and the sender of its consumed messages", () => {
     expect(SENSITIVE_EVENT_PATHS.EXECUTION_STARTED).toContain("input.owner");
     expect(SENSITIVE_EVENT_PATHS.MESSAGE_CONSUMED).toEqual(["sender"]);
-    expect(SENSITIVE_EVENT_PATHS.INBOX_MESSAGE).toEqual(["sender"]);
+    // The inbox copy of the sender is sealed by Loom itself (sender-handle sealing, ADR 0139 N6): registering it would double-seal it.
+    expect(SENSITIVE_EVENT_PATHS.INBOX_MESSAGE).toBeUndefined();
   });
 });
 ```
@@ -680,7 +757,6 @@ import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { collectUntil, isReply, scriptChat } from "./e2eSupport";
 
-const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
 const isEnvelope = (v: unknown) => (v as { __loomEnc?: unknown } | null)?.__loomEnc === "loom/aes-256-gcm";
 
 describe.skipIf(!PG_URL)("a conversation's log holds no plain owner or sender (needs DOCMIND_TEST_PG_URL)", () => {
@@ -719,9 +795,14 @@ describe.skipIf(!PG_URL)("a conversation's log holds no plain owner or sender (n
     expect(consumed.length).toBeGreaterThan(0); // the control: the events the claim is about exist
     expect(isEnvelope((started?.payload as { input?: { owner?: unknown } }).input?.owner)).toBe(true);
     for (const e of consumed) expect(isEnvelope((e.payload as { sender?: unknown }).sender)).toBe(true);
-    // no UUID is left in the plaintext of either event beyond sealed envelopes (the user, the tenant)
-    const plain = JSON.stringify([started, ...consumed], (_k, v) => (isEnvelope(v) ? "sealed" : v));
-    expect(plain).not.toMatch(UUID);
+    // The payloads hold neither the user's nor the tenant's id outside a sealed envelope. Only the payloads are judged: the envelope's
+    // `executionId` is `u_<user>.c-<chat>` until Task 4 flips the chat builders, and is judged by the Task 4 and 5 tests.
+    const plain = JSON.stringify(
+      [started?.payload, ...consumed.map((e) => e.payload)],
+      (_k, v) => (isEnvelope(v) ? "sealed" : v),
+    );
+    expect(plain).not.toContain(who.userId);
+    expect(plain).not.toContain(who.tenantId);
     // the owner's own key still opens them, as Loom needs
     const opened = await st.durable.sealed.eventStore.read(conversation as string);
     const openedStart = opened.find((e) => e.eventType === "EXECUTION_STARTED");
@@ -739,7 +820,7 @@ Expected: FAIL (`input.owner` not in the list; the owner is a plain object).
 
 - [ ] **Step 3: Register the paths**
 
-In `apps/server/app/sensitive.ts`, in `SENSITIVE_EVENT_PATHS`, add `"input.owner",` to `EXECUTION_STARTED` (before `...FLOW_INPUT_IDS`) and two entries after it:
+In `apps/server/app/sensitive.ts`, in `SENSITIVE_EVENT_PATHS`, add `"input.owner",` to `EXECUTION_STARTED` (before `...FLOW_INPUT_IDS`) and one entry after it:
 
 ```ts
   EXECUTION_STARTED: [
@@ -752,17 +833,16 @@ In `apps/server/app/sensitive.ts`, in `SENSITIVE_EVENT_PATHS`, add `"input.owner
     "input.owner",
     ...FLOW_INPUT_IDS,
   ],
-  // The sender of a conversation message is its owner's identity too: the same `{ actor, tenant }`, on the message in the owner's log and
-  // on its copy in the inbox stream. Loom seals only these events' `payload`.
+  // The sender of a consumed conversation message is its owner's identity too: the same `{ actor, tenant }`. Loom seals only this event's
+  // `payload`. (`INBOX_MESSAGE.sender` is not listed: Loom already seals it under the sender subject, ADR 0139 N6.)
   MESSAGE_CONSUMED: ["sender"],
-  INBOX_MESSAGE: ["sender"],
 ```
 
-and add a sentence to the rules comment above the map: `*  - the conversation's own owner and sender identities are ids too and are sealed (EXECUTION_STARTED.input.owner, MESSAGE_CONSUMED.sender, INBOX_MESSAGE.sender), for the same reason as FLOW_INPUT_IDS;`.
+and add a sentence to the rules comment above the map: `*  - the conversation's own owner and sender identities are ids too and are sealed (EXECUTION_STARTED.input.owner, MESSAGE_CONSUMED.sender), for the same reason as FLOW_INPUT_IDS;`.
 
 - [ ] **Step 4: Update the test that pins the exact map**
 
-In `apps/server/app/flows/ingest-document/flow.test.ts` find the test "ingest marks nothing; the map holds only the conversation event types" (`grep -n "holds only the conversation event types" apps/server/app/flows/ingest-document/flow.test.ts`) and add `"INBOX_MESSAGE"` and `"MESSAGE_CONSUMED"` to the sorted array of event types it expects (keep it sorted, as the test does).
+In `apps/server/app/flows/ingest-document/flow.test.ts` find the test "ingest marks nothing; the map holds only the conversation event types" (`grep -n "holds only the conversation event types" apps/server/app/flows/ingest-document/flow.test.ts`) and add `"MESSAGE_CONSUMED"` (only that one; it sorts after `"LLM_REASONING_CAPTURED"` and before `"STEP_COMPLETED"`) to the sorted array of event types it expects.
 
 - [ ] **Step 5: Run the tests, then the suites that read conversations**
 
@@ -887,7 +967,13 @@ and in `assertLogUnreadable` use it in both places: the `.filter((id) => namesUs
     );
 ```
 
-(`moreChatIds !== undefined` marks a mixed user, who has a legacy chat plus others.) In the `if (who.handle !== undefined)` block that follows add `expect(hRows.rows.some((r) => r.model_id === "chat-activity")).toBe(user.chatFormat === "opaque");` after the existing `ingest-status` assertion, so a new chat's activity row is shown to sit under the handle.
+(`moreChatIds !== undefined` marks a mixed user, who has a legacy chat plus others.) In the `if (who.handle !== undefined)` block that follows add, after the existing `ingest-status` assertion:
+
+```ts
+      // A new chat's activity row sits under the handle. A mixed user (`moreChatIds`) has a new chat beside the legacy one.
+      const hasOpaqueChat = user.chatFormat === "opaque" || user.moreChatIds !== undefined;
+      expect(hRows.rows.some((r) => r.model_id === "chat-activity")).toBe(hasOpaqueChat);
+```
 
 (d) The one chat entry of `ALLOWED` (F8). `Who` gets `legacyChats?: boolean` ("the user has a chat under the old format: its turn visuals lineage names the user"), `assertErased` sets `legacyChats: user.chatFormat === "legacy" || user.moreChatIds !== undefined` when building `who`, and the entry becomes:
 
@@ -913,7 +999,12 @@ and in `assertLogUnreadable` use it in both places: the `.filter((id) => namesUs
 
 - [ ] **Step 4: Pin the tests that need a `u_` chat**
 
-In `erasure.resume.e2e.pg.test.ts` (the two tests that fail after the flip: lines 69 and 287 are their "key is gone after the shred" and parked-subject assertions), `erasure.noPair.e2e.pg.test.ts` (line 119), and the first test of `opaqueIds.e2e.pg.test.ts` (the `h_` suggest-tags run: it expects the user's UUID subject to own a running turn through `[user.userId, "parked"]`): change each `seedUser(first, login, email)` call to `seedUser(first, login, email, { chat: "legacy" })`, with a one-line comment `// the user's UUID subject must own a running turn: an old chat`. In `golden.e2e.pg.test.ts` (line ~246, the expected subject set `[ada.userId, handleSubject]`) make the chat of that test legacy by creating it with `createLegacyChat(st, ada)` instead of `POST /api/chats` and use the returned `id`.
+Pin exactly these `seedUser` calls (each becomes `seedUser(first, login, email, { chat: "legacy" })` with the comment `// the user's UUID subject must own a running turn: an old chat`; the argument names are the file's own):
+
+- `erasure.resume.e2e.pg.test.ts`: line 55 (`eve`) and line 200 (`const user = await seedUser(st, login, email)` inside `parkedErasure`). Not line 112 (`gus`: that test expects the handle subject to own every run, "the user's UUID subject owns none").
+- `erasure.noPair.e2e.pg.test.ts`: line 55 (`ida`).
+- `opaqueIds.e2e.pg.test.ts`: line 205, the SECOND test (`opaque@example.com`, the one with the `u_` assertion at line 296 and the suggest-tags run after a cold restart). Not line 102 (`hana@example.com`, the first test, which hangs the summary model).
+- `golden.e2e.pg.test.ts` (line ~246, the expected subject set `[ada.userId, handleSubject]`): create that test's chat with `createLegacyChat(st, ada)` instead of `POST /api/chats` and use the returned `id`.
 
 - [ ] **Step 5: Run the erasure and chat e2e suites (still the old behaviour)**
 
@@ -946,71 +1037,116 @@ git commit -m "test(ids): the erasure harness reads a chat's id format and takes
 
 - [ ] **Step 1: Write the failing tests**
 
-(a) `create.pg.test.ts`: add to its describe (use the helpers the file already has for creating a chat through the route and reading rows; names below follow its existing `create` helper, adapt to the file's own):
+(a) `create.pg.test.ts` (its harness is `startChatServer()` as `h`: `h.req(user, method, path, body)`, `h.fake.calls`, `h.fake.ownerOf`, `h.owner` (the owner-role pool), `h.app`; Step 5b adds `h.ids`, the harness's `OpaqueIds`). Add the imports `withTenant` from `../db/tenant`, `deterministicUser` from `../opaqueIds/testing`, `insertChat` from `./sessions` and `legacyChatConversationId` from `./ids`.
+
+First update the existing first test ("creates a chat: 201 ..."): its hard-coded ``const conversationId = `u_${U1}.c-${dto.id}`;`` (line 37) would break at the flip. Replace it with the opaque id, keeping the two assertions after it:
 
 ```ts
-  it("makes a new chat opaque: the row says so, the conversation is h_<H>.c-<token>, and no id holds a uuid", async () => {
-    const res = await h.post("/api/chats", {});
-    expect(res.status).toBe(201);
-    const { id } = (await res.json()) as { id: string };
-    const row = await h.fx.db.owner.query(
-      "SELECT id_format, user_id FROM chat_sessions WHERE id = $1",
-      [id],
-    );
-    expect(row.rows[0].id_format).toBe("opaque");
-    const handle = (
-      await h.fx.db.owner.query("SELECT id_handle FROM users WHERE id = $1", [row.rows[0].user_id])
-    ).rows[0].id_handle as string;
-    expect(handle).toMatch(/^[a-z2-7]{25}[aeimquy4]$/);
-    const conv = (await h.executionIds()).filter((e) => e.startsWith(`h_${handle}.c-`));
-    expect(conv).toHaveLength(1);
-    expect(conv[0]).toMatch(/^h_[a-z2-7]{25}[aeimquy4]\.c-[a-z2-7]{51}[aq]$/);
-    expect(conv[0]).not.toContain(id);
-  });
+      const conversationId = deterministicUser(U1).conversation(dto.id); // a new chat starts under h_<H>.c-<token>
+      expect(h.fake.calls).toContain(`start:${conversationId}`);
+      expect(h.fake.ownerOf(conversationId)).toBe(`${T1}|${U1}`);
+```
 
-  it("keeps a chat inserted without a format on the old ids: its conversation is u_<user>.c-<chat>", async () => {
-    const id = randomUUID();
-    await withTenant(h.app, h.who.tenantId, (tx) =>
-      insertChat(tx, h.who.tenantId, h.who.userId, id, "all"),
-    );
-    await h.chat.conversations.start({
-      conversationId: legacyChatConversationId(h.who.userId, id),
-      principal: { tenant: h.who.tenantId, actor: h.who.userId },
+(and rename its title to "... and a conversation started for its owner under the opaque id"). Then add to the describe:
+
+```ts
+    it("makes a new chat opaque: the row says so, the conversation is h_<H>.c-<token>, and no id holds a uuid", async () => {
+      const res = await h.req("alice", "POST", "/api/chats", {});
+      expect(res.status).toBe(201);
+      const { id } = ChatSessionDto.parse(await res.json());
+      const row = await h.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [id]);
+      expect(row.rows).toEqual([{ id_format: "opaque" }]);
+      const handle = deterministicUser(U1).handle; // the harness's id source is deterministic, so the test can name the handle
+      expect(handle).toMatch(/^[a-z2-7]{25}[aeimquy4]$/);
+      expect(h.ids.cached(U1)?.handle).toBe(handle); // the create route minted it
+      const conversationId = deterministicUser(U1).conversation(id);
+      expect(h.fake.calls).toContain(`start:${conversationId}`);
+      expect(conversationId).toMatch(/^h_[a-z2-7]{25}[aeimquy4]\.c-[a-z2-7]{51}[aq]$/);
+      expect(h.fake.calls.filter((c) => c.includes(id) || c.includes(U1))).toEqual([]); // no call names a uuid
     });
-    const messages = await h.get(`/api/chats/${id}/messages`);
-    expect(messages.status).toBe(200); // the route found the conversation under the old id
-  });
+
+    it("regression guard (green before and after the flip): a chat inserted without a format stays on the old ids, u_<user>.c-<chat>", async () => {
+      const id = randomUUID();
+      await withTenant(h.app, T1, (tx) => insertChat(tx, T1, U1, id, "all"));
+      await h.fake.api.start({
+        conversationId: legacyChatConversationId(U1, id),
+        principal: { tenant: T1, actor: U1 },
+      });
+      const row = await h.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [id]);
+      expect(row.rows).toEqual([{ id_format: "legacy" }]);
+      const messages = await h.req("alice", "GET", `/api/chats/${id}/messages`);
+      expect(messages.status).toBe(200); // the route found the conversation under the old id
+    });
 ```
 
-If `create.pg.test.ts` has no `executionIds` helper, list with `st.durable.raw.eventStore.listExecutions()` as the other e2e tests do; read the file first and match its harness (`testHarness.ts` `chatHarness`) rather than the names above.
-
-(b) A resolver-driven route test in `chats/send.pg.test.ts` or `manage.pg.test.ts`: "continues an old chat in the old format after the flip": create a legacy chat through `insertChat(..., "legacy")` plus `conversations.start(legacy id)`, send a message through the route, and assert the conversation executions that exist are all `u_`: `expect((await executionIds()).filter(id => id.includes('.c-'))).toEqual([legacyChatConversationId(user, id)])` (plus `~n` generations if rotation ran). Put it next to the existing "send" tests using their harness.
-
-(c) Turn-visuals unit tests: in `flows/visualize-turn/start.test.ts` add, using `fixedChatIds` from `chats/testing`:
+(b) A resolver-driven route test in `chats/send.pg.test.ts` (its harness `h`, `send(user, chatId, body)` and `seedChat`; a chat from `seedChat` is inserted without a format, so it is legacy), next to the existing send tests:
 
 ```ts
-  it("starts the turn run under the chat's own format: u_ for a legacy chat, h_ for an opaque one", async () => {
-    const ids = testIdSource();
-    const legacy = loomTurnStarter(runtime, flow, optionsWith(fixedChatIds(() => "legacy", ids)));
-    const opaque = loomTurnStarter(runtime, flow, optionsWith(fixedChatIds(() => "opaque", ids)));
-    await ids.ensureUser(REF);
-    await legacy.visualize(REF);
-    await opaque.visualize({ ...REF, chatId: OTHER_CHAT });
-    const started = runtime.started.map((s) => s.executionId);
-    expect(started[0]).toBe(legacyIds.turnVisualize(REF.userId, REF.chatId, REF.ord, 1));
-    expect(started[1]).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:visualize-turn-[a-z2-7]{51}[aq]-\d+-r1$/);
-  });
-
-  it("starts nothing for a chat the resolver does not know", async () => {
-    const starter = loomTurnStarter(runtime, flow, optionsWith({ ...fixedChatIds(), forRef: async () => null }));
-    await expect(starter.visualize(REF)).rejects.toBeInstanceOf(TurnGoneError);
-    expect(runtime.started).toEqual([]);
+  it("regression guard (green before and after the flip): a message to a chat that began under the old ids goes to u_<user>.c-<chat>", async () => {
+    const chatId = await seedChat(h, ALICE);
+    const res = await send("alice", chatId, { text: "Hi" });
+    expect(res.status).toBe(202);
+    expect(h.fake.calls).toContain(`send:${legacyChatConversationId(ALICE.userId, chatId)}`);
+    expect(h.fake.calls.filter((c) => c.startsWith("send:h_"))).toEqual([]);
   });
 ```
 
-adapting `runtime`, `flow`, `REF`, `optionsWith` to the file's existing fakes (read `start.test.ts` first; it already builds a fake runtime and options for `loomTurnStarter`: add `chatIds` to its options builder).
+(import `legacyChatConversationId` from `./ids`).
 
-(d) Title unit test in `flows/chat-title/start.test.ts`: the starter takes the resolver and starts `h_<H>:chat-title-<C>` for an opaque chat, `u_<u>:chat-title-<c>` for a legacy one, and `null` (no start) for an unknown chat.
+(c) Turn-visuals unit tests: in `flows/visualize-turn/start.test.ts` (it already has `fake()` (`f.runtime`, `f.start`, `f.started`), `options(over)`, `ref`, `settled()`, `flow`, `user`, `chat`; add `chatIds: fixedChatIds()` to the defaults of `options`, and the imports `fixedChatIds` from `../../chats/testing`, `testIdSource` from `../../opaqueIds/testing`, `TurnGoneError` from `./errors`; `turnExecutionId` there is the legacy builder after Step 5a):
+
+```ts
+describe("the turn starter: the chat's own format", () => {
+  it("starts the turn run under the chat's own format: u_ for a legacy chat, h_ for an opaque one", async () => {
+    const f = fake();
+    const ids = testIdSource();
+    await ids.ensureUser(ref);
+    const legacy = loomTurnStarter(f.runtime, flow, options({ chatIds: fixedChatIds(() => "legacy", ids) }));
+    const opaque = loomTurnStarter(f.runtime, flow, options({ chatIds: fixedChatIds(() => "opaque", ids) }));
+    await legacy.visualize(ref);
+    await opaque.visualize({ ...ref, chatId: randomUUID() });
+    const [first, second] = [...f.started];
+    expect(first).toBe(turnExecutionId(user, chat, 4, 1));
+    expect(second).toMatch(/^h_[a-z2-7]{25}[aeimquy4]:visualize-turn-[a-z2-7]{51}[aq]-4-r1$/);
+    expect(second).not.toContain(user);
+  });
+
+  it("starts nothing for a chat the resolver does not know: a request is refused as gone, a settled turn is dropped without a log line", async () => {
+    const f = fake();
+    const onError = vi.fn();
+    const s = loomTurnStarter(
+      f.runtime,
+      flow,
+      options({ onError, chatIds: { forRef: async () => null } }),
+    );
+    await expect(s.visualize(ref)).rejects.toBeInstanceOf(TurnGoneError);
+    s.onSettled(settled());
+    await s.idle();
+    expect(f.start).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled(); // an erased chat is not an error on every settle (M6)
+  });
+});
+```
+
+(d) Title unit test in `flows/chat-title/start.test.ts` (its existing calls `loomTitleStarter({ start } as never)` become `loomTitleStarter({ start } as never, fixedChatIds())`; add the imports `fixedChatIds` from `../../chats/testing` and `deterministicUser`, `testIdSource` from `../../opaqueIds/testing`): the starter takes the resolver and starts `h_<H>:chat-title-<C>` for an opaque chat, `u_<u>:chat-title-<c>` for a legacy one, and `null` (no start) for an unknown chat.
+
+```ts
+  it("starts the title under the chat's own format, and nothing for a chat that is not the owner's", async () => {
+    const ids = testIdSource();
+    await ids.ensureUser(ref);
+    const start = vi.fn(async () => handle);
+    const executionId = () =>
+      (start.mock.calls.at(-1) as unknown as [unknown, unknown, { executionId: string }])[2].executionId;
+    await loomTitleStarter({ start } as never, fixedChatIds(() => "legacy", ids)).start(ref);
+    expect(executionId()).toBe(`u_${ref.userId}:chat-title-${ref.chatId}`);
+    await loomTitleStarter({ start } as never, fixedChatIds(() => "opaque", ids)).start(ref);
+    expect(executionId()).toBe(deterministicUser(ref.userId).chatTitle(ref.chatId));
+    expect(executionId()).not.toContain(ref.userId);
+    const none = loomTitleStarter({ start } as never, { forRef: async () => null });
+    expect(await none.start(ref)).toBeNull();
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+```
 
 Run: `cd apps/server && set -a; . /Users/such/workspace/docmind/.env; set +a; pnpm exec vitest run app/chats/create app/flows/visualize-turn/start app/flows/chat-title/start`
 Expected: FAIL (the options have no `chatIds`; the create route makes legacy chats).
@@ -1103,7 +1239,7 @@ and `chatConversationId(identity.userId, chat.id)` (two places) with `ids.conver
 
 - [ ] **Step 4: The title and turn-visuals flows**
 
-`flows/chat-title/start.ts`:
+`flows/chat-title/start.ts` (the `TitleStarter.start` doc becomes "`null`: already started, or not the owner's chat. Throws on a malformed ref or a Loom failure."; callers must not read `null` as "a title exists"):
 
 ```ts
 import type { ChatIdResolver } from "../../chats/chatIds";
@@ -1135,7 +1271,22 @@ export function loomTitleStarter(
       const conversationId = ids.conversationId();
 ```
 
-`flows/visualize-turn/start.ts`: `TurnStarterOptions` gets `chatIds: Pick<ChatIdResolver, "forRef">`; in `startOne` replace `const executionId = turnExecutionId(...)` with
+`flows/visualize-turn/start.ts`: `TurnStarterOptions` gets `chatIds: Pick<ChatIdResolver, "forRef">`; in `onSettled` an erased chat must not log "visualize-turn start failed" on every settle (M6), so the enqueue becomes
+
+```ts
+      enqueue(
+        turnToVisualize(e, o).then(async (ref) => {
+          if (!ref) return;
+          try {
+            await startOne(ref);
+          } catch (err) {
+            if (!(err instanceof TurnGoneError)) throw err; // the chat went (erased): nothing to start, nothing to report
+          }
+        }),
+      );
+```
+
+(`visualize` still lets `TurnGoneError` reach its caller). In `startOne` replace `const executionId = turnExecutionId(...)` with
 
 ```ts
     const ids = await o.chatIds.forRef(ref);
@@ -1155,18 +1306,39 @@ export function loomTitleStarter(
         };
 ```
 
-`flows/visualize-turn/ids.ts`: delete `turnExecutionId`, `turnExperienceId`, `checkOrd`, `checkUuid`, `MAX_RERUN`, `CANONICAL_UUID` and the `legacyIds` and `UUID_PATTERN` imports (keep `TurnRef`, `TURN_FLOW_ID`, `parseTurnExecution`, `isTurnVisualizeExecution`). `flows/visualize-turn/testing.ts` gains the old signatures for tests:
+`flows/visualize-turn/ids.ts`: delete `turnExecutionId`, `turnExperienceId`, `checkOrd`, `checkUuid`, `MAX_RERUN`, `CANONICAL_UUID` and the `legacyIds` and `UUID_PATTERN` imports (keep `TurnRef`, `TURN_FLOW_ID`, `parseTurnExecution`, `isTurnVisualizeExecution`; `RecordOrd` stays imported for `TurnRef`). `flows/visualize-turn/testing.ts` gains the old signatures for tests, with the old builders' full strictness (M9: the canonical lower-case check, the ord check and the rerun range moved with them, so `ids.test.ts` keeps its refusals):
 
 ```ts
-import { legacyIds } from "../../opaqueIds";
+import { RecordOrd } from "@docmind/contracts";
+import { UUID_PATTERN, legacyIds } from "../../opaqueIds";
 
-/** The old-format turn execution id, with the old builder's signature: tests that seed or read a legacy chat's turn run. */
-export const legacyTurnExecutionId = (userId: string, chatId: string, ord: number, rerun?: number) =>
-  legacyIds.turnVisualize(userId, chatId.toLowerCase(), ord, rerun);
-/** The old-format turn lineage id. */
-export const legacyTurnExperienceId = (r: { userId: string; chatId: string; ord: number }) =>
-  legacyIds.turnLineage(r.userId, r.chatId, r.ord);
+const CANONICAL_UUID = new RegExp(`^${UUID_PATTERN}$`);
+const MAX_RERUN = 999;
+const checkOrd = (ord: number) => {
+  if (!RecordOrd.safeParse(ord).success)
+    throw new RangeError("ord must be an integer from 1 to 999999999999999");
+};
+const checkUuid = (what: string, id: string) => {
+  if (!CANONICAL_UUID.test(id)) throw new RangeError(`${what} must be a canonical lower-case uuid`);
+};
+
+/** The old-format turn execution id, with the old builder's signature and checks: tests that seed or read a legacy chat's turn run. */
+export const legacyTurnExecutionId = (userId: string, chatId: string, ord: number, rerun?: number) => {
+  checkOrd(ord);
+  if (rerun !== undefined && (!Number.isSafeInteger(rerun) || rerun < 1 || rerun > MAX_RERUN))
+    throw new RangeError("rerun must be an integer from 1 to 999");
+  return legacyIds.turnVisualize(userId, chatId.toLowerCase(), ord, rerun);
+};
+/** The old-format turn lineage id, with the old builder's strictness (canonical lower-case user and chat ids, a valid ord). */
+export const legacyTurnExperienceId = (r: { userId: string; chatId: string; ord: number }): string => {
+  checkUuid("userId", r.userId);
+  checkUuid("chatId", r.chatId);
+  checkOrd(r.ord);
+  return legacyIds.turnLineage(r.userId, r.chatId, r.ord);
+};
 ```
+
+(The production resolver's `legacyBuilders.conversationId` stays the one canonical-chat check of the legacy conversation builder; the test-only turn builders above keep their own so the three legacy builders do not silently differ in strictness.)
 
 `compose.ts`: pass `chatIds` to `visualizeTurn.deps` (read and commit deps: `chatIds`), to `turnRead` (`readTurn({ reader, items, pool, fields, chatIds }, ...)`), to `loomTurnStarter` options, to `chatTitle` deps, to `loomTitleStarter(app.runtime, chatIds)`, to `chatRoutes` and `chatStreamRoutes` deps, to `lineageTurnHeads(lineage, chatIds)`, and to the UI routes deps. Because `chatTitle` and `visualizeTurn` are built before `app`, move `const chatIds = new PgChatIds(pool, ids);` (Task 1) above them if it is not already (it sits right after `ids`).
 
@@ -1203,7 +1375,7 @@ cd .. && pnpm exec biome check --write app && pnpm typecheck:tests
 
 If `typecheck:tests` names a file the script missed (a differently shaped import), add the aliased import by hand. The tests keep calling `turnExecutionId(...)`/`turnExperienceId(...)` unchanged, now backed by the legacy builders.
 
-(b) Every test or harness that constructs the route, starter, step or reader deps gets `chatIds`: `chats/testHarness.ts` and `chats/testStack.ts` (the `ChatRouteDeps` and the title/turn deps they build) use `new PgChatIds(pool, ids)` where they have a pool and an id source and `fixedChatIds()` elsewhere; `chats/turnHeads.test.ts` passes `fixedChatIds()`; the `ui/routes.test.ts` deps get `chatIds: fixedChatIds()`; `flows/chat-title/*.test.ts`, `flows/visualize-turn/{start,commit,readTurn,compose,trigger,flow}.test.ts` pass `chatIds: fixedChatIds()` where their deps types now require it, and `loomTitleStarter(runtime, fixedChatIds(), onError)` in `chat-title/start.test.ts`. `chats/messages.test.ts`: the 12 calls `toMessageDtos(deps, IDENTITY, C, ...)` become `toMessageDtos(deps, IDENTITY, CHAT, ...)` with `const CHAT = { id: C, conversationId: legacyChatConversationId(IDENTITY.userId, C) };` at the top (and `deps.heads.has` fakes take the new ref). Let `pnpm typecheck:tests` drive the remainder: each error is one of these four shapes.
+(b) Every test or harness that constructs the route, starter, step or reader deps gets `chatIds`: `chats/testHarness.ts` builds `const ids = testIdSource(); const chatIds = new PgChatIds(app, ids);`, adds `chatIds` to its `deps` and exposes `ids` on `ChatHarness` (`ids: OpaqueIds`; its `seedChat` keeps inserting legacy rows), and `chats/testStack.ts` (the `ChatRouteDeps` and the title/turn deps it builds) uses `new PgChatIds(pool, ids)` where it has a pool and an id source and `fixedChatIds()` elsewhere; `chats/turnHeads.test.ts` passes `fixedChatIds()`; the `ui/routes.test.ts` deps get `chatIds: fixedChatIds()`; `flows/chat-title/*.test.ts`, `flows/visualize-turn/{start,commit,readTurn,compose,trigger,flow}.test.ts` pass `chatIds: fixedChatIds()` where their deps types now require it, and `loomTitleStarter(runtime, fixedChatIds(), onError)` in `chat-title/start.test.ts`. `chats/messages.test.ts`: the 12 calls `toMessageDtos(deps, IDENTITY, C, ...)` become `toMessageDtos(deps, IDENTITY, CHAT, ...)` with `const CHAT = { id: C, conversationId: legacyChatConversationId(IDENTITY.userId, C) };` at the top (and `deps.heads.has` fakes take the new ref). Let `pnpm typecheck:tests` drive the remainder: each error is one of these four shapes.
 
 (c) `chats/startRatchet.test.ts`: the callee check follows the new source of the argument. Set `const IDS = join(APP, "chats", "chatIds.ts");` and replace `isChatConversationId` with:
 
@@ -1224,9 +1396,27 @@ If `typecheck:tests` names a file the script missed (a differently shaped import
   };
 ```
 
-and update its virtual snippets and test names from `chatConversationId(...)` to `ids.conversationId()` with `declare const ids: import("./chatIds").ChatIdBuilders;` (the real call in `routes.ts` is `conversationId: ids.conversationId()`). Keep the control that a literal id, `legacyIds.conversation(...)` and `userIds.conversation(...)` arguments are flagged.
+Update the virtual snippet header and the test names: the import line becomes `declare const ids: import("./chats/chatIds").ChatIdBuilders;` (the virtual file sits at the app root, so the path is `./chats/chatIds`; drop the `chatConversationId` import), and `chatConversationId(user, chat)` becomes `ids.conversationId()` in the accepted case, the "a variable" case (`const id = ids.conversationId(); ...`), the "a spread" case, the "without a principal" case and the test titles (the real call in `routes.ts` is `conversationId: ids.conversationId()`). Keep the control that a literal id, a cast, `legacyIds.conversation(...)` and `userIds.conversation(...)` arguments are flagged. Rewrite the negative test "flags a start whose callee only looks like chatConversationId" to look-alike the new name:
 
-(d) `restart.e2e.pg.test.ts`: turn the "restart in the middle of a tool loop" test into a parametrised pair, the new chat and an old one: replace `it("a restart in the middle ...", async () => {` with `it.each([["an h_ chat", "opaque"], ["a u_ chat", "legacy"]] as const)("a restart in the middle of a tool loop keeps the thinking block (%s): ...", async (_name, format) => {`, create the chat with `format === "legacy" ? await createLegacyChat(first, ada) : ChatSessionDto.parse(...)`, and after the restart (before opening `stream2`) assert the recovery ran on a cold cache and the id format is right:
+```ts
+  it("flags a start whose callee only looks like ChatIdBuilders.conversationId", () => {
+    const fake = scanStarts(
+      [],
+      new Map([
+        [
+          VIRTUAL,
+          `import type { Conversations } from "@loom/conversation";
+           declare const ids: { conversationId(): string };
+           declare const c: Conversations; declare const p: never;
+           export async function f() { await c.start({ conversationId: ids.conversationId() as never, principal: p }); }`,
+        ],
+      ]),
+    );
+    expect(fake.map((c) => c.ok)).toEqual([false]);
+  });
+```
+
+(d) `restart.e2e.pg.test.ts`: turn the "restart in the middle of a tool loop" test into a parametrised pair, the new chat and an old one (the `legacy` variant is a regression guard: green before and after the flip; the `opaque` variant is the one that fails first): replace `it("a restart in the middle ...", async () => {` with `it.each([["an h_ chat", "opaque"], ["a u_ chat", "legacy"]] as const)("a restart in the middle of a tool loop keeps the thinking block (%s): ...", async (_name, format) => {`, create the chat with `format === "legacy" ? await createLegacyChat(first, ada) : ChatSessionDto.parse(...)`, and after the restart (before opening `stream2`) assert the recovery ran on a cold cache and the id format is right:
 
 ```ts
       const conversations = ((await second.durable.raw.eventStore.listExecutions?.()) ?? []).filter(
@@ -1260,13 +1450,13 @@ git commit -m "feat(ids): new chats run under opaque ids; a chat keeps its own f
 ### Task 5: The ratchet, the mixed history and the phase 2 end to end (spec section 8; F7, F8)
 
 **Files:**
-- Modify: `apps/server/app/executionIds.test.ts`, `apps/server/app/erasure/opaqueIds.e2e.pg.test.ts`, `apps/server/app/chats/visuals.e2e.pg.test.ts`, `apps/server/app/documents/ingestStack.ts` (`runIds` for chats)
+- Modify: `apps/server/app/executionIds.test.ts`, `apps/server/app/erasure/opaqueIds.e2e.pg.test.ts`, `apps/server/app/chats/visuals.e2e.pg.test.ts`, `apps/server/app/documents/ingestStack.ts` (`runIds` for chats), `apps/server/tsconfig.json` (exclude the new test support from the production build)
 - Create: `apps/server/app/chats/visualsE2eSupport.ts`
 - Test: those files
 
 **Interfaces:**
 - Consumes: Tasks 1 to 4; `seedUser`, `eraseMe`, `waitErased`, `assertErased`, `rowsLinkingHandleToIds`, `scanTables`, `createLegacyChat`, `startIngestStack({ chat: true, visuals: true })`, `visualsLineage` (`flows/visualize-document/lineage.ts`).
-- Produces: a ratchet that forbids a direct call of a chat family's builder outside the resolver and the eraser; `stack.runIds.chat(who, chatId): Promise<ChatIdBuilders | null>` for tests; `visualsE2eSupport.ts` exports `FIGURE_DOC`, `LABEL`, `stubVisuals(claude, state)`, `readyDocument(st, cookie)`, `askChat(st, cookie, chatId, text)`.
+- Produces: a ratchet that forbids a direct call of a chat family's builder outside the resolver, the eraser, the legacy conversation builder (`chats/ids.ts`) and the test-only legacy turn builders (`flows/visualize-turn/testing.ts`), and a call of `legacyChatConversationId` outside the resolver and the chat test support; `stack.runIds.chat(who, chatId): Promise<ChatIdBuilders | null>` for tests; `visualsE2eSupport.ts` exports `FIGURE_DOC`, `LABEL`, `stubVisuals(claude, state)`, `readyDocument(st, cookie)`, `askChat(st, cookie, chatId, text)` and is excluded from the production tsconfig.
 
 - [ ] **Step 1: The ratchet, written first**
 
@@ -1275,23 +1465,46 @@ Append to `apps/server/app/executionIds.test.ts` (it already has `ts`, `readFile
 ```ts
 /**
  * Where a chat family's builder is called directly (`UserIds.conversation|chatTitle|turnVisualize|turnLineage`, or the same names on
- * `legacyIds`) outside `opaqueIds`. Phase 2: only the resolver (`chats/chatIds.ts`) and the eraser (`erasure/wire.ts`, which must name both
- * formats of a chat) may; everything else asks `ChatIdResolver`, so no call site can pick a format of its own.
+ * `legacyIds`) outside `opaqueIds`. Phase 2: only the resolver (`chats/chatIds.ts`), the eraser (`erasure/wire.ts`, which must name both
+ * formats of a chat), the legacy conversation builder (`chats/ids.ts`) and the test-only legacy turn builders
+ * (`flows/visualize-turn/testing.ts`) may; everything else asks `ChatIdResolver`, so no call site can pick a format of its own.
  */
 const CHAT_BUILDERS = new Set(["conversation", "chatTitle", "turnVisualize", "turnLineage"]);
-const MAY_BUILD_CHAT_IDS = new Set(["chats/chatIds.ts", "erasure/wire.ts"]);
+const MAY_BUILD_CHAT_IDS = new Set([
+  "chats/chatIds.ts",
+  "erasure/wire.ts",
+  "chats/ids.ts",
+  "flows/visualize-turn/testing.ts",
+]);
+/**
+ * `legacyChatConversationId` is a plain function, not a builder method, so it is flagged by name: outside tests only the resolver and the
+ * chat test support (which builds a legacy chat on purpose) may call it. Production code asks the resolver.
+ */
+const LEGACY_CONVERSATION = "legacyChatConversationId";
+const MAY_CALL_LEGACY_CONVERSATION = new Set([
+  "chats/chatIds.ts",
+  "chats/testing.ts",
+  "chats/testStack.ts",
+  "chats/testHarness.ts",
+  "chats/e2eSupport.ts",
+]);
 
-function chatBuilderCalls(files: string[], virtual = new Map<string, string>()): string[] {
+type CalleeRule = (callee: ts.Expression) => boolean;
+const isBuilderCall: CalleeRule = (callee) =>
+  ts.isPropertyAccessExpression(callee) && CHAT_BUILDERS.has(callee.name.text);
+const isLegacyConversationCall: CalleeRule = (callee) =>
+  ts.isIdentifier(callee) && callee.text === LEGACY_CONVERSATION;
+
+function chatBuilderCalls(
+  files: string[],
+  virtual = new Map<string, string>(),
+  flagged: CalleeRule = isBuilderCall,
+): string[] {
   const hits: string[] = [];
   const scan = (name: string, text: string) => {
     const sf = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
     const visit = (node: ts.Node) => {
-      if (
-        ts.isPropertyAccessExpression(node) &&
-        CHAT_BUILDERS.has(node.name.text) &&
-        ts.isCallExpression(node.parent) &&
-        node.parent.expression === node
-      ) {
+      if (ts.isCallExpression(node) && flagged(node.expression)) {
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         hits.push(`${name.startsWith(APP) ? name.slice(APP.length + 1) : name}:${line}`);
       }
@@ -1320,13 +1533,20 @@ describe("no chat id is built outside the resolver and the eraser", () => {
     ]);
   });
 
+  it("flags a direct call of the legacy conversation builder, by name", () => {
+    const body = "export const x = () => { legacyChatConversationId(user, chat); };";
+    expect(
+      chatBuilderCalls([], new Map([[join(APP, "__virtual__.ts"), body]]), isLegacyConversationCall),
+    ).toEqual(["__virtual__.ts:1"]);
+  });
+
   it("does not flag the resolver's own method names or a document builder", () => {
     const body =
       "export const x = () => { ids.conversationId(); ids.titleExecutionId(); ids.turnExecutionId(1); ids.turnExperienceId(1); user.ingest(d, 1); };";
     expect(chatBuilderCalls([], new Map([[join(APP, "__virtual__.ts"), body]]))).toEqual([]);
   });
 
-  it("finds none in the real sources beyond opaqueIds, the resolver and the eraser", () => {
+  it("finds none in the real sources beyond opaqueIds, the resolver, the eraser, the legacy conversation builder and the test-only legacy turn builders", () => {
     const real = sources(APP).filter(
       (f) =>
         !f.startsWith(join(APP, "opaqueIds") + sep) && !MAY_BUILD_CHAT_IDS.has(f.slice(APP.length + 1)),
@@ -1334,15 +1554,29 @@ describe("no chat id is built outside the resolver and the eraser", () => {
     expect(real.length).toBeGreaterThan(100);
     expect(chatBuilderCalls(real)).toEqual([]);
   });
+
+  it("finds no call of legacyChatConversationId in the real sources beyond the resolver and the chat test support", () => {
+    const real = sources(APP).filter((f) => !MAY_CALL_LEGACY_CONVERSATION.has(f.slice(APP.length + 1)));
+    expect(real.length).toBeGreaterThan(100);
+    expect(chatBuilderCalls(real, new Map(), isLegacyConversationCall)).toEqual([]);
+  });
 });
 ```
 
 Run: `cd apps/server && pnpm exec vitest run app/executionIds app/chats/startRatchet`
-Expected: PASS already (Task 4 moved every call into the resolver). If the real-sources test lists a file, a Task 4 call site was missed: move it behind the resolver.
+Expected: PASS (the allowed files are the resolver, the eraser, the legacy conversation builder and the test-only legacy turn builders; every other call moved behind the resolver in Task 4).
 
 - [ ] **Step 2: Share the visuals e2e helpers**
 
-Create `apps/server/app/chats/visualsE2eSupport.ts` by moving `LABEL`, `FIGURE_DOC`, `CHUNK_ID`, `stubVisuals` and the two helpers `ready` and `ask` out of `chats/visuals.e2e.pg.test.ts` (export them as `readyDocument` and `askChat`; they take the stack explicitly already) and import them back in that file; the bodies are moved verbatim:
+Create `apps/server/app/chats/visualsE2eSupport.ts` by moving `LABEL`, `FIGURE_DOC`, `CHUNK_ID`, `stubVisuals` and the two helpers `ready` and `ask` out of `chats/visuals.e2e.pg.test.ts` (export them as `readyDocument` and `askChat`; they take the stack explicitly already) and import them back in that file; the bodies are moved verbatim. This file imports `vitest` and `@docmind/llm-anthropic/testing`, and the production tsconfig's `exclude` matches `**/e2eSupport.ts` only by that exact basename, so add `"**/visualsE2eSupport.ts"` to the `exclude` list of `apps/server/tsconfig.json` next to `"**/e2eSupport.ts"` (otherwise `pnpm build` pulls both into the production program):
+
+```json
+    "**/e2eSupport.ts",
+    "**/visualsE2eSupport.ts",
+    "**/testStack.ts",
+```
+
+The file:
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -1483,7 +1717,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
     "a new chat: the conversation, the title and the turn visuals are opaque (across a cold restart); erasing leaves nothing linkable",
     async () => {
       const first = track(await startIngestStack({ chat: true, visuals: true }));
-      stubVisuals(first.visualsClaude as FakeAnthropic, { extract: true, calls: 0 });
+      stubPaymentVisuals(first.visualsClaude as FakeAnthropic);
       const login = await first.signUpAndLogIn("chatids@example.com");
       const user = await seedUser(first, login, "chatids@example.com"); // a chat turn with a citation and a title, on a stack with visuals on
       expect(user.chatFormat).toBe("opaque");
@@ -1505,7 +1739,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
           resume: { db: first.db, kek: first.kek, root: first.root },
         }),
       );
-      stubVisuals(st.visualsClaude as FakeAnthropic, { extract: true, calls: 0 });
+      stubPaymentVisuals(st.visualsClaude as FakeAnthropic);
       expect(st.composed.ids.cached(user.userId)?.handle).toBe(handle); // warmed at boot
       const history = ListMessagesResponse.parse(
         await (await st.chatReq(login.cookie, "GET", `/api/chats/${user.chatId}/messages`)).json(),
@@ -1565,7 +1799,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
     "a mixed history: an old chat continues in the old format beside a new chat; erasing removes both",
     async () => {
       const first = track(await startIngestStack({ chat: true, visuals: true }));
-      stubVisuals(first.visualsClaude as FakeAnthropic, { extract: true, calls: 0 });
+      stubPaymentVisuals(first.visualsClaude as FakeAnthropic);
       const login = await first.signUpAndLogIn("mixed@example.com");
       // The old chat, as every chat before this release: seeded with a turn, a title and (visuals on) a turn visuals line under `u_`.
       const user = await seedUser(first, login, "mixed@example.com", { chat: "legacy" });
@@ -1591,7 +1825,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
           resume: { db: first.db, kek: first.kek, root: first.root },
         }),
       );
-      stubVisuals(st.visualsClaude as FakeAnthropic, { extract: true, calls: 0 });
+      stubPaymentVisuals(st.visualsClaude as FakeAnthropic);
       const claude = st.claude;
       if (!claude) throw new Error("no fake Claude");
       scriptChat(claude, () => ({ stream: { steps: [{ text: "More." }, { stop: "end_turn" }] } }));
@@ -1616,8 +1850,11 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
       const handle = new RegExp(`^h_(${HANDLE})`).exec(newIds?.conversationId() as string)?.[1] as string;
       expect(all.some((id) => id.startsWith(`h_${handle}.c-${TOKEN}`) && id.includes(".c-"))).toBe(true);
       // no h_ execution belongs to the old chat and no u_ execution to the new one
-      const oldToken = new RegExp(`h_${HANDLE}\\.c-${TOKEN}`);
-      expect(all.filter((id) => id.startsWith("h_") && id.includes(".c-")).every((id) => oldToken.test(id))).toBe(true);
+      const userIds = st.composed.ids.cached(user.userId);
+      if (!userIds) throw new Error("the new chat should have minted the user's handle");
+      const oldChatToken = opaqueBuilders(userIds, user.chatId).conversationId().split(".c-")[1] as string;
+      expect(oldChatToken).toMatch(new RegExp(`^${TOKEN}$`)); // the control: the token the old chat WOULD have under h_ is a real token
+      expect(all.filter((id) => id.startsWith("h_") && id.includes(".c-") && id.includes(oldChatToken))).toEqual([]);
       expect(all.filter((id) => id.startsWith(`u_${user.userId}`) && id.includes(fresh.id))).toEqual([]);
       expect(all.some((id) => id.startsWith(`u_${user.userId}:chat-title-${user.chatId}`))).toBe(true); // the old chat's title stayed old
       expect(all.filter((id) => id.startsWith(`h_${handle}:chat-title-`))).toHaveLength(1); // one title for the new chat, none doubled for the old one
@@ -1656,17 +1893,28 @@ describe.skipIf(!PG_URL)("opaque ids phase 2: the chat flows, end to end (needs 
       );
       await assertErased(first, user, { tenantGone: true });
       expect(await rowsLinkingHandleToIds(first.db.owner, handle, [user.userId, user.chatId])).toEqual([]);
+      // The stop repeated after the park cancels only under live subjects: no denial naming the actor was written on the shredded h_ stream.
+      expect(await deniedOnHandle(first, handle)).toBe(0);
     },
     WAIT,
   );
 });
+
+/** Every EXECUTION_DENIED row on any `h_<handle>` stream: a denied cancel would put the actor's UUID there in the clear (as `erasure.resume.e2e.pg.test.ts` checks for its parked tests). */
+const deniedOnHandle = async (st: IngestStack, handle: string) =>
+  (
+    await st.db.owner.query(
+      "SELECT count(*)::int AS n FROM loom.events WHERE execution_id LIKE $1 AND event_type = 'EXECUTION_DENIED'",
+      [`h_${handle}%`],
+    )
+  ).rows[0].n as number;
 
 /** Whether an execution id names the user (the UUID) or the handle: the executions to judge after the erasure. */
 const namesUserForTest = (id: string, user: { userId: string }, handle: string) =>
   id.includes(user.userId) || id.includes(handle);
 ```
 
-Add the imports the block needs (`handleOfExecutions` from `./e2eSupport`; `scriptChat`, `collectUntil`, `isReply` from `../chats/e2eSupport`; `stubVisuals` from `../chats/visualsE2eSupport` replacing the file's own `stubVisuals` (delete the local copy only if its extraction text is identical in effect: the local one labels `Payment-due-days` and is used by the phase 1 test, so keep it under that name and import the shared one as `stubFigureVisuals`; use that in the block above); `ChatSessionDto`, `ListMessagesResponse` from `@docmind/contracts`). In the phase 1 test the comment "Seeded on a chat-only stack: a chat turn's visuals lineage is still old-format until phase 2" is removed: delete it, and its two later mentions of "the old-format chat still holds the user" in the control comment become "the new chat holds none".
+Add the imports the block needs: `handleOfExecutions` from `./e2eSupport`; `scriptChat`, `collectUntil`, `isReply` from `../chats/e2eSupport`; `ChatSessionDto`, `ListMessagesResponse` from `@docmind/contracts`; `opaqueBuilders` from `../chats/chatIds`. The phase 1 test's `stubVisuals(claude)` of this file (it labels `Payment-due-days` and, unlike the shared `stubVisuals` of `visualsE2eSupport.ts`, extracts a fact from whatever document it is shown) is what the new tests need: `seedUser`'s document is `DOC` plus a sentinel, with no `LABEL`, so the shared LABEL-gated stub would extract no fact and no turn visuals could ever commit. Rename the local function `stubPaymentVisuals` (its definition and its one phase 1 call at `stubVisuals(st.visualsClaude as FakeAnthropic)`), call it in the new tests, and do not import the shared stub here (import it, as `stubFigureVisuals`, only into a test that uploads `FIGURE_DOC`). In the phase 1 test, its comment "Seeded on a chat-only stack: a chat turn's visuals lineage is still old-format until phase 2, and is judged by its own tests." becomes "Seeded on a chat-only stack with a legacy chat (pinned in Task 3): its turn visuals lineage is old-format (O7) and is judged by its own tests.", and the control comment "the old-format chat still holds the user" stays as it is (the pinned test still has a legacy chat, and its `.some(id.startsWith("u_<user>"))` assertion stays true).
 
 - [ ] **Step 5: Run the end to end tests**
 
@@ -1710,10 +1958,10 @@ python3 - <<'PY'
 p = "docs/specs/2026-11-10-opaque-ids-design.md"
 s = open(p).read()
 old = s[s.index("  - Until phase 2, a chat's executions"):s.index("- `cloud-deploy.md` notes")]
-new = """  - **Legacy chats (phase 2).** A chat created before the phase 2 deploy keeps `u_<user>` ids for all of its executions and its turn visuals lineage for its whole life (its conversation and generations, its title, its turn visuals, its lineage: one chat never mixes formats, so `chat_sessions.id_format` stores which one it uses, migration 0039). Their content is sealed under the user's key, which erasure destroys, but the ids name the user and the chat and stay readable (O7). A chat created after the deploy is opaque. The end-to-end scan (`opaqueIds.e2e.pg.test.ts`) proves "no linkable id" for new chats and allow-lists a legacy chat's ids only for a user who has one.
+new = """  - **Legacy chats (phase 2).** A chat created before the phase 2 deploy keeps `u_<user>` ids for all of its executions and its turn visuals lineage for its whole life (its conversation and generations, its title, its turn visuals, its lineage: one chat never mixes formats, so `chat_sessions.id_format` stores which one it uses, migration 0039). That includes the executions such a chat creates after the deploy (a generation, a turn run, a rerun): O7's "new runs use the new format from deploy" applies per chat, not per run. Their content is sealed under the user's key, which erasure destroys, but the ids name the user and the chat and stay readable (O7). A chat created after the deploy is opaque. The end-to-end scan (`opaqueIds.e2e.pg.test.ts`) proves "no linkable id" for new chats and allow-lists a legacy chat's ids only for a user who has one.
 """
 s = s.replace(old, new)
-amend = """- **Amendment, conversation identities (phase 2):** a conversation writes its owner's `{ actor, tenant }` in plaintext in `EXECUTION_STARTED.input.owner` and in the `sender` of `MESSAGE_CONSUMED` and `INBOX_MESSAGE`. They are sealed under the subject key like the flow inputs, so a new chat's events hold no plain user or tenant UUID beside its `h_<H>` id.
+amend = """- **Amendment, conversation identities (phase 2):** a conversation writes its owner's `{ actor, tenant }` in plaintext in `EXECUTION_STARTED.input.owner` and in the `sender` of `MESSAGE_CONSUMED`. They are sealed under the subject key like the flow inputs, so a new chat's events hold no plain user or tenant UUID beside its `h_<H>` id. (`INBOX_MESSAGE.sender` is already sealed by Loom under the sender subject, ADR 0139 N6.)
 """
 anchor = "- **Amendment, tombstones:**"
 assert s.count(anchor) == 1
@@ -1721,7 +1969,7 @@ s = s.replace(anchor, amend + anchor)
 old3 = "| Chat conversation | `u_<u>.c-<c>[~n]` | `h_<H>.c-<C>[~n]` |\n"
 assert s.count(old3) == 1
 note = """
-**Amendment (phase 2):** a chat's ids cannot be derived from its UUID, so its format is stored (`chat_sessions.id_format`, `legacy` for every chat that existed at the phase 2 deploy, `opaque` for a chat created after it) and every id of a chat (conversation and generations, title, turn visuals, turn lineage) follows it. A turn's lineage is read from the chat's own line, with no new-then-old fallback (a chat never changes format). A Loom conversation id must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`: the new one is 83 characters (93 with a nine-digit generation), and the base32 alphabet `[a-z2-7]` conflicts with nothing in Loom's id rules (no case folding, no `~`, no `::`).
+**Amendment (phase 2):** a chat's ids cannot be derived from its UUID, so its format is stored (`chat_sessions.id_format`, `legacy` for every chat that existed at the phase 2 deploy, `opaque` for a chat created after it) and every id of a chat (conversation and generations, title, turn visuals, turn lineage) follows it. A turn's lineage is read from the chat's own line, with no new-then-old fallback (a chat never changes format). O7's "new runs use the new format from deploy" applies per chat: a legacy chat's new runs stay old-format. A Loom conversation id must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`: the new one is 83 characters (93 with a nine-digit generation), and the base32 alphabet `[a-z2-7]` conflicts with nothing in Loom's id rules (no case folding, no `~`, no `::`).
 """
 marker = "`D` and `C` are tokens."
 assert s.count(marker) == 1
@@ -1758,7 +2006,7 @@ new = """- **Shapes.** `h_<H>:ingest-<D>[.g]`, `h_<H>:visualize-<D>[.g][-rN]`, `
 """
 s = s.replace(old, new)
 rep("- **Flow inputs are sealed.** The user, tenant and document ids in a new-format flow's input are sealed in the log, so no plain UUID appears in an `h_` execution.",
-    "- **Flow inputs and conversation identities are sealed.** The user, tenant, document and chat ids in a new-format flow's input are sealed in the log, and so are a conversation's `EXECUTION_STARTED.input.owner` and the `sender` of its `MESSAGE_CONSUMED` and `INBOX_MESSAGE` events (`sensitive.ts`), so no plain UUID appears in an `h_` execution.")
+    "- **Flow inputs and conversation identities are sealed.** The user, tenant, document and chat ids in a new-format flow's input are sealed in the log, and so are a conversation's `EXECUTION_STARTED.input.owner` and the `sender` of its `MESSAGE_CONSUMED` events (`sensitive.ts`; Loom itself seals the inbox copy of the sender), so no plain UUID appears in an `h_` execution.")
 rep("- **Residuals.** Old-format ids stay readable after an erasure;", "- **Residuals.** Old-format ids stay readable after an erasure, and that includes every execution and turn visuals line of a chat created before phase 2;")
 open(p, "w").write(s)
 PY
@@ -1772,7 +2020,8 @@ In `docs/operations/cloud-deploy.md`, directly after the migration `0038` bullet
 - Migration `0039` (chat id format) adds `chat_sessions.id_format` (`NOT NULL DEFAULT 'legacy'`, a constant default, so no rewrite and a
   brief lock). Every existing chat is `legacy` and keeps its `u_` ids for life; a chat created after the release is `opaque` and its
   conversation, title and turn visuals are `h_<handle>` ids. Rolling back after the first `opaque` chat exists is not supported for the
-  same reason as `0038` (older code cannot parse its ids, and would answer 404 for it); roll forward with a fix release.
+  same reason as `0038` (older code cannot parse its ids, and would answer 404 for it); roll forward with a fix release. During a rolling
+  deploy a chat created by a new pod answers 404 on an old pod until that pod drains.
 ```
 
 In `docs/codebase-guide.md` add one row after the `opaqueIds/` row: `| apps/server/app/chats/chatIds.ts | Builds a chat's Loom ids in the chat's own format (legacy or opaque, chat_sessions.id_format) |`.
@@ -1817,7 +2066,7 @@ Report each of the five with a screenshot or the query result (ids only, no cont
 | §5 key outage fails the start; erased id is null | Task 4 (`forNew` throws before any row exists; `forRow`/`forRef` return null for an erased owner), Task 1 test |
 | §6 no UUID in a new id, timer, lease or log line | Tasks 1, 4, 5 (shapes and regexes asserted on live ids) |
 | §6 flow inputs sealed | phase 1 (`input.chatId` is in `FLOW_INPUT_IDS`) plus Task 2 for the conversation's own owner and sender |
-| §6 erasure covers both prefixes, stops and cancels chats | Task 5 (F7: the existing stop, close and cancel of both formats, with a parked mid-turn chat) |
+| §6 erasure covers both prefixes, stops and cancels chats | Task 5 (F7: the existing stop, close and cancel of both formats, with a parked mid-turn chat), Task 1 (the resolver's cache is evicted after the shred, I2) |
 | §6 residual bullet amended | Task 6 (Spec amendment A) |
 | §8 unit | Task 1 (`chatIds.test.ts`), Task 4 (starter, title, route tests), Task 2 (paths) |
 | §8 ratchet | Task 5 step 1 (`chatBuilderCalls`), Task 4 step 5c (`startRatchet`) |
@@ -1828,6 +2077,6 @@ Report each of the five with a screenshot or the query result (ids only, no cont
 | §8 browser check | Task 6 step 6 |
 | docs: architecture.md, spec, cloud-deploy | Task 6 |
 
-**2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N" remains. Two steps give a transformation plus the compiler's list rather than every line, because the lines are the compiler's: Task 1 step 7 (a mechanical identifier rename with a script) and Task 4 step 5 (a script for the turn builders, then "let `typecheck:tests` drive the remainder": each remaining error is one of four named shapes). Task 4 step 1 names the existing harness of `create.pg.test.ts` and `start.test.ts` instead of repeating it, because those files' helper names must be read from them (the test bodies and assertions are given in full).
+**2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N" remains. Two steps give a transformation plus the compiler's list rather than every line, because the lines are the compiler's: Task 1 step 7 (a mechanical identifier rename with a script) and Task 4 step 5 (a script for the turn builders, then "let `typecheck:tests` drive the remainder": each remaining error is one of four named shapes). Task 4 step 1 uses the real names of the existing harnesses (`create.pg.test.ts`: `h.req`, `h.fake.calls`, `h.owner`, `h.ids`; `start.test.ts`: `fake()`, `options()`, `ref`, `settled()`), and gives the test bodies and assertions in full.
 
-**3. Type consistency.** Names used across tasks: `ChatIdFormat`, `ChatOwner`, `ChatIdBuilders` (`format`, `conversationId`, `titleExecutionId`, `turnExecutionId`, `turnExperienceId`), `ChatIdResolver` (`forRow`, `forRef`, `forNew`), `legacyBuilders`, `opaqueBuilders`, `PgChatIds`, `fixedChatIds`, `loadChatWithIds`, `legacyChatConversationId`, `legacyTurnExecutionId`, `legacyTurnExperienceId`, `createLegacyChat`, `Seeded.chatFormat`, `Seeded.moreChatIds`, `Who.legacyChats`, `composed.chatIds`, `runIds.chat`, `insertChat(..., idFormat)`, `ChatSessionRow.id_format`. The resolver's method names (`conversationId`, `titleExecutionId`, `turnExecutionId`, `turnExperienceId`) are deliberately not the names the Task 5 ratchet flags (`conversation`, `chatTitle`, `turnVisualize`, `turnLineage`). A task's Interfaces block names only what the earlier tasks produced.
+**3. Type consistency.** Names used across tasks: `ChatIdFormat`, `ChatOwner`, `ChatIdBuilders` (`format`, `conversationId`, `titleExecutionId`, `turnExecutionId`, `turnExperienceId`), `ChatIdResolver` (`forRow`, `forRef`, `forNew`), `legacyBuilders`, `opaqueBuilders`, `PgChatIds`, `fixedChatIds`, `loadChatWithIds`, `legacyChatConversationId`, `legacyTurnExecutionId`, `legacyTurnExperienceId`, `createLegacyChat`, `ChatIdResolver.forgetUser`, `ErasureParts.chatIds`, `stubPaymentVisuals`, `Seeded.chatFormat`, `Seeded.moreChatIds`, `Who.legacyChats`, `composed.chatIds`, `runIds.chat`, `insertChat(..., idFormat)`, `ChatSessionRow.id_format`. The resolver's method names (`conversationId`, `titleExecutionId`, `turnExecutionId`, `turnExperienceId`) are deliberately not the names the Task 5 ratchet flags (`conversation`, `chatTitle`, `turnVisualize`, `turnLineage`). A task's Interfaces block names only what the earlier tasks produced.
