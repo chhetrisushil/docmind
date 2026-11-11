@@ -117,6 +117,8 @@ export interface IngestStack {
     chatId: string,
     headers?: Record<string, string>,
   ): ReturnType<typeof openSse>;
+  /** Settles when this boot's visuals sweep has finished (the boot does not await it). */
+  visualsSweepIdle(): Promise<void>;
   /** `keepDb` leaves the database and the blob root for a `resume` stack. */
   close(opts?: { keepDb?: boolean }): Promise<void>;
 }
@@ -343,6 +345,7 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
       failNextStart: () => {
         failStarts++;
       },
+      visualsSweepIdle: boot.visualsSweepIdle,
       async close(opts: { keepDb?: boolean } = {}) {
         // main's stop(): timers, open streams, the server drain, then the close sequence.
         await runAll(
