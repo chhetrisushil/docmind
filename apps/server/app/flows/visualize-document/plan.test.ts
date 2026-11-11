@@ -36,7 +36,7 @@ const executionIdFor = legacyIds.named;
 const FIGURE: Fact = {
   kind: "figure",
   label: "Zebra Revenue",
-  value: 4242,
+  value: 4242.75, // the "." keeps it out of any hex id or base64 ciphertext, so the sealing check below cannot match by chance
   unit: "USD",
   chunkIds: [randomUUID()],
   ordinal: 0,
@@ -166,7 +166,7 @@ describe("sealing", () => {
     const raw = JSON.stringify(await inner.read(executionId));
     for (const secret of [
       "Zebra Revenue",
-      "4242",
+      "4242.75",
       "A single headline figure",
       "KeyFigure",
       "fact-0",
