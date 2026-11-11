@@ -9,8 +9,8 @@ import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "
 import { commitPlan, commitPlanTo, visualsLineage } from "../flows/visualize-document/lineage";
 import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { aPlan } from "../flows/visualize-document/testing";
-import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { TURN_INTENT } from "../flows/visualize-turn/plan";
+import { legacyTurnExperienceId as turnExperienceId } from "../flows/visualize-turn/testing";
 import { type DurableStorage, createDurableStorage, sealedLineageContent } from "../storage";
 import { subjectOfExecution } from "../subject";
 import { collectLineageContent } from "./lineageGc";

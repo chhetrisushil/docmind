@@ -7,7 +7,7 @@ import { MAX_FACTS, StoredFact } from "../visualize-document/facts";
 /** 3 attempts, 2 s backoff, ×2: the numbers of `CHAT_TITLE_RETRY`. Declared metadata (part of the flow's identity); `stepEffect` applies it. */
 export const TURN_RETRY: RetryPolicy = { maxAttempts: 3, backoffMs: 2_000, backoffMultiplier: 2 };
 
-/** Ids only, strict. The execution id is `turnExecutionId(...)` (ids.ts). */
+/** Ids only, strict. The execution id is `ChatIdBuilders.turnExecutionId(...)` (chats/chatIds.ts). */
 export const TurnInput = z
   .object({
     tenantId: z.string().uuid(),

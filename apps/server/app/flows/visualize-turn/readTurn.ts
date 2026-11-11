@@ -1,7 +1,7 @@
 import type { ConversationReader, HistoryEntry } from "@loom/conversation";
 import type { Pool } from "pg";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import { citeReply, documentTitles } from "../../chats/citations";
-import { legacyChatConversationId } from "../../chats/ids";
 import { turnKeyOfRecord } from "../../chats/scope";
 import type { PgTurnItems, StoredPassage } from "../../chats/turnItems";
 import type { FieldCrypto } from "../../crypto/fields";
@@ -13,6 +13,8 @@ export interface TurnReadDeps {
   items: Pick<PgTurnItems, "forTurns">;
   pool: Pool;
   fields: FieldCrypto;
+  /** The chat's own id format for its conversation. */
+  chatIds: Pick<ChatIdResolver, "forRef">;
   /** Test seam: current titles of the user's documents among the ids (default: the real lookup). */
   titlesOf?: (ids: string[]) => Promise<Map<string, string>>;
 }
@@ -45,7 +47,9 @@ async function findReply(
   ref: TurnRef,
   signal?: AbortSignal,
 ): Promise<HistoryEntry | null | "too_old"> {
-  const conversationId = legacyChatConversationId(ref.userId, ref.chatId);
+  const ids = await deps.chatIds.forRef(ref);
+  if (!ids) return null;
+  const conversationId = ids.conversationId();
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const res = await deps.reader.read(conversationId, {

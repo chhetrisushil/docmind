@@ -3,12 +3,12 @@ import {
   type ExecutionHandle,
   type WorkflowRuntime,
 } from "@loom/workflow-runtime";
+import type { ChatIdResolver } from "../../chats/chatIds";
 import type { ChatRef } from "../../chats/turnItems";
-import { legacyIds } from "../../opaqueIds";
 import { ChatTitleInput, chatTitleFlow } from "./flow";
 
 export interface TitleStarter {
-  /** Starts the chat's title flow once. `null`: it was already started. Throws on a malformed ref or a Loom failure. */
+  /** Starts the chat's title flow once. `null`: already started, or not the owner's chat (callers must not read `null` as "a title exists"). Throws on a malformed ref or a Loom failure. */
   start(ref: ChatRef): Promise<ExecutionHandle | null>;
   /** `start` that never throws and is awaited by `idle`: for event callbacks and routes. */
   fire(ref: ChatRef): void;
@@ -24,6 +24,7 @@ const logClass = (err: unknown) =>
 
 export function loomTitleStarter(
   runtime: Pick<WorkflowRuntime, "start">,
+  chatIds: Pick<ChatIdResolver, "forRef">,
   onError: (err: unknown) => void = logClass,
 ): TitleStarter {
   const pending = new Set<Promise<unknown>>();
@@ -33,10 +34,13 @@ export function loomTitleStarter(
       userId: ref.userId,
       chatId: ref.chatId,
     });
+    // The chat's own format: a chat that began under `u_<user>` starts (once) under it, never a second title under `h_<H>` (Decision 2).
+    const ids = await chatIds.forRef(input);
+    if (!ids) return null; // not the owner's chat any more
     try {
       return await runtime.start(chatTitleFlow, input, {
-        // One title execution per chat: Loom starts a caller-chosen id once. PHASE 2 builds it with `UserIds.chatTitle` (`h_<H>:chat-title-<C>`); until then it is the old format.
-        executionId: legacyIds.chatTitle(input.userId, input.chatId),
+        // One title execution per chat: Loom starts a caller-chosen id once.
+        executionId: ids.titleExecutionId(),
         principal: { tenant: input.tenantId, actor: input.userId },
       });
     } catch (err) {

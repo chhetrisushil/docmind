@@ -2,8 +2,7 @@ import { ReasoningQuery } from "@docmind/contracts";
 import { ConversationNotFoundError, InvalidCursorError } from "@loom/conversation";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
-import { loadChat, notFound, principalOf } from "./access";
-import { legacyChatConversationId } from "./ids";
+import { loadChatWithIds, notFound, principalOf } from "./access";
 import { reasoningBody } from "./reasoningRead";
 import type { ChatRouteDeps } from "./routes";
 
@@ -19,8 +18,9 @@ export const REASONING_ROUTE = "GET /api/chats/:id/reasoning";
 export function chatReasoningRoutes(deps: ChatRouteDeps): Record<string, Handler> {
   return {
     [REASONING_ROUTE]: requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
-      const chat = await loadChat(deps, identity, ctx);
-      if (!chat) return notFound(res);
+      const loaded = await loadChatWithIds(deps, identity, ctx);
+      if (!loaded) return notFound(res);
+      const { chat, ids } = loaded;
       const url = new URL(req.url ?? "/", "http://localhost");
       const query = ReasoningQuery.safeParse(Object.fromEntries(url.searchParams));
       if (!query.success) return sendError(res, 400, "invalid_request", "invalid query");
@@ -32,7 +32,7 @@ export function chatReasoningRoutes(deps: ChatRouteDeps): Record<string, Handler
             store: deps.chat.reasoning,
           },
           { tenantId: identity.tenantId, userId: identity.userId, chatId: chat.id },
-          legacyChatConversationId(identity.userId, chat.id),
+          ids.conversationId(),
           query.data.cursor,
           { principal: principalOf(identity) },
         );

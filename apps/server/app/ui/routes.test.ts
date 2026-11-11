@@ -7,11 +7,12 @@ import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { ReferencePlanner } from "@loom-ui/planner";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { fixedChatIds } from "../chats/testing";
 import { commitPlan, commitPlanTo } from "../flows/visualize-document/lineage";
 import { experienceIdOf, lineageTestIds } from "../flows/visualize-document/testSupport";
 import { aPlan, recording, scriptedPlannerModel } from "../flows/visualize-document/testing";
-import { turnExperienceId } from "../flows/visualize-turn/ids";
 import { TURN_INTENT, planTurn } from "../flows/visualize-turn/plan";
+import { legacyTurnExperienceId as turnExperienceId } from "../flows/visualize-turn/testing";
 import { aTurnPlan } from "../flows/visualize-turn/testing";
 import { createHttpServer } from "../server";
 import { uiRoutes } from "./routes";
@@ -68,6 +69,7 @@ beforeAll(async () => {
       readers: {} as never,
       lineage,
       ids: lineageTestIds,
+      chatIds: fixedChatIds(),
       owns: async (_identity, id) => id === MINE || id === MINE_EMPTY,
       ownsChat: async (identity, id) => {
         ownsCalls.push([identity.userId, id]);
@@ -319,6 +321,7 @@ describe("GET /api/ui/documents/:id/detail", () => {
         readers: {} as never,
         lineage: erased,
         ids: lineageTestIds,
+        chatIds: fixedChatIds(),
         owns: async () => true,
       }),
     );
@@ -520,6 +523,7 @@ describe("a document's detail says where its visuals stand", () => {
         readers: {} as never,
         lineage: lin,
         ids: lineageTestIds,
+        chatIds: fixedChatIds(),
         owns: async (identity, id) => identity.userId === ID.userId && id === STATE_DOC,
         visualsState: async (identity, id, hasHead) => {
           calls.push([identity.userId, id, hasHead]);

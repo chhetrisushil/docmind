@@ -3,10 +3,10 @@ import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatBus, LiveChatEvent } from "../../chats/bus";
+import { fixedChatIds } from "../../chats/testing";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
 import { type TurnCommitInput, turnCommitEffect } from "./commit";
-import { turnExperienceId } from "./ids";
-import { aTurnPlan } from "./testing";
+import { aTurnPlan, legacyTurnExperienceId as turnExperienceId } from "./testing";
 
 const ref = () => ({ tenantId: randomUUID(), userId: randomUUID(), chatId: randomUUID(), ord: 6 });
 const lineage = () =>
@@ -16,6 +16,7 @@ const make = (l: Lineage, bus: Pick<ChatBus, "publish">) =>
     guard: { begin: async () => {} },
     lineage: l,
     bus,
+    chatIds: fixedChatIds(),
     now: () => "2026-11-08T10:00:00.000Z",
   });
 type Visualized = Extract<TurnCommitInput, { outcome: "visualized" }>;

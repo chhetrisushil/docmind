@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HistoryEntry } from "@loom/conversation";
 import { describe, expect, it, vi } from "vitest";
+import { fixedChatIds } from "../../chats/testing";
 import type { StoredPassage, TurnItem } from "../../chats/turnItems";
 import { LOOKBACK_RECORDS, readTurn } from "./readTurn";
 
@@ -54,6 +55,7 @@ const deps = (
   } as never,
   pool: {} as never,
   fields: {} as never,
+  chatIds: fixedChatIds(),
   titlesOf: async () => new Map(Object.entries(titles)),
 });
 

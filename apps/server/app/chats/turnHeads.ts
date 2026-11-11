@@ -1,9 +1,10 @@
 import type { Lineage } from "@loom-ui/lineage";
-import { turnExperienceId } from "../flows/visualize-turn/ids";
+import type { ChatIdResolver } from "./chatIds";
+import type { ChatRef } from "./turnItems";
 
 export interface TurnHeads {
   /** Which of the chat's turns (assistant record ordinals) have visuals that resolve. */
-  has(ref: { userId: string; chatId: string }, ords: readonly number[]): Promise<Set<number>>;
+  has(ref: ChatRef, ords: readonly number[]): Promise<Set<number>>;
 }
 
 /**
@@ -15,16 +16,19 @@ export interface TurnHeads {
  */
 export function lineageTurnHeads(
   lineage: Pick<Lineage, "resolveLatest">,
+  chatIds: Pick<ChatIdResolver, "forRef">,
   concurrency = 8,
 ): TurnHeads {
   return {
     async has(ref, ords) {
       const found = new Set<number>();
+      const ids = await chatIds.forRef(ref);
+      if (!ids) return found;
       const queue = [...new Set(ords)];
       const worker = async () => {
         for (let ord = queue.shift(); ord !== undefined; ord = queue.shift()) {
           try {
-            const r = await lineage.resolveLatest(turnExperienceId({ ...ref, ord }));
+            const r = await lineage.resolveLatest(ids.turnExperienceId(ord));
             if (r.ok) found.add(ord);
           } catch {
             // an unreadable line is no visuals

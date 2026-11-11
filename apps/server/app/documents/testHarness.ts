@@ -18,6 +18,7 @@ import { InMemoryReadModelStore } from "@loom/plugin-read-model";
 import type { ExecutionHandle, WorkflowRuntime } from "@loom/workflow-runtime";
 import { Pool } from "pg";
 import { expect } from "vitest";
+import { PgChatIds } from "../chats/chatIds";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { TagKeys } from "../crypto/tagKeys";
@@ -496,6 +497,7 @@ export async function startDocumentServer(
         views,
         lineage,
         ids: ingest.ids,
+        chatIds: new PgChatIds(app, ingest.ids),
         readers: {
           pool: app,
           fields,

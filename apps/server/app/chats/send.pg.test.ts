@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";
 import type { TitleStarter } from "../flows/chat-title/start";
+import { legacyChatConversationId } from "./ids";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 import type { ChatRef } from "./turnItems";
 
@@ -40,6 +41,14 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
       text: "What is due?",
       messageId,
     });
+  });
+
+  it("regression guard (green before and after the flip): a message to a chat that began under the old ids goes to u_<user>.c-<chat>", async () => {
+    const chatId = await seedChat(h, ALICE);
+    const res = await send("alice", chatId, { text: "Hi" });
+    expect(res.status).toBe(202);
+    expect(h.fake.calls).toContain(`send:${legacyChatConversationId(ALICE.userId, chatId)}`);
+    expect(h.fake.calls.filter((c) => c.startsWith("send:h_"))).toEqual([]);
   });
 
   it("passes editOf through, and mints a message id when the client sends none", async () => {

@@ -18,6 +18,7 @@ vi.mock("./citations", async (orig) => ({
 }));
 
 const CONV = legacyChatConversationId(U, C);
+const CHAT = { id: C, conversationId: CONV };
 const REF = { tenantId: T, userId: U, chatId: C };
 const IDENTITY = { tenantId: T, userId: U } as unknown as Identity;
 const secret = "SECRET-REASONING-TEXT";
@@ -76,7 +77,7 @@ describe("toMessageDtos reasoning", () => {
       items,
       replyReasoning({ log: { read: async () => w.log }, store: w.store }),
     );
-    const [reply] = await toMessageDtos(deps, IDENTITY, C, [entry({})]);
+    const [reply] = await toMessageDtos(deps, IDENTITY, CHAT, [entry({})]);
     expect(reply).toMatchObject({
       outcome: "refusal",
       reasoning: { text: "weighing the tool result", kind: "summary" },
@@ -96,7 +97,7 @@ describe("toMessageDtos reasoning", () => {
         new FieldCrypto(new InMemoryKeyStore()),
       ),
     });
-    const [reply] = await toMessageDtos(depsOf(new FakeItems(), failing), IDENTITY, C, [
+    const [reply] = await toMessageDtos(depsOf(new FakeItems(), failing), IDENTITY, CHAT, [
       entry({ text: "an answer" }),
     ]);
     expect(reply).toMatchObject({ text: "an answer", reasoning: null });
@@ -106,7 +107,7 @@ describe("toMessageDtos reasoning", () => {
   it("skips an entry without a record ordinal instead of deriving an id from its cursor", async () => {
     const deps = depsOf(new FakeItems(), { forReplies: async () => new Map() });
     const { ord: _ord, ...noOrd } = entry({ role: "user", text: "q" });
-    const got = await toMessageDtos(deps, IDENTITY, C, [
+    const got = await toMessageDtos(deps, IDENTITY, CHAT, [
       noOrd as HistoryEntry,
       entry({ ord: 4, turn: 2, cursor: "0.4" }),
     ]);
@@ -118,7 +119,7 @@ describe("toMessageDtos reasoning", () => {
 describe("toMessageDtos failureReason", () => {
   const dto = async (over: Partial<HistoryEntry>) => {
     const deps = depsOf(new FakeItems(), { forReplies: async () => new Map() });
-    const [m] = await toMessageDtos(deps, IDENTITY, C, [entry(over)]);
+    const [m] = await toMessageDtos(deps, IDENTITY, CHAT, [entry(over)]);
     return m;
   };
   it.each([
@@ -191,7 +192,7 @@ describe("toMessageDtos hasVisuals", () => {
       async (_ref: unknown, ords: readonly number[]) => new Set(ords.filter((o) => o === 2)),
     );
     const deps = { ...depsOf(await items(), noReasoning), heads: { has } } as MessageDeps;
-    const out = await toMessageDtos(deps, IDENTITY, C, history);
+    const out = await toMessageDtos(deps, IDENTITY, CHAT, history);
     expect(out.map((m) => [m.id, m.hasVisuals])).toEqual([
       ["1", false],
       ["2", true],
@@ -203,13 +204,13 @@ describe("toMessageDtos hasVisuals", () => {
       ["8", false],
     ]);
     expect(has).toHaveBeenCalledTimes(1);
-    expect(has).toHaveBeenCalledWith({ userId: IDENTITY.userId, chatId: C }, [2, 4]); // only complete, cited replies
+    expect(has).toHaveBeenCalledWith(REF, [2, 4]); // only complete, cited replies
   });
   it("marks visualizable only for a complete, cited reply while the visuals role is on", async () => {
     const on = await toMessageDtos(
       { ...depsOf(await items(), noReasoning), visualsOn: true } as MessageDeps,
       IDENTITY,
-      C,
+      CHAT,
       history,
     );
     expect(on.map((m) => [m.id, m.visualizable])).toEqual([
@@ -222,7 +223,7 @@ describe("toMessageDtos hasVisuals", () => {
       ["7", false],
       ["8", false],
     ]);
-    const off = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, C, history);
+    const off = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, CHAT, history);
     expect(off.every((m) => m.visualizable === false)).toBe(true);
   });
   it("makes no lookup when no reply qualifies, and says false everywhere when the server has no heads", async () => {
@@ -230,12 +231,12 @@ describe("toMessageDtos hasVisuals", () => {
     const uncited = await toMessageDtos(
       { ...depsOf(new FakeItems(), noReasoning), heads: { has } } as MessageDeps,
       IDENTITY,
-      C,
+      CHAT,
       history,
     );
     expect(has).not.toHaveBeenCalled();
     expect(uncited.every((m) => m.hasVisuals === false)).toBe(true);
-    const none = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, C, history);
+    const none = await toMessageDtos(depsOf(await items(), noReasoning), IDENTITY, CHAT, history);
     expect(none.every((m) => m.hasVisuals === false)).toBe(true);
   });
 });
