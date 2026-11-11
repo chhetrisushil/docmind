@@ -202,7 +202,8 @@ describe.skipIf(!PG_URL)("opaque ids phase 1, end to end (needs DOCMIND_TEST_PG_
       // Seeded on a chat-only stack: a chat turn's visuals lineage is still old-format until phase 2, and is judged by its own tests.
       const first = track(await startIngestStack({ chat: true }));
       const login = await first.signUpAndLogIn("opaque@example.com");
-      const user = await seedUser(first, login, "opaque@example.com");
+      // the user's UUID subject must own a running turn: an old chat
+      const user = await seedUser(first, login, "opaque@example.com", { chat: "legacy" });
       const ref = { tenantId: user.tenantId, userId: user.userId, documentId: user.documentId };
       const handle = (await first.runIds.ingest(ref, user.documentId, 1))
         .split(":")[0]

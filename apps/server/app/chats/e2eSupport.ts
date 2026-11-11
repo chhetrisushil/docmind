@@ -1,5 +1,11 @@
+import { randomUUID } from "node:crypto";
+import { ChatSessionDto } from "@docmind/contracts";
 import type { FakeAnthropic, FakeReply, FakeRequest } from "@docmind/llm-anthropic/testing";
+import { withTenant } from "../db/tenant";
+import type { IngestStack } from "../documents/ingestStack";
 import type { openSse } from "../documents/testHarness";
+import { legacyChatConversationId } from "./ids";
+import { insertChat } from "./sessions";
 
 /** One sentence, one chunk: the fake embedder hashes words, so a query made of this sentence finds this chunk. */
 export const SENTENCE = "Payment terms: payment is due within 30 days of the invoice date.";
@@ -72,4 +78,27 @@ export function scriptChat(
     if (body.model === "title-model") return { text: "Payment due dates" };
     return hasToolResult(body) ? final(body) : searchTurn();
   });
+}
+
+/**
+ * A chat made the way every chat before phase 2 was: a row with `id_format = 'legacy'` and a Loom conversation `u_<user>.c-<chat>`. The chat
+ * API makes new-format chats now, so a test that needs an old one (an upgrade, a mixed history, a `u_` subject that owns a running turn)
+ * starts it here; every route then reads its format from the row and carries on in it.
+ */
+export async function createLegacyChat(
+  st: IngestStack,
+  who: { cookie: string; userId: string; tenantId: string },
+): Promise<ChatSessionDto> {
+  const id = randomUUID();
+  await withTenant(st.app, who.tenantId, (tx) =>
+    insertChat(tx, who.tenantId, who.userId, id, "all", "legacy"),
+  );
+  if (!st.composed.chat) throw new Error("the stack has no chat");
+  await st.composed.chat.conversations.start({
+    conversationId: legacyChatConversationId(who.userId, id),
+    principal: { tenant: who.tenantId, actor: who.userId },
+  });
+  return ChatSessionDto.parse(
+    await (await st.chatReq(who.cookie, "GET", `/api/chats/${id}`)).json(),
+  );
 }
