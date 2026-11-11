@@ -62,9 +62,17 @@ describe.skipIf(!PG_URL)(
       // the owner's own key still opens them, as Loom needs
       const opened = await st.durable.sealed.eventStore.read(conversation as string);
       const openedStart = opened.find((e) => e.eventType === "EXECUTION_STARTED");
-      expect(
-        (openedStart?.payload as { input: { owner: { actor: string } } }).input.owner.actor,
-      ).toBe(who.userId);
+      const owner = (
+        openedStart?.payload as { input: { owner: { actor: string; tenant: string } } }
+      ).input.owner;
+      expect(owner).toMatchObject({ actor: who.userId, tenant: who.tenantId });
+      const openedConsumed = opened.filter((e) => e.eventType === "MESSAGE_CONSUMED");
+      expect(openedConsumed.length).toBe(consumed.length);
+      for (const e of openedConsumed)
+        expect((e.payload as { sender: unknown }).sender).toMatchObject({
+          actor: who.userId,
+          tenant: who.tenantId,
+        });
     }, 120_000);
   },
 );
