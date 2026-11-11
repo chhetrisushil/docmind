@@ -418,6 +418,7 @@ describe("what the flow may carry (owner decision 1: ids only)", () => {
       "EXECUTION_FAILED",
       "EXECUTION_STARTED",
       "LLM_REASONING_CAPTURED",
+      "MESSAGE_CONSUMED",
       "STEP_COMPLETED",
       "STEP_FAILED",
       "STEP_STARTED",
