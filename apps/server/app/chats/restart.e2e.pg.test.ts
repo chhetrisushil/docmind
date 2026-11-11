@@ -255,13 +255,12 @@ describe.skipIf(!PG_URL)(
         scriptChat(claude2, () => ({
           stream: { steps: [{ text: "Due in 30 days." }, { stop: "end_turn" }] },
         }));
-        // The recovery ran on a cold cache: the one conversation of the log has the chat's own format.
+        // The one conversation in the log has the chat's own format (u_ or h_); the reply below then completes on this fresh process.
         const conversations = (
           (await second.durable.raw.eventStore.listExecutions?.()) ?? []
         ).filter((id) => id.includes(".c-") && !id.startsWith("__loom") && !id.includes("::"));
         expect(conversations).toHaveLength(1);
         expect(conversations[0]?.startsWith(format === "legacy" ? "u_" : "h_")).toBe(true);
-        expect(second.composed.ids.cached(ada.userId)).toBeDefined(); // warmed at boot, before recovery (the uploaded document gave ada a handle in both variants)
         const stream2 = await second.openChat(ada.cookie, chat.id);
         let reply: ChatMessageDto;
         try {

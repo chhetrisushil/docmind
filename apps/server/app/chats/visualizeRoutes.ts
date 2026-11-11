@@ -1,4 +1,5 @@
 import { ORD_PATTERN, RecordOrd, type VisualizeTurnResponse } from "@docmind/contracts";
+import { TurnGoneError } from "../flows/visualize-turn/errors";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound } from "./access";
@@ -43,7 +44,13 @@ export function chatVisualizeRoutes(deps: ChatRouteDeps): Record<string, Handler
           );
         if (!turn || turn.status !== "complete" || turn.citations.length === 0)
           return sendError(res, 409, "not_visualizable", "this answer has no visuals to make");
-        const started = await v.starter.visualize(ref);
+        let started: Awaited<ReturnType<typeof v.starter.visualize>>;
+        try {
+          started = await v.starter.visualize(ref);
+        } catch (err) {
+          if (err instanceof TurnGoneError) return notFound(res); // the chat went (deleted or erased) after the turn was read
+          throw err;
+        }
         if (started.kind === "disabled")
           return sendError(res, 409, "not_visualizable", "this answer has no visuals to make");
         if (started.kind === "running")
