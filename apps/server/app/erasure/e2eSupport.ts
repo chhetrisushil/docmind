@@ -673,10 +673,16 @@ export function eventColumnProblems(e: {
   return bad;
 }
 
-/** The payload of a lineage row without its `experienceId` when that is exactly the row's own line id (`__loom_ui_lineage__:<line>`); any other value stays and is judged. */
-const withoutOwnLineId = (row: Row): unknown => {
+/** The prefix of a lineage line's execution id. */
+const LINEAGE_PREFIX = "__loom_ui_lineage__:";
+/**
+ * The payload of a lineage row without its `experienceId`, when the row is a lineage line and that is exactly its own line id (the same
+ * plaintext its `execution_id` already shows); any other row, or any other value, stays whole and is judged. Exported for its unit test.
+ */
+export const withoutOwnLineId = (row: Row): unknown => {
+  const id = String(row.execution_id);
   const { experienceId, ...rest } = (row.payload ?? {}) as { experienceId?: unknown };
-  return experienceId === String(row.execution_id).replace("__loom_ui_lineage__:", "")
+  return id.startsWith(LINEAGE_PREFIX) && experienceId === id.slice(LINEAGE_PREFIX.length)
     ? rest
     : row.payload;
 };
@@ -955,13 +961,13 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
     ).toEqual([]);
     // A legacy chat's turn visuals line (O7) is not shredded: Loom writes no tombstone on a lineage stream, and its payload is sealed under the
     // destroyed key instead (the read-refusal below proves it). Every other execution of the user carries the tombstone.
-    const lineageLine = id.startsWith("__loom_ui_lineage__:");
-    if (!lineageLine) expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
+    const legacyLine = id.startsWith(LINEAGE_PREFIX) && id.includes(gone.userId);
+    if (!legacyLine) expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
     // Every payload of the execution, needle or not: a sealed or shredded envelope, a tombstone, or listed ids/tokens.
     expect(
       events.flatMap((e) =>
         unlistedStrings(
-          withoutOwnLineId({ execution_id: id, payload: e.payload }),
+          legacyLine ? withoutOwnLineId({ execution_id: id, payload: e.payload }) : e.payload,
           "",
           handle,
           isOpaqueExecution(id, handle),

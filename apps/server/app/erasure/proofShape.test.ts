@@ -7,6 +7,7 @@ import {
   payloadIsIdsOnly,
   unexpected,
   unlistedStrings,
+  withoutOwnLineId,
 } from "./e2eSupport";
 
 const who: Who = {
@@ -329,5 +330,24 @@ describe("the shape of a raw event's plaintext columns", () => {
     expect(
       JSON.stringify(eventColumnProblems({ ...event, metadata: { note: content } })),
     ).not.toContain(content);
+  });
+});
+
+describe("withoutOwnLineId", () => {
+  const line = `turnvisuals-${randomUUID()}-${randomUUID()}-1`;
+  it("drops a lineage line's own id from its payload, and only that", () => {
+    const row = {
+      execution_id: `__loom_ui_lineage__:${line}`,
+      payload: { experienceId: line, n: 1 },
+    };
+    expect(withoutOwnLineId(row)).toEqual({ n: 1 });
+    expect(withoutOwnLineId({ ...row, payload: { experienceId: `${line}x` } })).toEqual({
+      experienceId: `${line}x`,
+    });
+  });
+  it("keeps the experienceId of a row that is not a lineage line, even when it equals the row's own id", () => {
+    const row = { execution_id: line, payload: { experienceId: line } };
+    expect(withoutOwnLineId(row)).toEqual({ experienceId: line });
+    expect(unlistedStrings(withoutOwnLineId(row), "", undefined, true)).toEqual(["experienceId"]);
   });
 });
