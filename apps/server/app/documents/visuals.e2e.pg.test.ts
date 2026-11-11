@@ -585,6 +585,12 @@ describe.skipIf(!PG_URL)("document visuals end to end (needs DOCMIND_TEST_PG_URL
         { run: 0, state: "failed", code: "visuals-model-unavailable" },
       ]),
     ); // repaired from Loom's output; the repair is stamped now, so the retry pass leaves it for a later boot
+    // The boot sweep is not awaited at boot: its retry pass must have run (and left the fresh failure alone) before the row is
+    // aged, or it would list the aged row itself and the sweep below would find nothing to fire.
+    await second.visualsSweepIdle();
+    expect(await runRow(second, id)).toEqual([
+      { run: 0, state: "failed", code: "visuals-model-unavailable" },
+    ]);
     await second.db.owner.query(
       "UPDATE visual_runs SET updated_at = now() - interval '2 hours' WHERE document_id = $1",
       [id],

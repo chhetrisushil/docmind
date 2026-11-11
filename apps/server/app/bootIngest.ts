@@ -78,9 +78,12 @@ export interface BootIngestParts {
  * safe and is idempotent; it does not close what `bootIngest` did not open the caller's way
  * (the blob root, the temp dir, the test database).
  */
-export async function bootIngest(
-  parts: BootIngestParts,
-): Promise<{ stop(): Promise<void>; recoveryIdle(): Promise<void> }> {
+export async function bootIngest(parts: BootIngestParts): Promise<{
+  stop(): Promise<void>;
+  recoveryIdle(): Promise<void>;
+  /** Settles when the boot's visuals sweep has (it is not awaited at boot); a test waits on it before it changes what the sweep reads. */
+  visualsSweepIdle(): Promise<void>;
+}> {
   const {
     built,
     ingest,
@@ -192,6 +195,7 @@ export async function bootIngest(
 
   const sweepAbort = new AbortController();
   let recovery!: ReturnType<typeof startRecovery>;
+  let visualsSweep: Promise<unknown> = Promise.resolve();
   let sweepTimer: ReturnType<typeof setInterval> | undefined;
   let uploadSweeper: ReturnType<typeof startSweeper> | undefined;
   let snapshotPruner: ReturnType<typeof startSnapshotPruner> | undefined;
@@ -209,7 +213,7 @@ export async function bootIngest(
     // Visualize the documents that turned ready with no visualize execution (a crash between ready and its start, or
     // the role switched on later). After recovery has started, so a half-run execution is resumed, not restarted.
     // Not awaited; a fired start is joined to the shutdown through `visuals.idle()`.
-    void visuals.sweep(sweepAbort.signal);
+    visualsSweep = visuals.sweep(sweepAbort.signal); // never throws
     // Resume erasures the last process left unfinished, after recovery has started (a cancelled-by-erasure
     // owner must not be re-driven by recovery first) and after the read models booted. Not awaited.
     void eraser?.resumeAll();
@@ -311,5 +315,11 @@ export async function bootIngest(
     })();
     return stopping;
   };
-  return { stop, recoveryIdle: () => recovery.idle() };
+  return {
+    stop,
+    recoveryIdle: () => recovery.idle(),
+    visualsSweepIdle: async () => {
+      await visualsSweep;
+    },
+  };
 }
