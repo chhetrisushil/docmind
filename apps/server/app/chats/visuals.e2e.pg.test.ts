@@ -6,91 +6,17 @@ import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { isTurnVisualizeExecution } from "../flows/visualize-turn/ids";
 import { isVisualizeExecution } from "../status/model";
-import { DOC, collectUntil, isReply, scriptChat } from "./e2eSupport";
+import { collectUntil, isReply, scriptChat } from "./e2eSupport";
 import { assertNoPlaintext } from "./eventLogProof";
+import { LABEL, askChat as ask, readyDocument as ready, stubVisuals } from "./visualsE2eSupport";
 
-const LABEL = "Zebra-Quarterly-Takings";
-const FIGURE_DOC = `${DOC} ${LABEL} reached 7391.25 in the last quarter.`;
-const CHUNK_ID = /\[\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]\]/;
 const WAIT = 60_000;
-
-/**
- * A `visuals` model that finds the figure in whatever it is shown while `state.extract` is on, and plans a KeyFigure bound
- * to the first offered fact. `state.calls` counts every request, so a test can say how many a step made.
- */
-function stubVisuals(claude: FakeAnthropic, state: { extract: boolean; calls: number }) {
-  claude.reply((body) => {
-    state.calls++;
-    const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
-    const text = JSON.stringify(body.messages);
-    if (system.includes("You extract facts")) {
-      const chunk = CHUNK_ID.exec(text)?.[1];
-      if (!state.extract || !chunk || !text.includes(LABEL)) return { text: '{"facts":[]}' };
-      return {
-        text: JSON.stringify({
-          facts: [{ kind: "figure", label: LABEL, value: 7391.25, unit: "USD", chunkIds: [chunk] }],
-        }),
-      };
-    }
-    return {
-      text: JSON.stringify({
-        summary: "A headline figure",
-        nodes: [
-          {
-            id: "headline",
-            type: "KeyFigure",
-            label: LABEL,
-            span: 4,
-            props: {},
-            binding: { capability: "fact-0", arguments: {}, path: "value", priority: "P0" },
-          },
-        ],
-      }),
-    };
-  });
-}
 
 describe.skipIf(!PG_URL)("chat visuals end to end (needs DOCMIND_TEST_PG_URL)", () => {
   const stacks: IngestStack[] = [];
   afterAll(async () => {
     for (const s of stacks.splice(0)) await s.close();
   });
-
-  async function ready(st: IngestStack, cookie: string) {
-    const events = await st.events(cookie);
-    try {
-      const up = await st.upload(cookie, "report.txt", Buffer.from(FIGURE_DOC));
-      expect(up.status).toBe(201);
-      const documentId = ((await up.json()) as UploadDocumentResponse).document.id;
-      await st.until(events, documentId, (s) => s === "ready" || s === "failed");
-      const chunks = await st.db.owner.query("SELECT id FROM chunks WHERE document_id = $1", [
-        documentId,
-      ]);
-      return { documentId, passageId: chunks.rows[0].id as string };
-    } finally {
-      events.close();
-    }
-  }
-
-  /** Asks one question; the chat model answers with `answer(passageId)`. Resolves with the reply frame's data. */
-  async function ask(st: IngestStack, cookie: string, chatId: string, text: string) {
-    const stream = await st.openChat(cookie, chatId);
-    try {
-      const sent = await st.chatReq(cookie, "POST", `/api/chats/${chatId}/messages`, {
-        text,
-        messageId: randomUUID(),
-      });
-      expect(sent.status).toBe(202);
-      const frames = await collectUntil(stream, isReply);
-      return frames.find(isReply)?.data as {
-        id: string;
-        hasVisuals?: boolean;
-        citations: unknown[];
-      };
-    } finally {
-      stream.close();
-    }
-  }
 
   /** Waits until every visualize-document execution of the stack has ended: its planner call (if it makes one) is then behind us, so a call count taken now is stable. */
   const documentVisualsSettled = (st: IngestStack) =>

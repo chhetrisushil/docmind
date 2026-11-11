@@ -9,6 +9,7 @@ import {
   assertErased,
   captureConsole,
   controlRows,
+  deniedOnHandle,
   eraseMe,
   eventColumnProblems,
   handleOfExecutions,
@@ -159,15 +160,6 @@ describe.skipIf(!PG_URL)(
       },
       WAIT,
     );
-
-    /** Every EXECUTION_DENIED row on any `h_<handle>` stream: a denied cancel would put the actor's UUID there in the clear. */
-    const deniedOnHandle = async (st: IngestStack, handle: string) =>
-      (
-        await st.db.owner.query(
-          "SELECT count(*)::int AS n FROM loom.events WHERE execution_id LIKE $1 AND event_type = 'EXECUTION_DENIED'",
-          [`h_${handle}%`],
-        )
-      ).rows[0].n as number;
 
     /** Starts a held chat turn for a user, then erases them: the shred parks behind the running turn. */
     const parkedErasure = async (email: string, restartWhileParked: boolean) => {

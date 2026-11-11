@@ -1,8 +1,10 @@
 import { rmSync } from "node:fs";
+import { ChatSessionDto, ListMessagesResponse } from "@docmind/contracts";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
 import { afterAll, describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { DOC } from "../chats/e2eSupport";
+import { opaqueBuilders } from "../chats/chatIds";
+import { DOC, collectUntil, createLegacyChat, isReply, scriptChat } from "../chats/e2eSupport";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { PgDocumentResults } from "../flows/ingest-document/pgResults";
@@ -11,7 +13,9 @@ import { aPlan } from "../flows/visualize-document/testing";
 import { subjectOfExecution } from "../subject";
 import {
   assertErased,
+  deniedOnHandle,
   eraseMe,
+  handleOfExecutions,
   rowsLinkingHandleToIds,
   scanTables,
   seedUser,
@@ -23,7 +27,7 @@ const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const CHUNK_ID = /\[\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]\]/;
 
 /** A `visuals` model that finds one figure in whatever document it is shown and plans a KeyFigure for it. */
-function stubVisuals(claude: FakeAnthropic) {
+function stubPaymentVisuals(claude: FakeAnthropic) {
   claude.reply((body) => {
     const system = typeof body.system === "string" ? body.system : JSON.stringify(body.system);
     const text = JSON.stringify(body.messages);
@@ -199,7 +203,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 1, end to end (needs DOCMIND_TEST_PG_
   it(
     "upload, visualize, suggest tags (after a cold restart) and erase: new runs hold no plain uuid, the handle links to none, nothing is left",
     async () => {
-      // Seeded on a chat-only stack: a chat turn's visuals lineage is still old-format until phase 2, and is judged by its own tests.
+      // Seeded on a chat-only stack with a legacy chat (pinned in Task 3): its turn visuals lineage is old-format (O7) and is judged by its own tests.
       const first = track(await startIngestStack({ chat: true }));
       const login = await first.signUpAndLogIn("opaque@example.com");
       // the user's UUID subject must own a running turn: an old chat
@@ -221,7 +225,7 @@ describe.skipIf(!PG_URL)("opaque ids phase 1, end to end (needs DOCMIND_TEST_PG_
           resume: { db: first.db, kek: first.kek, root: first.root },
         }),
       );
-      stubVisuals(st.visualsClaude as FakeAnthropic);
+      stubPaymentVisuals(st.visualsClaude as FakeAnthropic);
       expect(st.composed.ids.cached(user.userId)?.handle).toBe(handle); // warmed at boot, before the status model
       const doc = await st.chatReq(login.cookie, "GET", `/api/documents/${user.documentId}`);
       expect(doc.status).toBe(200);
@@ -310,3 +314,300 @@ describe.skipIf(!PG_URL)("opaque ids phase 1, end to end (needs DOCMIND_TEST_PG_
     WAIT,
   );
 });
+
+describe.skipIf(!PG_URL)(
+  "opaque ids phase 2: the chat flows, end to end (needs DOCMIND_TEST_PG_URL)",
+  () => {
+    const stacks: IngestStack[] = [];
+    const dbs = new Set<IngestStack["db"]>();
+    const roots = new Set<string>();
+    const track = (s: IngestStack) => {
+      stacks.push(s);
+      dbs.add(s.db);
+      roots.add(s.root);
+      return s;
+    };
+    afterAll(async () => {
+      for (const s of stacks.splice(0)) await s.close({ keepDb: true });
+      for (const db of dbs) await db.drop();
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
+    });
+    const HANDLE = "[a-z2-7]{25}[aeimquy4]";
+    const TOKEN = "[a-z2-7]{51}[aq]";
+
+    /** Waits for the visuals head of a turn: the line resolves, so the turn run committed. */
+    async function lineageHead(st: IngestStack, line: string) {
+      const lineage = visualsLineage({
+        events: st.durable.storage.eventStore,
+        content: st.composed.lineageContent,
+        keys: st.keys,
+        subjectOf: subjectOfExecution,
+      });
+      await vi.waitFor(async () => expect((await lineage.resolveLatest(line)).ok).toBe(true), {
+        timeout: 60_000,
+        interval: 100,
+      });
+      return lineage;
+    }
+    /** The ord of a chat's one assistant reply (the turn the visuals belong to). */
+    const replyOrd = async (st: IngestStack, cookie: string, chatId: string) =>
+      Number(
+        ListMessagesResponse.parse(
+          await (await st.chatReq(cookie, "GET", `/api/chats/${chatId}/messages`)).json(),
+        ).items.find((m) => m.role === "assistant")?.id,
+      );
+
+    it(
+      "a new chat: the conversation, the title and the turn visuals are opaque (across a cold restart); erasing leaves nothing linkable",
+      async () => {
+        const first = track(await startIngestStack({ chat: true, visuals: true }));
+        stubPaymentVisuals(first.visualsClaude as FakeAnthropic);
+        const login = await first.signUpAndLogIn("chatids@example.com");
+        const user = await seedUser(first, login, "chatids@example.com"); // a chat turn with a citation and a title, on a stack with visuals on
+        expect(user.chatFormat).toBe("opaque");
+        const who = { tenantId: user.tenantId, userId: user.userId };
+        const ids = await first.runIds.chat(who, user.chatId);
+        expect(ids?.format).toBe("opaque");
+        const ord = await replyOrd(first, login.cookie, user.chatId);
+        const line = ids?.turnExperienceId(ord) as string;
+        await lineageHead(first, line);
+        const handle = new RegExp(`^h_(${HANDLE})`).exec(
+          ids?.conversationId() as string,
+        )?.[1] as string;
+
+        // A cold restart: the chat continues (recovery and the cache warm-up read the new ids), a second turn is answered and titled once.
+        await first.close({ keepDb: true });
+        stacks.splice(stacks.indexOf(first), 1);
+        const st = track(
+          await startIngestStack({
+            chat: true,
+            visuals: true,
+            resume: { db: first.db, kek: first.kek, root: first.root },
+          }),
+        );
+        stubPaymentVisuals(st.visualsClaude as FakeAnthropic);
+        expect(st.composed.ids.cached(user.userId)?.handle).toBe(handle); // warmed at boot
+        const history = ListMessagesResponse.parse(
+          await (
+            await st.chatReq(login.cookie, "GET", `/api/chats/${user.chatId}/messages`)
+          ).json(),
+        );
+        expect(history.items.map((m) => m.role)).toEqual(["user", "assistant"]);
+        expect(history.items.find((m) => m.role === "assistant")?.hasVisuals).toBe(true); // the head reads back through the opaque line
+
+        // Every id of the chat, before the erasure: built from the handle and tokens, no uuid anywhere.
+        const all = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
+        const conv = all.filter((id) => id.startsWith(`h_${handle}.c-`));
+        const title = all.filter((id) => id.startsWith(`h_${handle}:chat-title-`));
+        const turn = all.filter((id) => id.startsWith(`h_${handle}:visualize-turn-`));
+        const lines = all.filter((id) => id.startsWith("__loom_ui_lineage__:turnvisuals-"));
+        expect(conv.length).toBeGreaterThanOrEqual(1);
+        expect(title).toHaveLength(1);
+        expect(turn.length).toBeGreaterThanOrEqual(1);
+        expect(lines).toHaveLength(1);
+        expect(conv[0]).toMatch(new RegExp(`^h_${HANDLE}\\.c-${TOKEN}(~\\d+)?$`));
+        expect(title[0]).toMatch(new RegExp(`^h_${HANDLE}:chat-title-${TOKEN}$`));
+        expect(turn[0]).toMatch(new RegExp(`^h_${HANDLE}:visualize-turn-${TOKEN}-\\d+(-r\\d+)?$`));
+        expect(lines[0]).toMatch(
+          new RegExp(`^__loom_ui_lineage__:turnvisuals-${HANDLE}-${TOKEN}-\\d+$`),
+        );
+        for (const id of [...conv, ...title, ...turn, ...lines]) {
+          expect(id).not.toMatch(UUID_ANYWHERE);
+          for (const plain of [user.userId, user.chatId, user.documentId, user.tenantId])
+            expect(id).not.toContain(plain);
+        }
+        expect(all.some((id) => id.startsWith(`u_${user.userId}.c-`))).toBe(false); // no old-format chat execution was made
+        // The control: before the erasure the status rows link the handle to the user, so the linking helper is not blind.
+        expect(
+          await rowsLinkingHandleToIds(st.db.owner, handle, [user.userId, user.chatId]),
+        ).toContain("public.read_model_state");
+
+        user.executions = all.filter(
+          (id) => namesUserForTest(id, user, handle) && !id.startsWith("__loom_ui_lineage__:"),
+        );
+        expect((await eraseMe(st, login.cookie)).status).toBe(202);
+        await waitErased(st, user.userId, 120_000);
+        await assertErased(st, user, { tenantGone: true });
+        expect(
+          await rowsLinkingHandleToIds(st.db.owner, handle, [
+            user.userId,
+            user.chatId,
+            user.documentId,
+          ]),
+        ).toEqual([]);
+        expect(
+          (await scanTables(st.db.owner, [user.chatId])).hits.filter(
+            (h) => h.table !== "public.erasure_requests",
+          ),
+        ).toEqual([]);
+        // The turn's line is erased with the handle's key.
+        const lineage = visualsLineage({
+          events: st.durable.storage.eventStore,
+          content: st.composed.lineageContent,
+          keys: st.keys,
+          subjectOf: subjectOfExecution,
+        });
+        expect(await lineage.resolveLatest(line)).toMatchObject({
+          ok: false,
+          refusal: { kind: "refused", finding: { code: "line-erased" } },
+        });
+      },
+      WAIT,
+    );
+
+    it(
+      "a mixed history: an old chat continues in the old format beside a new chat; erasing removes both",
+      async () => {
+        const first = track(await startIngestStack({ chat: true, visuals: true }));
+        stubPaymentVisuals(first.visualsClaude as FakeAnthropic);
+        const login = await first.signUpAndLogIn("mixed@example.com");
+        // The old chat, as every chat before this release: seeded with a turn, a title and (visuals on) a turn visuals line under `u_`.
+        const user = await seedUser(first, login, "mixed@example.com", { chat: "legacy" });
+        expect(user.chatFormat).toBe("legacy");
+        const who = { tenantId: user.tenantId, userId: user.userId };
+        const oldIds = await first.runIds.chat(who, user.chatId);
+        expect(oldIds?.format).toBe("legacy");
+        expect(oldIds?.conversationId()).toBe(`u_${user.userId}.c-${user.chatId}`);
+        const oldOrd = await replyOrd(first, login.cookie, user.chatId);
+        await lineageHead(first, oldIds?.turnExperienceId(oldOrd) as string);
+
+        // A new chat of the same user, then a cold restart.
+        const fresh = ChatSessionDto.parse(
+          await (await first.chatReq(login.cookie, "POST", "/api/chats", {})).json(),
+        );
+        user.moreChatIds = [fresh.id];
+        await first.close({ keepDb: true });
+        stacks.splice(stacks.indexOf(first), 1);
+        const st = track(
+          await startIngestStack({
+            chat: true,
+            visuals: true,
+            resume: { db: first.db, kek: first.kek, root: first.root },
+          }),
+        );
+        stubPaymentVisuals(st.visualsClaude as FakeAnthropic);
+        const claude = st.claude;
+        if (!claude) throw new Error("no fake Claude");
+        scriptChat(claude, () => ({
+          stream: { steps: [{ text: "More." }, { stop: "end_turn" }] },
+        }));
+        const ask = async (chatId: string) => {
+          const stream = await st.openChat(login.cookie, chatId);
+          try {
+            const sent = await st.chatReq(login.cookie, "POST", `/api/chats/${chatId}/messages`, {
+              text: "And then?",
+            });
+            expect(sent.status).toBe(202);
+            await collectUntil(
+              stream,
+              (f) => isReply(f) && (f.data as { text?: string }).text === "More.",
+            );
+          } finally {
+            stream.close();
+          }
+        };
+        await ask(user.chatId); // the old chat continues
+        await ask(fresh.id); // the new chat answers
+
+        const all = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
+        const oldConv = all.filter((id) => id.startsWith(`u_${user.userId}.c-${user.chatId}`));
+        expect(oldConv.length).toBeGreaterThanOrEqual(1); // one chat never mixes formats: only u_ ids belong to the old chat
+        const newIds = await st.runIds.chat(who, fresh.id);
+        expect(newIds?.format).toBe("opaque");
+        const handle = new RegExp(`^h_(${HANDLE})`).exec(
+          newIds?.conversationId() as string,
+        )?.[1] as string;
+        expect(all.some((id) => new RegExp(`^h_${handle}\\.c-${TOKEN}(~\\d+)?$`).test(id))).toBe(
+          true,
+        );
+        // no h_ execution belongs to the old chat and no u_ execution to the new one
+        // the control for the allow-listed residual: the old chat's turn visuals line exists, under the old id, and only for the old chat
+        expect(
+          all.filter((id) =>
+            id.startsWith(`__loom_ui_lineage__:turnvisuals-${user.userId}-${user.chatId}-`),
+          ).length,
+        ).toBeGreaterThanOrEqual(1);
+        expect(
+          all.filter((id) =>
+            id.startsWith(`__loom_ui_lineage__:turnvisuals-${user.userId}-${fresh.id}`),
+          ),
+        ).toEqual([]);
+        const userIds = st.composed.ids.cached(user.userId);
+        if (!userIds) throw new Error("the new chat should have minted the user's handle");
+        const oldChatToken = opaqueBuilders(userIds, user.chatId)
+          .conversationId()
+          .split(".c-")[1] as string;
+        expect(oldChatToken).toMatch(new RegExp(`^${TOKEN}$`)); // the control: the token the old chat WOULD have under h_ is a real token
+        expect(
+          all.filter(
+            (id) => id.startsWith("h_") && id.includes(".c-") && id.includes(oldChatToken),
+          ),
+        ).toEqual([]);
+        expect(
+          all.filter((id) => id.startsWith(`u_${user.userId}`) && id.includes(fresh.id)),
+        ).toEqual([]);
+        expect(all.some((id) => id.startsWith(`u_${user.userId}:chat-title-${user.chatId}`))).toBe(
+          true,
+        ); // the old chat's title stayed old
+        expect(all.filter((id) => id.startsWith(`h_${handle}:chat-title-`))).toHaveLength(1); // one title for the new chat, none doubled for the old one
+
+        user.executions = all.filter(
+          (id) => namesUserForTest(id, user, handle) && !id.startsWith("__loom_ui_lineage__:"),
+        );
+        expect((await eraseMe(st, login.cookie)).status).toBe(202);
+        await waitErased(st, user.userId, 120_000);
+        await assertErased(st, user, { tenantGone: true }); // legacy chat: its lineage line is the allow-listed residual (Who.legacyChats)
+        expect(
+          await rowsLinkingHandleToIds(st.db.owner, handle, [user.userId, user.chatId, fresh.id]),
+        ).toEqual([]);
+      },
+      WAIT,
+    );
+
+    it(
+      "a chat parked mid-turn when the erasure starts: the stop closes the h_ conversation and the erasure completes with nothing linkable",
+      async () => {
+        const first = track(await startIngestStack({ chat: true }));
+        const claude = first.claude;
+        if (!claude) throw new Error("no fake Claude");
+        const login = await first.signUpAndLogIn("parked@example.com");
+        const user = await seedUser(first, login, "parked@example.com");
+        expect(user.chatFormat).toBe("opaque");
+        scriptChat(claude, () => ({
+          stream: {
+            steps: [{ text: "Due " }, { hold: true }, { text: "now." }, { stop: "end_turn" }],
+          },
+        }));
+        const sent = await first.chatReq(
+          login.cookie,
+          "POST",
+          `/api/chats/${user.chatId}/messages`,
+          { text: "Hold on" },
+        );
+        expect(sent.status).toBe(202);
+        const gate = await claude.streamHold(); // the model call is under way
+        const handle = handleOfExecutions(user.executions) as string;
+        try {
+          expect((await eraseMe(first, login.cookie)).status).toBe(202);
+          await waitErased(first, user.userId, 120_000);
+        } finally {
+          gate.release();
+        }
+        user.executions = ((await first.durable.raw.eventStore.listExecutions?.()) ?? []).filter(
+          (id) => namesUserForTest(id, user, handle) && !id.startsWith("__loom_ui_lineage__:"),
+        );
+        await assertErased(first, user, { tenantGone: true });
+        expect(
+          await rowsLinkingHandleToIds(first.db.owner, handle, [user.userId, user.chatId]),
+        ).toEqual([]);
+        // The stop repeated after the park cancels only under live subjects: no denial naming the actor was written on the shredded h_ stream.
+        expect(await deniedOnHandle(first, handle)).toBe(0);
+      },
+      WAIT,
+    );
+  },
+);
+
+/** Whether an execution id names the user (the UUID) or the handle: the executions to judge after the erasure. */
+const namesUserForTest = (id: string, user: { userId: string }, handle: string) =>
+  id.includes(user.userId) || id.includes(handle);

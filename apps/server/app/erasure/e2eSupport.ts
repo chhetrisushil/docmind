@@ -516,7 +516,7 @@ const TOOLS = CHAT_TOOL_DEFS as readonly { name: string; description: string }[]
 const PAYLOAD_STRINGS: Record<string, Check> = {
   flowHash: /^fnv1a:[0-9a-f]{8}$/,
   stepId:
-    /^(ingest-[a-z]+|suggest-tags|visualize-(extract|structure|load|commit)|chat-title|conv#[a-z0-9#:]+)$/,
+    /^(ingest-[a-z]+|suggest-tags|visualize-(extract|structure|load|commit)|turn-(load|extract|facts|commit)|chat-title|conv#[a-z0-9#:]+)$/,
   decisionId: /^(conv#[a-z0-9#:]+|plan:compose:k:[0-9a-f]{32})$/,
   // the visualize flow's recorded planner decision: fixed ids of the planner, its catalog and a hash of the plan key
   summaryClass: oneOf("sensitive"),
@@ -526,7 +526,22 @@ const PAYLOAD_STRINGS: Record<string, Check> = {
   topic: /^conversation:turn$/,
   waitId: /^#\d+$/,
   messageId: /^([0-9a-f]{32,64}|[0-9a-f-]{36})$/,
-  outcome: oneOf("done", "failed", "titled", "skipped", "suggested", "empty"),
+  outcome: oneOf(
+    "done",
+    "failed",
+    "titled",
+    "skipped",
+    "suggested",
+    "empty",
+    "visualized",
+    "nothing",
+  ),
+  // a lineage event's content addresses: the digest of the (sealed) content it points at and of its version, and its parents' digests
+  versionHash: /^sha256:[0-9a-f]{64}$/,
+  parents: /^sha256:[0-9a-f]{64}$/,
+  __loomContent: /^sha256:[0-9a-f]{64}$/,
+  // the fixed failure codes of a failed visualize run (a document or a turn)
+  code: oneOf("visuals-model-unavailable", "visuals-plan-invalid"),
   on: oneOf("__loom_waits__"),
   kind: oneOf("inbox", "closed", "dropped", "compose"),
   reason: oneOf("erased"), // the fixed cancel reason of the eraser (wire.ts)
@@ -658,6 +673,14 @@ export function eventColumnProblems(e: {
   return bad;
 }
 
+/** The payload of a lineage row without its `experienceId` when that is exactly the row's own line id (`__loom_ui_lineage__:<line>`); any other value stays and is judged. */
+const withoutOwnLineId = (row: Row): unknown => {
+  const { experienceId, ...rest } = (row.payload ?? {}) as { experienceId?: unknown };
+  return experienceId === String(row.execution_id).replace("__loom_ui_lineage__:", "")
+    ? rest
+    : row.payload;
+};
+
 /**
  * Every row of Loom's plaintext erasure control stream (never compacted, never cleared). With the control-stream key (R14) a row that
  * names a subject carries `subjectRef` and `keyId` and no subject id; no allowance of the scan lets a plain id sit in one.
@@ -707,7 +730,8 @@ const ALLOWED: Allowed[] = [
       row.execution_id.startsWith(`__loom_ui_lineage__:turnvisuals-${who.userId}-`) &&
       sealed((row.payload as { by?: unknown } | null)?.by) &&
       // `opaque`: no plaintext id of any kind may sit in the payload (not a document or chat UUID), only sealed values and tokens
-      payloadIsIdsOnly(row.payload, "", undefined, true) &&
+      // `experienceId` is the line's own id again (the same plaintext the row's `execution_id` already shows, the residual this entry names)
+      payloadIsIdsOnly(withoutOwnLineId(row), "", undefined, true) &&
       noContent(row, who),
   })),
   {
@@ -929,13 +953,19 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
     expect(
       events.flatMap((e) => eventColumnProblems(e).map((column) => `${e.eventType}:${column}`)),
     ).toEqual([]);
-    expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
+    // A legacy chat's turn visuals line (O7) is not shredded: Loom writes no tombstone on a lineage stream, and its payload is sealed under the
+    // destroyed key instead (the read-refusal below proves it). Every other execution of the user carries the tombstone.
+    const lineageLine = id.startsWith("__loom_ui_lineage__:");
+    if (!lineageLine) expect(events.some((e) => e.eventType === "PAYLOAD_SHREDDED")).toBe(true);
     // Every payload of the execution, needle or not: a sealed or shredded envelope, a tombstone, or listed ids/tokens.
     expect(
       events.flatMap((e) =>
-        unlistedStrings(e.payload, "", handle, isOpaqueExecution(id, handle)).map(
-          (key) => `${e.eventType}:${key}`,
-        ),
+        unlistedStrings(
+          withoutOwnLineId({ execution_id: id, payload: e.payload }),
+          "",
+          handle,
+          isOpaqueExecution(id, handle),
+        ).map((key) => `${e.eventType}:${key}`),
       ),
     ).toEqual([]);
     const sealedPayloads = JSON.stringify(events).includes("__loomEnc");
@@ -1105,3 +1135,12 @@ export async function assertErased(
   ]);
   expect(tenant.rows[0].n).toBe(opts.tenantGone ? 0 : 1);
 }
+
+/** Every EXECUTION_DENIED row on any `h_<handle>` stream: a denied cancel would put the actor's UUID there in the clear. */
+export const deniedOnHandle = async (st: IngestStack, handle: string) =>
+  (
+    await st.db.owner.query(
+      "SELECT count(*)::int AS n FROM loom.events WHERE execution_id LIKE $1 AND event_type = 'EXECUTION_DENIED'",
+      [`h_${handle}%`],
+    )
+  ).rows[0].n as number;

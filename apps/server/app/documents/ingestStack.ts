@@ -9,6 +9,7 @@ import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/t
 import type { LlmProvider } from "@loom/llm";
 import { Pool } from "pg";
 import { bootIngest } from "../bootIngest";
+import type { ChatIdBuilders } from "../chats/chatIds";
 import { createChatLlm } from "../chats/llm";
 import { loadChatSettings } from "../chats/settings";
 import { buildServer } from "../compose";
@@ -95,6 +96,8 @@ export interface IngestStack {
       documentId: string,
       run?: number,
     ): Promise<string>;
+    /** The id builders of a chat in its own format (read from its row): what a test needs to name the chat's conversation, title, turn run or lineage line. */
+    chat(who: { tenantId: string; userId: string }, chatId: string): Promise<ChatIdBuilders | null>;
   };
   /** The composed eraser (always present on this stack). */
   eraser: Eraser;
@@ -333,6 +336,8 @@ export async function startIngestStack(options: IngestStackOptions = {}): Promis
           (await composed.ids.ensureUser(who)).visualize(documentId, generation ?? 2, rerun),
         suggestTags: async (who, documentId, run = 1) =>
           (await composed.ids.ensureUser(who)).suggestTags(documentId, run),
+        chat: (who, chatId) =>
+          composed.chatIds.forRef({ tenantId: who.tenantId, userId: who.userId, chatId }),
       },
       eraser: erasing,
       root,
