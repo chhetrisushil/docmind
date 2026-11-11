@@ -214,10 +214,15 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
     // the scan is not blind: before the erasure it finds the user
     expect((await scanTables(st.db.owner, [user.userId])).hits.length).toBeGreaterThan(0);
     const handle = (await st.composed.ids.ensureUser(user)).handle; // the erasure deletes it
+    // The chat's (read before the erasure deletes its row) format comes from its row, so the scan judges it right on either side of the flip.
+    const chatFormat = (
+      await st.db.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [shared.chatId])
+    ).rows[0].id_format as "legacy" | "opaque";
     expect((await eraseMe(st, user.cookie, PASSWORD)).status).toBe(202);
     await waitErased(st, user.userId);
     const who = {
       handle,
+      legacyChats: chatFormat === "legacy",
       userId: user.userId,
       tenantId: user.tenantId,
       email: "ada@example.com",
@@ -229,6 +234,7 @@ describe.skipIf(!PG_URL)("the rolling summary on real Postgres (needs DOCMIND_TE
       documentId: "",
       passageId: "",
       chatId: shared.chatId,
+      chatFormat,
     };
     const needles = [
       ...who.sentinels,

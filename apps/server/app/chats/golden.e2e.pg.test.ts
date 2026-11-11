@@ -11,7 +11,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { subjectOfExecution } from "../subject";
-import { DOC, SENTENCE, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
+import {
+  DOC,
+  SENTENCE,
+  SIG,
+  collectUntil,
+  createLegacyChat,
+  isReply,
+  scriptChat,
+} from "./e2eSupport";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { legacyChatConversationId } from "./ids";
 
@@ -60,9 +68,8 @@ describe.skipIf(!PG_URL)(
         }));
 
         // 2. create a chat and open its stream
-        const created = await st.chatReq(ada.cookie, "POST", "/api/chats", {});
-        expect(created.status).toBe(201);
-        const chat = ChatSessionDto.parse(await created.json());
+        // (an old-format chat: the test pins the `u_<ada>` subject below)
+        const chat = await createLegacyChat(st, ada);
         const stream = await st.openChat(ada.cookie, chat.id);
 
         // 3. ask

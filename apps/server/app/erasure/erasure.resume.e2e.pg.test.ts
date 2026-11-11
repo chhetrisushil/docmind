@@ -52,7 +52,8 @@ describe.skipIf(!PG_URL)(
           });
           const first = track(await startIngestStack({ chat: true, wrapErasure: wrap }));
           const login = await first.signUpAndLogIn("eve@example.com");
-          const eve = await seedUser(first, login, "eve@example.com");
+          // the user's UUID subject must own a running turn: an old chat
+          const eve = await seedUser(first, login, "eve@example.com", { chat: "legacy" });
           expect((await eraseMe(first, eve.cookie)).status).toBe(202);
 
           await vi.waitFor(
@@ -197,7 +198,8 @@ describe.skipIf(!PG_URL)(
       const claude = st.claude;
       if (!claude) throw new Error("no fake Claude");
       const login = await st.signUpAndLogIn(email);
-      const user = await seedUser(st, login, email);
+      // the user's UUID subject must own a running turn: an old chat
+      const user = await seedUser(st, login, email, { chat: "legacy" });
       const handle = handleOfExecutions(user.executions);
       if (handle === undefined) throw new Error("the seeded user has no new-format executions");
 

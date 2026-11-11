@@ -17,6 +17,7 @@ import {
   SENTENCE,
   SIG,
   collectUntil,
+  createLegacyChat,
   hasToolResult,
   isReply,
   searchTurn,
@@ -50,6 +51,10 @@ export interface Seeded {
   documentId: string;
   passageId: string;
   chatId: string;
+  /** Which id format the seeded chat runs under, read from its row (so it is right whatever the create route does). */
+  chatFormat: "legacy" | "opaque";
+  /** Chats a test added after seeding, for the scan's needles and the linking check. */
+  moreChatIds?: string[];
   /** Strings only this user wrote: in the document text, the file name, the question, the answer and the title. */
   sentinels: string[];
   /** The auto title (it carries a sentinel). */
@@ -115,6 +120,7 @@ export async function seedUser(
   st: IngestStack,
   who: { cookie: string; userId: string; tenantId: string },
   email: string,
+  opts: { chat?: "legacy" } = {},
 ): Promise<Seeded> {
   const claude = st.claude;
   if (!claude) throw new Error("the stack has no fake LLM provider");
@@ -221,9 +227,13 @@ export async function seedUser(
       },
     };
   });
-  const chat = ChatSessionDto.parse(
-    await (await st.chatReq(who.cookie, "POST", "/api/chats", {})).json(),
-  );
+  const chat =
+    opts.chat === "legacy"
+      ? await createLegacyChat(st, who)
+      : ChatSessionDto.parse(await (await st.chatReq(who.cookie, "POST", "/api/chats", {})).json());
+  const chatFormat = (
+    await st.db.owner.query("SELECT id_format FROM chat_sessions WHERE id = $1", [chat.id])
+  ).rows[0].id_format as "legacy" | "opaque";
   const stream = await st.openChat(who.cookie, chat.id);
   try {
     const sent = await st.chatReq(who.cookie, "POST", `/api/chats/${chat.id}/messages`, {
@@ -252,6 +262,7 @@ export async function seedUser(
     documentId,
     passageId,
     chatId: chat.id,
+    chatFormat,
     sentinels: [inDoc, inFile, inAsk, inAnswer, inTitle, inTag, inSuggest, inEvent, inParty],
     title,
     executions,
@@ -406,6 +417,8 @@ export interface Who {
   sentinels: readonly string[];
   /** The user's id handle (`h_<handle>` names their new-format executions), read before the erasure deletes it. */
   handle?: string;
+  /** The user has a chat under the old format: its turn visuals lineage names the user (O7). */
+  legacyChats?: boolean;
 }
 
 type Row = Record<string, unknown>;
@@ -425,6 +438,11 @@ const isUserExecution = (id: unknown, who: Who) =>
   typeof id === "string" &&
   (id.startsWith(`u_${who.userId}`) ||
     (who.handle !== undefined && id.startsWith(`h_${who.handle}`)));
+
+/** Whether an execution names the user: the UUID (an old-format id, its inbox stream, its lineage line) or, for a new-format id, the handle (`h_<H>...`, `__loom_inbox__:h_<H>.c-...`). A new-format lineage line is judged on its own (`line-erased`), not here. */
+const namesUser = (id: string, userId: string, handle: string | undefined): boolean =>
+  id.includes(userId) ||
+  (handle !== undefined && !id.startsWith("__loom_ui_lineage__:") && id.includes(handle));
 
 /** The handle of the user whose new-format executions (`h_<handle>:...`) are among `ids`, if any. */
 export const handleOfExecutions = (ids: readonly string[]): string | undefined =>
@@ -470,8 +488,11 @@ const checkFor = (key: string, handle?: string, opaque = false): Check | undefin
   ID_KEYS.has(key) ? (opaque ? ownHandleValue(handle) : idValue(handle)) : PAYLOAD_STRINGS[key];
 const ANY_UUID = new RegExp(UUID_RE);
 /** Whether a string leaf is acceptable under `key`. On an opaque row a UUID-shaped value is refused under ANY key, even a listed one. */
+/** The chat's fixed system prompt cites the nil UUID as an example; it cannot be anyone's id. */
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
 const leafOk = (key: string, value: string, handle: string | undefined, opaque: boolean): boolean =>
-  !(opaque && ANY_UUID.test(value)) && checkFor(key, handle, opaque)?.test(value) === true;
+  !(opaque && ANY_UUID.test(value.replaceAll(NIL_UUID, ""))) &&
+  checkFor(key, handle, opaque)?.test(value) === true;
 /** Whether an execution id is one of the erased user's new-format (`h_<handle>`) executions. */
 export const isOpaqueExecution = (executionId: unknown, handle?: string): boolean =>
   handle !== undefined && String(executionId).startsWith(`h_${handle}`);
@@ -667,15 +688,17 @@ const ALLOWED: Allowed[] = [
         isOpaqueExecution(row.execution_id, who.handle),
       ),
   },
-  // Phase 1 residual (spec section 6, handoff to phase 2): a chat turn's visuals lineage line is still old-format
-  // (`__loom_ui_lineage__:turnvisuals-<user>-<chat>-<ord>`), so its plaintext id names the user and the chat. Its content is
-  // sealed under the destroyed key; here only that the row is the user's own line, with a sealed author and no content.
+  // O7 (spec section 6): a LEGACY chat's turn visuals lineage line is old-format (`__loom_ui_lineage__:turnvisuals-<user>-<chat>-<ord>`),
+  // so its plaintext id names the user and the chat. Its content is sealed under the destroyed key; here only that the row is the user's
+  // own line, with a sealed author and no content. It applies only to a user who has a legacy chat: for a user with new chats only, the
+  // same row fails the scan.
   ...["id", "execution_id", "payload"].map((column) => ({
     table: "loom.events",
     column,
     reason:
-      "phase 1: the old-format id of the user's own chat-turn visuals lineage (a chat builder moves in phase 2); author sealed, no content",
+      "O7: the old-format id of a legacy chat's turn visuals lineage; author sealed, no content",
     ok: (row: Row, who: Who) =>
+      who.legacyChats === true &&
       typeof row.execution_id === "string" &&
       row.execution_id.startsWith(`__loom_ui_lineage__:turnvisuals-${who.userId}-`) &&
       sealed((row.payload as { by?: unknown } | null)?.by) &&
@@ -794,6 +817,7 @@ export function needlesOf(
     ...(handle !== undefined ? [`h_${handle}`] : []),
     gone.documentId,
     gone.chatId,
+    ...(gone.moreChatIds ?? []),
     gone.passageId,
     ...(opts.tenantGone ? [gone.tenantId] : []),
     ...(opts.emailReused ? [] : [gone.email]),
@@ -882,19 +906,17 @@ export async function assertLogUnreadable(st: IngestStack, gone: Seeded): Promis
   const handle = handleOfExecutions(gone.executions);
   const ids = [
     ...new Set([
-      ...gone.executions,
-      ...(await executionIds(st)).filter(
-        (id) => id.includes(gone.userId) || (handle !== undefined && id.startsWith(`h_${handle}`)),
+      ...gone.executions.filter(
+        (id) => !id.startsWith("__loom_ui_lineage__:") || id.includes(gone.userId),
       ),
+      ...(await executionIds(st)).filter((id) => namesUser(id, gone.userId, handle)),
     ]),
   ];
   expect(gone.executions.length).toBeGreaterThanOrEqual(3);
   const secrets = [...SECRETS, ...gone.sentinels, gone.title];
   for (const id of ids) {
     // keyed outside the user's subject: unshreddable (a new-format id names the user by handle, an old one by UUID)
-    expect(id.includes(gone.userId) || (handle !== undefined && id.startsWith(`h_${handle}`))).toBe(
-      true,
-    );
+    expect(namesUser(id, gone.userId, handle)).toBe(true);
     const events = await raw.read(id);
     if (events.length === 0) continue; // gone altogether (an inbox stream retired with its conversation)
     assertNoPlaintext(events, secrets);
@@ -945,6 +967,7 @@ export async function assertErased(
     email: user.email,
     sentinels: user.sentinels,
     handle: handleOfExecutions(user.executions),
+    legacyChats: user.chatFormat === "legacy" || user.moreChatIds !== undefined,
   };
 
   // 1. Nothing names the user, anywhere: every column of every table in every schema, as text, for the sentinels, the
@@ -988,14 +1011,30 @@ export async function assertErased(
       "SELECT DISTINCT model_id FROM read_model_state WHERE starts_with(execution_id, $1) AND erased AND state IS NULL",
       [`u_${user.userId}`],
     );
-    expect(tomb.rows.map((r) => r.model_id).sort()).toEqual(["chat-activity", "ingest-status"]);
+    // A legacy chat leaves both models' tombstones under `u_<user>` (its conversation and its title); a new chat leaves none there.
+    expect(tomb.rows.map((r) => r.model_id).sort()).toEqual(
+      user.chatFormat === "legacy" || user.moreChatIds !== undefined
+        ? ["chat-activity", "ingest-status"]
+        : [],
+    );
     if (who.handle !== undefined) {
       // the document flows' rows are keyed by the handle (`h_<H>:...`): tombstoned too, and holding no scope or app key
       const hRows = await db.owner.query(
-        "SELECT model_id, erased, state IS NULL AS no_state, scope IS NULL AS no_scope, app_key IS NULL AS no_app_key FROM read_model_state WHERE starts_with(execution_id, $1)",
+        "SELECT model_id, execution_id, erased, state IS NULL AS no_state, scope IS NULL AS no_scope, app_key IS NULL AS no_app_key FROM read_model_state WHERE starts_with(execution_id, $1)",
         [`h_${who.handle}`],
       );
       expect(hRows.rows.some((r) => r.model_id === "ingest-status")).toBe(true);
+      // A new chat's activity row sits under the handle, on the CONVERSATION (`h_<H>.c-...`). Every handle execution (an ingest, a tag run)
+      // has a neutral chat-activity row too, so only a conversation's row says anything. A mixed user (`moreChatIds`) has a new chat
+      // beside the legacy one.
+      const hasOpaqueChat = user.chatFormat === "opaque" || user.moreChatIds !== undefined;
+      expect(
+        hRows.rows.some(
+          (r) =>
+            r.model_id === "chat-activity" &&
+            String(r.execution_id).startsWith(`h_${who.handle}.c-`),
+        ),
+      ).toBe(hasOpaqueChat);
       for (const r of hRows.rows)
         expect(r).toMatchObject({ erased: true, no_state: true, no_scope: true, no_app_key: true });
     }
@@ -1038,6 +1077,7 @@ export async function assertErased(
         user.userId,
         user.documentId,
         user.chatId,
+        ...(user.moreChatIds ?? []),
       ]),
     ).toEqual([]);
   }

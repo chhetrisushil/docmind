@@ -14,6 +14,7 @@ const who: Who = {
   tenantId: randomUUID(),
   email: "ada@example.com",
   sentinels: ["sentinel-doc-0123456789ab"],
+  legacyChats: true,
 };
 const hit = (table: string, column: string, ...rows: Record<string, unknown>[]): Hit => ({
   table,
@@ -187,6 +188,10 @@ describe("the proof's allowlist of residue", () => {
     const row = (payload: unknown) =>
       hit("loom.events", "payload", { execution_id: line, event_type: "X", payload });
     expect(unexpected([row({ by: envelope })], who)).toEqual([]);
+    // for a user with new chats only, the same row is not residue: it fails the scan
+    expect(unexpected([row({ by: envelope })], { ...who, legacyChats: false })).toEqual([
+      "loom.events.payload",
+    ]);
     expect(unexpected([row({ by: envelope, documentId: randomUUID() })], who)).toEqual([
       "loom.events.payload",
     ]);

@@ -52,7 +52,8 @@ describe.skipIf(!PG_URL)(
         } as never;
         first = await startIngestStack({ chat: true });
         const login = await first.signUpAndLogIn("ida@example.com");
-        const user = await seedUser(first, login, "ida@example.com");
+        // the user's UUID subject must own a running turn: an old chat
+        const user = await seedUser(first, login, "ida@example.com", { chat: "legacy" });
         await first.close({ keepDb: true });
 
         // Both stop signals are swallowed until the park they should have prevented: the h_ run (the document's cancel) stays
