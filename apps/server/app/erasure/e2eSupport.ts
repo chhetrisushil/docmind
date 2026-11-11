@@ -439,7 +439,11 @@ const isUserExecution = (id: unknown, who: Who) =>
   (id.startsWith(`u_${who.userId}`) ||
     (who.handle !== undefined && id.startsWith(`h_${who.handle}`)));
 
-/** Whether an execution names the user: the UUID (an old-format id, its inbox stream, its lineage line) or, for a new-format id, the handle (`h_<H>...`, `__loom_inbox__:h_<H>.c-...`). A new-format lineage line is judged on its own (`line-erased`), not here. */
+/**
+ * Whether an execution names the user: the UUID (an old-format id, its inbox stream, its lineage line) or, for a new-format
+ * id, the handle (`h_<H>...`, `__loom_inbox__:h_<H>.c-...`). A new-format lineage line is judged on its own (`line-erased`),
+ * not here.
+ */
 const namesUser = (id: string, userId: string, handle: string | undefined): boolean =>
   id.includes(userId) ||
   (handle !== undefined && !id.startsWith("__loom_ui_lineage__:") && id.includes(handle));
@@ -487,9 +491,9 @@ const ownHandleValue = (handle?: string): Check =>
 const checkFor = (key: string, handle?: string, opaque = false): Check | undefined =>
   ID_KEYS.has(key) ? (opaque ? ownHandleValue(handle) : idValue(handle)) : PAYLOAD_STRINGS[key];
 const ANY_UUID = new RegExp(UUID_RE);
-/** Whether a string leaf is acceptable under `key`. On an opaque row a UUID-shaped value is refused under ANY key, even a listed one. */
 /** The chat's fixed system prompt cites the nil UUID as an example; it cannot be anyone's id. */
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+/** Whether a string leaf is acceptable under `key`. On an opaque row a UUID-shaped value is refused under ANY key, even a listed one. */
 const leafOk = (key: string, value: string, handle: string | undefined, opaque: boolean): boolean =>
   !(opaque && ANY_UUID.test(value.replaceAll(NIL_UUID, ""))) &&
   checkFor(key, handle, opaque)?.test(value) === true;
