@@ -101,12 +101,11 @@ export class PgChatIds implements ChatIdResolver {
     return user ? opaqueBuilders(user, chatId) : null;
   }
 
-  /** `chat` must come from an owner-scoped read (`loadChat`, under RLS): its format is cached without another check. */
+  /** `chat` must come from an owner-scoped read (`loadChat`, under RLS). Not cached: the row may predate an erasure's `forgetUser` (only `forRef`, guarded, fills the cache). */
   async forRow(
     who: ChatOwner,
     chat: { id: string; id_format: ChatIdFormat },
   ): Promise<ChatIdBuilders | null> {
-    this.remember(this.key(who, chat.id), chat.id_format);
     return this.build(who, chat.id, chat.id_format);
   }
 

@@ -53,8 +53,8 @@ export interface Seeded {
   chatId: string;
   /** Which id format the seeded chat runs under, read from its row (so it is right whatever the create route does). */
   chatFormat: "legacy" | "opaque";
-  /** Chats a test added after seeding, for the scan's needles and the linking check. */
-  moreChatIds?: string[];
+  /** Chats a test added after seeding, with the format each runs under: for the scan's needles, the linking check and what the scan allows. */
+  moreChats?: { id: string; format: "legacy" | "opaque" }[];
   /** Strings only this user wrote: in the document text, the file name, the question, the answer and the title. */
   sentinels: string[];
   /** The auto title (it carries a sentinel). */
@@ -419,7 +419,15 @@ export interface Who {
   handle?: string;
   /** The user has a chat under the old format: its turn visuals lineage names the user (O7). */
   legacyChats?: boolean;
+  /** The user's chats that run under the new format: no `u_<user>...` id may name one (it would hold the user and the chat UUID). */
+  opaqueChatIds?: readonly string[];
 }
+
+/** Every chat of a seeded user, with its format. */
+const chatsOf = (user: Seeded) => [
+  { id: user.chatId, format: user.chatFormat },
+  ...(user.moreChats ?? []),
+];
 
 type Row = Record<string, unknown>;
 
@@ -434,9 +442,15 @@ interface Allowed {
   ok(row: Row, who: Who): boolean;
 }
 
+/**
+ * The user's own execution: `u_<user>...` or `h_<handle>...`. A `u_` id is never accepted when it names one of the user's NEW-format
+ * chats (it contains the chat UUID: `u_<user>.c-<chat>`, `u_<user>:chat-title-<chat>`, `u_<user>:visualize-turn-<chat>-...`): a new chat
+ * must run under `h_` only, so such a row stays a finding.
+ */
 const isUserExecution = (id: unknown, who: Who) =>
   typeof id === "string" &&
-  (id.startsWith(`u_${who.userId}`) ||
+  ((id.startsWith(`u_${who.userId}`) &&
+    !(who.opaqueChatIds ?? []).some((c) => id.toLowerCase().includes(c.toLowerCase()))) ||
     (who.handle !== undefined && id.startsWith(`h_${who.handle}`)));
 
 /**
@@ -536,7 +550,8 @@ const PAYLOAD_STRINGS: Record<string, Check> = {
     "visualized",
     "nothing",
   ),
-  // a lineage event's content addresses: the digest of the (sealed) content it points at and of its version, and its parents' digests
+  // a lineage event's content addresses: `__loomContent` is the address of the sealed content; `versionHash` (and `parents`, the earlier ones)
+  // is an unkeyed sha256 of the PLAINTEXT artifact: a deterministic content digest that outlives erasure (a confirmation oracle only; spec section 6)
   versionHash: /^sha256:[0-9a-f]{64}$/,
   parents: /^sha256:[0-9a-f]{64}$/,
   __loomContent: /^sha256:[0-9a-f]{64}$/,
@@ -851,7 +866,7 @@ export function needlesOf(
     ...(handle !== undefined ? [`h_${handle}`] : []),
     gone.documentId,
     gone.chatId,
-    ...(gone.moreChatIds ?? []),
+    ...(gone.moreChats ?? []).map((c) => c.id),
     gone.passageId,
     ...(opts.tenantGone ? [gone.tenantId] : []),
     ...(opts.emailReused ? [] : [gone.email]),
@@ -1007,7 +1022,10 @@ export async function assertErased(
     email: user.email,
     sentinels: user.sentinels,
     handle: handleOfExecutions(user.executions),
-    legacyChats: user.chatFormat === "legacy" || user.moreChatIds !== undefined,
+    legacyChats: chatsOf(user).some((c) => c.format === "legacy"),
+    opaqueChatIds: chatsOf(user)
+      .filter((c) => c.format === "opaque")
+      .map((c) => c.id),
   };
 
   // 1. Nothing names the user, anywhere: every column of every table in every schema, as text, for the sentinels, the
@@ -1053,9 +1071,7 @@ export async function assertErased(
     );
     // A legacy chat leaves both models' tombstones under `u_<user>` (its conversation and its title); a new chat leaves none there.
     expect(tomb.rows.map((r) => r.model_id).sort()).toEqual(
-      user.chatFormat === "legacy" || user.moreChatIds !== undefined
-        ? ["chat-activity", "ingest-status"]
-        : [],
+      who.legacyChats ? ["chat-activity", "ingest-status"] : [],
     );
     if (who.handle !== undefined) {
       // the document flows' rows are keyed by the handle (`h_<H>:...`): tombstoned too, and holding no scope or app key
@@ -1065,9 +1081,8 @@ export async function assertErased(
       );
       expect(hRows.rows.some((r) => r.model_id === "ingest-status")).toBe(true);
       // A new chat's activity row sits under the handle, on the CONVERSATION (`h_<H>.c-...`). Every handle execution (an ingest, a tag run)
-      // has a neutral chat-activity row too, so only a conversation's row says anything. A mixed user (`moreChatIds`) has a new chat
-      // beside the legacy one.
-      const hasOpaqueChat = user.chatFormat === "opaque" || user.moreChatIds !== undefined;
+      // has a neutral chat-activity row too, so only a conversation's row says anything.
+      const hasOpaqueChat = (who.opaqueChatIds ?? []).length > 0;
       expect(
         hRows.rows.some(
           (r) =>
@@ -1117,7 +1132,7 @@ export async function assertErased(
         user.userId,
         user.documentId,
         user.chatId,
-        ...(user.moreChatIds ?? []),
+        ...(user.moreChats ?? []).map((c) => c.id),
       ]),
     ).toEqual([]);
   }

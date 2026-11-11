@@ -95,6 +95,16 @@ describe.skipIf(!PG_URL)("PgChatIds (needs DOCMIND_TEST_PG_URL)", () => {
     expect(await chatIds.forRef(ref)).toBeNull(); // nothing was cached: asks the database, finds nothing
   });
 
+  it("forRow does not cache the format: after forgetUser a late forRow cannot make forRef answer for a deleted chat", async () => {
+    const { chatIds } = make();
+    const mine = await chat(T1, U1, "legacy");
+    const who = { tenantId: T1, userId: U1 };
+    chatIds.forgetUser(U1); // the eraser ran between the route's read and its forRow
+    expect((await chatIds.forRow(who, mine))?.format).toBe("legacy"); // the row in hand still builds
+    await fx.db.owner.query("DELETE FROM chat_sessions WHERE id = $1", [mine.id]);
+    expect(await chatIds.forRef({ ...who, chatId: mine.id })).toBeNull(); // nothing was cached
+  });
+
   it("answers null for an opaque chat whose owner's key is destroyed, and the legacy chat of that owner still builds", async () => {
     const { chatIds, ids, keys } = make();
     await ids.ensureUser({ tenantId: T1, userId: U1 });
