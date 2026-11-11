@@ -69,6 +69,8 @@ const FORMAT_CACHE_MAX = 5000;
  */
 export class PgChatIds implements ChatIdResolver {
   private readonly formats = new Map<string, ChatIdFormat>();
+  /** Bumped by every `forgetUser`: a `forRef` read in flight across one does not cache what it read (it may be the erased user's). */
+  private forgets = 0;
 
   constructor(
     private readonly pool: Pool,
@@ -99,6 +101,7 @@ export class PgChatIds implements ChatIdResolver {
     return user ? opaqueBuilders(user, chatId) : null;
   }
 
+  /** `chat` must come from an owner-scoped read (`loadChat`, under RLS): its format is cached without another check. */
   async forRow(
     who: ChatOwner,
     chat: { id: string; id_format: ChatIdFormat },
@@ -111,6 +114,7 @@ export class PgChatIds implements ChatIdResolver {
     const key = this.key(ref, ref.chatId);
     let format = this.formats.get(key);
     if (format === undefined) {
+      const forgets = this.forgets;
       const row = await withTenant(
         this.pool,
         ref.tenantId,
@@ -124,7 +128,7 @@ export class PgChatIds implements ChatIdResolver {
       );
       if (!row) return null;
       format = row.id_format;
-      this.remember(key, format);
+      if (forgets === this.forgets) this.remember(key, format);
     }
     return this.build(ref, ref.chatId, format);
   }
@@ -134,6 +138,7 @@ export class PgChatIds implements ChatIdResolver {
   }
 
   forgetUser(userId: string): void {
+    this.forgets++;
     for (const key of [...this.formats.keys()])
       if (key.split(":")[1] === userId) this.formats.delete(key);
   }
