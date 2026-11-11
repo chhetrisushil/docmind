@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { ChatSessionDto, ListMessagesResponse } from "@docmind/contracts";
 import type { FakeAnthropic } from "@docmind/llm-anthropic/testing";
@@ -376,7 +377,8 @@ describe.skipIf(!PG_URL)(
           ids?.conversationId() as string,
         )?.[1] as string;
 
-        // A cold restart: the chat continues (recovery and the cache warm-up read the new ids), a second turn is answered and titled once.
+        // A cold restart: the history and the turn visuals are read back under the new ids (the cache warm-up). No turn is sent after the restart,
+        // and no title or visualize run is held across it (an in-flight run is proven only for the conversation turn, in restart.e2e).
         await first.close({ keepDb: true });
         stacks.splice(stacks.indexOf(first), 1);
         const st = track(
@@ -476,7 +478,7 @@ describe.skipIf(!PG_URL)(
         const fresh = ChatSessionDto.parse(
           await (await first.chatReq(login.cookie, "POST", "/api/chats", {})).json(),
         );
-        user.moreChatIds = [fresh.id];
+        user.moreChats = [{ id: fresh.id, format: "opaque" }];
         await first.close({ keepDb: true });
         stacks.splice(stacks.indexOf(first), 1);
         const st = track(
@@ -604,6 +606,21 @@ describe.skipIf(!PG_URL)(
         const login = await first.signUpAndLogIn("parked@example.com");
         const user = await seedUser(first, login, "parked@example.com");
         expect(user.chatFormat).toBe("opaque");
+        // The control for `deniedOnHandle`: it counts a denial written under an `h_` id (a fake handle, removed again).
+        const fake = `${"a".repeat(25)}a`;
+        const fakeExec = `h_${fake}.c-${"a".repeat(51)}a`;
+        await first.durable.raw.eventStore.append({
+          id: randomUUID(),
+          workflowId: "chat",
+          executionId: fakeExec,
+          eventType: "EXECUTION_DENIED",
+          sequence: 0,
+          timestamp: 1,
+          payload: { op: "cancel", reason: "not-owner", actor: "control" },
+        });
+        expect(await deniedOnHandle(first, fake)).toBe(1);
+        await first.db.owner.query("DELETE FROM loom.events WHERE execution_id = $1", [fakeExec]);
+        expect(await deniedOnHandle(first, fake)).toBe(0);
         scriptChat(claude, () => ({
           stream: {
             steps: [{ text: "Due " }, { hold: true }, { text: "now." }, { stop: "end_turn" }],

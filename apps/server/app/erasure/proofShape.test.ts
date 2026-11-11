@@ -184,6 +184,24 @@ describe("the proof's allowlist of residue", () => {
     expect(unexpected([row({ messageId: "a".repeat(32) })], hWho)).toEqual([]);
   });
 
+  it("a u_ id that names a new-format chat of the user is never the user's own execution", () => {
+    const chat = randomUUID();
+    const mixed: Who = { ...who, opaqueChatIds: [chat] };
+    const rowOf = (id: string) =>
+      hit("loom.events", "execution_id", { execution_id: id, event_type: "X" });
+    // the control: the user's other u_ executions stay residue
+    expect(unexpected([rowOf(own)], mixed)).toEqual([]);
+    for (const id of [
+      `u_${who.userId}.c-${chat}`,
+      `u_${who.userId}:chat-title-${chat}`,
+      `u_${who.userId}:visualize-turn-${chat}-1`,
+      `u_${who.userId}.c-${chat.toUpperCase()}~2`,
+    ])
+      expect(unexpected([rowOf(id)], mixed)).toEqual(["loom.events.execution_id"]);
+    // without the chat listed as new-format, the same row is accepted (a legacy chat's)
+    expect(unexpected([rowOf(`u_${who.userId}.c-${chat}`)], who)).toEqual([]);
+  });
+
   it("the old-format turn-visuals lineage line accepts only an ids-only payload", () => {
     const line = `__loom_ui_lineage__:turnvisuals-${who.userId}-${randomUUID()}-1`;
     const row = (payload: unknown) =>

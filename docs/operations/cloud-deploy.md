@@ -112,10 +112,12 @@ docker run --rm \
   (it would fold such an ingest as no document, never start its visuals and read its events under no subject). After the release a
   user's first document flow creates their id handle (`users.id_handle`); a key-store outage fails that start, which is retried like
   any other. If a release must be undone, roll forward with a fix release: restoring the pre-0038 sweep functions would also orphan every `h_` run.
-- Migration `0039` (chat id format) adds `chat_sessions.id_format` (`NOT NULL DEFAULT 'legacy'`, a constant default, so no rewrite and a
-  brief lock). Every existing chat is `legacy` and keeps its `u_` ids for life; a chat created after the release is `opaque` and its
+- Migration `0039` (chat id format) adds `chat_sessions.id_format` (`NOT NULL DEFAULT 'legacy'`, a constant default, so no table rewrite; the
+  inline CHECK is validated against every existing row while the `ACCESS EXCLUSIVE` lock is held, a scan of `chat_sessions` that is brief
+  for a table this size). Every existing chat is `legacy` and keeps its `u_` ids for life; a chat created after the release is `opaque` and its
   conversation, title and turn visuals are `h_<handle>` ids. Rolling back after the first `opaque` chat exists is not supported for the
-  same reason as `0038` (older code cannot parse its ids, and would answer 404 for it); roll forward with a fix release. If a deploy ever
+  same reason as `0038` (older code builds `u_` ids from the chat's UUID, so it answers 404 for the chat and starts nothing for its
+  turns: its `h_` conversation parses, but its turn trigger then fails to read the turn under the `u_` id); roll forward with a fix release. If a deploy ever
   runs old and new pods side by side (the supported deploy is recreate-only, one replica), a chat created by a new pod answers 404 on an
   old pod until that pod drains.
 - Migration `0032` (document connections) replaces one SECURITY DEFINER function and stores nothing new. With the `visuals`
