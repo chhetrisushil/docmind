@@ -7,7 +7,7 @@ import type { buildServer } from "./compose";
 import { repairStoredExecutionIds } from "./documents/executionIds";
 import { STALE_UPLOAD_MS, SWEEP_BATCH, SWEEP_LOOKBACK_MS } from "./documents/sweep";
 import { startSweeper } from "./documents/sweeper";
-import { hydrateSubjectIndex, userSubjectOf } from "./erasure/compliance";
+import { hydrateSubjectIndex } from "./erasure/compliance";
 import { type IngestWiring, closeIngest } from "./flows/ingest-document/limits";
 import { startRecovery } from "./flows/ingest-document/recovery";
 import { verifyVectors } from "./flows/ingest-document/verifyVectors";
@@ -201,12 +201,6 @@ export async function bootIngest(
     recovery = startRecovery(app.runtime, durable.storage.eventStore, {
       // Ingest, the visuals flow, and the chat: a conversation mid-turn at a crash, and an interrupted title flow (P5).
       owns: recoveryOwns,
-      // An erased user's executions are shredded: folding one throws, and Loom would end the whole pass there.
-      erased: {
-        // `userSubjectOf` returns "" when no user owns the execution: that is no subject, so `undefined`.
-        subjectOf: (id) => userSubjectOf({ executionId: id }) || undefined,
-        destroyed: built.subjectErased,
-      },
       // After the boot scan, a crash is found through its expired lease, not by reading every execution.
       ...(durable.storage.leaseStore && {
         leases: { store: durable.storage.leaseStore, owner: recoveryOwner },
