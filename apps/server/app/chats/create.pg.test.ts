@@ -156,9 +156,10 @@ describe.skipIf(!PG_URL)(
       const log = vi.spyOn(console, "error").mockImplementation(() => {});
       const real = h.app.connect.bind(h.app) as (...a: unknown[]) => Promise<unknown>;
       let calls = 0;
+      // connections 1 and 2 are the scope check and the insert; the rollback is the third
       const connect = vi.spyOn(h.app, "connect").mockImplementation(((...a: unknown[]) => {
         calls++;
-        return calls === 1 ? real(...a) : Promise.reject(new Error("pool down secret"));
+        return calls <= 2 ? real(...a) : Promise.reject(new Error("pool down secret"));
       }) as never);
       try {
         h.fake.failNextStart();

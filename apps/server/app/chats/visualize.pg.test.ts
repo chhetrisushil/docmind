@@ -4,6 +4,7 @@ import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflo
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, BOB } from "../documents/testHarness";
+import { TurnGoneError } from "../flows/visualize-turn/errors";
 import { visualizeTurnFlow } from "../flows/visualize-turn/flow";
 import { UserRateLimit } from "../flows/visualize-turn/limiter";
 import type { TurnRead } from "../flows/visualize-turn/readTurn";
@@ -124,6 +125,13 @@ describe.skipIf(!PG_URL)(
       const res = await post("alice", id, 4);
       expect([res.status, await code(res)]).toEqual([409, "visualize_running"]);
       state.start = { kind: "started", rerun: 1 };
+    });
+
+    it("answers 404 when the chat goes between the turn read and the start (the starter says gone)", async () => {
+      const id = await seedChat(h, ALICE);
+      visualize.mockRejectedValueOnce(new TurnGoneError());
+      const res = await post("alice", id, 4);
+      expect([res.status, await code(res)]).toEqual([404, "not_found"]);
     });
 
     it("answers 429 with retry-after on the 11th request in a minute, per user", async () => {
