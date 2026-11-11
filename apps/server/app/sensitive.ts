@@ -19,6 +19,8 @@ const FLOW_INPUT_IDS = [
  *    answers) is listed here, or marked `sensitive(...)` in its schema and derived with
  *    `sensitivePathsFromSteps`; add it in the SAME PR that adds the flow, because an event written
  *    before its path is registered stays readable in the clear forever;
+ *  - the conversation's own owner and sender identities are ids too and are sealed (EXECUTION_STARTED.input.owner, MESSAGE_CONSUMED.sender),
+ *    for the same reason as FLOW_INPUT_IDS;
  *  - execution ids are plaintext and survive erasure, so they never contain user content either.
  *
  * M2's only flow (`ingest-document`) has a start input of three ids (sealed by `FLOW_INPUT_IDS`, not listed per flow) and a two-value
@@ -82,6 +84,12 @@ export const SENSITIVE_EVENT_PATHS: Readonly<Record<string, readonly string[]>> 
     "input.turns[].assistant",
     "input.summary",
     "input.pending",
+    // The conversation's own owner identity (`{ actor, tenant }`: the user and tenant UUIDs). Loom does not seal it with `principal`, and
+    // beside an `h_<H>` execution id it would link the erased handle to the user for good (R14 phase 2).
+    "input.owner",
     ...FLOW_INPUT_IDS,
   ],
+  // The sender of a consumed conversation message is its owner's identity too: the same `{ actor, tenant }`. Loom seals only this event's
+  // `payload`. (`INBOX_MESSAGE.sender` is not listed: Loom already seals it under the sender subject, ADR 0139 N6.)
+  MESSAGE_CONSUMED: ["sender"],
 };

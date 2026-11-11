@@ -238,3 +238,12 @@ describe("SENSITIVE_EVENT_PATHS for conversations", () => {
     });
   });
 });
+
+describe("the conversation's own ids (R14 phase 2)", () => {
+  it("seals the owner of a conversation's start and the sender of its consumed messages", () => {
+    expect(SENSITIVE_EVENT_PATHS.EXECUTION_STARTED).toContain("input.owner");
+    expect(SENSITIVE_EVENT_PATHS.MESSAGE_CONSUMED).toEqual(["sender"]);
+    // The inbox copy of the sender is sealed by Loom itself (sender-handle sealing, ADR 0139 N6): registering it would double-seal it.
+    expect(SENSITIVE_EVENT_PATHS.INBOX_MESSAGE).toBeUndefined();
+  });
+});
