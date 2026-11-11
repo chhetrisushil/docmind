@@ -1,12 +1,12 @@
 import type { StreamScript } from "@docmind/llm-anthropic/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type ChatStack, startChatStack } from "./testStack";
 import { C, T, U } from "./testing";
 import { passage } from "./tools/testing";
 
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 const QUESTION = "What is the Nocturne revenue forecast for next quarter?";
 const QUERY = "Nocturne quarterly revenue forecast";
 const THINKING = "Weighing which Nocturne memo covers the revenue forecast.";

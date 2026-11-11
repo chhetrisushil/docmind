@@ -18,7 +18,7 @@ function sources(): string[] {
   return parsed.fileNames.filter((f) => !f.endsWith(".d.ts"));
 }
 
-/** Every call the checker resolves to `Conversations.start`, with whether its `conversationId` is `chatConversationId(...)`. */
+/** Every call the checker resolves to `Conversations.start`, with whether its `conversationId` is `legacyChatConversationId(...)`. */
 function scanStarts(files: string[], virtual = new Map<string, string>()) {
   const options = ts.parseJsonConfigFileContent(
     ts.readConfigFile(CONFIG, ts.sys.readFile).config,
@@ -44,7 +44,7 @@ function scanStarts(files: string[], virtual = new Map<string, string>()) {
       symbol?.declarations?.some(
         (d) =>
           ts.isFunctionDeclaration(d) &&
-          d.name?.text === "chatConversationId" &&
+          d.name?.text === "legacyChatConversationId" &&
           d.getSourceFile().fileName === IDS,
       ) ?? false
     );
@@ -106,7 +106,7 @@ const snippet = (body: string) =>
       [
         VIRTUAL,
         `import type { Conversations } from "@loom/conversation";
-         import { chatConversationId } from "./chats/ids";
+         import { legacyChatConversationId } from "./chats/ids";
          declare const c: Conversations; declare const user: string; declare const chat: string; declare const p: never;
          export async function f() { ${body} }`,
       ],
@@ -114,9 +114,11 @@ const snippet = (body: string) =>
   );
 
 describe("Conversations.start", () => {
-  it("accepts a start whose conversationId is chatConversationId(...)", () => {
+  it("accepts a start whose conversationId is legacyChatConversationId(...)", () => {
     expect(
-      snippet("await c.start({ conversationId: chatConversationId(user, chat), principal: p });"),
+      snippet(
+        "await c.start({ conversationId: legacyChatConversationId(user, chat), principal: p });",
+      ),
     ).toEqual([{ at: "__virtual_chat__.ts:4", ok: true }]);
   });
 
@@ -126,18 +128,18 @@ describe("Conversations.start", () => {
     ["a literal id", `await c.start({ conversationId: "conv-1" });`],
     [
       "a variable",
-      "const id = chatConversationId(user, chat); await c.start({ conversationId: id });",
+      "const id = legacyChatConversationId(user, chat); await c.start({ conversationId: id });",
     ],
     ["a cast", "await c.start({ conversationId: `u_${user}` as never });"],
     [
       "a spread",
-      "const o = { conversationId: chatConversationId(user, chat) }; await c.start({ ...o });",
+      "const o = { conversationId: legacyChatConversationId(user, chat) }; await c.start({ ...o });",
     ],
   ])("flags %s", (_name, body) => {
     expect(snippet(body).map((c) => c.ok)).toEqual([false]);
   });
 
-  // Only the create route (POST /api/chats) may call `Conversations.start`, with a chatConversationId.
+  // Only the create route (POST /api/chats) may call `Conversations.start`, with a legacyChatConversationId.
   it("passes for every start in the real sources, and finds the create route's", () => {
     const found = scanStarts(sources());
     expect(found.filter((c) => !c.ok).map((c) => c.at)).toEqual([]);
@@ -147,22 +149,22 @@ describe("Conversations.start", () => {
 
   it("flags a start without a principal", () => {
     expect(
-      snippet("await c.start({ conversationId: chatConversationId(user, chat) });").map(
+      snippet("await c.start({ conversationId: legacyChatConversationId(user, chat) });").map(
         (c) => c.ok,
       ),
     ).toEqual([false]);
   });
 
-  it("flags a start whose callee only looks like chatConversationId", () => {
+  it("flags a start whose callee only looks like legacyChatConversationId", () => {
     const fake = scanStarts(
       [],
       new Map([
         [
           VIRTUAL,
           `import type { Conversations } from "@loom/conversation";
-           declare const chatConversationId: (a: string, b: string) => string;
+           declare const legacyChatConversationId: (a: string, b: string) => string;
            declare const c: Conversations; declare const p: never;
-           export async function f() { await c.start({ conversationId: chatConversationId("a", "b") as never, principal: p }); }`,
+           export async function f() { await c.start({ conversationId: legacyChatConversationId("a", "b") as never, principal: p }); }`,
         ],
       ]),
     );

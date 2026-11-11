@@ -2,7 +2,7 @@ import { ReasoningResponse } from "@docmind/contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type ChatHarness, seedChat, seedReasoning, startChatServer } from "./testHarness";
 
 describe.skipIf(!PG_URL)("GET /api/chats/:id/reasoning (needs DOCMIND_TEST_PG_URL)", () => {
@@ -88,7 +88,10 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/reasoning (needs DOCMIND_TEST_PG_UR
   it("answers an empty step list for a reply that kept no reasoning, and works without a Claude key", async () => {
     const noKey = await startChatServer({ available: false });
     const chatId = await seedChat(noKey, ALICE);
-    noKey.fake.addTurn(chatConversationId(ALICE.userId, chatId), { question: "q", answer: "a" });
+    noKey.fake.addTurn(legacyChatConversationId(ALICE.userId, chatId), {
+      question: "q",
+      answer: "a",
+    });
     const history = (await (
       await noKey.req("alice", "GET", `/api/chats/${chatId}/messages`)
     ).json()) as { items: { cursor: string }[] };

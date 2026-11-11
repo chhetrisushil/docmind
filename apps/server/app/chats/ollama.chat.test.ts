@@ -3,12 +3,12 @@ import { UNTRUSTED_CONTENT_SYSTEM_NOTE, readReasoningBounded } from "@loom/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CompatReply } from "../llm/testing";
 import { DOC_ASSISTANT_PROMPT } from "./agent";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type ChatStack, startOllamaChatStack } from "./testStack";
 import { C, T, U } from "./testing";
 import { passage } from "./tools/testing";
 
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 const QUESTION = "What is the Nocturne revenue forecast for next quarter?";
 const PASSAGE = passage({
   text: "Nocturne quarterly revenue forecast: seventeen thousand dollars.",

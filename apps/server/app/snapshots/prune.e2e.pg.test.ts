@@ -3,7 +3,7 @@ import { ChatSessionDto, type UploadDocumentResponse } from "@docmind/contracts"
 import { LogLifecycle } from "@loom/workflow-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { DOC, collectUntil, isReply, scriptChat } from "../chats/e2eSupport";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { pgSessionLock } from "../db/sessionLock";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";
@@ -89,7 +89,7 @@ describe.skipIf(!PG_URL)("snapshot pruning on real chats (needs DOCMIND_TEST_PG_
     } finally {
       stream.close();
     }
-    const conversation = chatConversationId(user.userId, chat.id) as string;
+    const conversation = legacyChatConversationId(user.userId, chat.id) as string;
     await settled(st, conversation); // the park after the last turn has committed its snapshot
     return { user, chat, conversation };
   }

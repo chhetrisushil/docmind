@@ -15,7 +15,7 @@ import {
   chatKeyOf,
   chatScopeOf,
 } from "../chats/activity";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { InMemoryProgressBus } from "../documents/progress";
@@ -36,7 +36,10 @@ describe.skipIf(!PG_URL)("read-model boot over an erased user (needs DOCMIND_TES
   let keys: PostgresKeyStore;
   let durable: DurableStorage;
   const [A, B] = [randomUUID(), randomUUID()];
-  const [chatA, chatB] = [chatConversationId(A, randomUUID()), chatConversationId(B, randomUUID())];
+  const [chatA, chatB] = [
+    legacyChatConversationId(A, randomUUID()),
+    legacyChatConversationId(B, randomUUID()),
+  ];
 
   const [docA, docB] = [randomUUID(), randomUUID()];
   const [ingA, ingB] = [executionIdFor(A, `ingest-${docA}`), executionIdFor(B, `ingest-${docB}`)];

@@ -18,7 +18,7 @@ import { MemoryLog } from "../status/testing";
 import { ChatActivity } from "./activity";
 import { ChatBus } from "./bus";
 import { type FakeConversations, fakeConversations } from "./fakeConversations";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { PgReasoningRows } from "./pgReasoningRows";
 import { ChatReasoningStore } from "./reasoningStore";
 import { type ChatRouteDeps, chatRoutes } from "./routes";
@@ -155,7 +155,7 @@ export async function seedChat(
     insertChat(tx, who.tenantId, who.userId, id, "all"),
   );
   await h.fake.api.start({
-    conversationId: chatConversationId(who.userId, id),
+    conversationId: legacyChatConversationId(who.userId, id),
     principal: { tenant: who.tenantId, actor: who.userId },
   });
   if (o.ageSeconds !== undefined)
@@ -172,7 +172,7 @@ export async function seedChat(
       `INSERT INTO read_model_state (model_id, execution_id, app_key, scope, sequence, state)
        VALUES ('chat-activity', $1, $2, $3, 0, $4::jsonb)`,
       [
-        chatConversationId(who.userId, id),
+        legacyChatConversationId(who.userId, id),
         id,
         who.userId,
         JSON.stringify({
@@ -206,7 +206,7 @@ export async function seedReasoning(
   turnKey: number,
   text: string,
 ): Promise<string> {
-  const conversationId = chatConversationId(who.userId, chatId);
+  const conversationId = legacyChatConversationId(who.userId, chatId);
   h.fake.addTurn(conversationId, { question: "q", answer: "a" });
   const stepId = `conv#o${turnKey}#turn:0`;
   const ctx = modelCtx({

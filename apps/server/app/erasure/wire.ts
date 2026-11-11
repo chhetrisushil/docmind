@@ -3,6 +3,7 @@ import { ConversationNotFoundError } from "@loom/conversation";
 import type { KeyStore } from "@loom/plugin-crypto";
 import { InboxClosedError, type WorkflowRuntime } from "@loom/workflow-runtime";
 import { principalOf } from "../chats/access";
+import type { ChatIdResolver } from "../chats/chatIds";
 import type { ChatWiring } from "../chats/wiring";
 import { existingUser } from "../documents/executionCandidates";
 import type { IngestPort } from "../documents/ingest";
@@ -33,6 +34,8 @@ export interface ErasureParts {
   sql: Pick<ErasureDeps, "lock" | "work" | "rows" | "blobs" | "handleOf">;
   /** The id key cache: erasure reads an existing user's key (never mints one) to name their new-format runs, and evicts it when a subject key is destroyed. Absent: old-format ids only. */
   ids?: Pick<OpaqueIds, "load" | "cached" | "forgetSubject" | "retireHandle" | "unretireHandle">;
+  /** The chat id resolver: its cached chat formats name a user's chats, so the user is evicted from it after the shred (a late `forRef` must ask the database, which no longer has the rows). Absent: nothing to evict. */
+  chatIds?: Pick<ChatIdResolver, "forgetUser">;
   starts: Pick<StartScheduler, "settle">;
   titles?: { idle(): Promise<void> };
   ingest: Pick<IngestPort, "cancel">;
@@ -164,7 +167,14 @@ export function erasureDeps(p: ErasureParts): ErasureDeps {
       wasDestroyed: async (subjectId) => (await p.keys.wasDestroyed?.(subjectId)) === true,
     },
     forgetStatus: (userId, handle) => p.status.forgetUser(userId, handle),
-    forgetActivity: (userId, handle) => p.activity.forgetUser(userId, handle),
+    forgetActivity: async (userId, handle) => {
+      try {
+        return await p.activity.forgetUser(userId, handle);
+      } finally {
+        // After the shred and the activity tombstones, and even if they threw (the step is retried and evicts again).
+        p.chatIds?.forgetUser(userId);
+      }
+    },
     ...(p.sleep && { sleep: p.sleep }),
   };
 }

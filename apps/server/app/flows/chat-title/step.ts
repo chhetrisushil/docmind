@@ -9,7 +9,7 @@ import type { ConversationReader } from "@loom/conversation";
 import type { Effect } from "@loom/effect-runtime";
 import type { LlmProvider } from "@loom/llm";
 import type { Pool } from "pg";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { chatTitleBind, getChat, setTitle } from "../../chats/sessions";
 import type { FieldCrypto } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
@@ -72,7 +72,7 @@ export function chatTitleEffect(deps: ChatTitleDeps): Effect<ChatTitleInput, Cha
         getChat(tx, ref.userId, ref.chatId),
       );
       if (!row || row.title_source !== "none") return SKIPPED;
-      const conversationId = chatConversationId(ref.userId, ref.chatId);
+      const conversationId = legacyChatConversationId(ref.userId, ref.chatId);
       const wait = async (attempt: number) => {
         await sleep(
           (CHAT_TITLE_RETRY.backoffMs ?? 0) *

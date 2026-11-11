@@ -6,10 +6,10 @@ import { frame } from "@loom/plugin-conversation-sse";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, openSse } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 
-const convOf = (chatId: string) => chatConversationId(ALICE.userId, chatId);
+const convOf = (chatId: string) => legacyChatConversationId(ALICE.userId, chatId);
 const dataOf = (frame: string): unknown => JSON.parse(frame.split("\ndata: ")[1] as string);
 
 describe.skipIf(!PG_URL)(

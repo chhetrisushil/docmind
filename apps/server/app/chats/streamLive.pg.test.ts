@@ -4,10 +4,10 @@ import { withTurnScope } from "@loom/conversation";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, openSse } from "../documents/testHarness";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 
-const convOf = (chatId: string) => chatConversationId(ALICE.userId, chatId);
+const convOf = (chatId: string) => legacyChatConversationId(ALICE.userId, chatId);
 
 describe.skipIf(!PG_URL)(
   "GET /api/chats/:id/stream, live kinds and limits (needs DOCMIND_TEST_PG_URL)",
@@ -131,7 +131,7 @@ describe.skipIf(!PG_URL)(
     it("limits open streams per user with 429, frees the slot when one closes, and unsubscribes from the hub", async () => {
       // Its own user, so streams that earlier tests have closed but the server has not yet noticed cannot count.
       const chatId = await seedChat(h, ALICE2);
-      const conv = chatConversationId(ALICE2.userId, chatId);
+      const conv = legacyChatConversationId(ALICE2.userId, chatId);
       const [a, b] = [await open("alice2", chatId), await open("alice2", chatId)];
       await a.next();
       await b.next();
@@ -210,7 +210,7 @@ describe.skipIf(!PG_URL)(
         stream: { maxPendingBytes: 1024, onStreamEnd: () => ended() },
       });
       const chatId = await seedChat(own, ALICE);
-      const conv = chatConversationId(ALICE.userId, chatId);
+      const conv = legacyChatConversationId(ALICE.userId, chatId);
       const stalled = await new Promise<http.IncomingMessage>((resolve, reject) => {
         const req = http.get(
           `${own.base}/api/chats/${chatId}/stream`,

@@ -2,13 +2,13 @@ import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
-import { chatConversationId } from "./chats/ids";
+import { legacyChatConversationId } from "./chats/ids";
 import { SENSITIVE_EVENT_PATHS } from "./sensitive";
 import { subjectOfExecution } from "./subject";
 
 const U = "a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1";
 const C = "c3c3c3c3-c3c3-4c3c-8c3c-c3c3c3c3c3c3";
-const EXEC = chatConversationId(U, C);
+const EXEC = legacyChatConversationId(U, C);
 const isSealed = (v: unknown) =>
   (v as { __loomEnc?: string } | undefined)?.__loomEnc === "loom/aes-256-gcm";
 

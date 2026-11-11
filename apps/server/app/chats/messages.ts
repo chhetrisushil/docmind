@@ -3,7 +3,7 @@ import { ChatFailureReason, type ChatMessageDto } from "@docmind/contracts";
 import type { Conversations, HistoryEntry } from "@loom/conversation";
 import type { PrincipalChain } from "@loom/effect-runtime";
 import { citeReply, documentTitles } from "./citations";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import type { ChatRouteDeps } from "./routes";
 import { turnKeyOfRecord } from "./scope";
 import type { StoredPassage, TurnItem } from "./turnItems";
@@ -92,7 +92,7 @@ export async function toMessageDtos(
   });
   const reasoning = await deps.reasoning.forReplies(
     ref,
-    chatConversationId(identity.userId, chatId),
+    legacyChatConversationId(identity.userId, chatId),
     replies,
   );
   const documentIds = new Set<string>();

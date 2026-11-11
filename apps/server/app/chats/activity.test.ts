@@ -15,12 +15,12 @@ import {
   isChatExecution,
   recordOf,
 } from "./activity";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 
 const U = randomUUID();
 const T = randomUUID();
 const C = randomUUID();
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 
 /** A recorded message the way `conversation$` writes it: a decision with a deterministic id. */
 const record = (

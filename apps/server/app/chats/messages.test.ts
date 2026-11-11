@@ -5,7 +5,7 @@ import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { type MessageDeps, toMessageDtos, turnKeyOf } from "./messages";
 import { replyReasoning } from "./reasoningRead";
 import { ChatReasoningStore } from "./reasoningStore";
@@ -17,7 +17,7 @@ vi.mock("./citations", async (orig) => ({
   documentTitles: async () => new Map([["7f6d1b8e-3b0a-4a56-8f2f-0a8e0f7c4d11", "Q3 report"]]),
 }));
 
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 const REF = { tenantId: T, userId: U, chatId: C };
 const IDENTITY = { tenantId: T, userId: U } as unknown as Identity;
 const secret = "SECRET-REASONING-TEXT";

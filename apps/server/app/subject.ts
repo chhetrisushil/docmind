@@ -1,6 +1,6 @@
 import { opaqueIds } from "./opaqueIds";
 
-export { chatConversationId, chatIdOfConversation } from "./chats/ids";
+export { legacyChatConversationId, chatIdOfConversation } from "./chats/ids";
 export type { ChatConversationId } from "./chats/ids";
 export type { UserExecutionId } from "./opaqueIds";
 

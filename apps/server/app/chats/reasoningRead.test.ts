@@ -5,7 +5,7 @@ import { type LlmReasoning, type ReasoningStepRead, captureReasoning } from "@lo
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import {
   MAX_REASONING_CHARS,
   REPLY_LIMITS,
@@ -18,7 +18,7 @@ import { ChatReasoningStore } from "./reasoningStore";
 import { type ChatCallScope, chatScope } from "./scope";
 import { C, MemoryReasoningRows, T, U, modelCtx } from "./testing";
 
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 const REF = { tenantId: T, userId: U, chatId: C };
 const part = (kind: "text" | "summary" | "redacted", status: string, text?: string) => ({
   kind,

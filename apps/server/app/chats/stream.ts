@@ -15,7 +15,7 @@ import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf } from "./access";
 import { ChatBusLimitError, type LiveChatEvent } from "./bus";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { toMessageDtos } from "./messages";
 import type { ChatRouteDeps } from "./routes";
 import { getChat } from "./sessions";
@@ -129,7 +129,7 @@ export function chatStreamRoutes(deps: ChatStreamDeps): {
     [CHAT_STREAM_ROUTE]: requireAuth(deps.authenticator, async (req, res, identity, ctx) => {
       const chat = await loadChat(deps, identity, ctx);
       if (!chat) return notFound(res);
-      const conversationId = chatConversationId(identity.userId, chat.id);
+      const conversationId = legacyChatConversationId(identity.userId, chat.id);
       const principal = principalOf(identity);
       let status: Awaited<ReturnType<ChatRouteDeps["chat"]["conversations"]["status"]>>;
       try {

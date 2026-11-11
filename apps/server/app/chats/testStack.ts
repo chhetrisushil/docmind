@@ -11,7 +11,7 @@ import { FieldCrypto } from "../crypto/fields";
 import { type CompatReply, type FakeOpenAiCompat, startFakeOpenAiCompat } from "../llm/testing";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { subjectOfExecution } from "../subject";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { createChatLlm } from "./llm";
 import { ChatReasoningStore } from "./reasoningStore";
 import type { Passage } from "./retrieval";
@@ -161,7 +161,7 @@ async function buildChatStack<F extends { close(): Promise<void> }>(
     subjects,
     async start() {
       const { conversationId } = await chat.conversations.start({
-        conversationId: chatConversationId(U, C),
+        conversationId: legacyChatConversationId(U, C),
         principal: PRINCIPAL,
       });
       return conversationId;

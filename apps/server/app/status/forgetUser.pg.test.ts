@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ChatActivity } from "../chats/activity";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
 import { APP_PASSWORD, LOOM_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { InMemoryProgressBus } from "../documents/progress";
@@ -58,7 +58,7 @@ describe.skipIf(!PG_URL)(
       log.append(
         ...ingestRun(`u_${A}:ingest-${doc}`, "ready"),
         ...ingestRun(`u_${A}:chat-title-${chat}`, "started"),
-        evt(chatConversationId(A, chat), 0, "EXECUTION_STARTED", { input: {} }),
+        evt(legacyChatConversationId(A, chat), 0, "EXECUTION_STARTED", { input: {} }),
         ...ingestRun(`u_${B}:ingest-${randomUUID()}`, "ready"), // the other user of the same tenant
       );
       await status.boot();
@@ -115,7 +115,7 @@ describe.skipIf(!PG_URL)(
       // Started after boot: each model folds only its own executions live.
       const events = [
         ...ingestRun(`u_${U}:ingest-${doc2}`, "ready"),
-        evt(chatConversationId(U, chat2), 0, "EXECUTION_STARTED", { input: {} }),
+        evt(legacyChatConversationId(U, chat2), 0, "EXECUTION_STARTED", { input: {} }),
       ];
       log.append(...events);
       for (const e of events) {

@@ -13,7 +13,7 @@ import { type IngestStack, startIngestStack } from "../documents/ingestStack";
 import { subjectOfExecution } from "../subject";
 import { DOC, SENTENCE, SIG, collectUntil, isReply, scriptChat } from "./e2eSupport";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 
 const WAIT = 60_000;
 const QUESTION = "When is payment due?";
@@ -207,7 +207,7 @@ describe.skipIf(!PG_URL)(
         //    Every raw stream is scanned (the conversation, the ingest of the document, the title flow), not only the chat's.
         const ids = (await st.durable.raw.eventStore.listExecutions?.()) ?? []; // an empty list fails the next line
         const raw = (await Promise.all(ids.map((id) => st.durable.raw.eventStore.read(id)))).flat();
-        expect(ids).toContain(chatConversationId(ada.userId, chat.id));
+        expect(ids).toContain(legacyChatConversationId(ada.userId, chat.id));
         expect(raw.length).toBeGreaterThan(5);
         assertNoPlaintext(raw, [
           QUESTION,
@@ -255,7 +255,7 @@ describe.skipIf(!PG_URL)(
         expect(keySubjects.filter((s) => /^sbj-/.test(s))).toHaveLength(1);
         expect(await st.keys.get(bob.userId)).toBeNull();
         const opened = JSON.stringify(
-          await st.durable.sealed.eventStore.read(chatConversationId(ada.userId, chat.id)),
+          await st.durable.sealed.eventStore.read(legacyChatConversationId(ada.userId, chat.id)),
         );
         expect(opened).toContain(QUESTION);
         const items = await st.db.owner.query(
@@ -284,7 +284,7 @@ describe.skipIf(!PG_URL)(
         // 10. the production stack seals snapshots too (Task 147b's testStack sealed none): whatever Loom
         //     snapshotted for this conversation holds none of the secrets in the clear
         const snapshot = await st.durable.raw.snapshotStore.loadLatest(
-          chatConversationId(ada.userId, chat.id),
+          legacyChatConversationId(ada.userId, chat.id),
         );
         expect(snapshot?.state).toMatchObject({ aad: "loom-snap-v1" }); // there is a snapshot, and its state is sealed
         const snapshotJson = JSON.stringify(snapshot);

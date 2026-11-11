@@ -7,7 +7,7 @@ import type { LlmProvider, LlmRequest } from "@loom/llm";
 import { InMemoryContentStore } from "@loom/plugin-content";
 import { afterEach, describe, expect, it } from "vitest";
 import { recoveryOwns } from "../../bootIngest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { buildApp } from "../../config";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { legacyIngestId, legacyVisualizeId } from "../../opaqueIds/testing";
@@ -232,7 +232,7 @@ describe("recovering an interrupted visualize execution", () => {
     expect(recoveryOwns(legacyIngestId(u, d, 2))).toBe(true);
     expect(recoveryOwns(legacyVisualizeId(u, d, 1))).toBe(true);
     expect(recoveryOwns(legacyVisualizeId(u, d, 7))).toBe(true);
-    expect(recoveryOwns(chatConversationId(u, d))).toBe(true);
+    expect(recoveryOwns(legacyChatConversationId(u, d))).toBe(true);
     expect(recoveryOwns(`u_${u}:visualize-not-a-uuid`)).toBe(false);
     expect(recoveryOwns(`u_${u}:erasure-${d}`)).toBe(false);
   });

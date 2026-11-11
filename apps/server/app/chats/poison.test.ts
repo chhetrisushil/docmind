@@ -9,12 +9,12 @@ import { INGEST_STATUS_MODEL } from "../status/model";
 import { MemoryLog, evt, ingestRun } from "../status/testing";
 import { flowSteps, statusSensitive } from "../status/wire";
 import { CHAT_ACTIVITY_MODEL, ChatActivity } from "./activity";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 
 const U = randomUUID();
 const C = randomUUID();
 const D = randomUUID();
-const CONV = chatConversationId(U, C);
+const CONV = legacyChatConversationId(U, C);
 const TITLE = `u_${U}:chat-title-${C}`;
 const INGEST = `u_${U}:ingest-${D}`;
 

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, seedDoc } from "../documents/testHarness";
 import { DELETED_DOCUMENT } from "./citations";
-import { chatConversationId } from "./ids";
+import { legacyChatConversationId } from "./ids";
 import { readHistoryPage, turnKeyOf } from "./messages";
 import { type ChatHarness, seedChat, startChatServer } from "./testHarness";
 import type { ChatRef, StoredPassage } from "./turnItems";
@@ -37,7 +37,7 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
     await Promise.all([h.close(), short.close(), noKey.close()]);
   });
 
-  const convOf = (chatId: string) => chatConversationId(ALICE.userId, chatId);
+  const convOf = (chatId: string) => legacyChatConversationId(ALICE.userId, chatId);
 
   it("returns the user's question and the answer with its citations, reasoning and tool steps merged from the side table", async () => {
     const chatId = await seedChat(h, ALICE);

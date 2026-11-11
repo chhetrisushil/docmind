@@ -6,7 +6,7 @@ import type { EventEnvelope } from "@loom/core";
 import { InMemoryAsyncEventStore } from "@loom/event-runtime";
 import { InMemoryKeyStore } from "@loom/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
-import { chatConversationId } from "../chats/ids";
+import { legacyChatConversationId } from "../chats/ids";
 import { loomWarn } from "../config";
 import { legacyIds } from "../opaqueIds";
 import {
@@ -70,8 +70,8 @@ describe("userSubjectOf", () => {
     for (const executionId of [
       executionIdFor(A, "ingest-x"),
       executionIdFor(A, "chat-title-y"),
-      chatConversationId(A, CHAT),
-      `${chatConversationId(A, CHAT)}~3`,
+      legacyChatConversationId(A, CHAT),
+      `${legacyChatConversationId(A, CHAT)}~3`,
       `${executionIdFor(A, "ingest-x")}::step#0`,
     ])
       expect(userSubjectOf({ executionId })).toBe(A);
@@ -88,8 +88,8 @@ describe("hydrateSubjectIndex", () => {
     executionIdFor(A, "ingest-1"),
     executionIdFor(A, "ingest-1.2"),
     executionIdFor(A, "chat-title-1"),
-    chatConversationId(A, CHAT),
-    `${chatConversationId(A, CHAT)}~1`,
+    legacyChatConversationId(A, CHAT),
+    `${legacyChatConversationId(A, CHAT)}~1`,
     executionIdFor(B, "ingest-1"),
     "system-sweep",
     "__loom_erasure__",
@@ -161,7 +161,7 @@ describe("userShredder", () => {
   it("destroys the user's key and tombstones every named execution on the raw log", async () => {
     const keys = new InMemoryKeyStore();
     const raw = new InMemoryAsyncEventStore();
-    const [e1, e2] = [executionIdFor(A, "ingest-1"), chatConversationId(A, CHAT)];
+    const [e1, e2] = [executionIdFor(A, "ingest-1"), legacyChatConversationId(A, CHAT)];
     for (const id of [e1, e2]) {
       await raw.append(ev(id, 0, "EXECUTION_STARTED"));
       await raw.append(ev(id, 1, "EXECUTION_COMPLETED"));
@@ -240,7 +240,7 @@ describe("warningFor", () => {
   });
 
   it("redacts ids in an erasure coordinator notice and keeps the error class", () => {
-    const msg = `erasure coordinator: ShredIncompleteError: shredSubject("${A}"): failed (${executionIdFor(A, "ingest-1")}, ${chatConversationId(A, CHAT)}) — the request stays parked`;
+    const msg = `erasure coordinator: ShredIncompleteError: shredSubject("${A}"): failed (${executionIdFor(A, "ingest-1")}, ${legacyChatConversationId(A, CHAT)}) — the request stays parked`;
     expect(warningFor(msg)).toBe(
       'erasure coordinator: ShredIncompleteError: shredSubject("<id>"): failed (<id>, <id>) — the request stays parked',
     );
@@ -249,7 +249,7 @@ describe("warningFor", () => {
   it("redacts a quoted execution id of any shape, a bare uuid and an inbox stream id", () => {
     expect(warningFor('execution "title-abc": REFUSED')).toBe('execution "<id>": REFUSED');
     expect(warningFor(`user ${A.toUpperCase()} unknown`)).toBe("user <id> unknown");
-    expect(warningFor(`stream __loom_inbox__:${chatConversationId(A, CHAT)} stuck`)).toBe(
+    expect(warningFor(`stream __loom_inbox__:${legacyChatConversationId(A, CHAT)} stuck`)).toBe(
       "stream __loom_inbox__:<id> stuck",
     );
   });

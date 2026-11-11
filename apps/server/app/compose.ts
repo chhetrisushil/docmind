@@ -19,6 +19,7 @@ import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";
 import { authRoutes } from "./auth/routes";
 import { ChatActivity } from "./chats/activity";
+import { PgChatIds } from "./chats/chatIds";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID } from "./chats/ids";
 import type { ChatLlm } from "./chats/llm";
 import { pgCollaborators } from "./chats/pgCollaborators";
@@ -182,6 +183,7 @@ export function buildServer(options: ComposeOptions) {
   // The id module (R14): the per-user key cache and the handle store. Installed process-wide so the synchronous parsers (the status fold, the
   // stores' subject mapping) can read new-format ids; `bootIngest` warms it before anything runs. `executions` records each document's current ids.
   const ids = options.ids ?? new OpaqueIds(keys, new PgHandleStore(pool));
+  const chatIds = new PgChatIds(pool, ids);
   opaqueIds.install(ids);
   // Each document's current ingest and visualize execution ids (migration 0038), which the boot sweeps and the connections reader compare with the status rows.
   const executions = new PgExecutionRecorder(pool);
@@ -489,6 +491,7 @@ export function buildServer(options: ComposeOptions) {
               runtime: app.runtime,
               keys,
               ids,
+              chatIds,
               store: erasureStore,
               sql: pgErasureSql({
                 app: pool,
@@ -636,6 +639,8 @@ export function buildServer(options: ComposeOptions) {
     server,
     /** The id cache (installed process-wide): `bootIngest` warms it before the status model boots; tests build ids with it. */
     ids,
+    /** Builds a chat's Loom ids in the chat's own format (migration 0039). */
+    chatIds,
     /**
      * The visuals lineage's artifact store: Postgres under the per-user sealing wrapper, built once. Task 9 builds
      * `visualsLineage` over this; the raw `PgContentStore` is never exposed, so a `Lineage` cannot be built over plaintext.

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { TurnSettledEvent } from "@loom/conversation";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chatConversationId } from "../../chats/ids";
+import { legacyChatConversationId } from "../../chats/ids";
 import { OpaqueIds, opaqueIds } from "../../opaqueIds";
 import { testOpaqueIds } from "../../opaqueIds/testing";
 import type { TurnRead } from "./readTurn";
@@ -16,8 +16,8 @@ const cited: TurnRead = {
   citations: [{ passageId: "k", documentId: randomUUID() }],
 };
 const event = (over: Partial<TurnSettledEvent> = {}): TurnSettledEvent => ({
-  conversationId: chatConversationId(user, chat),
-  executionId: chatConversationId(user, chat),
+  conversationId: legacyChatConversationId(user, chat),
+  executionId: legacyChatConversationId(user, chat),
   turn: 2,
   ord: 4,
   status: "complete",
@@ -45,8 +45,8 @@ describe("turnToVisualize", () => {
   });
   it("resolves the chat of a rotated generation too", async () => {
     const e = event({
-      conversationId: chatConversationId(user, chat),
-      executionId: `${chatConversationId(user, chat)}~2`,
+      conversationId: legacyChatConversationId(user, chat),
+      executionId: `${legacyChatConversationId(user, chat)}~2`,
     });
     expect((await turnToVisualize(e, deps()))?.chatId).toBe(chat);
   });
