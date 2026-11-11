@@ -84,6 +84,17 @@ describe.skipIf(!PG_URL)("PgChatIds (needs DOCMIND_TEST_PG_URL)", () => {
     expect((await chatIds.forRef(ref(theirs, U1B)))?.format).toBe("legacy"); // another user's entry is untouched
   });
 
+  it("a forRef read in flight when forgetUser runs does not cache what it read", async () => {
+    const { chatIds } = make();
+    const mine = await chat(T1, U1, "legacy");
+    const ref = { tenantId: T1, userId: U1, chatId: mine.id };
+    const inFlight = chatIds.forRef(ref); // its query is still out
+    chatIds.forgetUser(U1);
+    expect((await inFlight)?.format).toBe("legacy"); // the read itself still answers
+    await fx.db.owner.query("DELETE FROM chat_sessions WHERE id = $1", [mine.id]);
+    expect(await chatIds.forRef(ref)).toBeNull(); // nothing was cached: asks the database, finds nothing
+  });
+
   it("answers null for an opaque chat whose owner's key is destroyed, and the legacy chat of that owner still builds", async () => {
     const { chatIds, ids, keys } = make();
     await ids.ensureUser({ tenantId: T1, userId: U1 });
