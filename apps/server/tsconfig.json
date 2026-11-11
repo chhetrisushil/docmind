@@ -12,6 +12,7 @@
     "**/pgFixture.ts",
     "**/ingestStack.ts",
     "**/e2eSupport.ts",
+    "**/visualsE2eSupport.ts",
     "**/testStack.ts",
     "dist"
   ]
