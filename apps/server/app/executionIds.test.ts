@@ -271,6 +271,11 @@ const MAY_CALL_LEGACY_CONVERSATION = new Set([
 ]);
 
 type CalleeRule = (callee: ts.Expression) => boolean;
+/**
+ * Flags property-access calls only (`x.conversation(...)`). Destructuring (`const { conversation } = ids`), aliasing (`const f = ids.conversation`),
+ * element access (`ids["conversation"](...)`) and aliased imports are out of its reach; the type-aware scan of `start` and `fork` above is
+ * what catches a start that takes an id from anywhere else.
+ */
 const isBuilderCall: CalleeRule = (callee) =>
   ts.isPropertyAccessExpression(callee) && CHAT_BUILDERS.has(callee.name.text);
 const isLegacyConversationCall: CalleeRule = (callee) =>

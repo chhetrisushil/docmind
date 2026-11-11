@@ -21,6 +21,7 @@ import {
   seedUser,
   waitErased,
 } from "./e2eSupport";
+import type { ErasureDeps } from "./eraser";
 
 const WAIT = 300_000;
 const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -506,12 +507,23 @@ describe.skipIf(!PG_URL)(
             stream.close();
           }
         };
+        const userTurns = async () =>
+          ListMessagesResponse.parse(
+            await (
+              await st.chatReq(login.cookie, "GET", `/api/chats/${user.chatId}/messages`)
+            ).json(),
+          ).items.filter((m) => m.role === "user").length;
+        const oldEvents = async () =>
+          (await st.durable.raw.eventStore.read(oldIds?.conversationId() as string)).length;
+        const [turnsBefore, eventsBefore] = [await userTurns(), await oldEvents()];
         await ask(user.chatId); // the old chat continues
         await ask(fresh.id); // the new chat answers
 
         const all = (await st.durable.raw.eventStore.listExecutions?.()) ?? [];
-        const oldConv = all.filter((id) => id.startsWith(`u_${user.userId}.c-${user.chatId}`));
-        expect(oldConv.length).toBeGreaterThanOrEqual(1); // one chat never mixes formats: only u_ ids belong to the old chat
+        // The old chat continued after the restart, in the old format: one more user message, and its own `u_` conversation grew.
+        expect(await userTurns()).toBe(turnsBefore + 1);
+        expect(await oldEvents()).toBeGreaterThan(eventsBefore);
+        expect(eventsBefore).toBeGreaterThan(0);
         const newIds = await st.runIds.chat(who, fresh.id);
         expect(newIds?.format).toBe("opaque");
         const handle = new RegExp(`^h_(${HANDLE})`).exec(
@@ -567,7 +579,26 @@ describe.skipIf(!PG_URL)(
     it(
       "a chat parked mid-turn when the erasure starts: the stop closes the h_ conversation and the erasure completes with nothing linkable",
       async () => {
-        const first = track(await startIngestStack({ chat: true }));
+        // The first stop is swallowed so the turn is still running when the eraser first asks Loom to shred (outcome "parked"); the stop it
+        // repeats after the park is the real one (the way `parkedErasure` of erasure.resume.e2e.pg.test.ts does it).
+        const outcomes: string[] = [];
+        let swallowed = false;
+        const wrap = (deps: ErasureDeps): ErasureDeps => ({
+          ...deps,
+          stopChat: async (identity, chatId) => {
+            if (!swallowed) {
+              swallowed = true;
+              return;
+            }
+            await deps.stopChat(identity, chatId);
+          },
+          eraseSubject: async (userId) => {
+            const r = await deps.eraseSubject(userId);
+            outcomes.push(r.outcome);
+            return r;
+          },
+        });
+        const first = track(await startIngestStack({ chat: true, wrapErasure: wrap }));
         const claude = first.claude;
         if (!claude) throw new Error("no fake Claude");
         const login = await first.signUpAndLogIn("parked@example.com");
@@ -596,6 +627,7 @@ describe.skipIf(!PG_URL)(
         user.executions = ((await first.durable.raw.eventStore.listExecutions?.()) ?? []).filter(
           (id) => namesUserForTest(id, user, handle) && !id.startsWith("__loom_ui_lineage__:"),
         );
+        expect(outcomes).toContain("parked"); // the control: the shred really parked behind the running h_ turn
         await assertErased(first, user, { tenantGone: true });
         expect(
           await rowsLinkingHandleToIds(first.db.owner, handle, [user.userId, user.chatId]),
