@@ -8,7 +8,7 @@ A signed-in user uploads documents, gets summaries and analysis, and asks questi
 documents in a chat that cites its sources. Each user's data is isolated per tenant and encrypted
 under a per-user key, so account erasure can be made final by destroying that key.
 
-Document storage, ingestion, linked retrieval, chat, account erasure and the web UI exist today (see Status).
+What exists today is listed under Features and Security and privacy below; Status tracks the milestones.
 
 #+begin_quote
 *Disclaimer:* the idea and product direction of DocMind are mine (Sushil Chhetri). The codebase is vibe coded: it
@@ -17,6 +17,72 @@ was written with Claude, Anthropic's AI coding assistant, working from my direct
 
 New to the code? Read [[file:docs/architecture.md][the architecture]] for how the system fits together, then
 [[file:docs/codebase-guide.md][the codebase guide]] for where to start reading and in what order.
+
+* Features
+
+Each line names what is built; the linked doc has the detail.
+
+- *Upload and library.* PDF, Word, text, Markdown, Org and image uploads, typed by their bytes, deduplicated, listed
+  newest first. Delete cancels the document's work, then removes its rows and file. Failed documents can be retried.
+- *Ingestion.* Parse, chunk, embed, analyze, summarize and link each document in a durable Loom flow that resumes
+  after a crash ([[file:docs/architecture.md][architecture]] §7). Images and scanned PDF pages go to a vision model when that role is on.
+- *Tags.* Hand-made tags plus model suggestions you accept or dismiss; filter the library by any or all of them
+  ([[file:docs/specs/2026-11-10-document-tags-design.md][spec]]).
+- *Chat over your documents.* Streamed answers that cite the passages they use, validated on read; the model's
+  reasoning is shown and stored; chats are named automatically, keep a rolling summary when long, and can be
+  scoped to all documents or the chat's own ([[file:docs/design/linked-retrieval.md][linked retrieval]]).
+- *Document visuals.* Charts and figure cards built from facts the model extracts, each fact kept only if every
+  number it states appears in the passages it cites ([[file:docs/specs/2026-11-08-document-visuals-design.md][spec]]).
+- *Structure diagrams.* An outline and an entity map derived without a model call, plus a timeline and named
+  relationships extracted by the model ([[file:docs/specs/2026-11-10-structure-diagrams-c1-design.md][c1]], [[file:docs/specs/2026-11-10-structure-diagrams-c2-design.md][c2]]).
+- *Connections.* Related documents and shared people, organisations and products across your library, read live,
+  with no extra model call ([[file:docs/specs/2026-11-08-document-connections-design.md][spec]]).
+- *Chat visuals.* A cited answer gets its own charts and cards; a Visualize button makes or remakes them
+  ([[file:docs/specs/2026-11-08-chat-visuals-design.md][spec]]).
+- *Pluggable models.* Ollama, Gemini or Claude, chosen per role (chat, title, summary, visuals, vision); a role left off is
+  skipped ([[file:docs/operations/llm-providers.md][runbook]]).
+- *Account erasure.* =DELETE /api/me= stops your work, destroys your key and deletes your rows and files; an
+  interrupted erasure resumes at boot.
+- *One UI, two surfaces.* The screens are loom-ui experiences compiled for the web (shipped) and the terminal
+  (tested, not shipped).
+
+* Security and privacy
+
+What DocMind guarantees, and where it stops. The full model is [[file:docs/architecture.md][architecture]] §6.
+
+- *Isolation.* Every request's tenant and user come from the session, never from the client. Postgres row-level
+  security scopes every row; the server's role owns nothing and cannot bypass it, and migrations run as a separate
+  owner role.
+- *Encryption at rest.* Each user has a data key wrapped by a master key. Loom's event log and snapshots, sensitive
+  columns (titles, tag names, facts, reasoning), and uploaded files are encrypted under it. Paths in the event log
+  that hold sensitive fields are registered in =apps/server/app/sensitive.ts=.
+- *Erasure by crypto-shredding.* Destroying the key (with a tombstone so it is never re-created) makes everything
+  sealed under it unreadable; the rows and files are then deleted.
+- *Opaque ids.* Documents and chats created since the opaque-ids release run under ids derived from a per-user key. Once the user is
+  erased, no execution id, lineage id, timer or log line links back to their user, document or chat ids
+  ([[file:docs/specs/2026-11-10-opaque-ids-design.md][spec]] §6).
+- *Accounts.* Passwords are hashed with argon2id (OWASP's minimum profile); sign-up and sign-in are throttled; the
+  session cookie is =HttpOnly= and =SameSite=Lax=; erasing the account needs the password.
+- *Untrusted files.* Types are decided by magic bytes, not names. Parsers run in a child process with CPU, memory,
+  size and decompression limits. Size and count quotas apply per file and per tenant, and concurrent uploads per user.
+- *Untrusted model input.* Document text is fenced as data. The chat tools are read-only and scoped by the
+  server, not by the model, and citations must match retrieved passages. A prompt injection can skew an answer,
+  but cannot read another user's data or take an action.
+- *Web.* An origin guard on state-changing routes, a strict CSP in production (no inline script or style, no
+  remote assets), limits on connections, bodies, uploads and streams. The browser stores only the theme.
+- *Logs.* Errors carry class names and routes, never ids, emails, values or content.
+
+Limits, stated plainly:
+- *Your model provider sees your content.* Passages, questions and tag names are sent to the provider configured
+  for each role. Only a local model keeps them on your machine; the default Ollama model (=-cloud=) runs on
+  Ollama's cloud ([[file:docs/operations/llm-providers.md][runbook]]).
+- *Older ids stay readable.* Documents and chats created before the opaque-ids deploy keep ids that contain UUIDs
+  for their whole life. Run counts and timing also remain after erasure.
+- *Visual digests.* Each visual keeps an unkeyed content hash after erasure. It holds no id and cannot be reversed,
+  but it can confirm a guessed visual.
+- *Sign-up reveals whether an address has an account* (no email verification; see Web UI).
+- *One server process.* Erasure clears cached keys in its own process only; more than one replica needs the fix in
+  [[file:docs/design/cloud-scaling.md][cloud scaling]] §4 first.
 
 * Status
 
@@ -33,6 +99,11 @@ Milestones follow [[file:docs/specs/2026-10-18-docmind-design.md][the design spe
 | M6        | Web UI (=apps/web=, =packages/experiences=)    | merged                         |
 | LLM       | Pluggable LLM providers (Ollama, Gemini, Claude per role), see [[file:docs/operations/llm-providers.md][the runbook]] | merged |
 | Visuals   | Document visuals: facts extracted by the =visuals= role, planned into a Visuals panel on the document detail | merged |
+| Connections | Live cross-document connections on the Visuals panel | merged |
+| Chat visuals | Charts and cards for cited chat answers | merged |
+| Structure | Outline, entity map, timeline and relationships | merged |
+| Tags      | Hand-made and suggested tags, library filter   | merged                         |
+| Opaque ids | No user, document or chat UUID in Loom ids after erasure | merged |
 | M7        | Hardening: e2e, retrieval eval, budgets, runbooks | planned                     |
 
 The =ingest-document= flow (version 3.0.0) parses, chunks, embeds, analyzes, summarizes and links each
@@ -71,14 +142,7 @@ Data flow as built:
    tombstones the read models, deletes the rows, deletes the blobs and finishes. An interrupted erasure
    resumes at boot. See Operations.
 
-Security model, in brief:
-- Per-tenant isolation through Postgres row-level security. The server connects as =docmind_app=,
-  which owns nothing and cannot bypass RLS; migrations run as the owner role.
-- A per-user data key (DEK) is stored wrapped by a master key (KEK). Loom's event log and snapshots
-  are sealed per user through =PostgresKeyStore=; blobs are enveloped per user.
-- Destroying a user's key makes their events, snapshots, sealed columns and blobs unreadable (crypto-shredding); =DELETE /api/me= does that and then deletes their rows and files.
-- Event paths holding sensitive fields are registered in =apps/server/app/sensitive.ts=; flow input
-  carries ids only, and passwords and secrets are kept out of logs.
+The security model is summarized under Security and privacy above.
 
 * Web UI
 
@@ -377,7 +441,7 @@ The backup and restore drill (restore into an empty database, verify, re-run era
 - A chat left on an old flow version is logged and left at recovery; a flow version bump needs the previous version registered beside the new one.
 - A title is skipped (and not retried) if the model is down or the first question is not recorded in time.
 - Search filtered by documents is exact; unfiltered search is approximate (HNSW with iterative scans). Chunks are searchable once embedded, whatever the document's status.
-- Erasure (M5) must also cover =chat_sessions=, =chat_turn_items=, =chat_reasoning_texts= and the =chat-activity= read-model rows, plus: the =ingest-status= and =chat-activity= read-model rows of chat and chat-title executions (their key and scope may be NULL, so purge by execution id prefix =u_<user>=), the Loom timers rows, the chat-title executions, and the conversation streams (destroying the user's key covers their content).
+- Documents and chats created before the opaque-ids deploy keep =u_<user>= ids for their whole life; erasure walks both id formats. See Security and privacy.
 - Documents that reached =ready= before flow 3.0.0 never get stats, summary, entities or links.
   Re-upload them; a re-ingest tool is planned for M7. There is no production data yet.
 - Parse retries use =LLM_RETRY= for every format (a crash is retried as patiently as a model outage).
