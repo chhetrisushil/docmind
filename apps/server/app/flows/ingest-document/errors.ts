@@ -9,7 +9,7 @@ import {
   ParseRejectedError,
   ParseTimeoutError,
 } from "@docmind/parsers";
-import { EmbeddingError } from "@loom/memory";
+import { EmbeddingError } from "@loomwork/memory";
 import { FieldKeyUnavailableError } from "../../crypto/fields";
 
 /** The document, its row or its blob is gone (deleted or erased while a step ran): stop quietly. */

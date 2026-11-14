@@ -3,17 +3,17 @@ import { AuthService, type Identity, PasswordAuthenticator } from "@docmind/auth
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import { createViews } from "@docmind/experiences";
 import { type ChunkVectorStore, PgChunkVectorStore } from "@docmind/vector-pg";
-import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
+import type { PrincipalCryptoOptions, StorageConfig } from "@loomwork/app";
 import {
   type TurnSettledEvent,
   createConversationReader,
   turnSettledObserver,
-} from "@loom/conversation";
-import type { EventEnvelope } from "@loom/core";
-import type { EventStore, TimerStore } from "@loom/event-runtime";
-import type { LlmProvider } from "@loom/llm";
-import type { KeyStore } from "@loom/plugin-crypto";
-import type { ReadModelStore } from "@loom/plugin-read-model";
+} from "@loomwork/conversation";
+import type { EventEnvelope } from "@loomwork/core";
+import type { EventStore, TimerStore } from "@loomwork/event-runtime";
+import type { LlmProvider } from "@loomwork/llm";
+import type { KeyStore } from "@loomwork/plugin-crypto";
+import type { ReadModelStore } from "@loomwork/plugin-read-model";
 import { Pool, type QueryConfig } from "pg";
 import { PgAuthStore } from "./auth/pgAuthStore";
 import { PgThrottle } from "./auth/pgThrottle";

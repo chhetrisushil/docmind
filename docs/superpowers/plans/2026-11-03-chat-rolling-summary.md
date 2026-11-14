@@ -6,7 +6,7 @@
 
 **Architecture:** Loom's `conversation$` already summarizes when `budget.summarizerToolId` is set; DocMind registers `createSummarizerEffect` on the bare chat provider and ships the summarizer as flow version 1.1.0 beside the unchanged 1.0.0 (Loom resumes each execution on the version it started on). The one place the summary would land in plaintext, the `…:summary-fit` decision's string `choice`, is handled by a DocMind event-store decorator that stores it as `{ docmindSummary: 1, text }` (so the existing `choice.text` seal applies) and restores the string on every read.
 
-**Tech Stack:** TypeScript (ESM), Node >= 22.13, vitest 2, Loom (`@loom/conversation`, `@loom/agent`, `@loom/event-runtime`, `@loom/plugin-crypto`, `@loom/conformance`), node-postgres, pnpm + turbo, biome.
+**Tech Stack:** TypeScript (ESM), Node >= 22.13, vitest 2, Loom (`@loomwork/conversation`, `@loomwork/agent`, `@loomwork/event-runtime`, `@loomwork/plugin-crypto`, `@loomwork/conformance`), node-postgres, pnpm + turbo, biome.
 
 **Spec:** `docs/specs/2026-11-03-chat-rolling-summary-design.md`
 
@@ -60,9 +60,9 @@
 Create `apps/server/app/chats/summaryChoice.test.ts`:
 
 ```ts
-import { runEventStoreDecoratorConformance } from "@loom/conformance";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { runEventStoreDecoratorConformance } from "@loomwork/conformance";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
 import { describe, expect, it } from "vitest";
 import {
   SummaryChoiceEventStore,
@@ -157,7 +157,7 @@ describe("SummaryChoiceEventStore", () => {
 runEventStoreDecoratorConformance("SummaryChoiceEventStore", (inner) => new SummaryChoiceEventStore(inner));
 ```
 
-Before running: check `InMemoryAsyncEventStore` is exported from `@loom/event-runtime` (grep `../loom/packages/event-runtime/src/index.ts`; `config.test.ts` imports it) and that `@loom/conformance` is a devDependency of `apps/server` (`apps/server/package.json`). If not, add `"@loom/conformance": "*"` to `devDependencies` (it is linked by `pnpm-workspace.yaml`'s overrides) and run `pnpm install` from the repo root. Check `readFrom`'s semantics in `../loom/packages/event-runtime/src/types.ts` (inclusive `fromSequence`?) and adjust the `readFrom` expectation to it.
+Before running: check `InMemoryAsyncEventStore` is exported from `@loomwork/event-runtime` (grep `../loom/packages/event-runtime/src/index.ts`; `config.test.ts` imports it) and that `@loomwork/conformance` is a devDependency of `apps/server` (`apps/server/package.json`). If not, add `"@loomwork/conformance": "*"` to `devDependencies` (it is linked by `pnpm-workspace.yaml`'s overrides) and run `pnpm install` from the repo root. Check `readFrom`'s semantics in `../loom/packages/event-runtime/src/types.ts` (inclusive `fromSequence`?) and adjust the `readFrom` expectation to it.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -169,17 +169,17 @@ Expected: FAIL, `Failed to resolve import "./summaryChoice"`.
 Create `apps/server/app/chats/summaryChoice.ts`, modelled on Loom's `TenantScopedEventStore` (`../loom/packages/event-runtime/src/TenantScopedEventStore.ts`, its plan at lines ~126-173):
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import {
   type DecoratorPlan,
   type EventStore,
   type OptionalEventStoreMethod,
   installOptional,
-} from "@loom/event-runtime";
+} from "@loomwork/event-runtime";
 
 /**
  * The decision under which Loom's conversation records the trimmed rolling summary (`conv#o<ord>:summary-fit`,
- * `@loom/conversation`). Its `choice` is the summary STRING, which no sealed path can reach without also sealing
+ * `@loomwork/conversation`). Its `choice` is the summary STRING, which no sealed path can reach without also sealing
  * every conversation record's `choice` (spec: docs/specs/2026-11-03-chat-rolling-summary-design.md §4).
  */
 export const SUMMARY_FIT_DECISION = /^conv#o[1-9][0-9]{0,8}:summary-fit$/;
@@ -292,7 +292,7 @@ export class SummaryChoiceEventStore implements EventStore {
 
 Notes for the implementer:
 - `installOptional` already copies `keys` (and the other structural markers) via `forwardStoreMarkers`; `subjectOf` / `senderSubjectOf` are not markers, hence the two explicit copies. Assigning to `readonly` fields in the constructor is fine in TypeScript.
-- Check the real import locations: `EventEnvelope` may live in `@loom/core` or `@loom/event-runtime`; `DecoratorPlan`, `OptionalEventStoreMethod`, `installOptional` must be exported from `@loom/event-runtime`'s index (grep it). Use whatever the existing code in `apps/server/app` imports (`erasure/compliance.ts` imports `EventStore` from `@loom/event-runtime`).
+- Check the real import locations: `EventEnvelope` may live in `@loomwork/core` or `@loomwork/event-runtime`; `DecoratorPlan`, `OptionalEventStoreMethod`, `installOptional` must be exported from `@loomwork/event-runtime`'s index (grep it). Use whatever the existing code in `apps/server/app` imports (`erasure/compliance.ts` imports `EventStore` from `@loomwork/event-runtime`).
 - If the EventStore interface has other REQUIRED methods than `append`, `read`, `readFrom`, `subscribe`, `close` (check `../loom/packages/event-runtime/src/types.ts` around lines 400-670), implement each: write paths rewrite, read paths restore, everything else forwards. Report any you add.
 - If the conformance kit reports a forwarding problem for `readAtRest`/`copyPrefix` as "forward", follow the kit; a refusal must carry a reason and be justified in the report.
 
@@ -351,7 +351,7 @@ In `apps/server/app/config.test.ts`, inside the test "composes under strict mode
     expect(shape.senderSubjectOf).toBe(sealing.senderSubjectOf);
 ```
 
-with imports `import { SummaryChoiceEventStore } from "./chats/summaryChoice";` and `import { EncryptingEventStore } from "@loom/plugin-crypto";` (if not already imported). Keep the existing `expect(app.stores.eventStore).toBe(storage.eventStore)`.
+with imports `import { SummaryChoiceEventStore } from "./chats/summaryChoice";` and `import { EncryptingEventStore } from "@loomwork/plugin-crypto";` (if not already imported). Keep the existing `expect(app.stores.eventStore).toBe(storage.eventStore)`.
 
 The new `output.summary` sealed path needs no test here: Task 3's raw-log proof asserts it on a real evicting chat.
 
@@ -527,7 +527,7 @@ Expected: FAIL (`CHAT_SUMMARIZER_TOOL_ID` missing; no summarizer call).
 `apps/server/app/chats/ids.ts`:
 
 ```ts
-/** The rolling summary of evicted turns (`@loom/conversation` `budget.summarizerToolId`, Loom's `createSummarizerEffect`). */
+/** The rolling summary of evicted turns (`@loomwork/conversation` `budget.summarizerToolId`, Loom's `createSummarizerEffect`). */
 export const CHAT_SUMMARIZER_TOOL_ID = "chat-summarize";
 export const CHAT_EFFECT_IDS: readonly string[] = [CHAT_MODEL_TOOL_ID, CHAT_SUMMARIZER_TOOL_ID, ...CHAT_TOOL_IDS];
 ```
@@ -584,7 +584,7 @@ export const CHAT_EFFECT_IDS: readonly string[] = [CHAT_MODEL_TOOL_ID, CHAT_SUMM
     effects[CHAT_SUMMARIZER_TOOL_ID] = createSummarizerEffect(o.llm.provider, { maxTokens: SUMMARY_MAX_TOKENS });
 ```
 
-  with `import { createSummarizerEffect } from "@loom/agent";`, `import { CHAT_SUMMARIZER_TOOL_ID } from "./ids";` (beside the existing `CHAT_MODEL_TOOL_ID` import) and `SUMMARY_MAX_TOKENS` added to the existing `./agent` import.
+  with `import { createSummarizerEffect } from "@loomwork/agent";`, `import { CHAT_SUMMARIZER_TOOL_ID } from "./ids";` (beside the existing `CHAT_MODEL_TOOL_ID` import) and `SUMMARY_MAX_TOKENS` added to the existing `./agent` import.
 
 If Loom refuses two registered versions of one flow id at `defineConfig`/`registerFlow`, STOP and report BLOCKED with the error: the rollout design depends on it.
 
@@ -635,7 +635,7 @@ Find where the stack builds its env for chat settings and `prepareChat` (grep `p
 
 - [ ] **Step 2: Write the acceptance tests (failing until wired)**
 
-Create `apps/server/app/chats/summary.e2e.pg.test.ts` with `describe.skipIf(!PG_URL)(…)` and the teardown pattern of `snapshots/prune.e2e.pg.test.ts` (track stacks, dbs, roots; 40 s per-test timeouts). Tests (each asserts that eviction really happened by counting summarizer requests on the fake, identified by `DEFAULT_SUMMARIZER_INSTRUCTION` from `@loom/agent` in the request's `system`):
+Create `apps/server/app/chats/summary.e2e.pg.test.ts` with `describe.skipIf(!PG_URL)(…)` and the teardown pattern of `snapshots/prune.e2e.pg.test.ts` (track stacks, dbs, roots; 40 s per-test timeouts). Tests (each asserts that eviction really happened by counting summarizer requests on the fake, identified by `DEFAULT_SUMMARIZER_INSTRUCTION` from `@loomwork/agent` in the request's `system`):
 
 1. **Evicts, summarizes, carries the summary, survives a restart.** Stack with `chat: true, env: { DOCMIND_CHAT_CONTEXT_TOKENS, DOCMIND_CHAT_MAX_TOKENS }` (the values Task 3 settled on), a user, a ready document, a chat of enough long turns to evict. The fake answers summarizer requests with a sentinel summary and chat requests with normal replies. Assert: at least one summarizer request; its transcript contains an evicted turn's question; the sentinel never appears in any chat stream frame (`collectUntil` frames) — the summary is not streamed; the next chat request's messages contain the sentinel; `loom.events` (read via `st.db.owner`) contains no row whose payload text includes the sentinel. Then `close({ keepDb: true })`, restart with `resume`, send one more turn: it answers (no `FlowDivergenceError` in the reply status or logs) and its request still contains the sentinel.
 2. **The inbox archive stays sealed through the decorator.** After test 1's chat (or a fresh one with a rotation: `rotateEveryTurns` is a `prepareChat` seam; if the ingest stack cannot set it, assert on whatever archive rows the chat produced), every `loom.archive_segments` row for the user has `body.envelopes = []` and a sealed `body.sealed.box` (`__loomEnc === "loom/aes-256-gcm"`). If the chat produced no archive rows, say so in the report and assert instead that `durable.storage.eventStore` exposes the sealing store's `keys`/`subjectOf`/`senderSubjectOf` (Task 2 already asserts this; then this case is covered there).

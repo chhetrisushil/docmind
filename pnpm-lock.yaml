@@ -163,34 +163,34 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@loom/agent': link:../loom/packages/agent
-  '@loom/app': link:../loom/packages/app
-  '@loom/classify': link:../loom/packages/classify
-  '@loom/compliance': link:../loom/packages/compliance
-  '@loom/cli': link:../loom/tools/cli
-  '@loom/conformance': link:../loom/packages/conformance
-  '@loom/conversation': link:../loom/packages/conversation
-  '@loom/core': link:../loom/packages/core
-  '@loom/effect-runtime': link:../loom/packages/effect-runtime
-  '@loom/event-runtime': link:../loom/packages/event-runtime
-  '@loom/fair-scheduler': link:../loom/packages/fair-scheduler
-  '@loom/knowledge': link:../loom/packages/knowledge
-  '@loom/llm': link:../loom/packages/llm
-  '@loom/memory': link:../loom/packages/memory
-  '@loom/plugin-content': link:../loom/plugins/content
-  '@loom/plugin-conversation-sse': link:../loom/plugins/conversation-sse
-  '@loom/plugin-crypto': link:../loom/plugins/crypto
-  '@loom/plugin-postgres': link:../loom/plugins/postgres
-  '@loom/plugin-read-model': link:../loom/plugins/read-model
-  '@loom/workflow-runtime': link:../loom/packages/workflow-runtime
-  '@loom/blueprint-runtime': link:../loom/packages/blueprint-runtime
-  '@loom/projection-runtime': link:../loom/packages/projection-runtime
-  '@loom-ui/core': link:../loom-ui/packages/core
-  '@loom-ui/hydration': link:../loom-ui/packages/hydration
-  '@loom-ui/lineage': link:../loom-ui/packages/lineage
-  '@loom-ui/planner': link:../loom-ui/packages/planner
-  '@loom-ui/renderer-lit': link:../loom-ui/packages/renderer-lit
-  '@loom-ui/renderer-terminal': link:../loom-ui/packages/renderer-terminal
+  '@loomwork/agent': link:../loom/packages/agent
+  '@loomwork/app': link:../loom/packages/app
+  '@loomwork/classify': link:../loom/packages/classify
+  '@loomwork/compliance': link:../loom/packages/compliance
+  '@loomwork/cli': link:../loom/tools/cli
+  '@loomwork/conformance': link:../loom/packages/conformance
+  '@loomwork/conversation': link:../loom/packages/conversation
+  '@loomwork/core': link:../loom/packages/core
+  '@loomwork/effect-runtime': link:../loom/packages/effect-runtime
+  '@loomwork/event-runtime': link:../loom/packages/event-runtime
+  '@loomwork/fair-scheduler': link:../loom/packages/fair-scheduler
+  '@loomwork/knowledge': link:../loom/packages/knowledge
+  '@loomwork/llm': link:../loom/packages/llm
+  '@loomwork/memory': link:../loom/packages/memory
+  '@loomwork/plugin-content': link:../loom/plugins/content
+  '@loomwork/plugin-conversation-sse': link:../loom/plugins/conversation-sse
+  '@loomwork/plugin-crypto': link:../loom/plugins/crypto
+  '@loomwork/plugin-postgres': link:../loom/plugins/postgres
+  '@loomwork/plugin-read-model': link:../loom/plugins/read-model
+  '@loomwork/workflow-runtime': link:../loom/packages/workflow-runtime
+  '@loomwork/blueprint-runtime': link:../loom/packages/blueprint-runtime
+  '@loomwork/projection-runtime': link:../loom/packages/projection-runtime
+  '@loomwork/ui-core': link:../loom-ui/packages/core
+  '@loomwork/ui-hydration': link:../loom-ui/packages/hydration
+  '@loomwork/ui-lineage': link:../loom-ui/packages/lineage
+  '@loomwork/ui-planner': link:../loom-ui/packages/planner
+  '@loomwork/ui-renderer-lit': link:../loom-ui/packages/renderer-lit
+  '@loomwork/ui-renderer-terminal': link:../loom-ui/packages/renderer-terminal
 
 importers:
 
@@ -254,64 +254,64 @@ importers:
       '@docmind/vector-pg':
         specifier: workspace:*
         version: link:../../packages/vector-pg
-      '@loom-ui/core':
+      '@loomwork/ui-core':
         specifier: link:../../../loom-ui/packages/core
         version: link:../../../loom-ui/packages/core
-      '@loom-ui/lineage':
+      '@loomwork/ui-lineage':
         specifier: link:../../../loom-ui/packages/lineage
         version: link:../../../loom-ui/packages/lineage
-      '@loom-ui/planner':
+      '@loomwork/ui-planner':
         specifier: link:../../../loom-ui/packages/planner
         version: link:../../../loom-ui/packages/planner
-      '@loom/agent':
+      '@loomwork/agent':
         specifier: link:../../../loom/packages/agent
         version: link:../../../loom/packages/agent
-      '@loom/app':
+      '@loomwork/app':
         specifier: link:../../../loom/packages/app
         version: link:../../../loom/packages/app
-      '@loom/classify':
+      '@loomwork/classify':
         specifier: link:../../../loom/packages/classify
         version: link:../../../loom/packages/classify
-      '@loom/compliance':
+      '@loomwork/compliance':
         specifier: link:../../../loom/packages/compliance
         version: link:../../../loom/packages/compliance
-      '@loom/conversation':
+      '@loomwork/conversation':
         specifier: link:../../../loom/packages/conversation
         version: link:../../../loom/packages/conversation
-      '@loom/core':
+      '@loomwork/core':
         specifier: link:../../../loom/packages/core
         version: link:../../../loom/packages/core
-      '@loom/effect-runtime':
+      '@loomwork/effect-runtime':
         specifier: link:../../../loom/packages/effect-runtime
         version: link:../../../loom/packages/effect-runtime
-      '@loom/fair-scheduler':
+      '@loomwork/fair-scheduler':
         specifier: link:../../../loom/packages/fair-scheduler
         version: link:../../../loom/packages/fair-scheduler
-      '@loom/knowledge':
+      '@loomwork/knowledge':
         specifier: link:../../../loom/packages/knowledge
         version: link:../../../loom/packages/knowledge
-      '@loom/llm':
+      '@loomwork/llm':
         specifier: link:../../../loom/packages/llm
         version: link:../../../loom/packages/llm
-      '@loom/memory':
+      '@loomwork/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
-      '@loom/plugin-content':
+      '@loomwork/plugin-content':
         specifier: link:../../../loom/plugins/content
         version: link:../../../loom/plugins/content
-      '@loom/plugin-conversation-sse':
+      '@loomwork/plugin-conversation-sse':
         specifier: link:../../../loom/plugins/conversation-sse
         version: link:../../../loom/plugins/conversation-sse
-      '@loom/plugin-crypto':
+      '@loomwork/plugin-crypto':
         specifier: link:../../../loom/plugins/crypto
         version: link:../../../loom/plugins/crypto
-      '@loom/plugin-postgres':
+      '@loomwork/plugin-postgres':
         specifier: link:../../../loom/plugins/postgres
         version: link:../../../loom/plugins/postgres
-      '@loom/plugin-read-model':
+      '@loomwork/plugin-read-model':
         specifier: link:../../../loom/plugins/read-model
         version: link:../../../loom/plugins/read-model
-      '@loom/workflow-runtime':
+      '@loomwork/workflow-runtime':
         specifier: link:../../../loom/packages/workflow-runtime
         version: link:../../../loom/packages/workflow-runtime
       busboy:
@@ -324,13 +324,13 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@loom/cli':
+      '@loomwork/cli':
         specifier: link:../../../loom/tools/cli
         version: link:../../../loom/tools/cli
-      '@loom/conformance':
+      '@loomwork/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
-      '@loom/event-runtime':
+      '@loomwork/event-runtime':
         specifier: link:../../../loom/packages/event-runtime
         version: link:../../../loom/packages/event-runtime
       '@types/busboy':
@@ -360,16 +360,16 @@ importers:
       '@lit/context':
         specifier: ^1.1.3
         version: 1.1.6
-      '@loom-ui/core':
+      '@loomwork/ui-core':
         specifier: link:../../../loom-ui/packages/core
         version: link:../../../loom-ui/packages/core
-      '@loom-ui/hydration':
+      '@loomwork/ui-hydration':
         specifier: link:../../../loom-ui/packages/hydration
         version: link:../../../loom-ui/packages/hydration
-      '@loom-ui/renderer-lit':
+      '@loomwork/ui-renderer-lit':
         specifier: link:../../../loom-ui/packages/renderer-lit
         version: link:../../../loom-ui/packages/renderer-lit
-      '@loom/projection-runtime':
+      '@loomwork/projection-runtime':
         specifier: link:../../../loom/packages/projection-runtime
         version: link:../../../loom/packages/projection-runtime
       '@phosphor-icons/core':
@@ -385,7 +385,7 @@ importers:
       '@docmind/experiences':
         specifier: workspace:*
         version: link:../../packages/experiences
-      '@loom-ui/renderer-terminal':
+      '@loomwork/ui-renderer-terminal':
         specifier: link:../../../loom-ui/packages/renderer-terminal
         version: link:../../../loom-ui/packages/renderer-terminal
       '@types/node':
@@ -419,14 +419,14 @@ importers:
 
   packages/blob-store:
     dependencies:
-      '@loom/plugin-content':
+      '@loomwork/plugin-content':
         specifier: link:../../../loom/plugins/content
         version: link:../../../loom/plugins/content
-      '@loom/plugin-crypto':
+      '@loomwork/plugin-crypto':
         specifier: link:../../../loom/plugins/crypto
         version: link:../../../loom/plugins/crypto
     devDependencies:
-      '@loom/conformance':
+      '@loomwork/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
       '@types/node':
@@ -448,14 +448,14 @@ importers:
 
   packages/embeddings:
     dependencies:
-      '@loom/memory':
+      '@loomwork/memory':
         specifier: link:../../../loom/packages/memory
         version: link:../../../loom/packages/memory
       zod:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@loom/conformance':
+      '@loomwork/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
       '@types/node':
@@ -470,29 +470,29 @@ importers:
       '@docmind/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@loom-ui/core':
+      '@loomwork/ui-core':
         specifier: link:../../../loom-ui/packages/core
         version: link:../../../loom-ui/packages/core
-      '@loom-ui/hydration':
+      '@loomwork/ui-hydration':
         specifier: link:../../../loom-ui/packages/hydration
         version: link:../../../loom-ui/packages/hydration
-      '@loom-ui/planner':
+      '@loomwork/ui-planner':
         specifier: link:../../../loom-ui/packages/planner
         version: link:../../../loom-ui/packages/planner
-      '@loom/blueprint-runtime':
+      '@loomwork/blueprint-runtime':
         specifier: link:../../../loom/packages/blueprint-runtime
         version: link:../../../loom/packages/blueprint-runtime
-      '@loom/core':
+      '@loomwork/core':
         specifier: link:../../../loom/packages/core
         version: link:../../../loom/packages/core
       zod:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
-      '@loom-ui/renderer-terminal':
+      '@loomwork/ui-renderer-terminal':
         specifier: link:../../../loom-ui/packages/renderer-terminal
         version: link:../../../loom-ui/packages/renderer-terminal
-      '@loom/projection-runtime':
+      '@loomwork/projection-runtime':
         specifier: link:../../../loom/packages/projection-runtime
         version: link:../../../loom/packages/projection-runtime
       '@types/node':
@@ -504,7 +504,7 @@ importers:
 
   packages/keystore-pg:
     dependencies:
-      '@loom/plugin-crypto':
+      '@loomwork/plugin-crypto':
         specifier: link:../../../loom/plugins/crypto
         version: link:../../../loom/plugins/crypto
       pg:
@@ -523,11 +523,11 @@ importers:
 
   packages/llm-anthropic:
     dependencies:
-      '@loom/llm':
+      '@loomwork/llm':
         specifier: link:../../../loom/packages/llm
         version: link:../../../loom/packages/llm
     devDependencies:
-      '@loom/conformance':
+      '@loomwork/conformance':
         specifier: link:../../../loom/packages/conformance
         version: link:../../../loom/packages/conformance
       '@types/node':

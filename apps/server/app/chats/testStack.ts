@@ -3,9 +3,9 @@ import {
   type StreamScript,
   startFakeAnthropic,
 } from "@docmind/llm-anthropic/testing";
-import { followConversation } from "@loom/conversation";
-import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+import { followConversation } from "@loomwork/conversation";
+import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loomwork/event-runtime";
+import { EncryptingEventStore, InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";
 import { type CompatReply, type FakeOpenAiCompat, startFakeOpenAiCompat } from "../llm/testing";

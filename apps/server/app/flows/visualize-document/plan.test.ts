@@ -6,10 +6,10 @@ import {
   visualCapabilities,
 } from "@docmind/experiences";
 import { LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import { ReferencePlanner, checkPlannerConformance } from "@loom-ui/planner";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { ReferencePlanner, checkPlannerConformance } from "@loomwork/ui-planner";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { legacyIds } from "../../opaqueIds";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -239,7 +239,7 @@ describe("plannerUnavailable pins the planner's finding shape", () => {
       [FIGURE],
       recording(),
     );
-    // If @loom-ui/planner changes these codes or the message prefix, this fails loudly (and plannerUnavailable with it).
+    // If @loomwork/ui-planner changes these codes or the message prefix, this fails loudly (and plannerUnavailable with it).
     expect(plan.findings.map((f) => [f.code, f.severity])).toEqual([
       ["model-error", "error"],
       ["plan-failed", "error"],

@@ -1,7 +1,7 @@
 import type { DocumentStats, DocumentSummary } from "@docmind/contracts";
 import { ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
-import { HashingEmbeddingProvider } from "@loom/memory";
+import { HashingEmbeddingProvider } from "@loomwork/memory";
 import { isBase64Of } from "../../crypto/fields";
 import { INGEST_GENERATION } from "../../documents/ingest";
 import { legacyIngestId } from "../../opaqueIds/testing";

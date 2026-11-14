@@ -51,7 +51,7 @@ Rejected alternatives:
 ## 3. Repo layout
 
 The repo is a pnpm workspace using Turborepo, Biome and Vitest. It gets Loom via `link:../loom`
-until `@loom/*` is published to a registry.
+until `@loomwork/*` is published to a registry.
 
 ```
 apps/
@@ -64,7 +64,7 @@ packages/
   experiences/ loom-ui experiences (the six views, providers, reshapers), surface-neutral
   contracts/   zod schemas + types for the HTTP API (server ⇄ web)
   auth/        Authenticator interface + password/session implementation
-  keystore-pg/ PostgresKeyStore (implements @loom/plugin-crypto KeyStore)
+  keystore-pg/ PostgresKeyStore (implements @loomwork/plugin-crypto KeyStore)
   parsers/     DocumentParser registry, one file per format
   embeddings/  EmbeddingProvider implementations (Ollama default)
   llm-anthropic/ loom `llm` provider on fetch (streaming, reasoning, refusals)
@@ -84,11 +84,11 @@ Dependency rules:
 |---|---|---|---|
 | `Authenticator` | packages/auth | `authenticate(req) → {tenantId, userId} \| null` | email+password, HTTP-only session cookie |
 | `DocumentParser` | packages/parsers | `accepts(mime, ext)`, `parse(bytes) → ParsedDocument` | one per format (§5.3) |
-| `EmbeddingProvider` | `@loom/memory` | `modelId`, `dimensions`, `embed(texts)` | Ollama `nomic-embed-text` |
+| `EmbeddingProvider` | `@loomwork/memory` | `modelId`, `dimensions`, `embed(texts)` | Ollama `nomic-embed-text` |
 | `ChunkVectorStore` | packages/vector-pg | `upsert`, `missing`, `search(…, {documentIds?})`, `vectors`, `neighbours` over the `chunks` rows (Loom's `VectorIndex` cannot add a vector for an id that has no row, and has no document scope) | pgvector. Search uses the HNSW index with iterative scans, so **pgvector 0.8.0 or newer is a boot requirement** (`verify` fails the boot below it). A search filtered by `documentIds` is exact; an unfiltered one is approximate. Which of several chunks with exactly equal scores fill the last places of `limit` is unspecified (an index scan does not break ties); returned hits are still ordered by score then id. |
-| `ContentStore` | `@loom/plugin-content` | put/get by content address | encrypted filesystem |
-| `KeyStore` | `@loom/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
-| `LlmProvider` | `@loom/llm` (`llm` seam) | `complete` / `stream` | Providers: `packages/llm-anthropic` (Claude), Loom's `OpenAiProvider` (Ollama) and `GeminiProvider`, built per role by `apps/server/app/llm` and wrapped by a bounding layer (timeout, token cap, errors mapped by status only; the error classes live in `@docmind/llm-anthropic` for historical reasons). The Claude provider is on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). It never sends `temperature` (the 5.x models answer 400 to any non-default value). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors. Non-streaming from M3 (summaries, vision), streaming and reasoning from M4 |
+| `ContentStore` | `@loomwork/plugin-content` | put/get by content address | encrypted filesystem |
+| `KeyStore` | `@loomwork/plugin-crypto` | `getOrCreate / get / destroy` | Postgres, DEKs wrapped by a KEK |
+| `LlmProvider` | `@loomwork/llm` (`llm` seam) | `complete` / `stream` | Providers: `packages/llm-anthropic` (Claude), Loom's `OpenAiProvider` (Ollama) and `GeminiProvider`, built per role by `apps/server/app/llm` and wrapped by a bounding layer (timeout, token cap, errors mapped by status only; the error classes live in `@docmind/llm-anthropic` for historical reasons). The Claude provider is on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). It never sends `temperature` (the 5.x models answer 400 to any non-default value). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors. Non-streaming from M3 (summaries, vision), streaming and reasoning from M4 |
 | `ChatSessionStore` | apps/server | `list`, `rename`, `delete` | `chat_sessions` table plus the `chat-activity` folded model; no projection writes to Postgres |
 | `PassageReader`, `LinkReader`, `Retriever` | apps/server | owner-scoped reads of passages and links, and the linked retrieval of `docs/design/linked-retrieval.md` | Postgres through `withTenant` |
 
@@ -98,21 +98,21 @@ Each interface has **one shared conformance test suite** that every implementati
 
 | Need | Loom package |
 |---|---|
-| Composition root, compliance/erasure | `@loom/app` `defineConfig`, `app.eraseSubject` |
-| Durable flows, steps, logged non-determinism | `@loom/core` |
-| ReAct agent loop (`agentLoop$` through `conversation$`), delta chunking | `@loom/agent` |
-| LLM effects, provider interface, untrusted-input guard | `@loom/llm` (its Anthropic provider is replaced by `packages/llm-anthropic`, §6.5) |
-| Idempotent sync, grounding, `checkCitations` on the markers DocMind extracts (chunking is app-local: `@loom/knowledge` has no overlap, offsets or token budget) | `@loom/knowledge` |
-| Embedding/vector-index interfaces, `recallRelevant` | `@loom/memory` |
-| Multi-turn conversations (`createConversations`, `followConversation`, `ConversationHub`), history reader, barge-in (`inboxBargeIn`, wrapped by `stoppableBargeIn`), token-window rotation | `@loom/conversation` |
-| Model reasoning (ADR 0133) | `@loom/llm`: `createAgentModelEffect(..., { reasoning })` captures, `ConversationHub.reasoningSink` streams, `Conversations.reasoningTarget` plus `readReasoningBounded` read it back. DocMind supplies the `ReasoningStore`, sealed under the owner's key. |
-| `frame` and `SseSink` only: DocMind serves its own SSE routes | `@loom/plugin-conversation-sse` |
-| Event store | `@loom/plugin-postgres` |
-| Blob seam, GC of unpinned content | `@loom/plugin-content` |
-| Encrypting event and snapshot stores, `shredSubject` | `@loom/plugin-crypto` |
+| Composition root, compliance/erasure | `@loomwork/app` `defineConfig`, `app.eraseSubject` |
+| Durable flows, steps, logged non-determinism | `@loomwork/core` |
+| ReAct agent loop (`agentLoop$` through `conversation$`), delta chunking | `@loomwork/agent` |
+| LLM effects, provider interface, untrusted-input guard | `@loomwork/llm` (its Anthropic provider is replaced by `packages/llm-anthropic`, §6.5) |
+| Idempotent sync, grounding, `checkCitations` on the markers DocMind extracts (chunking is app-local: `@loomwork/knowledge` has no overlap, offsets or token budget) | `@loomwork/knowledge` |
+| Embedding/vector-index interfaces, `recallRelevant` | `@loomwork/memory` |
+| Multi-turn conversations (`createConversations`, `followConversation`, `ConversationHub`), history reader, barge-in (`inboxBargeIn`, wrapped by `stoppableBargeIn`), token-window rotation | `@loomwork/conversation` |
+| Model reasoning (ADR 0133) | `@loomwork/llm`: `createAgentModelEffect(..., { reasoning })` captures, `ConversationHub.reasoningSink` streams, `Conversations.reasoningTarget` plus `readReasoningBounded` read it back. DocMind supplies the `ReasoningStore`, sealed under the owner's key. |
+| `frame` and `SseSink` only: DocMind serves its own SSE routes | `@loomwork/plugin-conversation-sse` |
+| Event store | `@loomwork/plugin-postgres` |
+| Blob seam, GC of unpinned content | `@loomwork/plugin-content` |
+| Encrypting event and snapshot stores, `shredSubject` | `@loomwork/plugin-crypto` |
 | Sandboxed execution of parsers | none: `@docmind/parsers` `ParseRunner` (child process, §5.2) |
-| Per-tenant fair scheduling | `@loom/fair-scheduler` |
-| Test harness, evals | `@loom/testing`, `loom eval` |
+| Per-tenant fair scheduling | `@loomwork/fair-scheduler` |
+| Test harness, evals | `@loomwork/testing`, `loom eval` |
 | Chat transcript state, Lit widgets | loom-ui `ChatFeed`, `chatSource`, `lu-chat`, `lu-inputs`, `lu-media`, `lu-data-table`, `lu-note` |
 
 ## 4. Data model, tenancy and erasure
@@ -121,7 +121,7 @@ Each interface has **one shared conformance test suite** that every implementati
 
 | Data | Store |
 |---|---|
-| Chats | Chat messages: Loom event log (`@loom/conversation`). Citations and tool steps: sealed `chat_turn_items`, merged on read. Model reasoning: Loom's ADR 0133 capture; the readable text is a sealed `chat_reasoning_texts` row, the signatures are sealed in the log. |
+| Chats | Chat messages: Loom event log (`@loomwork/conversation`). Citations and tool steps: sealed `chat_turn_items`, merged on read. Model reasoning: Loom's ADR 0133 capture; the readable text is a sealed `chat_reasoning_texts` row, the signatures are sealed in the log. |
 | Ingestion progress | Loom event log (ingest flow). A document's status is the `ingest-status` folded read model's state (a document with no row is `uploaded`); there is no `documents.status` column. |
 | Original files | `ContentStore`, path `<tenant>/<user>/<sha256>`, encrypted |
 | Everything else | Postgres tables (§4.2) |
@@ -321,7 +321,7 @@ the same transaction, so chunks always derive from the current parsed row. A sup
 | **chunk** | App-local section-bounded chunker (`chunker.ts`). Chunks respect section boundaries: ~600 tokens with ~15% overlap. Each chunk carries its `locator`. |
 | **embed** | Batches of 64 → `EmbeddingProvider` → `ChunkVectorStore.upsert` (onto the existing chunk rows), idempotent by `chunkId`. The event log records `{count, model}`, never the vectors. |
 | **analyze** | Deterministic and local: word and page counts, reading time (230 words/min), language (stop-word vote over 8 languages, else null), outline (depth ≤ 2, ≤ 50 entries), notable dates and numbers (≤ 20 each). Stored sealed in `documents.stats_enc`. Word segmentation (`Intl.Segmenter`) is synchronous. |
-| **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loom/llm` `guardRequest` and `fenceUntrustedMedia`. With the summary provider `off`, summaries are skipped. |
+| **summarize** | Map-reduce. Consecutive sections are packed into groups of ≤ 24,000 characters, one request each (4 at a time), then one reduce request returns structured JSON: `tldr, keyPoints[], entities[], topics[], suggestedQuestions[]`. At most `DOCMIND_SUMMARY_MAX_CHARS` (default 400,000) of text is summarized. Entities are stored per owner. Document text is passed as **untrusted** input through `@loomwork/llm` `guardRequest` and `fenceUntrustedMedia`. With the summary provider `off`, summaries are skipped. |
 | **link** | Writes `chunk_links`: `structure` (next chunk within a section 0.9; other chunks of a section of at most 8 chunks 0.6), `similar` (5 nearest chunks of the owner's other documents, score ≥ 0.80; exact vector scans until M4, an index search from M4), `entity` (shared entity, weight 1/(1+ln n)) and `reference` (another document's title, ≥ 8 characters, as a whole phrase: 0.7). Owner-scoped, top 24 links per chunk. The LLM fallback for ambiguous references is M7, beside the retrieval eval. |
 | **finalize** | Set `status=ready`. |
 
@@ -337,7 +337,7 @@ the same transaction, so chunks always derive from the current parsed row. A sup
 - Deleting a document cancels its flow. A delete cancels every generation first.
 - Entity writes take a per-owner shared advisory lock, and a delete's orphan-entity purge the exclusive one; link writes take a per-owner exclusive advisory lock. Both link foreign keys are transient failures (never `document_gone`).
 
-**Scaling.** `@loom/fair-scheduler` caps ingestion concurrency per tenant. In v1 the server and its flow
+**Scaling.** `@loomwork/fair-scheduler` caps ingestion concurrency per tenant. In v1 the server and its flow
 engine run as ONE process per database. Recovery of interrupted ingests assumes it: the boot pass has no
 grace period, and an execution whose flow definition changed is given up (failed) by whichever node finds
 it. Running several nodes or a separate worker is therefore not a configuration change: it first needs
@@ -407,7 +407,7 @@ Five tools. Chunks are searchable once embedded, whatever the document's status.
 - **Citation requirement.** The system prompt requires claims to cite `[[<chunk id>]]` and to answer
   "not found in your documents" when retrieval is weak. Falling back to general knowledge is a config
   flag, off by default.
-- **Validation.** Validation and citation building happen on read (`citeReply`) through `@loom/knowledge` `checkCitations`. The stored text is the model's raw reply; the shown text has ungrounded markers removed.
+- **Validation.** Validation and citation building happen on read (`citeReply`) through `@loomwork/knowledge` `checkCitations`. The stored text is the model's raw reply; the shown text has ungrounded markers removed.
 - **Rendering.** Valid citations become numbered markers with source cards (document, page or heading,
   snippet) and are stored in the message metadata.
 
@@ -416,7 +416,7 @@ Five tools. Chunks are searchable once embedded, whatever the document's status.
 - **Untrusted input.** Document text is untrusted, the tools have no side effects, and Loom's
   capability ring grants the agent only these tools. A prompt injection in a document can skew an
   answer but cannot leak data or act.
-- **Determinism.** LLM calls go through `@loom/llm` effects and tool calls are journaled frames of `agentLoop$` (not `ctx.decide` / `recallRelevant`), so a replay serves recorded results.
+- **Determinism.** LLM calls go through `@loomwork/llm` effects and tool calls are journaled frames of `agentLoop$` (not `ctx.decide` / `recallRelevant`), so a replay serves recorded results.
 - **Cost.** The system prompt and tool definitions come first, followed by a prompt-cache breakpoint;
   per-turn content comes after it (breakpoints on the system block and the last message). Usage is recorded, not yet budgeted (M7 item 47).
 - **Errors:**
@@ -432,7 +432,7 @@ The chat shows the model's reasoning.
   `thinking: {type: "adaptive", display: "summarized"}`. The raw chain of thought is never exposed by
   the API on any model.
 - **Provider.** Loom's `AnthropicProvider` sends no `thinking` setting, sends no effort or cache breakpoints, maps `stop_reason: "refusal"` to `end_turn` and puts the response body in its errors. DocMind adds
-  `packages/llm-anthropic`, which implements Loom's `llm` interface on `fetch` with its own byte-capped SSE reader, not the SDK (open question 7). It streams, reports `refusal` with its `stop_details`, sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`), places cache breakpoints, never sends `temperature`, and implements Loom's ADR 0133 reasoning contract. It is a candidate for upstreaming into `@loom/llm` later.
+  `packages/llm-anthropic`, which implements Loom's `llm` interface on `fetch` with its own byte-capped SSE reader, not the SDK (open question 7). It streams, reports `refusal` with its `stop_details`, sets `output_config.effort` from route config (Opus 5.5 defaults to `medium`), places cache breakpoints, never sends `temperature`, and implements Loom's ADR 0133 reasoning contract. It is a candidate for upstreaming into `@loomwork/llm` later.
 - **As built with other providers.** Ollama's gemma (through Loom's `OpenAiProvider`, with `reasoning_effort` sent so the model reasons) returns its own reasoning text, not a summary. Loom records it as kind `text` and it shows under the same Thinking row. Effort maps to `reasoning_effort` (`low`, `medium`, `high`; `max` becomes `high`). A reply never ends in a refusal outcome and nothing meters usage. The chat cannot run on Gemini (Loom's `GeminiProvider` does not stream). The error classes live in `@docmind/llm-anthropic` for historical reasons.
 - **Reasoning follows Loom's ADR 0133.** The provider returns the model's summarized thinking and the order of its blocks. Loom records the signatures in the log, keeps the readable text in a sidecar store (DocMind's, sealed under the owner's key), sends the signed blocks back unchanged within one tool loop and drops them on any edit. A restart in the middle of a loop keeps them because both live in durable storage. What the API returns with `display: "summarized"` is a summary, never the raw chain of thought, and is shown as such. Across turns the history is text only, which the API accepts. A refused or stopped reply keeps no durable reasoning.
 - **Stream.** DocMind's own SSE (H2) shows `reasoning` and `reasoning-partial`, `tool` and `tool-reset` (for example "Searched documents: 'Q3 revenue' → 8 passages"), and `answer` deltas; see §6.1. History carries the same as `ChatMessageDto.reasoning`.
@@ -447,7 +447,7 @@ The chat shows the model's reasoning.
 **Stack.** Vite, Lit and loom-ui. DocMind's views are loom-ui experiences, composed once on the server in
 `packages/experiences` (a semantic catalogue, sealed and compiled per surface, hydrated across the trust boundary
 with identity-bound readers) and run by `apps/server/app/ui`. `apps/web` is a thin web surface that draws them with
-the loom-ui Lit renderer and performs the surface-neutral intents of `@docmind/contracts` (`intentOf`). `@loom-ui/*`
+the loom-ui Lit renderer and performs the surface-neutral intents of `@docmind/contracts` (`intentOf`). `@loomwork/ui-*`
 and Loom's two browser runtimes are linked as built ESM through `link:` (CI checks loom-ui out at `LOOM_UI_REF`);
 `@docmind/contracts` is aliased to its source. Only browser-safe entry points are imported. The design is surface-agnostic: the same experiences compile for a
 terminal surface (proven by a test, not shipped; a terminal surface is planned).
@@ -515,7 +515,7 @@ acceptance test with happy-dom; Playwright is M7 item 45.
 |---|---|---|
 | Unit | Vitest | Parsers (fixtures), chunking, key store, citation mapping, contracts, stores |
 | Conformance | Vitest, one suite per interface | Every implementation of the §3.1 interfaces |
-| Flow / agent | `@loom/testing` with scripted LLM and embedder fakes | Crash-resume at each step, retries, failure states, tool sequences, citations |
+| Flow / agent | `@loomwork/testing` with scripted LLM and embedder fakes | Crash-resume at each step, retries, failure states, tool sequences, citations |
 | Integration | Vitest + Postgres/pgvector (runs when `DOCMIND_TEST_PG_URL` is set) | RLS isolation (including raw SQL as the app role), vector search, projections, erasure leaves nothing decryptable |
 | Component | Vitest + happy-dom | `dm-*` component states from the mocks |
 | E2E | Playwright | Sign up → upload → ready → ask → cited answer → reload → history intact |
@@ -637,7 +637,7 @@ Each milestone ends with something runnable.
 | Risk | Mitigation |
 |---|---|
 | `lu-chat` may lack an inline-citation hook | Settled by the M6 spike: generic loom-ui additions instead |
-| Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out the private `chhetrisushil/loom` at a pinned `LOOM_REF` using a read-only `LOOM_TOKEN` secret (as loom-ui does). Publishing `@loom/*` is tracked as platform work. |
+| Loom is consumed via `link:../loom` (breaks in standalone CI) | CI checks out the private `chhetrisushil/loom` at a pinned `LOOM_REF` using a read-only `LOOM_TOKEN` secret (as loom-ui does). Publishing `@loomwork/*` is tracked as platform work. |
 | conversation-sse runs its own HTTP server (no mountable handler) | Retired: DocMind serves its own chat SSE; only `frame` and `SseSink` come from the plugin |
 | pgvector below 0.8.0 has no iterative index scans | `verify` fails the boot as a `StartupConfigError` |
 | One process holds the stop registry, the stream partials and the hub (§5.2); a crash mid-turn re-runs the turn | The stream sends `reset`; one server per database |

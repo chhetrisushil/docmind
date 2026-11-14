@@ -1,7 +1,7 @@
 import type { ChatScope } from "@docmind/contracts";
 import { EmbeddingUnavailableError } from "@docmind/embeddings";
 import type { ChunkVectorStore, VectorScope } from "@docmind/vector-pg";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import type { LinkKind } from "../../flows/ingest-document/pgLinks";
 import { cosine, expandHops, hop2Frontier, mmr } from "./core";
 import type { LinkHop, LinkReader } from "./links";

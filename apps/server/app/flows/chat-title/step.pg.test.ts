@@ -1,5 +1,5 @@
 import { LlmAbortedError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmResponse } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { legacyChatConversationId } from "../../chats/ids";
 import { chatTitleBind, setTitle } from "../../chats/sessions";

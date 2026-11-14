@@ -1,6 +1,6 @@
 import { AnthropicMessagesProvider, LlmOutputError } from "@docmind/llm-anthropic";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PermanentIngestError } from "./errors";
 import { pngBytes } from "./imageFixtures";

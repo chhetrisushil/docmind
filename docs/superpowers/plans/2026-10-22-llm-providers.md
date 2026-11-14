@@ -6,9 +6,9 @@
 
 This is the owner's binding instruction: "make the required code changes; pick the gemini api key from genUI; use gemini only in the places it is required and if ollama gemma cloud model is enough then use that."
 
-**Architecture:** DocMind already talks to models through Loom's `LlmProvider` interface (`@loom/llm`); only the *construction* of providers is Anthropic-specific (`AnthropicMessagesProvider` from `packages/llm-anthropic`, built in four places). This plan adds one small module, `apps/server/app/llm/`, with three parts: a **role configuration** (`loadLlmRoles`: provider and model per role, validated at boot), a **provider factory** (`createRoleProvider`: Anthropic as today, or Loom's own `OpenAiProvider` pointed at Ollama, or Loom's own `GeminiProvider`) and a **bounding wrapper** (`bounded`: the timeout, the default `maxTokens` and the typed, content-free errors DocMind's retry logic already understands). **No new HTTP client is written**: Ollama and Gemini go through Loom's providers. Three small, generic gaps in those providers are fixed in Loom first (Tasks 201a to 201c, described without any DocMind wording): the OpenAI-compatible provider ignores the `reasoning` field Ollama returns and cannot request reasoning, no provider throws a typed HTTP error, and the Gemini provider cannot cap thinking tokens (they eat `maxOutputTokens`). Embeddings are untouched (Ollama `nomic-embed-text`, 768 dimensions).
+**Architecture:** DocMind already talks to models through Loom's `LlmProvider` interface (`@loomwork/llm`); only the *construction* of providers is Anthropic-specific (`AnthropicMessagesProvider` from `packages/llm-anthropic`, built in four places). This plan adds one small module, `apps/server/app/llm/`, with three parts: a **role configuration** (`loadLlmRoles`: provider and model per role, validated at boot), a **provider factory** (`createRoleProvider`: Anthropic as today, or Loom's own `OpenAiProvider` pointed at Ollama, or Loom's own `GeminiProvider`) and a **bounding wrapper** (`bounded`: the timeout, the default `maxTokens` and the typed, content-free errors DocMind's retry logic already understands). **No new HTTP client is written**: Ollama and Gemini go through Loom's providers. Three small, generic gaps in those providers are fixed in Loom first (Tasks 201a to 201c, described without any DocMind wording): the OpenAI-compatible provider ignores the `reasoning` field Ollama returns and cannot request reasoning, no provider throws a typed HTTP error, and the Gemini provider cannot cap thinking tokens (they eat `maxOutputTokens`). Embeddings are untouched (Ollama `nomic-embed-text`, 768 dimensions).
 
-**Tech Stack:** everything through M6, plus Loom's `OpenAiProvider` and `GeminiProvider` (already in `@loom/llm`), Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`), Gemini `generateContent`. **No new third-party dependency.**
+**Tech Stack:** everything through M6, plus Loom's `OpenAiProvider` and `GeminiProvider` (already in `@loomwork/llm`), Ollama's OpenAI-compatible endpoint (`/v1/chat/completions`), Gemini `generateContent`. **No new third-party dependency.**
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md`: §3.2 (reuse; the `LlmProvider` row), §5.2 (summarize, vision), §6.1 and §6.5 (chat, reasoning; this plan changes what produces the reasoning, not its contract), §8 (gates), §10 (risks). Task 210 records the as-built provider story there.
 
@@ -119,13 +119,13 @@ Everything in the M4, M5 and M6 plans' Global Constraints still binds. Restated,
 - **No key leaks across providers:** the Ollama provider is built with `apiKey: ""` (never `OPENAI_API_KEY`), the Gemini provider with the explicit `GEMINI_API_KEY` (never `GOOGLE_API_KEY`), and a test per provider proves what header the fake server saw.
 - **Tenancy rules on the server stay intact** (RLS, `withTenant`, owner scoping). This plan adds no table, no migration and no cross-tenant path.
 - **Embeddings stay on Ollama** (`nomic-embed-text`, 768 dimensions, `DOCMIND_EMBED_*`); nothing in this plan touches them.
-- **Dependencies:** none added. `apps/server` already depends on `@loom/llm` and `@docmind/llm-anthropic`.
+- **Dependencies:** none added. `apps/server` already depends on `@loomwork/llm` and `@docmind/llm-anthropic`.
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, Node `>=22.13.0`.
 
 ## Interface catalogue (binding names; every task uses exactly these)
 
 ```ts
-// Loom: packages/llm/src/errors.ts (Task 201b), exported from "@loom/llm"
+// Loom: packages/llm/src/errors.ts (Task 201b), exported from "@loomwork/llm"
 export type LlmHttpProvider = "anthropic" | "openai" | "gemini"
 export class LlmHttpError extends Error {
   readonly status: number; readonly provider: LlmHttpProvider
@@ -301,7 +301,7 @@ describe("OpenAiProvider reasoning on OpenAI-compatible servers", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loom/llm test -- openAiReasoningCompat` (Expected: FAIL: `res.reasoning` undefined for the `reasoning` field; `reasoning_effort` missing).
+- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loomwork/llm test -- openAiReasoningCompat` (Expected: FAIL: `res.reasoning` undefined for the `reasoning` field; `reasoning_effort` missing).
 - [ ] **Step 3: Implement.** In `OpenAiProvider.ts`:
 
 ```ts
@@ -370,7 +370,7 @@ describe("LlmHttpError", () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loom/llm test -- httpError` (Expected: FAIL: `../errors` missing).
+- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loomwork/llm test -- httpError` (Expected: FAIL: `../errors` missing).
 - [ ] **Step 3: Implement.** `errors.ts`:
 
 ```ts
@@ -393,7 +393,7 @@ export class LlmHttpError extends Error {
 
 Replace each `throw new Error(\`X API error ${resp.status}: ${await resp.text()}\`)` with `throw new LlmHttpError("x", resp.status, await resp.text())` (`"anthropic"` at the two Anthropic sites, `"openai"` at the two OpenAI sites, `"gemini"` at the one Gemini site); export `LlmHttpError` and `LlmHttpProvider` from `index.ts`.
 
-- [ ] **Step 4: Run to verify it passes** (new file plus the whole `@loom/llm` suite).
+- [ ] **Step 4: Run to verify it passes** (new file plus the whole `@loomwork/llm` suite).
 - [ ] **Step 5: Gate and commit.** `git commit -m "feat(llm): providers throw a typed LlmHttpError carrying the status"` (trailer). Draft PR.
 
 ### Task 201c (Loom repo): `GeminiProvider` can cap thinking
@@ -429,7 +429,7 @@ Replace each `throw new Error(\`X API error ${resp.status}: ${await resp.text()}
   });
 ```
 
-- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loom/llm test -- GeminiProvider` (Expected: FAIL).
+- [ ] **Step 2: Run to verify it fails.** `pnpm --filter @loomwork/llm test -- GeminiProvider` (Expected: FAIL).
 - [ ] **Step 3: Implement.** Add the config field with its doc comment, `private readonly thinkingBudget: number | undefined;`, validation in the constructor (`if (config.thinkingBudget !== undefined && !(Number.isInteger(config.thinkingBudget) && config.thinkingBudget >= 0)) throw new RangeError("thinkingBudget must be a non-negative integer");`), and replace the `includeThoughts` block of `buildBody` with:
 
 ```ts
@@ -461,7 +461,7 @@ Replace each `throw new Error(\`X API error ${resp.status}: ${await resp.text()}
 - [ ] **Step 1: Write the failing test.** `apps/server/app/llm/loomPin.test.ts`:
 
 ```ts
-import { GeminiProvider, LlmHttpError, OpenAiProvider } from "@loom/llm";
+import { GeminiProvider, LlmHttpError, OpenAiProvider } from "@loomwork/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -819,7 +819,7 @@ Then in `limits.ts` replace the body of `insecureBaseUrlWarning` with `return in
 - Test: `apps/server/app/llm/bounded.test.ts`
 
 **Interfaces:**
-- Consumes: the typed errors of `@docmind/llm-anthropic`; `LlmHttpError`, `UnsupportedModalityError`, `LlmProvider`, `LlmRequest`, `LlmStreamChunk` of `@loom/llm`.
+- Consumes: the typed errors of `@docmind/llm-anthropic`; `LlmHttpError`, `UnsupportedModalityError`, `LlmProvider`, `LlmRequest`, `LlmStreamChunk` of `@loomwork/llm`.
 - Produces: `mapLlmError`, `bounded` (catalogue). `bounded` returns a provider that exposes `capabilities` of the inner one, has `stream` only when the inner has it, forwards `warm`, fills `maxTokens` when a request has none, and bounds the whole call (a stream included) by `timeoutMs` through the request signal.
 
 - [ ] **Step 1: Write the failing test.** `bounded.test.ts`:
@@ -828,7 +828,7 @@ Then in `limits.ts` replace the body of `insecureBaseUrlWarning` with `return in
 import {
   LlmAbortedError, LlmOutputError, LlmRequestError, LlmStreamError, LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import { type LlmProvider, type LlmRequest, type LlmResponse, type LlmStreamChunk, LlmHttpError, UnsupportedModalityError } from "@loom/llm";
+import { type LlmProvider, type LlmRequest, type LlmResponse, type LlmStreamChunk, LlmHttpError, UnsupportedModalityError } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { bounded, mapLlmError } from "./bounded";
 
@@ -930,7 +930,7 @@ import {
 } from "@docmind/llm-anthropic";
 import {
   LlmHttpError, type LlmProvider, type LlmRequest, type LlmStreamChunk, UnsupportedModalityError,
-} from "@loom/llm";
+} from "@loomwork/llm";
 
 export interface BoundedOptions {
   maxTokens: number;
@@ -1156,7 +1156,7 @@ export async function startFakeOpenAiCompat(): Promise<FakeOpenAiCompat> {
 - Test: `apps/server/app/llm/factory.test.ts`
 
 **Interfaces:**
-- Consumes: `loadLlmRoles` and `RoleCallOptions` (Task 203), `bounded` (204), the fakes (205a), `AnthropicMessagesProvider` and `CallObserver` (`@docmind/llm-anthropic`), `OpenAiProvider`, `GeminiProvider`, `GEMINI_CAPABILITIES` (`@loom/llm`), `ChatEffort` (`../chats/settings`).
+- Consumes: `loadLlmRoles` and `RoleCallOptions` (Task 203), `bounded` (204), the fakes (205a), `AnthropicMessagesProvider` and `CallObserver` (`@docmind/llm-anthropic`), `OpenAiProvider`, `GeminiProvider`, `GEMINI_CAPABILITIES` (`@loomwork/llm`), `ChatEffort` (`../chats/settings`).
 - Produces: `createRoleProvider` (catalogue).
 
 - [ ] **Step 1: Write the failing test.** `factory.test.ts` (each test starts the fake it needs; helper `env(extra)` builds `{ DOCMIND_OLLAMA_URL: fake.url, ... }`):
@@ -1264,7 +1264,7 @@ describe("createRoleProvider", () => {
 
 ```ts
 import { AnthropicMessagesProvider, type CallObserver } from "@docmind/llm-anthropic";
-import { GeminiProvider, type LlmCapabilities, type LlmProvider, OpenAiProvider } from "@loom/llm";
+import { GeminiProvider, type LlmCapabilities, type LlmProvider, OpenAiProvider } from "@loomwork/llm";
 import type { ChatEffort } from "../chats/settings";
 import { StartupConfigError } from "../startupError";
 import { bounded } from "./bounded";

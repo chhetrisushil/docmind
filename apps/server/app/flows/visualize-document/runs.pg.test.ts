@@ -1,7 +1,7 @@
 import { factFormatFingerprint } from "@docmind/experiences";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import type { WorkflowRuntime } from "@loom/workflow-runtime";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import type { WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";

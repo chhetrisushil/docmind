@@ -4,9 +4,9 @@
 
 **Goal:** After M2, a signed-in user can upload a document (txt, md, org, doc, docx, pdf, png, jpg, webp) to `POST /api/documents`, list their documents (`GET /api/documents`, paged), read one (`GET /api/documents/:id`) and delete one (`DELETE /api/documents/:id`); the type is decided from magic bytes, the size and the tenant's quotas are enforced while the file streams in, identical bytes from the same user are stored once (found by a **keyed** fingerprint, not a plain hash), the original bytes are envelope-encrypted under the user's data key in a filesystem `ContentStore`, titles, filenames and (later) stats and summaries are encrypted in Postgres, and everything is tenant-isolated by row-level security and shaped so that the later `DELETE /api/me` can remove a user's rows, then blobs, then key. A stub `ingest-document` Loom flow is started after each new upload commits (spec §5.1 step 4) and cancelled when the document is deleted. M2 also closes the three M1 carry-forwards (sensitive event paths, `x:` and child execution ids, `executionIdFor`).
 
-**Architecture:** `packages/blob-store` implements Loom's `ContentStore` SPI (`@loom/plugin-content`) as one instance per user: bytes are addressed by `hmac-sha256:<fingerprint>`, where the fingerprint is HMAC-SHA256 of the plaintext under a key derived (HKDF) from the user's data key; they are sealed with a per-blob random key that is itself wrapped by the user's data key (from the `KeyStore`), and written atomically to `<root>/<tenant>/<user>/<fingerprint>`; a two-phase `stage()`/`commit()` lets the upload handler decide, inside a database transaction, whether the blob is kept. The server adds a `documents` table (migration 0009, RLS like every other table, `*_enc` columns including `stats_enc` sealed with Loom's `encryptValue` bound to the row and column), a streaming multipart reader on `busboy`, a pure magic-byte sniffer, per-tenant quotas checked under a per-tenant advisory lock, the four document routes behind `requireAuth`, and the `ingest-document` stub flow (`apps/server/app/flows/ingest-document/`) with an `IngestPort` that starts it (execution id `executionIdFor(userId, "ingest-" + documentId)`, input = ids only) after the upload transaction commits and cancels it before a delete.
+**Architecture:** `packages/blob-store` implements Loom's `ContentStore` SPI (`@loomwork/plugin-content`) as one instance per user: bytes are addressed by `hmac-sha256:<fingerprint>`, where the fingerprint is HMAC-SHA256 of the plaintext under a key derived (HKDF) from the user's data key; they are sealed with a per-blob random key that is itself wrapped by the user's data key (from the `KeyStore`), and written atomically to `<root>/<tenant>/<user>/<fingerprint>`; a two-phase `stage()`/`commit()` lets the upload handler decide, inside a database transaction, whether the blob is kept. The server adds a `documents` table (migration 0009, RLS like every other table, `*_enc` columns including `stats_enc` sealed with Loom's `encryptValue` bound to the row and column), a streaming multipart reader on `busboy`, a pure magic-byte sniffer, per-tenant quotas checked under a per-tenant advisory lock, the four document routes behind `requireAuth`, and the `ingest-document` stub flow (`apps/server/app/flows/ingest-document/`) with an `IngestPort` that starts it (execution id `executionIdFor(userId, "ingest-" + documentId)`, input = ids only) after the upload transaction commits and cancels it before a delete.
 
-**Tech Stack:** everything in M0 and M1, plus `busboy` ^1.6.0 and `@types/busboy` ^1.5.4 (multipart), `@loom/core` (flow, step and handler builders for the stub flow), and the Loom package `@loom/plugin-content` (the `ContentStore` SPI), all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db` like the others.
+**Tech Stack:** everything in M0 and M1, plus `busboy` ^1.6.0 and `@types/busboy` ^1.5.4 (multipart), `@loomwork/core` (flow, step and handler builders for the stub flow), and the Loom package `@loomwork/plugin-content` (the `ContentStore` SPI), all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db` like the others.
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout and interfaces, §4 tables, tenancy, quotas and crypto-shredding, §5.1 upload, §5.2 `ingest-document` flow, §6.1 conventions, §8 gates and PR rules, §9 M2 = items 9-11 and the start/cancel half of M3 item 14). M1 plan (model for structure, and source of the carry-forwards): `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m1-identity-and-keys.md`. Accepted direction for M3/M4 that M2 must not block: `/Users/such/workspace/docmind/docs/design/linked-retrieval.md`. Executors read all of them.
 
@@ -42,14 +42,14 @@ Read from the Loom checkout at `/Users/such/workspace/loom` (HEAD `8f9eab24`) an
 
 | Need | Real shape | Where |
 |---|---|---|
-| ContentStore SPI | `interface ContentStore { put(bytes: Uint8Array): Promise<ContentRef>; putStream?(stream: AsyncIterable<Uint8Array>): Promise<ContentRef>; get(ref): Promise<Uint8Array \| null>; getMany?; delete(ref): Promise<void>; deleteIfUntouchedSince?; listPage?; touchClock?; touch? }`. `ContentRef = { readonly __loomContent: string /* "sha256:<hex>" in the default scheme */; readonly size?: number; readonly codec?: string }`. `get` MUST return `null` (never throw) on absence; `delete` is idempotent physical erasure; `put` is idempotent by address. `contentAddress(bytes)` = `sha256:<hex>` of the bytes is a helper, not a requirement of the SPI; only `CachingContentStore` re-hashes, and only for addresses that start with `sha256:`. The SPI 1.3.0 optionals (`deleteIfUntouchedSince`, `listPage`, `touchClock`) are "all three or none". | `plugins/content/src/ContentStore.ts`, `content.ts`, `CachingContentStore.ts:146`; exported from `@loom/plugin-content` |
-| ContentStore contract suite | `runContentStoreConformance(factory: () => ContentStoreLike, label?, { clocked? })` from `@loom/conformance` (registers vitest tests: round trip, idempotent put, distinct refs, `get` of `sha256:deadbeef` is `null`, idempotent delete, `putStream` address equals `put` address, plus optional-method checks that are skipped when a method is absent). **It compares addresses only with each other** (equal for equal bytes, different for different bytes) and never recomputes `sha256` of the plaintext, so a keyed address passes; the one literal it uses is the absent ref `sha256:deadbeef`, which our `parseAddress` rejects, so `get` answers `null`. | `packages/conformance/src/index.ts:3039` |
-| Field envelope | `encryptValue(key: Buffer, value: unknown, aad?: { v: string; bind: string }): Envelope` and `decryptValue(key, envelope, bind?)` from `@loom/plugin-crypto`: AES-256-GCM, random IV, JSON value, AAD bound to a context string; `decryptValue` **passes a non-envelope through unchanged** (so DocMind checks the shape itself, Task 48). | `plugins/crypto/src/crypto.ts:76-120` |
+| ContentStore SPI | `interface ContentStore { put(bytes: Uint8Array): Promise<ContentRef>; putStream?(stream: AsyncIterable<Uint8Array>): Promise<ContentRef>; get(ref): Promise<Uint8Array \| null>; getMany?; delete(ref): Promise<void>; deleteIfUntouchedSince?; listPage?; touchClock?; touch? }`. `ContentRef = { readonly __loomContent: string /* "sha256:<hex>" in the default scheme */; readonly size?: number; readonly codec?: string }`. `get` MUST return `null` (never throw) on absence; `delete` is idempotent physical erasure; `put` is idempotent by address. `contentAddress(bytes)` = `sha256:<hex>` of the bytes is a helper, not a requirement of the SPI; only `CachingContentStore` re-hashes, and only for addresses that start with `sha256:`. The SPI 1.3.0 optionals (`deleteIfUntouchedSince`, `listPage`, `touchClock`) are "all three or none". | `plugins/content/src/ContentStore.ts`, `content.ts`, `CachingContentStore.ts:146`; exported from `@loomwork/plugin-content` |
+| ContentStore contract suite | `runContentStoreConformance(factory: () => ContentStoreLike, label?, { clocked? })` from `@loomwork/conformance` (registers vitest tests: round trip, idempotent put, distinct refs, `get` of `sha256:deadbeef` is `null`, idempotent delete, `putStream` address equals `put` address, plus optional-method checks that are skipped when a method is absent). **It compares addresses only with each other** (equal for equal bytes, different for different bytes) and never recomputes `sha256` of the plaintext, so a keyed address passes; the one literal it uses is the absent ref `sha256:deadbeef`, which our `parseAddress` rejects, so `get` answers `null`. | `packages/conformance/src/index.ts:3039` |
+| Field envelope | `encryptValue(key: Buffer, value: unknown, aad?: { v: string; bind: string }): Envelope` and `decryptValue(key, envelope, bind?)` from `@loomwork/plugin-crypto`: AES-256-GCM, random IV, JSON value, AAD bound to a context string; `decryptValue` **passes a non-envelope through unchanged** (so DocMind checks the shape itself, Task 48). | `plugins/crypto/src/crypto.ts:76-120` |
 | KeyStore | `getOrCreate(subjectId): Promise<Buffer>` (the raw 32-byte data key; refuses a destroyed subject), `get(subjectId): Promise<Buffer \| null>`, `destroy`, `wasDestroyed`. **The raw DEK is exposed**, so a purpose-specific key can be derived from it with HKDF (Node `crypto.hkdfSync`) and no `KeyStore` change or extra key table is needed. `InMemoryKeyStore` (no constructor arguments) is the test double. | `plugins/crypto/src/keystore.ts` |
 | Child execution ids | A `::`-derived child is `<parent>::<segment>`; a continue-as-new successor is `<root>~<n>`; a user-owned id is `u_<uuid>:<name>`. `subjectOfExecution` (M1) matches `^u_(uuid)(?::|$)`, so children and successors of a user's execution keep the user subject; Task 42 pins that with tests. | `apps/server/app/subject.ts` |
 | Sensitive event paths | `EncryptingEventStore` takes `sensitive: Record<eventType, string[]>`; `sensitivePathsFromSteps(steps)` derives `STEP_COMPLETED -> output.<path>` from `sensitive(...)` step output schemas (returns `{}` when none is marked). M1 passes `sensitive: {}`. | `plugins/crypto/src/EncryptingEventStore.ts`, `derive.ts` |
-| Flows | A flow is `{ definition: flow$({ id, name, version, inputSchema, outputSchema, steps }), runner }` (`RegisteredFlow` from `@loom/workflow-runtime`); a step is `step$({ id, name, inputSchema, outputSchema, handler: handler$(async (input, ctx) => ...) })` (`flow$`, `step$`, `handler$` from `@loom/core`; `ctx` carries `executionId`, `stepId`, `attempt`); the runner calls `ctx.run(step, input)`. `loom gen --dir app` (`pnpm --filter @docmind/server gen`) scans `app/flows/<name>/flow.ts` and writes `app/loom.gen.ts`, whose `flowModules` M0 already passes to `defineConfig`. Under `security.strict` the `authorizer` (a `GrantTable` keyed by **workflow id**) must list the step ids a flow may run (a step id doubles as its tool id). | `tools/scaffold/src/templates.ts` (flow and security templates), `packages/core/src/builders/step.ts`, `packages/app/src/registerFlows.ts` |
-| Start, idempotency, cancel | `runtime.start(flow, input, { executionId, principal })` returns an `ExecutionHandle` (`executionId`, `waitForCompletion`, `getState`, `cancel`) without waiting for the body. With a caller-chosen `executionId` start is **start-once**: a second start rejects with `ExecutionAlreadyExistsError` (exported from `@loom/workflow-runtime`) and nothing runs. `runtime.cancel(executionId, reason?, { principal })` cancels by id (aborts a live run, or fences then appends `EXECUTION_CANCELLED`); returns `true` if it cancelled, `false` if the execution was already terminal, and **throws `Error("No execution found for id: ...")`** for an unknown id. The M0 `executionAuthorizer` (`requireTenant: true`, `cancel: "owner"`) needs a principal `{ tenant, actor }`; the actor that started an execution owns it. | `packages/workflow-runtime/src/WorkflowRuntime.ts:2953` (`cancel`), `:3349` (`start`), `types.ts:405` (`RunOptions`), `types.ts:835`, `:1151` |
+| Flows | A flow is `{ definition: flow$({ id, name, version, inputSchema, outputSchema, steps }), runner }` (`RegisteredFlow` from `@loomwork/workflow-runtime`); a step is `step$({ id, name, inputSchema, outputSchema, handler: handler$(async (input, ctx) => ...) })` (`flow$`, `step$`, `handler$` from `@loomwork/core`; `ctx` carries `executionId`, `stepId`, `attempt`); the runner calls `ctx.run(step, input)`. `loom gen --dir app` (`pnpm --filter @docmind/server gen`) scans `app/flows/<name>/flow.ts` and writes `app/loom.gen.ts`, whose `flowModules` M0 already passes to `defineConfig`. Under `security.strict` the `authorizer` (a `GrantTable` keyed by **workflow id**) must list the step ids a flow may run (a step id doubles as its tool id). | `tools/scaffold/src/templates.ts` (flow and security templates), `packages/core/src/builders/step.ts`, `packages/app/src/registerFlows.ts` |
+| Start, idempotency, cancel | `runtime.start(flow, input, { executionId, principal })` returns an `ExecutionHandle` (`executionId`, `waitForCompletion`, `getState`, `cancel`) without waiting for the body. With a caller-chosen `executionId` start is **start-once**: a second start rejects with `ExecutionAlreadyExistsError` (exported from `@loomwork/workflow-runtime`) and nothing runs. `runtime.cancel(executionId, reason?, { principal })` cancels by id (aborts a live run, or fences then appends `EXECUTION_CANCELLED`); returns `true` if it cancelled, `false` if the execution was already terminal, and **throws `Error("No execution found for id: ...")`** for an unknown id. The M0 `executionAuthorizer` (`requireTenant: true`, `cancel: "owner"`) needs a principal `{ tenant, actor }`; the actor that started an execution owns it. | `packages/workflow-runtime/src/WorkflowRuntime.ts:2953` (`cancel`), `:3349` (`start`), `types.ts:405` (`RunOptions`), `types.ts:835`, `:1151` |
 
 ### This repo (M1, on `main`)
 
@@ -59,7 +59,7 @@ Read from the Loom checkout at `/Users/such/workspace/loom` (HEAD `8f9eab24`) an
 
 1. **busboy option and event names** (`defParamCharset`, `limits.*`, the `file` event signature `(name, stream, { filename })`, the `limit` event on the file stream, the `close` event). Written from busboy 1.6 documentation. If a name differs, adjust Task 51 only.
 2. **`runContentStoreConformance` accepting a store with none of the SPI 1.3.0 optionals.** The kit documents them as optional ("when supported"); if it does not, implement `touchClock`/`listPage`/`deleteIfUntouchedSince` over directory mtimes in Task 45a and say so in the PR. (The keyed `hmac-sha256:` address is *not* a risk here: the kit never recomputes a sha256, see the table above.)
-3. **`pnpm` resolving `@loom/plugin-content` and `@loom/core` through the new root overrides** (Task 43 adds the first, Task 53 the second, next to the others). If `pnpm install` complains, run it from the repo root with `--no-frozen-lockfile` once and commit the lockfile.
+3. **`pnpm` resolving `@loomwork/plugin-content` and `@loomwork/core` through the new root overrides** (Task 43 adds the first, Task 53 the second, next to the others). If `pnpm install` complains, run it from the repo root with `--no-frozen-lockfile` once and commit the lockfile.
 4. **Flow authoring names** (new): `flow$`/`step$`/`handler$` import paths and option names, `ctx.run(step, input)`, that `loom gen` emits `flowModules` entries for `app/flows/ingest-document/flow.ts` exporting `ingestDocumentFlow`, and that the `GrantTable` key is the workflow id (`ingest-document`) and the grant the step id (`ingest-begin`). Written from Loom's scaffold templates. If a name differs, adjust Task 53 only; the `IngestPort` hides the rest.
 5. **Start and cancel semantics** (new): that `runtime.start` resolves with a handle before the step body finishes (if it waits for completion, fire it without `await` in `loomIngest` and attach `.catch`, and say so in the PR); that a caller-chosen duplicate id rejects with `ExecutionAlreadyExistsError`; the option shape `{ executionId, principal: { tenant, actor } }` for start and `{ principal }` for cancel; and that "no such execution" is only detectable by the message `No execution found for id` (there is no typed error). If the message differs, `loomIngest.cancel` must still treat "unknown execution" as success: adjust the matcher in Task 54 and keep its test.
 6. **Process-global flow dependencies** (new): flows are static modules (`loom gen`), so the stub step reads its database access from a module-level holder (`setIngestDeps`). Test harnesses that coexist in one test file share the last one set; only tests that assert flow outcomes (Tasks 53, 56, 60) own the single live harness. If the executor finds a per-app injection point in `defineConfig`, prefer it and drop the holder.
@@ -415,11 +415,11 @@ gh pr create --draft --title "feat(server): event path registry, x: and child ex
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loom/plugin-content": "*",
-    "@loom/plugin-crypto": "*"
+    "@loomwork/plugin-content": "*",
+    "@loomwork/plugin-crypto": "*"
   },
   "devDependencies": {
-    "@loom/conformance": "*",
+    "@loomwork/conformance": "*",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
   }
@@ -451,11 +451,11 @@ gh pr create --draft --title "feat(server): event path registry, x: and child ex
 In the root `package.json`, add this line to `pnpm.overrides`, keeping the keys sorted as they are:
 
 ```json
-      "@loom/plugin-content": "link:../loom/plugins/content",
+      "@loomwork/plugin-content": "link:../loom/plugins/content",
 ```
 
 Run: `pnpm install`
-Expected: success; `packages/blob-store/node_modules/@loom/plugin-content` links to the Loom checkout.
+Expected: success; `packages/blob-store/node_modules/@loomwork/plugin-content` links to the Loom checkout.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -903,15 +903,15 @@ Expected: gate green; about 90 changed lines, 3 files.
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: { conditions: ["node", "require", "default"] },
   test: {
     environment: "node",
     server: {
       deps: {
-        external: [/@loom\//, /[\\/]loom[\\/]/],
+        external: [/@loomwork\//, /[\\/]loom[\\/]/],
         // Loom's conformance kits are ESM with extensionless imports, so Vite must load them.
-        inline: [/@loom\/conformance/, /[\\/]conformance[\\/]dist/],
+        inline: [/@loomwork\/conformance/, /[\\/]conformance[\\/]dist/],
       },
     },
   },
@@ -924,8 +924,8 @@ export default defineConfig({
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runContentStoreConformance } from "@loom/conformance";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { runContentStoreConformance } from "@loomwork/conformance";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 
@@ -967,8 +967,8 @@ import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ContentRef, ContentStore } from "@loom/plugin-content";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { ContentRef, ContentStore } from "@loomwork/plugin-content";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { addressOf, deriveFingerprintKey, fingerprintOf, parseAddress, sameFingerprint } from "./address";
 import { type BlobScope, openBytes, sealStream } from "./envelope";
 import { BlobCorruptError, BlobKeyUnavailableError, BlobTooLargeError } from "./errors";
@@ -1201,7 +1201,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { deriveFingerprintKey, fingerprintOf } from "./address";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
@@ -1333,7 +1333,7 @@ Expected: gate green; about 70 changed lines, 1 file.
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 import { eraseUserBlobs, removeStaleTemp } from "./maintenance";
@@ -1515,7 +1515,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { deriveFingerprintKey, fingerprintOf } from "./address";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
@@ -1899,7 +1899,7 @@ gh pr create --draft --title "feat(db): documents table with row-level security"
 - Create: `apps/server/app/crypto/fields.test.ts`
 
 **Interfaces:**
-- Consumes: `KeyStore` from `@loom/plugin-crypto` (the same instance the event store uses).
+- Consumes: `KeyStore` from `@loomwork/plugin-crypto` (the same instance the event store uses).
 - Produces:
   - `interface UserFieldCipher { seal(bind: string, value: unknown): Promise<unknown>; open(bind: string, envelope: unknown): Promise<unknown>; openText(bind: string, envelope: unknown): Promise<string> }`
   - `class FieldCrypto { constructor(keys: KeyStore); forUser(userId: string): UserFieldCipher }`: the key is fetched lazily and once per cipher (`seal` uses `getOrCreate`, `open` uses `get`); the AAD context is `<userId>|<bind>`.
@@ -1911,7 +1911,7 @@ gh pr create --draft --title "feat(db): documents table with row-level security"
 `apps/server/app/crypto/fields.test.ts`:
 
 ```ts
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto, FieldKeyUnavailableError } from "./fields";
 
@@ -1980,7 +1980,7 @@ Expected: FAIL (module not found).
 `apps/server/app/crypto/fields.ts`:
 
 ```ts
-import { type KeyStore, decryptValue, encryptValue } from "@loom/plugin-crypto";
+import { type KeyStore, decryptValue, encryptValue } from "@loomwork/plugin-crypto";
 
 const AAD_VERSION = "docmind-field-v1";
 
@@ -2865,7 +2865,7 @@ export const TEXT = (tag = "") => Buffer.from(`some plain text ${tag}\n`);
 `apps/server/app/documents/repo.pg.test.ts`:
 
 ```ts
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -3138,7 +3138,7 @@ Expected: gate green; about 190 changed lines, 3 files. `lockTenantForWrite` and
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
@@ -3274,7 +3274,7 @@ Owner decision 1: M2 starts the flow on upload. This task adds the flow itself; 
 - Create: `apps/server/app/flows/ingest-document/flow.test.ts`
 - Modify: `apps/server/app/security.ts` (one grant)
 - Modify: `apps/server/app/loom.gen.ts` (generated by `pnpm --filter @docmind/server gen`; not counted)
-- Modify: `apps/server/package.json` (add `"@loom/core": "*"` to `dependencies`) and root `package.json` (one `pnpm.overrides` line), `pnpm-lock.yaml` (not counted)
+- Modify: `apps/server/package.json` (add `"@loomwork/core": "*"` to `dependencies`) and root `package.json` (one `pnpm.overrides` line), `pnpm-lock.yaml` (not counted)
 
 **Interfaces:**
 - Consumes: M0/M1 `buildApp`, `executionIdFor`, `createDurableStorage`.
@@ -3284,12 +3284,12 @@ Owner decision 1: M2 starts the flow on upload. This task adds the flow itself; 
   - `ingestBeginStep` (id `ingest-begin`) and `ingestDocumentFlow: RegisteredFlow` (id `ingest-document`, version `1.0.0`, one step). The step only asks `documentExists`; it **writes nothing**, so `documents.status` stays `uploaded`. A document that is gone ends the execution `completed` with `{ outcome: "document_gone" }` (a clean stop, not an error and not a retry).
   - What M3 replaces: the `ingest-begin` step (see Deviation 7). The input schema, the execution-id convention, the grant mechanism and the guard stay.
 
-- [ ] **Step 1: Link `@loom/core`**
+- [ ] **Step 1: Link `@loomwork/core`**
 
-Add `"@loom/core": "*"` to `dependencies` in `apps/server/package.json`, and this line to the root `package.json` `pnpm.overrides`, keeping the keys sorted:
+Add `"@loomwork/core": "*"` to `dependencies` in `apps/server/package.json`, and this line to the root `package.json` `pnpm.overrides`, keeping the keys sorted:
 
 ```json
-      "@loom/core": "link:../loom/packages/core",
+      "@loomwork/core": "link:../loom/packages/core",
 ```
 
 Run: `pnpm install`
@@ -3301,8 +3301,8 @@ Expected: success.
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
-import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
+import { sensitivePathsFromSteps } from "@loomwork/plugin-crypto";
+import { ExecutionAlreadyExistsError } from "@loomwork/workflow-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -3432,8 +3432,8 @@ export function ingestDeps(): IngestDeps {
 `apps/server/app/flows/ingest-document/flow.ts`:
 
 ```ts
-import { flow$, handler$, step$ } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, handler$, step$ } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 import { ingestDeps } from "./deps";
 
@@ -3641,7 +3641,7 @@ describe("loomIngest", () => {
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
@@ -3710,7 +3710,7 @@ import {
   type ExecutionHandle,
   ExecutionAlreadyExistsError,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import { type IngestStartInput, ingestDocumentFlow } from "../flows/ingest-document/flow";
 import { executionIdFor } from "../subject";
 
@@ -3835,7 +3835,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EncryptedFsContentStore, deriveFingerprintKey, fingerprintOf } from "@docmind/blob-store";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool as PgPool } from "pg";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
@@ -4256,7 +4256,7 @@ Owner decision 1 / spec §5.1 step 4. The start happens **after** `withTenant` h
 
 - [ ] **Step 1: Extend the harness and write the failing tests**
 
-In `testHarness.ts`, add (imports: `type ExecutionHandle` from `@loom/workflow-runtime`, `buildApp` from `../config`, `resetIngestDeps`/`setIngestDeps` from `../flows/ingest-document/deps`, `pgIngestDeps` from `../flows/ingest-document/pgDeps`, `type IngestPort`/`loomIngest` from `./ingest`):
+In `testHarness.ts`, add (imports: `type ExecutionHandle` from `@loomwork/workflow-runtime`, `buildApp` from `../config`, `resetIngestDeps`/`setIngestDeps` from `../flows/ingest-document/deps`, `pgIngestDeps` from `../flows/ingest-document/pgDeps`, `type IngestPort`/`loomIngest` from `./ingest`):
 
 ```ts
 export interface IngestProbe {
@@ -5585,7 +5585,7 @@ import { AuthService, PasswordAuthenticator } from "@docmind/auth";
 import { EncryptedFsContentStore } from "@docmind/blob-store";
 import type { DocumentDto, ListDocumentsResponse, UploadDocumentResponse } from "@docmind/contracts";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import type { ExecutionHandle } from "@loom/workflow-runtime";
+import type { ExecutionHandle } from "@loomwork/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgAuthStore } from "../auth/pgAuthStore";

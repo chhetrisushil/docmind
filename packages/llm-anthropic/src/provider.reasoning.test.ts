@@ -4,7 +4,7 @@ import {
   type LlmStreamChunk,
   assembleStream,
   assistantMessageOf,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { allReleased, sseFetch } from "./__helpers__/bodyOf";
 import * as f from "./__helpers__/frames";

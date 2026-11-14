@@ -1,5 +1,5 @@
 import type { ChatReasoningDto } from "@docmind/contracts";
-import type { EffectContext } from "@loom/effect-runtime";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { type UserIdSource, existingUser } from "../documents/executionCandidates";
 import { type ChatIdFormat, type ChatIdResolver, legacyBuilders, opaqueBuilders } from "./chatIds";
 import { legacyChatConversationId } from "./ids";

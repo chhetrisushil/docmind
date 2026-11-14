@@ -1,6 +1,6 @@
 import { LlmRefusalError } from "@docmind/llm-anthropic";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import { MAX_READ_IDS } from "../../chats/retrieval/passages";
 import { isDocumentGone } from "../ingest-document/errors";
 import {

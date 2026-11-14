@@ -1,4 +1,4 @@
-import type { Lineage } from "@loom-ui/lineage";
+import type { Lineage } from "@loomwork/ui-lineage";
 import type { Pool } from "pg";
 import { pgSessionLock } from "../db/sessionLock";
 import type { LineageGcDeps, MaintenanceRuns } from "./lineageGc";

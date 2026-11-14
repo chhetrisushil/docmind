@@ -1,6 +1,6 @@
 import { LlmOutputError } from "@docmind/llm-anthropic";
 import type { ParsedDocument } from "@docmind/parsers";
-import { type LlmProvider, type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { type LlmProvider, type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { reduceInstruction } from "./prompts";
 import { summarizeDocument } from "./summarize";

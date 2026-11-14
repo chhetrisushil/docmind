@@ -1,7 +1,7 @@
 import { readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import { runContentStoreConformance } from "@loom/conformance";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { runContentStoreConformance } from "@loomwork/conformance";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 import { BlobCorruptError, BlobTooLargeError } from "./errors";

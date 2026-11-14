@@ -1,4 +1,4 @@
-import { createAgentModelEffect, createSummarizerEffect } from "@loom/agent";
+import { createAgentModelEffect, createSummarizerEffect } from "@loomwork/agent";
 import {
   type ConversationFlow,
   ConversationHub,
@@ -6,10 +6,10 @@ import {
   type Conversations,
   createConversations,
   inboxBargeIn,
-} from "@loom/conversation";
-import type { Effect } from "@loom/effect-runtime";
-import type { EventStore, TimerStore } from "@loom/event-runtime";
-import type { RegisteredFlow, WorkflowRuntime } from "@loom/workflow-runtime";
+} from "@loomwork/conversation";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { EventStore, TimerStore } from "@loomwork/event-runtime";
+import type { RegisteredFlow, WorkflowRuntime } from "@loomwork/workflow-runtime";
 import type { ChatDeps } from "../config";
 import { executionAuthorizer } from "../security";
 import { type ChatFlowConfig, SUMMARY_MAX_TOKENS, chatFlow } from "./agent";

@@ -1,5 +1,5 @@
-import { type PgConfig, PostgresReadModelStore } from "@loom/plugin-postgres";
-import type { ReadModelStore } from "@loom/plugin-read-model";
+import { type PgConfig, PostgresReadModelStore } from "@loomwork/plugin-postgres";
+import type { ReadModelStore } from "@loomwork/plugin-read-model";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
 import { prefixExtensions, userPrefixes } from "../opaqueIds";

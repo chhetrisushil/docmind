@@ -1,17 +1,17 @@
 import type { UiViewResponse, ViewName } from "@docmind/contracts";
-import { type StampedAction, compileFingerprint, isStaleAction } from "@loom-ui/core/browser";
+import { InMemoryProjectionRuntime } from "@loomwork/projection-runtime";
+import { type StampedAction, compileFingerprint, isStaleAction } from "@loomwork/ui-core/browser";
 import {
   type HandleLoadRequest,
   type HandleLoadResult,
   type HandleLoader,
   HydrationStore,
   SplitHydrationController,
-} from "@loom-ui/hydration/client";
-import { type ChatEntryAccessories, createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
-import { referenceContainers } from "@loom-ui/renderer-lit/containers";
-import { registerDiagramWidgets } from "@loom-ui/renderer-lit/diagram";
-import { type DomRenderHandle, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
-import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
+} from "@loomwork/ui-hydration/client";
+import { type ChatEntryAccessories, createChatLitRegistry } from "@loomwork/ui-renderer-lit/chat";
+import { referenceContainers } from "@loomwork/ui-renderer-lit/containers";
+import { registerDiagramWidgets } from "@loomwork/ui-renderer-lit/diagram";
+import { type DomRenderHandle, renderBlueprintDom } from "@loomwork/ui-renderer-lit/dom";
 import type { Api, ViewSource } from "../api/client";
 import { report } from "../report";
 import "./elements";

@@ -1,7 +1,7 @@
 import type { ChatSessionDto, DocumentDto, DocumentPassage } from "@docmind/contracts";
 import { RecordOrd, TagIdList, TagMatch, Uuid } from "@docmind/contracts";
-import type { TransientInvoker } from "@loom-ui/hydration";
-import { TypedFailure } from "@loom/core";
+import { TypedFailure } from "@loomwork/core";
+import type { TransientInvoker } from "@loomwork/ui-hydration";
 import { z } from "zod";
 import { clipConnections } from "./connections";
 import { CHAT_LIST_CAP, CONTENT_CAP, LIST_CAP, citedWindow } from "./providers";

@@ -1,4 +1,4 @@
-import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { EntityKeys } from "./entityKeys";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";

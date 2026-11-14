@@ -1,7 +1,7 @@
 import type { Identity } from "@docmind/auth";
-import type { HistoryEntry } from "@loom/conversation";
-import { type LlmReasoning, captureReasoning } from "@loom/llm";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { HistoryEntry } from "@loomwork/conversation";
+import { type LlmReasoning, captureReasoning } from "@loomwork/llm";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";

@@ -1,4 +1,4 @@
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";

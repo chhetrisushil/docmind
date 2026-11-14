@@ -4,15 +4,15 @@
 
 **Goal:** After M3 part 1, uploading a `.txt` file takes a document from `uploaded` to `ready` through the real durable `ingest-document` flow: the original is read from the encrypted blob store, parsed in a resource-limited child process, split into section-bounded chunks (~600 tokens, ~15% overlap, each with a locator) that are stored with sealed text, embedded in batches of 64 by a local Ollama model, and the vectors are stored in pgvector by chunk id. a document's status is a durable Loom folded-state read model of the flow's events (`documents.status` is gone), progress streams to the browser over `GET /api/documents/events` (SSE), and the analyze, summarize and link steps exist as named no-op placeholders that part 2 fills. A sweep restarts documents stranded in `uploaded`, a delete that races a running step stops it cleanly, and the M2 stub is retired. This covers spec §9 items 12, 13, 14, 21, 22 and 23.
 
-**Architecture:** One flow, `ingest-document`, with a durable `step$` per spec §5.2 plus `link` (linked-retrieval design note): `parse -> chunk -> embed -> analyze -> summarize -> link -> finalize`. Loom has no per-flow dependency argument, so each step's effect is registered by `buildApp` from an `IngestDeps` bundle that the composition root builds (blob store factory, `FieldCrypto`, parser registry and runner, chunk and vector stores, embedder, status store). Every effect is built by one wrapper, `stepEffect`, which turns "document, row, key or blob is gone" into the clean outcome `document_gone`, turns a permanent content problem into a terminal `failed` outcome with a fixed code, and rethrows anything else with a fixed message. No step writes a status: an `ingest-status` folded model (`@loom/plugin-read-model`, ADR 0132, in DocMind's own `public` tables under row-level security) folds the flow's events, feeds the SSE bus after each fold, and is what the list and detail routes read (Revision 2026-10-19). Steps pass ids and counts only; the parsed text travels between `parse` and `chunk` through a sealed row (`parsed_documents`) that the chunk step deletes, so no document text is ever in the event log. Parsers run in a short-lived Node child process under the Node permission model (no filesystem or process access), a heap limit and a wall-clock kill.
+**Architecture:** One flow, `ingest-document`, with a durable `step$` per spec §5.2 plus `link` (linked-retrieval design note): `parse -> chunk -> embed -> analyze -> summarize -> link -> finalize`. Loom has no per-flow dependency argument, so each step's effect is registered by `buildApp` from an `IngestDeps` bundle that the composition root builds (blob store factory, `FieldCrypto`, parser registry and runner, chunk and vector stores, embedder, status store). Every effect is built by one wrapper, `stepEffect`, which turns "document, row, key or blob is gone" into the clean outcome `document_gone`, turns a permanent content problem into a terminal `failed` outcome with a fixed code, and rethrows anything else with a fixed message. No step writes a status: an `ingest-status` folded model (`@loomwork/plugin-read-model`, ADR 0132, in DocMind's own `public` tables under row-level security) folds the flow's events, feeds the SSE bus after each fold, and is what the list and detail routes read (Revision 2026-10-19). Steps pass ids and counts only; the parsed text travels between `parse` and `chunk` through a sealed row (`parsed_documents`) that the chunk step deletes, so no document text is ever in the event log. Parsers run in a short-lived Node child process under the Node permission model (no filesystem or process access), a heap limit and a wall-clock kill.
 
-**Tech Stack:** everything in M0-M2, plus Node >=22.13 (`--permission` child processes), `@loom/plugin-read-model` (folded-state read models, with the Postgres store from `@loom/plugin-postgres`), `@loom/memory` (the `EmbeddingProvider` type), `@loom/conformance` (`runEmbeddingProviderConformance`), `typescript` (compiler API, used by one test), Ollama's `/api/embed` over `fetch`, and the Postgres `vector` extension (pgvector). Loom is linked from `../loom` at the commit CI pins: `8f9eab2492c85bb994d746855f06d2eccc9f45db` until Task 74b moves the pin to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132, folded-state read models).
+**Tech Stack:** everything in M0-M2, plus Node >=22.13 (`--permission` child processes), `@loomwork/plugin-read-model` (folded-state read models, with the Postgres store from `@loomwork/plugin-postgres`), `@loomwork/memory` (the `EmbeddingProvider` type), `@loomwork/conformance` (`runEmbeddingProviderConformance`), `typescript` (compiler API, used by one test), Ollama's `/api/embed` over `fetch`, and the Postgres `vector` extension (pgvector). Loom is linked from `../loom` at the commit CI pins: `8f9eab2492c85bb994d746855f06d2eccc9f45db` until Task 74b moves the pin to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132, folded-state read models).
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout and interfaces, §4.2 tables, §4.3 tenancy, §4.4 crypto-shredding, §5.2 flow, §5.3 parsers, §8 gates and PR rules, §9 items 12-14 and 21-23). Accepted design note this plan must not block: `/Users/such/workspace/docmind/docs/design/linked-retrieval.md`. Model plan for structure: `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m2-document-storage.md` (its sizes were badly low; the sizes here are counted, see the note under the task index). Executors read all of them.
 
 ## Revision 2026-10-19: the document status is a Loom folded-state read model
 
-This section **replaces Finding F5 and owner decision 4**. Loom now has durable per-execution projections: `@loom/plugin-read-model` folded models (ADR 0132, Accepted), merged at Loom `main` `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` and built. The owner decided that DocMind's document status must use them. Everything below was read from that checkout (`docs/adr/0132-folded-state-read-model.md`, `docs/plugins.md` "Folded-state models", `docs/api-reference.org`, `plugins/read-model/src/*`, `plugins/postgres/src/{foldedState,PostgresReadModelStore,index}.ts`) and from DocMind `main` (`50010f6`: `compose.ts`, `main.ts`, `config.ts`, `storage.ts`, `documents/*`, `flows/ingest-document/*`, `subject.ts`, `infra/migrations`, `db/{tenant,pool,migrate}.ts`). Where this section and an older task text disagree, this section wins and the task has been rewritten to match.
+This section **replaces Finding F5 and owner decision 4**. Loom now has durable per-execution projections: `@loomwork/plugin-read-model` folded models (ADR 0132, Accepted), merged at Loom `main` `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` and built. The owner decided that DocMind's document status must use them. Everything below was read from that checkout (`docs/adr/0132-folded-state-read-model.md`, `docs/plugins.md` "Folded-state models", `docs/api-reference.org`, `plugins/read-model/src/*`, `plugins/postgres/src/{foldedState,PostgresReadModelStore,index}.ts`) and from DocMind `main` (`50010f6`: `compose.ts`, `main.ts`, `config.ts`, `storage.ts`, `documents/*`, `flows/ingest-document/*`, `subject.ts`, `infra/migrations`, `db/{tenant,pool,migrate}.ts`). Where this section and an older task text disagree, this section wins and the task has been rewritten to match.
 
 **Design (R1 to R9).**
 
@@ -24,7 +24,7 @@ This section **replaces Finding F5 and owner decision 4**. Loom now has durable 
 - **R6. SSE.** `IngestStatus.onEvent` calls `service.handleEvent(event)` and then schedules a publish on a single promise chain: `await service.drain()`, then `bus.publish(...)`. The progress event is derived by a pure function (`progressOf`) from the same handlers the model folds with. Chosen over publishing from the step effect (the previous design) because the effect runs **before** its `STEP_COMPLETED` is appended and cannot see crash recovery, resumed executions or a failure the kernel records; publishing after the node's durable apply means a client that refetches on an event never reads an older status, and the effects stay free of any bus (Open question R3). Limits: `drain()` waits for every in-flight apply on the node, so latency is the slowest concurrent apply (a database write); an apply that fails is reported to `onError` and the event is still published, since the log is the authority and the next `catchUp` heals the row; an unexpected `EXECUTION_FAILED` moves the state to `failed` and emits a terminal progress event without a `step` (the contract's `step` is optional, Task 65; `progressOf`, Task 74d).
 - **R7. `documents.status` and `documents.error` are dropped** (migration `0013`, Task 79d). The status of a document is the model's state; a document with no row is `uploaded`; `error` is a fixed message derived from the code at read time. Only the pre-flow state needed anything stored, and it needs no column: the stale-upload sweep (Task 93) finds documents whose generation-2 execution has no row in `read_model_state`, by one anti-join in a `SECURITY DEFINER` function (both tables are in `public`). The sweep calling `start` for a document whose row has not been folded yet is harmless: `start` is start-once. Keeping a column that nothing writes would only be a second source of truth that can disagree (Open question R2).
 - **R8. Erasure.** The delete route cancels the flow, then `forgetDocument` = `purgeFolded("ingest-status", { key: documentId })` (a tombstone that keeps `sequence`, `execution_id`, `scope`, and nulls the state; later events cannot resurrect it), then removes the row and blob. User erasure (M5) does rows, then blobs, then the key, **then `purgeFolded({ scope: userId })`** (`IngestStatus.forgetUser`); the table has no foreign key to `users`, so deleting the user does not cascade. Task 74e proves both. Carry-forward for M5: a model rebuild reads the log through the decrypting store; after a key is destroyed that read must use a shredding-tolerant source (the handlers already skip `{ $shredded: true }` payloads).
-- **R9. Pins and dependencies.** DocMind's CI `LOOM_REF` moves from `8f9eab24` to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (Task 74b), `@loom/plugin-read-model` joins the root `pnpm.overrides` and `apps/server` dependencies, and `@loom/event-runtime` joins both as a dev dependency for tests (Task 74b).
+- **R9. Pins and dependencies.** DocMind's CI `LOOM_REF` moves from `8f9eab24` to `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (Task 74b), `@loomwork/plugin-read-model` joins the root `pnpm.overrides` and `apps/server` dependencies, and `@loomwork/event-runtime` joins both as a dev dependency for tests (Task 74b).
 
 **What does not change.** The step effects still do the work and nothing else; a step still stops with `document_gone` when its document is gone (a `StepGuard` check replaces the status write that used to double as that check); the flow returns early on `document_gone` or `failed`; execution ids, the ids-only start input and the content-free log are untouched.
 
@@ -55,7 +55,7 @@ Copied from the spec and the owner's standing rules; every task includes them.
 - **Migrations:** never edit an applied migration; the next free number is `0010`. This plan adds `0010` (documents composite key), `0011` (chunks and parsed_documents), `0012` (the folded-state tables and their row-level security, Task 74a), `0013` (drops `documents.status` and `error`, Task 79d), `0014` (embedding column, needs pgvector) and `0015` (stale-upload function). Every table has RLS enabled (the M0 guard test fails otherwise). A migration that touches the `vector` type declares `-- requires-extension: vector` (Task 84).
 - **Dependency rules:** packages never import from apps; only `loom.config.ts`, `app/config.ts`, `app/compose.ts` and `app/main.ts` choose which implementation backs an interface; no process globals (the parser registry, embedder, vector store, runner and progress bus are constructed in `compose.ts` and passed down; so is the `IngestStatus`, from the stores `main.ts` chooses).
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=22.13.0` from Task 69 on (the first task that spawns a `--permission` child; CI already runs Node 22).
-- **Loom pin:** the `ingest-status` model needs Loom at or after `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132); Task 74b moves the CI `LOOM_REF`, adds `@loom/plugin-read-model` (and, for tests, `@loom/event-runtime`) to `pnpm.overrides`, and runs the whole gate against it.
+- **Loom pin:** the `ingest-status` model needs Loom at or after `006dfdaf63319fa61594c42e2d5b2c8b87add2ca` (ADR 0132); Task 74b moves the CI `LOOM_REF`, adds `@loomwork/plugin-read-model` (and, for tests, `@loomwork/event-runtime`) to `pnpm.overrides`, and runs the whole gate against it.
 - **Document status:** only the `ingest-status` model says what a document's status is; no code reads or writes a `documents.status` column (it is dropped in Task 79d), and no step effect publishes progress.
 - **Ollama is never required by a default test run; pgvector is required by the Postgres suites** (F08). Ollama tests use a fake HTTP server that passes the same conformance suite; a real-Ollama suite runs only when `DOCMIND_TEST_OLLAMA_URL` is set. pgvector is installed on the local test cluster and in CI's image, `0014` is applied by every `createTestDb()` (no global skip switch), and a database without it fails the migration loudly instead of letting vector suites pass vacuously. The `hasVector` guards in the vector tests are a second line of defence, not a supported configuration.
 
@@ -67,11 +67,11 @@ Read from `/Users/such/workspace/loom` (HEAD `8f9eab24`) and `main` of this repo
 
 | # | Finding | Consequence |
 |---|---|---|
-| F1 | `@loom/plugin-sandbox` is a **QuickJS-in-WASM evaluator of content-addressed JS scripts** (`SandboxWorkerPool`, `SandboxEvalEffect`, `sandboxEval$`; limits `memoryBytes`, `interruptBudget`, `wallClockMs`, `maxInputBytes`, `maxOutputBytes`). Input is JSON; there is no filesystem, no Node, no `Buffer`, no way to load `mammoth`, `unpdf`, `remark` or `word-extractor`. Spec §3.2 assumed it can run parsers. | It cannot host the parsers (part 2 needs real libraries and binary input). Tasks 69-70 build `ParseRunner`: a short-lived `child_process.fork` under `node --permission` (verified on this machine: with `--allow-fs-read` for the runner dir only, both a read of `/etc/hosts` and a write to `/tmp` fail with `ERR_ACCESS_DENIED`, and IPC still works), `--max-old-space-size`, a wall-clock `SIGKILL`, input and output caps. The spec gets a one-line correction. Network is not covered by Node 22/24's permission model (residual risk, Open question 1). |
-| F2 | `@loom/knowledge`'s chunker is `packParagraphs(maxChars)`: it returns plain strings, collapses whitespace, has no overlap, no token budget, no offsets. | It cannot give locators or overlap, so Tasks 71-72 write an app-local chunker (pure, section-bounded, offset-preserving). It does not use `KnowledgeBase`/`MemoryStore` either: spec §4.2 puts chunks in Postgres. |
-| F3 | `@loom/memory` has `EmbeddingProvider { modelId, dimensions, maxBatchSize?, embed(texts, {signal}) }` and `VectorIndex { add(key,id,vector), remove, clear, search(key,query,limit,minScore), size }`; `@loom/conformance` ships `runEmbeddingProviderConformance` and `runVectorIndexConformance`. **No Ollama provider exists in Loom.** | We implement `EmbeddingProvider` for Ollama and run Loom's real kit against it (Tasks 85-86). |
+| F1 | `@loomwork/plugin-sandbox` is a **QuickJS-in-WASM evaluator of content-addressed JS scripts** (`SandboxWorkerPool`, `SandboxEvalEffect`, `sandboxEval$`; limits `memoryBytes`, `interruptBudget`, `wallClockMs`, `maxInputBytes`, `maxOutputBytes`). Input is JSON; there is no filesystem, no Node, no `Buffer`, no way to load `mammoth`, `unpdf`, `remark` or `word-extractor`. Spec §3.2 assumed it can run parsers. | It cannot host the parsers (part 2 needs real libraries and binary input). Tasks 69-70 build `ParseRunner`: a short-lived `child_process.fork` under `node --permission` (verified on this machine: with `--allow-fs-read` for the runner dir only, both a read of `/etc/hosts` and a write to `/tmp` fail with `ERR_ACCESS_DENIED`, and IPC still works), `--max-old-space-size`, a wall-clock `SIGKILL`, input and output caps. The spec gets a one-line correction. Network is not covered by Node 22/24's permission model (residual risk, Open question 1). |
+| F2 | `@loomwork/knowledge`'s chunker is `packParagraphs(maxChars)`: it returns plain strings, collapses whitespace, has no overlap, no token budget, no offsets. | It cannot give locators or overlap, so Tasks 71-72 write an app-local chunker (pure, section-bounded, offset-preserving). It does not use `KnowledgeBase`/`MemoryStore` either: spec §4.2 puts chunks in Postgres. |
+| F3 | `@loomwork/memory` has `EmbeddingProvider { modelId, dimensions, maxBatchSize?, embed(texts, {signal}) }` and `VectorIndex { add(key,id,vector), remove, clear, search(key,query,limit,minScore), size }`; `@loomwork/conformance` ships `runEmbeddingProviderConformance` and `runVectorIndexConformance`. **No Ollama provider exists in Loom.** | We implement `EmbeddingProvider` for Ollama and run Loom's real kit against it (Tasks 85-86). |
 | F4 | `VectorIndex` cannot be implemented over `chunks.embedding`: `add` must accept any id (the kit invents ids like `"x"`), but an embedding is a column on an existing chunk row; and `search` has no document-scope filter that M4's `search_docs` needs. | `@docmind/vector-pg` exposes its own narrow `ChunkVectorStore` port (Task 87) with an in-memory twin and one shared conformance suite, as spec §3.1 requires ("each interface has one shared conformance suite"). Spec §3.1's row is corrected. |
-| F5 | **Superseded 2026-10-19 (see Revision 2026-10-19).** Originally: Loom's `ProjectionRuntime` folds were in-memory and its durable read models indexed rows, so the status had to be written by each step's effect. Loom now has durable folded-state read models (`@loom/plugin-read-model`, ADR 0132). | The status is the `ingest-status` folded model over the flow's events; steps write nothing; `documents.status` is dropped. |
+| F5 | **Superseded 2026-10-19 (see Revision 2026-10-19).** Originally: Loom's `ProjectionRuntime` folds were in-memory and its durable read models indexed rows, so the status had to be written by each step's effect. Loom now has durable folded-state read models (`@loomwork/plugin-read-model`, ADR 0132). | The status is the `ingest-status` folded model over the flow's events; steps write nothing; `documents.status` is dropped. |
 | F6 | `step$` supports `retry`, `timeoutMs`, `errors` (typed failure channels) and a tool-level `idempotent` flag. An effect is at-least-once: a crash between the effect and its `STEP_COMPLETED` append re-runs it. | Every effect is written to be idempotent (deterministic chunk ids, delete-then-insert, `embedding IS NULL` work lists). Retry policy is part 2. |
 | F7 | `packages/contracts` already has `DocumentStatus`, `IngestStep` and `DocumentProgressEvent`, but `IngestStep` has no `link`. | Task 65 adds `link` (after `summarize`, before `finalize`) and the numeric `Locator` union. |
 | F8 | The test database on `127.0.0.1:55432` (PostgreSQL 17.2, superuser `docmind`) has **no `vector` extension** (`pg_available_extensions` returns 0 rows for it). CI and `docker-compose.yml` use `pgvector/pgvector:pg16`. | **Superseded (F08):** pgvector is now installed locally (see Preconditions), so `0014` is applied everywhere and there is no global skip switch; the runner's `-- requires-extension` header and its test-only env switch remain, exercised by the migrate test alone (Task 84). Everything else (flow, chunk, embed logic) is tested against an in-memory `ChunkVectorStore` that passes the same conformance suite. |
@@ -81,7 +81,7 @@ Read from `/Users/such/workspace/loom` (HEAD `8f9eab24`) and `main` of this repo
 
 ## Decisions made in this plan
 
-- **D1. The sandbox is a child process, not `@loom/plugin-sandbox`** (F1). `ParseRunner` is the one place parsers run. `@loom/plugin-sandbox` stays reserved for part 2 if a pure-JS, JSON-in/JSON-out transform is ever worth running in QuickJS; nothing in part 1 needs it.
+- **D1. The sandbox is a child process, not `@loomwork/plugin-sandbox`** (F1). `ParseRunner` is the one place parsers run. `@loomwork/plugin-sandbox` stays reserved for part 2 if a pure-JS, JSON-in/JSON-out transform is ever worth running in QuickJS; nothing in part 1 needs it.
 - **D2. Parsed text between `parse` and `chunk` lives in a sealed table row, not in the event log and not in a derived blob.** `parsed_documents (tenant_id, document_id PK, body_enc)`: cascade-deleted with the document, removed by the chunk step once chunks exist, hard-deleted on erasure, no blob lifecycle to get wrong. Cost: a 50 MB text becomes a ~70 MB sealed JSON value for a moment; `ParseRunner` caps parsed characters (default 20 M) and a larger result is the permanent failure `too_large`.
 - **D3. Locators are numeric.** `chunks.locator` is `{kind: "chars", start, end} | {kind: "section", index} | {kind: "page", page} | {kind: "paragraphs", from, to} | {kind: "region", page, x, y, w, h}`. The heading path (content) is sealed inside `text_enc` as `{text, headingPath}`. `chunks.section_ordinal` (plaintext integer) is the section tree's id for linked retrieval's `structure` links; it reveals grouping only. This deviates from spec §4.2's `locator jsonb` holding heading paths; Open question 5.
 - **D4. Chunk ids are deterministic**: `chunkIdFor(documentId, ordinal)` = UUID built from `sha256("docmind-chunk-v1:" + documentId + ":" + ordinal)`. A re-run of `chunk` writes the same ids, and embedding "idempotent by chunkId" is therefore literal. `chunk_links` (part 2) can FK them.
@@ -306,7 +306,7 @@ const snippet = (body: string) =>
     new Map([
       [
         VIRTUAL,
-        `import type { WorkflowRuntime } from "@loom/workflow-runtime";
+        `import type { WorkflowRuntime } from "@loomwork/workflow-runtime";
          import { executionIdFor } from "./subject";
          declare const rt: WorkflowRuntime; declare const flow: never; declare const user: string;
          export async function f() { ${body} }`,
@@ -555,7 +555,7 @@ CREATE POLICY tenant_isolation ON parsed_documents USING (tenant_id = app_tenant
 The fixture, `apps/server/app/flows/ingest-document/pgFixture.ts` (used by later tasks; add it here because it needs only the tables above):
 
 ```ts
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { FieldCrypto } from "../../crypto/fields";
 import { migrate, setAppRolePassword } from "../../db/migrate";
@@ -1317,7 +1317,7 @@ Branch `feat/parsers-txt`; subject `feat(parsers): txt parser with strict decodi
 
 ### Task 69a: `ParseRunner` core
 
-Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` and returns a validated `ParsedDocument`. This task: the process, the message protocol, shape validation, the rejection mapping, and the kill of the child on every path that reaches the `finally`. Task 69a2 adds the paths that end a run **without** a reply (the wall-clock kill, a child that exits or errors); Task 69b adds the input cap, the output character cap and the noisy-stdio proof; Task 70 adds the heap limit, permission-denial proof, concurrency and abort. See Finding F1 for why this is not `@loom/plugin-sandbox`. Split from the first draft along the seam the preflight named (F16): the original 69a counted 181 lines plus 18 over Biome's width and 7 files.
+Spec §9 item 13. Runs one parser on one input in a fresh `child_process.fork` and returns a validated `ParsedDocument`. This task: the process, the message protocol, shape validation, the rejection mapping, and the kill of the child on every path that reaches the `finally`. Task 69a2 adds the paths that end a run **without** a reply (the wall-clock kill, a child that exits or errors); Task 69b adds the input cap, the output character cap and the noisy-stdio proof; Task 70 adds the heap limit, permission-denial proof, concurrency and abort. See Finding F1 for why this is not `@loomwork/plugin-sandbox`. Split from the first draft along the seam the preflight named (F16): the original 69a counted 181 lines plus 18 over Biome's width and 7 files.
 
 **Files:**
 - Create: `packages/parsers/src/runner/protocol.ts`
@@ -1859,7 +1859,7 @@ In `ParseRunner.ts`: add the two error classes (same shape as Task 69a's); add `
 
 `active()` now returns `this.slots`. `run` becomes: `await this.acquire(signal); try { the whole body of `run` from Task 69a } finally { this.release(); }`. In `exchange`, add an `abort` listener that kills the child and rejects `ParseAbortedError` (remove it when settled). In the `exit` handler, map a V8 out-of-memory abort to `ParseMemoryError`: `(code, signal) => reject(signal === "SIGABRT" || code === 134 ? new ParseMemoryError() : new ParseCrashedError())`. In `run`'s `finally`, kill the child on abort too (already done by the existing guard).
 
-Spec edits: in `docs/specs/2026-10-18-docmind-design.md` §3.2 change the `@loom/plugin-sandbox` row to `| Parsers run in a resource-limited child process (Node permission model, heap limit, wall-clock kill) | DocMind \`ParseRunner\` (\`@loom/plugin-sandbox\` evaluates JSON-in/JSON-out QuickJS scripts and cannot host parser libraries) |`; in §5.2 the parse row change "Runs in `@loom/plugin-sandbox` with time and memory limits" to "Runs in a resource-limited child process (`ParseRunner`) with time and memory limits".
+Spec edits: in `docs/specs/2026-10-18-docmind-design.md` §3.2 change the `@loomwork/plugin-sandbox` row to `| Parsers run in a resource-limited child process (Node permission model, heap limit, wall-clock kill) | DocMind \`ParseRunner\` (\`@loomwork/plugin-sandbox\` evaluates JSON-in/JSON-out QuickJS scripts and cannot host parser libraries) |`; in §5.2 the parse row change "Runs in `@loomwork/plugin-sandbox` with time and memory limits" to "Runs in a resource-limited child process (`ParseRunner`) with time and memory limits".
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -2081,7 +2081,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Correct the spec (F13)**
 
-In `docs/specs/2026-10-18-docmind-design.md`: in §3.2 change the row `| Chunking, idempotent sync, grounding, \`checkCitations\` | \`@loom/knowledge\` |` to `| Idempotent sync, grounding, \`checkCitations\` (chunking is app-local: \`@loom/knowledge\` has no overlap, offsets or token budget) | \`@loom/knowledge\` |`; in §5.2 change the chunk row's `\`@loom/knowledge\` chunker.` to `App-local section-bounded chunker (\`chunker.ts\`).`
+In `docs/specs/2026-10-18-docmind-design.md`: in §3.2 change the row `| Chunking, idempotent sync, grounding, \`checkCitations\` | \`@loomwork/knowledge\` |` to `| Idempotent sync, grounding, \`checkCitations\` (chunking is app-local: \`@loomwork/knowledge\` has no overlap, offsets or token budget) | \`@loomwork/knowledge\` |`; in §5.2 change the chunk row's `\`@loomwork/knowledge\` chunker.` to `App-local section-bounded chunker (\`chunker.ts\`).`
 
 - [ ] **Step 6: Close-out**
 
@@ -2231,7 +2231,7 @@ The one place that decides what a step does when its document disappears (carry-
 - Create: `apps/server/app/flows/ingest-document/stepEffect.test.ts`
 
 **Interfaces:**
-- Consumes: `IngestStartInput` (`flow.ts`, M2), `IngestStep` (contracts), `FieldKeyUnavailableError` (`crypto/fields.ts`), `BlobKeyUnavailableError` (`@docmind/blob-store`), `Effect` (`@loom/effect-runtime`).
+- Consumes: `IngestStartInput` (`flow.ts`, M2), `IngestStep` (contracts), `FieldKeyUnavailableError` (`crypto/fields.ts`), `BlobKeyUnavailableError` (`@docmind/blob-store`), `Effect` (`@loomwork/effect-runtime`).
 - Produces:
   - `errors.ts`: `class DocumentGoneError`; `class PermanentIngestError { readonly code: FailureCode }`; `FAILURE_CODES = ["unsupported_content", "corrupt_content", "too_large"] as const`, `type FailureCode`; `isDocumentGone(err: unknown): boolean` (true for `DocumentGoneError`, `FieldKeyUnavailableError`, `BlobKeyUnavailableError`, or any error whose `code` is Postgres `23503`).
   - `stepEffect.ts`: `StepResult` (zod, strict: `{ outcome: "done" | "document_gone" | "failed"; count?: number; model?: string; code?: FailureCode }`), `interface StepGuard { begin(ref: IngestStartInput, step: IngestStep): Promise<void> }` (throws `DocumentGoneError` when the document or its owner row is gone; writes nothing), and `stepEffect(step: IngestStep, guard: StepGuard, work: (ref: IngestStartInput) => Promise<{ count?: number; model?: string } | void>): Effect<IngestStartInput, StepResult>`.
@@ -2350,7 +2350,7 @@ export function isDocumentGone(err: unknown): boolean {
 
 ```ts
 import type { IngestStep } from "@docmind/contracts";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { z } from "zod";
 import { FAILURE_CODES, PermanentIngestError, isDocumentGone } from "./errors";
 import type { IngestStartInput } from "./flow";
@@ -2550,7 +2550,7 @@ Revision R2. DocMind's own migration creates the tables Loom's folded read model
 - Modify: `docs/specs/2026-10-18-docmind-design.md` (§4.2, one line, F13)
 
 **Interfaces:**
-- Consumes: `app_tenant_id()` (`0002`), `users` (`0002`), the `docmind_loom` role (`0008`), `foldedStateDdl` (`@loom/plugin-postgres`), `MIGRATIONS_DIR`, `migrate`, `setAppRolePassword`, `setRolePassword`, `createTestDb`, `seedUsers`, `T1`, `T2`, `U1`, `U1B`, `U2` (the harness).
+- Consumes: `app_tenant_id()` (`0002`), `users` (`0002`), the `docmind_loom` role (`0008`), `foldedStateDdl` (`@loomwork/plugin-postgres`), `MIGRATIONS_DIR`, `migrate`, `setAppRolePassword`, `setRolePassword`, `createTestDb`, `seedUsers`, `T1`, `T2`, `U1`, `U1B`, `U2` (the harness).
 - Produces: tables `public.read_model_folds` and `public.read_model_state` (Loom's folded-state layout: `model_id, execution_id, app_key, scope, sequence, state, erased`), the check `read_model_state_scope_uuid`, policies `ingest_all` (both tables, `TO docmind_loom`, `FOR ALL`) and `tenant_read` (`read_model_state`, `TO docmind_app`, `FOR SELECT`), and these privileges: `docmind_loom` `SELECT, INSERT, UPDATE, DELETE` on both tables; `docmind_app` `SELECT` on `read_model_state` only.
 
 - [ ] **Step 1: Write the failing test**
@@ -2560,7 +2560,7 @@ Revision R2. DocMind's own migration creates the tables Loom's folded read model
 ```ts
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { foldedStateDdl } from "@loom/plugin-postgres";
+import { foldedStateDdl } from "@loomwork/plugin-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { T1, T2, U1, U1B, U2, seedUsers } from "../documents/testHarness";
@@ -2714,11 +2714,11 @@ Revision R1 and R9. The pure half of the status design: one `projection$` fold o
 - Create: `apps/server/app/status/model.test.ts`
 - Create: `apps/server/app/status/testing.ts` (event builders, shared by Tasks 74c, 74e, 79c, 94b; Task 74c adds the in-memory log)
 - Modify: `.github/workflows/ci.yml` (`LOOM_REF`)
-- Modify: `package.json` (`pnpm.overrides`: `@loom/plugin-read-model`, `@loom/event-runtime`)
-- Modify: `apps/server/package.json` (dependency `@loom/plugin-read-model`, dev dependency `@loom/event-runtime`)
+- Modify: `package.json` (`pnpm.overrides`: `@loomwork/plugin-read-model`, `@loomwork/event-runtime`)
+- Modify: `apps/server/package.json` (dependency `@loomwork/plugin-read-model`, dev dependency `@loomwork/event-runtime`)
 
 **Interfaces:**
-- Consumes: `FAILURE_CODES`, `FailureCode` (73a), `DocumentStatus`, `IngestStep` (contracts; `IngestStep` has `link` from Task 65), `projection$`, `EventEnvelope` (`@loom/core`).
+- Consumes: `FAILURE_CODES`, `FailureCode` (73a), `DocumentStatus`, `IngestStep` (contracts; `IngestStep` has `link` from Task 65), `projection$`, `EventEnvelope` (`@loomwork/core`).
 - Produces (all in `status/model.ts`):
   - `INGEST_STATUS_MODEL = "ingest-status"`; `type StatusCode = FailureCode | "internal"`; `interface IngestStatusState { status: DocumentStatus; step: IngestStep | null; code: StatusCode | null }`; `INITIAL_STATUS`.
   - `STATUS_OF_STEP: Record<IngestStep, DocumentStatus>` (Decision D7, amended: `finalize` is `embedding` while it runs; `ready` is set by its completion).
@@ -2805,13 +2805,13 @@ Expected: FAIL (modules not found).
 
 - [ ] **Step 3: Implement**
 
-First the dependency and pin changes. Root `package.json` `pnpm.overrides` gains `"@loom/event-runtime": "link:../loom/packages/event-runtime"` and `"@loom/plugin-read-model": "link:../loom/plugins/read-model"`; `apps/server/package.json` gains `"@loom/plugin-read-model": "*"` under `dependencies` and `"@loom/event-runtime": "*"` under `devDependencies`; `.github/workflows/ci.yml` line `LOOM_REF: 8f9eab2492c85bb994d746855f06d2eccc9f45db` becomes `LOOM_REF: 006dfdaf63319fa61594c42e2d5b2c8b87add2ca`. Then, with `../loom` at that commit and built (`git -C ../loom rev-parse HEAD`), run `pnpm install` and commit the lockfile.
+First the dependency and pin changes. Root `package.json` `pnpm.overrides` gains `"@loomwork/event-runtime": "link:../loom/packages/event-runtime"` and `"@loomwork/plugin-read-model": "link:../loom/plugins/read-model"`; `apps/server/package.json` gains `"@loomwork/plugin-read-model": "*"` under `dependencies` and `"@loomwork/event-runtime": "*"` under `devDependencies`; `.github/workflows/ci.yml` line `LOOM_REF: 8f9eab2492c85bb994d746855f06d2eccc9f45db` becomes `LOOM_REF: 006dfdaf63319fa61594c42e2d5b2c8b87add2ca`. Then, with `../loom` at that commit and built (`git -C ../loom rev-parse HEAD`), run `pnpm install` and commit the lockfile.
 
 `status/model.ts`:
 
 ```ts
 import type { DocumentStatus, IngestStep } from "@docmind/contracts";
-import { type EventEnvelope, projection$ } from "@loom/core";
+import { type EventEnvelope, projection$ } from "@loomwork/core";
 import { FAILURE_CODES, type FailureCode } from "../flows/ingest-document/errors";
 
 export const INGEST_STATUS_MODEL = "ingest-status";
@@ -2887,7 +2887,7 @@ export function foldIngestStatus(events: readonly EventEnvelope[]): IngestStatus
 `status/testing.ts`:
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 
 /** An event the way Loom writes one (fields as in `EventEnvelope`). */
 export const evt = (executionId: string, sequence: number, eventType: string, payload: unknown = {}): EventEnvelope => ({
@@ -2922,7 +2922,7 @@ export function ingestRun(executionId: string, spec: "started" | "parsed" | "rea
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `pnpm --filter @docmind/server exec vitest run app/status/model.test.ts && pnpm typecheck`
-Expected: PASS. The event type names (`STEP_STARTED`, `STEP_COMPLETED`, `EXECUTION_STARTED`, `EXECUTION_FAILED`) and the payload keys `stepId` and `output` are the kernel's (`@loom/replay-vm` `eventHandlers.ts`); Task 81 proves them against a real log.
+Expected: PASS. The event type names (`STEP_STARTED`, `STEP_COMPLETED`, `EXECUTION_STARTED`, `EXECUTION_FAILED`) and the payload keys `stepId` and `output` are the kernel's (`@loomwork/replay-vm` `eventHandlers.ts`); Task 81 proves them against a real log.
 
 - [ ] **Step 5: Close-out**
 
@@ -3018,7 +3018,7 @@ Revision R3 and R5. One class owns the Loom `ReadModelService` for the `ingest-s
 - Modify: `apps/server/app/status/testing.ts` (`MemoryLog`)
 
 **Interfaces:**
-- Consumes: `ReadModelService`, `ReadModelStore`, `ReadModelEventSource`, `SensitiveMap`, `foldedStates` (`@loom/plugin-read-model`); `INGEST_STATUS_MODEL`, `ingestStatus`, `ingestKeyOf`, `ingestScopeOf`, `generationOf`, `IngestStatusState`, `evt`, `ingestRun` (74b); `viewOf`, `UPLOADED`, `StatusView` (74b2); `ingestExecutionId(userId, documentId)` (`documents/ingest.ts`; the current generation, which Task 76 turns into generation 2); `Identity` (`@docmind/auth`).
+- Consumes: `ReadModelService`, `ReadModelStore`, `ReadModelEventSource`, `SensitiveMap`, `foldedStates` (`@loomwork/plugin-read-model`); `INGEST_STATUS_MODEL`, `ingestStatus`, `ingestKeyOf`, `ingestScopeOf`, `generationOf`, `IngestStatusState`, `evt`, `ingestRun` (74b); `viewOf`, `UPLOADED`, `StatusView` (74b2); `ingestExecutionId(userId, documentId)` (`documents/ingest.ts`; the current generation, which Task 76 turns into generation 2); `Identity` (`@docmind/auth`).
 - Produces: `interface IngestStatusOptions { writer: ReadModelStore; readerFor(identity: Identity): ReadModelStore; source: ReadModelEventSource; sensitive: SensitiveMap; onError?(err: unknown): void }` and `class IngestStatus` with `boot(): Promise<{ rebuilt: boolean; executionsScanned: number }>`, `onEvent: (event: EventEnvelope) => void` (an arrow property: pass it as is; it never throws), `forPage(identity, documentIds: readonly string[]): Promise<Map<string, StatusView>>`, `forDocument(identity, documentId): Promise<StatusView>`, `close(): Promise<void>`; and, in `status/testing.ts`, `class MemoryLog implements ReadModelEventSource { append(...events: EventEnvelope[]): void; listExecutions(): Promise<string[]>; readFrom(id, from): Promise<EventEnvelope[]> }`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3028,7 +3028,7 @@ Revision R3 and R5. One class owns the Loom `ReadModelService` for the `ingest-s
 ```ts
 import { randomUUID } from "node:crypto";
 import type { Identity } from "@docmind/auth";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { ingestExecutionId } from "../documents/ingest";
 import { IngestStatus, type IngestStatusOptions } from "./ingestStatus";
@@ -3101,14 +3101,14 @@ Expected: FAIL (`./ingestStatus` not found).
 
 ```ts
 import type { Identity } from "@docmind/auth";
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import {
   type ReadModelEventSource,
   ReadModelService,
   type ReadModelStore,
   type SensitiveMap,
   foldedStates,
-} from "@loom/plugin-read-model";
+} from "@loomwork/plugin-read-model";
 import { ingestExecutionId } from "../documents/ingest";
 import {
   INGEST_STATUS_MODEL,
@@ -3205,7 +3205,7 @@ export class IngestStatus {
 `status/testing.ts` gains:
 
 ```ts
-import type { ReadModelEventSource } from "@loom/plugin-read-model";
+import type { ReadModelEventSource } from "@loomwork/plugin-read-model";
 
 /** A tiny event log for tests: what Loom's event store is to the model (live source and catch-up source). */
 export class MemoryLog implements ReadModelEventSource {
@@ -3284,7 +3284,7 @@ describe("progressOf", () => {
 });
 ```
 
-In `status/ingestStatus.test.ts`: add `import { type FoldedApply, InMemoryReadModelStore } from "@loom/plugin-read-model";` (replacing the plain import), `import { InMemoryProgressBus } from "../documents/progress";` and `evt` to the `./testing` import; replace the first lines of `setup` so that it creates and records the bus:
+In `status/ingestStatus.test.ts`: add `import { type FoldedApply, InMemoryReadModelStore } from "@loomwork/plugin-read-model";` (replacing the plain import), `import { InMemoryProgressBus } from "../documents/progress";` and `evt` to the `./testing` import; replace the first lines of `setup` so that it creates and records the bus:
 
 ```ts
   const bus = new InMemoryProgressBus();
@@ -3444,7 +3444,7 @@ Revision R2 and R8. The two real stores behind `IngestStatus`: the writer on the
 - Modify: `apps/server/app/status/ingestStatus.test.ts` (the erasure cases)
 
 **Interfaces:**
-- Consumes: `PostgresReadModelStore` (`@loom/plugin-postgres`), `ReadModelStore`, `ReadModelService`, `foldedStates` (`@loom/plugin-read-model`), `withTenant`, `IngestStatus` (74c, 74d), the model (74b), `0012` (74a).
+- Consumes: `PostgresReadModelStore` (`@loomwork/plugin-postgres`), `ReadModelStore`, `ReadModelService`, `foldedStates` (`@loomwork/plugin-read-model`), `withTenant`, `IngestStatus` (74c, 74d), the model (74b), `0012` (74a).
 - Produces: `pgStatusWriter(loomPool: Pool): ReadModelStore` (schema `public`, `manageSchema: false`); `pgStatusReaderFor(appPool: Pool): (identity: { tenantId: string }) => ReadModelStore` (every query runs in `withTenant`, so the `tenant_read` policy applies; nothing is created or closed); `interface DocumentStatusReads { forPage(identity, documentIds: readonly string[]): Promise<Map<string, StatusView>>; forDocument(identity, documentId): Promise<StatusView>; forgetDocument(identity, documentId): Promise<void> }` implemented by `IngestStatus`; `IngestStatus.forgetDocument(identity, documentId)` = `purgeFolded(INGEST_STATUS_MODEL, { key: documentId })` and `IngestStatus.forgetUser(userId): Promise<number>` = `purgeFolded(INGEST_STATUS_MODEL, { scope: userId })` (rows newly tombstoned).
 
 - [ ] **Step 1: Write the failing tests**
@@ -3481,7 +3481,7 @@ Append to `status/ingestStatus.test.ts` (inside the `describe`; the helpers are 
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { ReadModelService, foldedStates } from "@loom/plugin-read-model";
+import { ReadModelService, foldedStates } from "@loomwork/plugin-read-model";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";
@@ -3569,8 +3569,8 @@ Expected: FAIL (`./pgStores` not found; `forgetDocument` is not a function).
 `status/pgStores.ts`:
 
 ```ts
-import { PostgresReadModelStore } from "@loom/plugin-postgres";
-import type { ReadModelStore } from "@loom/plugin-read-model";
+import { PostgresReadModelStore } from "@loomwork/plugin-postgres";
+import type { ReadModelStore } from "@loomwork/plugin-read-model";
 import type { Pool } from "pg";
 import { withTenant } from "../db/tenant";
 
@@ -3655,7 +3655,7 @@ The parse step's write port and the chunk step's read port. `PgParsedStore` seal
 ```ts
 import { randomUUID } from "node:crypto";
 import type { ParsedDocument } from "@docmind/parsers";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
 import { PG_URL } from "../../db/testSupport";
@@ -3931,7 +3931,7 @@ The existence check every step runs first (`StepGuard`, Task 73a): tenant-scoped
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
@@ -4053,7 +4053,7 @@ In `ingest.test.ts` (it builds real in-memory Loom apps through `appWith(documen
     expect(ingestExecutionId(who.userId, documentId, 1)).toBe(`u_${who.userId}:ingest-${documentId}`);
 ```
 
-Then add the imports `import type { Identity } from "@docmind/auth";` and `import type { WorkflowRuntime } from "@loom/workflow-runtime";` (merge with the existing `ExecutionDeniedError` import), these module-level helpers after `appWith`, and the new tests:
+Then add the imports `import type { Identity } from "@docmind/auth";` and `import type { WorkflowRuntime } from "@loomwork/workflow-runtime";` (merge with the existing `ExecutionDeniedError` import), these module-level helpers after `appWith`, and the new tests:
 
 ```ts
 const IDENTITY: Identity = identity();
@@ -4395,7 +4395,7 @@ Expected: FAIL (module not found).
 
 ```ts
 import { ParseLimitError, ParseMemoryError, ParseRejectedError, ParseTimeoutError, type ParseRunner, type ParserRegistry } from "@docmind/parsers";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ParsedStore } from "../pgParsed";
@@ -4563,7 +4563,7 @@ Revision R3 and R4. The composition root gets the live feed (`observability.onEv
 - Modify: `apps/server/app/storage.ts` (`DurableStorage.pool`)
 
 **Interfaces:**
-- Consumes: `IngestStatus` (74c, 74d), `pgStatusWriter`, `pgStatusReaderFor` (74e), `isIngestExecution` (74b), `IngestWiring` (79; its `bus`), `sensitivePathsFromSteps` (`@loom/plugin-crypto`), `mergeSensitive`, `sensitiveMapFromCovers` (`@loom/plugin-read-model`), `EventStore` (`@loom/event-runtime`).
+- Consumes: `IngestStatus` (74c, 74d), `pgStatusWriter`, `pgStatusReaderFor` (74e), `isIngestExecution` (74b), `IngestWiring` (79; its `bus`), `sensitivePathsFromSteps` (`@loomwork/plugin-crypto`), `mergeSensitive`, `sensitiveMapFromCovers` (`@loomwork/plugin-read-model`), `EventStore` (`@loomwork/event-runtime`).
 - Produces: `flowSteps()` (the steps of every registered flow; today `ingestDocumentFlow.definition.steps`; add each new flow here), `statusSensitive(steps, store: Pick<EventStore, "sealingCapability">): SensitiveMap`; `interface StatusStores { writer: ReadModelStore; readerFor(identity: Identity): ReadModelStore; source: EventStore }`; `ComposeOptions.status: StatusStores`; `buildServer` also returns `status: IngestStatus`; `DurableStorage.pool: Pool`; `FlowDeps.onEvent?: (event: EventEnvelope) => void`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -4572,8 +4572,8 @@ Revision R3 and R4. The composition root gets the live feed (`observability.onEv
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore, sensitivePathsFromSteps } from "@loom/plugin-crypto";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { EncryptingEventStore, InMemoryKeyStore, sensitivePathsFromSteps } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../config";
 import { ingestDocumentFlow } from "../flows/ingest-document/flow";
@@ -4647,9 +4647,9 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
 import type { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildServer } from "../compose";
@@ -4705,10 +4705,10 @@ Expected: FAIL (`./wire` not found; `buildServer` takes no `status` and returns 
 `status/wire.ts`:
 
 ```ts
-import type { StepDefinition } from "@loom/core";
-import type { EventStore } from "@loom/event-runtime";
-import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
-import { type SensitiveMap, mergeSensitive, sensitiveMapFromCovers } from "@loom/plugin-read-model";
+import type { StepDefinition } from "@loomwork/core";
+import type { EventStore } from "@loomwork/event-runtime";
+import { sensitivePathsFromSteps } from "@loomwork/plugin-crypto";
+import { type SensitiveMap, mergeSensitive, sensitiveMapFromCovers } from "@loomwork/plugin-read-model";
 import { ingestDocumentFlow } from "../flows/ingest-document/flow";
 
 /** The steps of every flow the app registers. Add a flow here so its `sensitive(...)` outputs reach the model's guard (ADR 0132 D11). */
@@ -4723,7 +4723,7 @@ export const statusSensitive = (steps: readonly StepDefinition[], store: Pick<Ev
   mergeSensitive(sensitivePathsFromSteps(steps), sensitiveMapFromCovers(store.sealingCapability?.()?.covers ?? []));
 ```
 
-`config.ts`: import `type { EventEnvelope } from "@loom/core"` and `isIngestExecution` from `./status/model`; `FlowDeps` gains `onEvent?: (event: EventEnvelope) => void;` and `defineConfig({...})` gains
+`config.ts`: import `type { EventEnvelope } from "@loomwork/core"` and `isIngestExecution` from `./status/model`; `FlowDeps` gains `onEvent?: (event: EventEnvelope) => void;` and `defineConfig({...})` gains
 
 ```ts
     observability: { ...(deps.onEvent && { onEvent: deps.onEvent }) },
@@ -4736,8 +4736,8 @@ export const statusSensitive = (steps: readonly StepDefinition[], store: Pick<Ev
 
 ```ts
 import type { Identity } from "@docmind/auth";
-import type { EventStore } from "@loom/event-runtime";
-import type { ReadModelStore } from "@loom/plugin-read-model";
+import type { EventStore } from "@loomwork/event-runtime";
+import type { ReadModelStore } from "@loomwork/plugin-read-model";
 import { IngestStatus } from "./status/ingestStatus";
 import { flowSteps, statusSensitive } from "./status/wire";
 
@@ -5132,7 +5132,7 @@ Expected: FAIL (the stub effect still calls `deps.documentExists`, which the gua
 `deps.ts`:
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { isDocumentGone } from "./errors";
 import type { IngestOutput, IngestStartInput } from "./flow";
 import type { StepGuard } from "./stepEffect";
@@ -5361,8 +5361,8 @@ Edit `flow.test.ts` in place to this final content (in-memory Loom app with the 
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
-import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loom/workflow-runtime";
+import { sensitivePathsFromSteps } from "@loomwork/plugin-crypto";
+import { ExecutionAlreadyExistsError, ExecutionDeniedError } from "@loomwork/workflow-runtime";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../../config";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -5527,8 +5527,8 @@ Expected: FAIL (`INGEST_STEPS` undefined; `StepResult` not the step output).
 `flow.ts`:
 
 ```ts
-import { flow$, step$ } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "./stepEffect";
 
@@ -5573,7 +5573,7 @@ export const ingestDocumentFlow: RegisteredFlow = {
 `deps.ts` (the stub effect and its imports are deleted; `IngestDeps extends ParseDeps` since Task 80b):
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import type { IngestStartInput } from "./flow";
 import { type ParseDeps, parseEffect } from "./steps/parse";
 import type { StepResult } from "./stepEffect";
@@ -6031,7 +6031,7 @@ Expected: FAIL (`./chunk` not found; the flow has no chunk step).
 - [ ] **Step 3: Implement**
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { chunkDocument } from "../chunker";
 import type { IngestStartInput } from "../flow";
 import type { ParsedStore } from "../pgParsed";
@@ -6265,7 +6265,7 @@ Branch `feat/db-embedding-column`; subject `feat(db): chunk embeddings column, a
 
 ### Task 85: `packages/embeddings`: `OllamaEmbeddingProvider`
 
-Spec §9 item 22, first half. Implements Loom's `EmbeddingProvider` (Finding F3) over Ollama's `POST /api/embed`. It never logs or throws a URL, a body or a text; a failure is one of two classes so part 2's retry policy can tell them apart: `EmbeddingUnavailableError` (transient: network failure, timeout, 429, 5xx) and `EmbeddingError` from `@loom/memory` (permanent: 4xx other than 429, wrong shape or dimensions, non-finite values).
+Spec §9 item 22, first half. Implements Loom's `EmbeddingProvider` (Finding F3) over Ollama's `POST /api/embed`. It never logs or throws a URL, a body or a text; a failure is one of two classes so part 2's retry policy can tell them apart: `EmbeddingUnavailableError` (transient: network failure, timeout, 429, 5xx) and `EmbeddingError` from `@loomwork/memory` (permanent: 4xx other than 429, wrong shape or dimensions, non-finite values).
 
 **Files:**
 - Create: `packages/embeddings/package.json`
@@ -6275,10 +6275,10 @@ Spec §9 item 22, first half. Implements Loom's `EmbeddingProvider` (Finding F3)
 - Create: `packages/embeddings/src/ollama.ts`
 - Create: `packages/embeddings/src/ollama.test.ts`
 - Create: `packages/embeddings/src/index.ts`
-- Modify: `package.json` (root `pnpm.overrides`: `"@loom/memory": "link:../loom/packages/memory"`), `pnpm-lock.yaml` (not counted)
+- Modify: `package.json` (root `pnpm.overrides`: `"@loomwork/memory": "link:../loom/packages/memory"`), `pnpm-lock.yaml` (not counted)
 
 **Interfaces:**
-- Consumes: `EmbeddingProvider`, `EmbedOptions`, `EmbeddingError` from `@loom/memory`.
+- Consumes: `EmbeddingProvider`, `EmbedOptions`, `EmbeddingError` from `@loomwork/memory`.
 - Produces: `interface OllamaOptions { baseUrl: string; model: string; dimensions: number; maxBatchSize?: number; timeoutMs?: number; fetch?: typeof fetch }`; `class OllamaEmbeddingProvider implements EmbeddingProvider` (`modelId` = `ollama/<model>`, `dimensions`, `maxBatchSize` default 64, `embed(texts, opts)`); `class EmbeddingUnavailableError extends EmbeddingError`.
 
 - [ ] **Step 1: Write the failing test**
@@ -6286,7 +6286,7 @@ Spec §9 item 22, first half. Implements Loom's `EmbeddingProvider` (Finding F3)
 `ollama.test.ts` drives the provider with an injected `fetch` that returns `Response` objects (a real HTTP server arrives in Task 86):
 
 ```ts
-import { EmbeddingError } from "@loom/memory";
+import { EmbeddingError } from "@loomwork/memory";
 import { describe, expect, it } from "vitest";
 import { EmbeddingUnavailableError, OllamaEmbeddingProvider } from "./ollama";
 
@@ -6370,10 +6370,10 @@ Expected: FAIL (module not found).
 
 - [ ] **Step 3: Implement**
 
-`package.json` copies `packages/parsers`'s shape (`@docmind/embeddings`, `main: dist/index.js`, scripts as in blob-store: `build`, `test: vitest run`, `typecheck`, `typecheck:tests`; dependencies `"@loom/memory": "*"`, `"zod": "^3.23.8"`; devDependencies node types, vitest; `tsconfig.json` excludes `src/testing`). `src/ollama.ts`:
+`package.json` copies `packages/parsers`'s shape (`@docmind/embeddings`, `main: dist/index.js`, scripts as in blob-store: `build`, `test: vitest run`, `typecheck`, `typecheck:tests`; dependencies `"@loomwork/memory": "*"`, `"zod": "^3.23.8"`; devDependencies node types, vitest; `tsconfig.json` excludes `src/testing`). `src/ollama.ts`:
 
 ```ts
-import { type EmbedOptions, EmbeddingError, type EmbeddingProvider } from "@loom/memory";
+import { type EmbedOptions, EmbeddingError, type EmbeddingProvider } from "@loomwork/memory";
 import { z } from "zod";
 
 /** Worth retrying: the service is down, slow or overloaded. Permanent problems are plain EmbeddingError. */
@@ -6466,10 +6466,10 @@ Spec §9 item 22, second half; "each interface has one shared conformance suite"
 - Create: `packages/embeddings/src/testing/fakeOllama.ts`
 - Create: `packages/embeddings/src/conformance.test.ts`
 - Create: `packages/embeddings/src/http.test.ts`
-- Modify: `packages/embeddings/package.json` (devDependency `@loom/conformance`)
+- Modify: `packages/embeddings/package.json` (devDependency `@loomwork/conformance`)
 
 **Interfaces:**
-- Consumes: `OllamaEmbeddingProvider` (85); `runEmbeddingProviderConformance` from `@loom/conformance`; `HashingEmbeddingProvider` from `@loom/memory` (the fake server's embedding function).
+- Consumes: `OllamaEmbeddingProvider` (85); `runEmbeddingProviderConformance` from `@loomwork/conformance`; `HashingEmbeddingProvider` from `@loomwork/memory` (the fake server's embedding function).
 - Produces: `startFakeOllama(options: { dimensions: number; model?: string }): Promise<{ url: string; close(): Promise<void>; batches: number[]; failNext(status: number): void; hold(): Promise<void>; release(): void; nextAbort(): Promise<void> }>` (`batches` records each request's input count, never the texts; `hold()` returns a promise that resolves when a request has arrived at the gate; `nextAbort()` returns a promise that resolves when a request's connection closes before its answer was sent: F22, F23). Server binds `127.0.0.1`, answers `POST /api/embed`, 404 for any other path or unknown model.
 
 - [ ] **Step 1: Write the failing tests**
@@ -6477,7 +6477,7 @@ Spec §9 item 22, second half; "each interface has one shared conformance suite"
 `conformance.test.ts`:
 
 ```ts
-import { runEmbeddingProviderConformance } from "@loom/conformance";
+import { runEmbeddingProviderConformance } from "@loomwork/conformance";
 import { afterAll, beforeAll, describe } from "vitest";
 import { OllamaEmbeddingProvider } from "./ollama";
 import { type FakeOllama, startFakeOllama } from "./testing/fakeOllama";
@@ -6551,7 +6551,7 @@ Expected: FAIL (`./testing/fakeOllama` not found).
 ```ts
 import { type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { HashingEmbeddingProvider } from "@loom/memory";
+import { HashingEmbeddingProvider } from "@loomwork/memory";
 
 export interface FakeOllama {
   url: string;
@@ -6711,7 +6711,7 @@ Expected: FAIL (module not found).
 
 `types.ts` carries the interfaces above. `inMemory.ts`: a `Map<chunkId, {vector, model}>`; `upsert` validates every vector first (`VectorDimensionError`), asks `chunkIds(scope, documentId)` for the set of existing chunks, writes the ones in the set with `model = this.modelId`, returns `{ written, missing: ids not in the set }`; `missing` returns `chunkIds(...)` filtered to those with no row or a row whose model differs from `modelId`, sliced to `limit`; `search` scans the rows whose model equals `modelId` and whose id is in the scope's chunk ids (the twin has only the per-document lister, so `search` takes the union over documents the twin has seen via `upsert`/`missing`; document that limitation in a comment: the twin's search is for tests of ranking, not for scope), ranks by cosine, applies `minScore`, slices to `limit`. Package config as in Task 85 (`dependencies` none; devDependencies node types, vitest, and `@types/pg` for Task 89). Spec §3.1: replace the `VectorIndex` row with `| \`ChunkVectorStore\` | packages/vector-pg | \`upsert\`, \`missing\`, \`search\` over the \`chunks\` rows (Loom's \`VectorIndex\` cannot add a vector for an id that has no row, and has no document scope) | pgvector |`.
 
-Two more one-line spec edits in the same step (F13): the §3 layout line `  vector-pg/   pgvector VectorIndex (implements @loom/memory VectorIndex)` becomes `  vector-pg/   pgvector ChunkVectorStore (port, in-memory twin, shared conformance suite)`; and the §5.2 embed row's `\`VectorIndex.upsert\`` becomes `\`ChunkVectorStore.upsert\` (onto the existing chunk rows)`.
+Two more one-line spec edits in the same step (F13): the §3 layout line `  vector-pg/   pgvector VectorIndex (implements @loomwork/memory VectorIndex)` becomes `  vector-pg/   pgvector ChunkVectorStore (port, in-memory twin, shared conformance suite)`; and the §5.2 embed row's `\`VectorIndex.upsert\`` becomes `\`ChunkVectorStore.upsert\` (onto the existing chunk rows)`.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -7096,11 +7096,11 @@ Spec §5.2 embed: batches of 64, idempotent by `chunkId`, the log records `{coun
 **Files:**
 - Create: `apps/server/app/flows/ingest-document/steps/embed.ts`
 - Create: `apps/server/app/flows/ingest-document/steps/embed.test.ts`
-- Modify: `apps/server/package.json` (`@docmind/vector-pg`, `@docmind/embeddings`, `@loom/memory`)
+- Modify: `apps/server/package.json` (`@docmind/vector-pg`, `@docmind/embeddings`, `@loomwork/memory`)
 - Modify: `apps/server/app/flows/ingest-document/errors.ts` (`TransientIngestError`)
 
 **Interfaces:**
-- Consumes: `StepGuard`, `ChunkStore` (82), `ChunkVectorStore` (87), `EmbeddingProvider` (`@loom/memory`), `EmbeddingUnavailableError` (85), `DocumentGoneError`.
+- Consumes: `StepGuard`, `ChunkStore` (82), `ChunkVectorStore` (87), `EmbeddingProvider` (`@loomwork/memory`), `EmbeddingUnavailableError` (85), `DocumentGoneError`.
 - Produces also: `class TransientIngestError` in `errors.ts` (message `transient ingest failure`; part 2's retry policy reads it, part 1 treats it like any unexpected error):
 
   ```ts
@@ -8558,19 +8558,19 @@ Branch `test/api-ingest-acceptance-delete-sweep`; subject `test(api): M3 part 1 
 
 ## Self-review
 
-**Spec coverage.** Item 12 (interface, registry, conformance, txt): Tasks 66-68. Item 13 (sandboxed runner, limits): Tasks 69a-70, with the `@loom/plugin-sandbox` correction (F1, D1). Item 14 (flow skeleton, status projection, progress SSE): Tasks 73a, 74a-74e, 75c, 79b-79d, 80a-80c, 92, 94a-94c (the status projection is Loom's folded model, Revision 2026-10-19). Item 21 (chunk step, `chunks` table): Tasks 64, 71-72, 82-83. Item 22 (Ollama provider and suite): Tasks 85-86. Item 23 (`vector-pg`, embed step): Tasks 84, 87-91b. Carry-forwards: 1 sweep and stub executions (Tasks 76, 93), 2 `document_gone` everywhere (Task 73a, plus each step's own tests and the pg race tests in Tasks 83 and 95b), 3 composite key (Task 64), 4 sensitive paths and the raw event-log proof (Tasks 80-81, 83, 91, 92, 95a), 5 deps through `buildServer` (Tasks 79, 91a), 6 ratchet (Task 63), 7 `deriveKey` (D9, deliberately not done), 8 bounded start (Task 77), 9 UTF-16 bypass (Task 68). Linked retrieval: chunk ids are deterministic (D4), `chunks` has `ordinal`, `section_ordinal` and a numeric locator, `chunks` has `UNIQUE (tenant_id, id)` for the later `chunk_links` composite foreign keys, the `link` step exists as a placeholder, and `deriveKey` is left for the step that needs it. Out of scope and designed to slot in: md/org/docx/doc/pdf/image parsers (append to `createDefaultParsers`, add fixtures to the kit), analyze/summarize/link (replace three entries in `ingestEffects`), retry policy and retry endpoint (`TransientIngestError`, `FAILURE_CODES`, execution generations, `PermanentIngestError` -> `failed` already exist), fair scheduling (the child runner's `maxConcurrent` is the per-process cap; per-tenant fairness sits in front of `runtime.start`).
+**Spec coverage.** Item 12 (interface, registry, conformance, txt): Tasks 66-68. Item 13 (sandboxed runner, limits): Tasks 69a-70, with the `@loomwork/plugin-sandbox` correction (F1, D1). Item 14 (flow skeleton, status projection, progress SSE): Tasks 73a, 74a-74e, 75c, 79b-79d, 80a-80c, 92, 94a-94c (the status projection is Loom's folded model, Revision 2026-10-19). Item 21 (chunk step, `chunks` table): Tasks 64, 71-72, 82-83. Item 22 (Ollama provider and suite): Tasks 85-86. Item 23 (`vector-pg`, embed step): Tasks 84, 87-91b. Carry-forwards: 1 sweep and stub executions (Tasks 76, 93), 2 `document_gone` everywhere (Task 73a, plus each step's own tests and the pg race tests in Tasks 83 and 95b), 3 composite key (Task 64), 4 sensitive paths and the raw event-log proof (Tasks 80-81, 83, 91, 92, 95a), 5 deps through `buildServer` (Tasks 79, 91a), 6 ratchet (Task 63), 7 `deriveKey` (D9, deliberately not done), 8 bounded start (Task 77), 9 UTF-16 bypass (Task 68). Linked retrieval: chunk ids are deterministic (D4), `chunks` has `ordinal`, `section_ordinal` and a numeric locator, `chunks` has `UNIQUE (tenant_id, id)` for the later `chunk_links` composite foreign keys, the `link` step exists as a placeholder, and `deriveKey` is left for the step that needs it. Out of scope and designed to slot in: md/org/docx/doc/pdf/image parsers (append to `createDefaultParsers`, add fixtures to the kit), analyze/summarize/link (replace three entries in `ingestEffects`), retry policy and retry endpoint (`TransientIngestError`, `FAILURE_CODES`, execution generations, `PermanentIngestError` -> `failed` already exist), fair scheduling (the child runner's `maxConcurrent` is the per-process cap; per-tenant fairness sits in front of `runtime.start`).
 
 **Placeholder scan.** Tests and implementations are printed for every task except where a change is a small edit to a file shown earlier (harness wiring in Tasks 77, 79, 79b, 79c, 80a, 80b, 91b and 94b, `flow.ts` step appends in Tasks 83, 91b and 92, package manifests); those are described precisely enough to apply (file, symbol, what changes). The assertions of the M2 pg tests that Task 80c changes are named, and the rewritten duplicate-upload test is printed; the executor reads those files in the same step. Anything that turns out ambiguous on contact with the code is a question for the owner, not a guess.
 
 **Type consistency.** `IngestStartInput` is the `ref` everywhere; `StepResult` is every step's output; `StepGuard.begin(ref, step)` matches `PgStepGuard` (75c) and every fake (78, 80a, 80b, 83, 90, 92); `IngestStatus` implements `DocumentStatusReads` (74e) exactly as the routes use it (79c); `StatusView`, `UPLOADED` and `viewOf` (74b2) are what `toDto` takes; `progressOf` (74d) is what the publisher sends and Task 94b frames; `ingestKeyOf`/`ingestScopeOf` (74b) parse exactly what `ingestExecutionId` (76) builds, and the sweep's SQL (93) builds the same string again, pinned by a test; `ChunkStore.replace/count/read` match Tasks 82, 83, 90, 92; `ChunkVectorStore.upsert(scope, documentId, items)` matches Tasks 87-90 (the twin, the kit, the pg store and the embed step); `ingestExecutionId(userId, documentId, generation?)` matches Tasks 63, 76, 80c, 95; `ParseLimits` grows across 69a (`wallClockMs`, `memoryMb`), 69b (`maxInputBytes`, `maxChars`) and matches `loadParseLimits` in Task 79 (`maxConcurrent` is read by `createIngestWiring`, F07); `PgIngestArgs` is `{ pool, fields, blobs, wiring }` in Task 80b, gains an optional `vectors` in Task 91a and a required one in Task 91b; `DocumentProgressEvent.step` is optional from Task 65 on, which `progressOf` (74d) and the SSE frames (94a) rely on; the step ids are `ingest-parse`, `ingest-chunk`, `ingest-embed`, `ingest-analyze`, `ingest-summarize`, `ingest-link`, `ingest-finalize` in `flow.ts`, `deps.ts` and `security.ts`.
 
-**Revision self-review (2026-10-19).** *Spec coverage:* the brief's items map to tasks as follows: model, key and scope (74b); the tables, RLS policy on `scope`, grants and `manageSchema: false` (74a, 74e); wiring through `buildServer`, boot order, `onEvent`, `liveSource`, sensitive union, compaction exemption (79b); list page then `getFoldedByKey`, read-your-writes with `refreshFrom` (74c, 79c); SSE after the fold (74d); the `documents.status` decision (79c, 79d, `0013`); erasure by key, by scope (74e, 79c); the sweep (93); acceptance on the real roles (95a, 95a2, 95b). *Loom API:* every name used exists in the Loom checkout at `006dfdaf`: `projection$` (`@loom/core`), `ReadModelService.{registerFolded, handleEvent, catchUp, getMany, purgeFolded, drain}`, `InMemoryReadModelStore`, `foldedStates`, `mergeSensitive`, `sensitiveMapFromCovers`, `ReadModelStore.{getFoldedByKey, getFolded, applyFolded}`, `FoldedApply`, `PostgresReadModelStore(pool, { schema, manageSchema })`, `foldedStateDdl` (`@loom/plugin-postgres`), `sensitivePathsFromSteps` (`@loom/plugin-crypto`), `EventStore.sealingCapability`, `defineConfig({ observability.onEvent, durability.retention.compactionExempt })`. *Not used on purpose:* `service.getManyByKey` (it runs as the writer role, Revision R5). *Placeholders:* none; the prose-only edits are the harness, `compose.ts`, `main.ts` and `config.ts` changes of 79b and 79c, each with the file, the symbol and the code that changes. *Types:* `StatusCode = FailureCode | "internal"` (74b) is the only code type the model, `STATUS_MESSAGES`, `viewOf` and the DTO use; `IngestStatusOptions.bus` becomes required in 74d, and 74c's tests are edited there. *Pre-flight (2026-10-19):* findings F01 to F35 are applied as ruled (see the commit that introduced them); the "non-ingest executions get state-less rows" claim was wrong and is corrected in Loom API note 1 and Open question R4.
+**Revision self-review (2026-10-19).** *Spec coverage:* the brief's items map to tasks as follows: model, key and scope (74b); the tables, RLS policy on `scope`, grants and `manageSchema: false` (74a, 74e); wiring through `buildServer`, boot order, `onEvent`, `liveSource`, sensitive union, compaction exemption (79b); list page then `getFoldedByKey`, read-your-writes with `refreshFrom` (74c, 79c); SSE after the fold (74d); the `documents.status` decision (79c, 79d, `0013`); erasure by key, by scope (74e, 79c); the sweep (93); acceptance on the real roles (95a, 95a2, 95b). *Loom API:* every name used exists in the Loom checkout at `006dfdaf`: `projection$` (`@loomwork/core`), `ReadModelService.{registerFolded, handleEvent, catchUp, getMany, purgeFolded, drain}`, `InMemoryReadModelStore`, `foldedStates`, `mergeSensitive`, `sensitiveMapFromCovers`, `ReadModelStore.{getFoldedByKey, getFolded, applyFolded}`, `FoldedApply`, `PostgresReadModelStore(pool, { schema, manageSchema })`, `foldedStateDdl` (`@loomwork/plugin-postgres`), `sensitivePathsFromSteps` (`@loomwork/plugin-crypto`), `EventStore.sealingCapability`, `defineConfig({ observability.onEvent, durability.retention.compactionExempt })`. *Not used on purpose:* `service.getManyByKey` (it runs as the writer role, Revision R5). *Placeholders:* none; the prose-only edits are the harness, `compose.ts`, `main.ts` and `config.ts` changes of 79b and 79c, each with the file, the symbol and the code that changes. *Types:* `StatusCode = FailureCode | "internal"` (74b) is the only code type the model, `STATUS_MESSAGES`, `viewOf` and the DTO use; `IngestStatusOptions.bus` becomes required in 74d, and 74c's tests are edited there. *Pre-flight (2026-10-19):* findings F01 to F35 are applied as ruled (see the commit that introduced them); the "non-ingest executions get state-less rows" claim was wrong and is corrected in Loom API note 1 and Open question R4.
 
 ## Owner decisions
 
 Settled 2026-10-19: the owner accepted the recommended default for each question below (except question 4, replaced by the Revision 2026-10-19 section and the questions at the end of this file), and chose to build pgvector into the local test cluster (see Preconditions).
 
-1. **Parser sandbox: child process instead of `@loom/plugin-sandbox` (spec §3.2, §5.2).** `@loom/plugin-sandbox` is a QuickJS evaluator of JSON-in/JSON-out scripts and cannot host `mammoth`, `unpdf` or `word-extractor`. Default: `ParseRunner`, a `child_process.fork` under Node's `--permission` (no filesystem beyond its own code, no child processes, empty environment), `--max-old-space-size` 512 MB, 30 s wall clock then `SIGKILL`, 2 concurrent. Residual risk: Node 22/24's permission model does not restrict network, so a compromised parser library could open sockets; mitigate in deployment (no secrets on the host's reachable network from that user) or move to a container per parse later. The spec lines are corrected in Task 70. Alternative: drop the permission model for a plain worker thread (weaker, simpler).
+1. **Parser sandbox: child process instead of `@loomwork/plugin-sandbox` (spec §3.2, §5.2).** `@loomwork/plugin-sandbox` is a QuickJS evaluator of JSON-in/JSON-out scripts and cannot host `mammoth`, `unpdf` or `word-extractor`. Default: `ParseRunner`, a `child_process.fork` under Node's `--permission` (no filesystem beyond its own code, no child processes, empty environment), `--max-old-space-size` 512 MB, 30 s wall clock then `SIGKILL`, 2 concurrent. Residual risk: Node 22/24's permission model does not restrict network, so a compromised parser library could open sockets; mitigate in deployment (no secrets on the host's reachable network from that user) or move to a container per parse later. The spec lines are corrected in Task 70. Alternative: drop the permission model for a plain worker thread (weaker, simpler).
 2. **Embedding model and dimension.** Default: `nomic-embed-text`, **768** dimensions, `vector(768)` fixed by migration `0014`; provider `modelId` `ollama/nomic-embed-text`. nomic recommends `search_document:` and `search_query:` prefixes; the `EmbeddingProvider` SPI has no document/query distinction, so part 1 sends texts unprefixed and M4 decides how to embed queries (a provider option or a second method). A different model size is a new migration plus the resumable re-embed (`missing` already treats a changed `modelId` as work to do).
 3. **Chunk size and tokenizer.** Default: `ceil(characters / 4)` as the token estimate (no tokenizer dependency), target 600 tokens = 2400 characters, overlap 15% = 360 characters, paragraphs never split unless longer than the target. An exact tokenizer (the embedding model's) is a drop-in replacement for `estimateTokens` if retrieval quality demands it; the 8192-token nomic context makes the estimate safe.
 4. **`documents.status` as a "projection". Replaced 2026-10-19 (see Revision 2026-10-19).** The owner decided that the status must use Loom's folded-state read models (ADR 0132). The status is the state of an `ingest-status` folded model, folded from the flow's events, read by the routes and published to SSE after each fold; no step writes it and `documents.status` is dropped. The questions that decision left open are at the end of this file. (The earlier answer, a status written by each step's effect, is withdrawn.)

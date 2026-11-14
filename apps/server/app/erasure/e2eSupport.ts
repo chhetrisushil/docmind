@@ -7,8 +7,8 @@ import {
   ErasureStatusResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
-import type { EventEnvelope } from "@loom/core";
-import { archiveChainOf, isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
+import type { EventEnvelope } from "@loomwork/core";
+import { archiveChainOf, isKeyUnavailable, isPayloadShredded } from "@loomwork/event-runtime";
 import type { Pool } from "pg";
 import { expect, vi } from "vitest";
 import { DOC_ASSISTANT_GK_PROMPT, DOC_ASSISTANT_PROMPT } from "../chats/agent";

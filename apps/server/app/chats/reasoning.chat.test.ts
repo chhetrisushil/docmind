@@ -1,5 +1,5 @@
-import { unwrapTainted } from "@loom/classify";
-import { readReasoningBounded } from "@loom/llm";
+import { unwrapTainted } from "@loomwork/classify";
+import { readReasoningBounded } from "@loomwork/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { legacyChatConversationId } from "./ids";
 import { type ChatStack, startChatStack } from "./testStack";

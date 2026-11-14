@@ -1,4 +1,4 @@
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 import { chatIdOfConversation } from "../../chats/ids";
 import { opaqueIds } from "../../opaqueIds";
 import type { TurnRef } from "./ids";

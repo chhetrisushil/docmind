@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: {
     conditions: ["node", "require", "default"],
     // The auth test kit imports vitest, which cannot be require()d from the CommonJS build, so
@@ -44,9 +44,10 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     server: {
       deps: {
-        external: [/@loom\//, /[\\/]loom[\\/]/],
+        // loom only: loom-ui shares the scope as @loomwork/ui-*.
+        external: [/@loomwork\/(?!ui-)/, /[\\/]loom[\\/]/],
         // Loom's conformance kits are ESM with extensionless imports, so Vite must load them.
-        inline: [/@loom\/conformance/, /[\\/]conformance[\\/]dist/],
+        inline: [/@loomwork\/conformance/, /[\\/]conformance[\\/]dist/],
       },
     },
   },

@@ -1,4 +1,4 @@
-import { unwrapTainted } from "@loom/classify";
+import { unwrapTainted } from "@loomwork/classify";
 import { describe, expect, it } from "vitest";
 import { type DocumentSummaryView, type ListedDocument, documentEffects } from "./documents";
 import { ChatToolInputError } from "./harness";

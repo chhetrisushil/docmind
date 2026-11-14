@@ -1,7 +1,7 @@
 import { ORD_PATTERN } from "@docmind/contracts";
-import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
-import { isValidConversationId } from "@loom/conversation";
-import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+import { isValidConversationId } from "@loomwork/conversation";
+import { MAX_EXECUTION_ID_BYTES } from "@loomwork/plugin-postgres";
+import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";
 import { type IdKey, TOKEN_LENGTH, sealToken } from "./siv";
 
 /** The canonical lower-case UUID source (8-4-4-4-12), defined once; `chats/ids.ts` re-exports it. */

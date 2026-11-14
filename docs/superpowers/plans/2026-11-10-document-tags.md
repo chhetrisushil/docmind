@@ -115,7 +115,7 @@ This plan was amended after the pre-flight scan (`preflight.md`, F1 to F16) and 
 - Create: `apps/server/app/tags/suggestions.ts`, `apps/server/app/tags/suggestions.test.ts`
 
 **Interfaces:**
-- Consumes: `Uuid` from `packages/contracts/src/common.ts`; `FieldKeyStoreError`, `FieldKeyUnavailableError` from `apps/server/app/crypto/fields.ts`; `KeyStore` from `@loom/plugin-crypto`.
+- Consumes: `Uuid` from `packages/contracts/src/common.ts`; `FieldKeyStoreError`, `FieldKeyUnavailableError` from `apps/server/app/crypto/fields.ts`; `KeyStore` from `@loomwork/plugin-crypto`.
 - Produces (contracts, used by every later task):
   - limits: `MAX_TAG_NAME_CHARS = 40`, `MAX_TAGS_PER_DOCUMENT = 20`, `MAX_TAGS_PER_USER = 200`, `MAX_TAGS_PER_FILTER = 10`, `MAX_TAG_SUGGESTIONS = 5`, `MAX_NEW_TAG_SUGGESTIONS = 3`
   - `cleanTagName(raw: string): string | null`, `normaliseTagName(raw: string): string | null`
@@ -368,7 +368,7 @@ Expected: PASS.
 Create `apps/server/app/crypto/tagKeys.test.ts`:
 
 ```ts
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { EntityKeys } from "./entityKeys";
 import { FieldKeyUnavailableError } from "./fields";
@@ -421,7 +421,7 @@ Expected: FAIL (`./tagKeys` does not exist).
 ```ts
 import { createHmac, hkdfSync } from "node:crypto";
 import { normaliseTagName } from "@docmind/contracts";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";
 
 const TAG_INFO = "docmind-tag-v1";
@@ -2735,7 +2735,7 @@ describe("summarize step: tag suggestions", () => {
 Create `apps/server/app/flows/ingest-document/flowHash.test.ts` (the D1 finding as a guard):
 
 ```ts
-import { flowContentHash } from "@loom/core";
+import { flowContentHash } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { ingestDocumentFlow } from "./flow";
 
@@ -2762,7 +2762,7 @@ Create `apps/server/app/flows/ingest-document/steps/summarize.tags.pg.test.ts` (
 ```ts
 import { randomUUID } from "node:crypto";
 import type { ParsedDocument } from "@docmind/parsers";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TagKeys } from "../../../crypto/tagKeys";
 import { PG_URL } from "../../../db/testSupport";
@@ -3052,9 +3052,9 @@ Run the contracts suite: PASS.
 Create `apps/server/app/flows/suggest-tags/flow.ts`:
 
 ```ts
-import { flow$, step$ } from "@loom/core";
-import type { RetryPolicy } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { RetryPolicy } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 
 export const SUGGEST_TAGS_FLOW_ID = "suggest-tags";
@@ -3146,7 +3146,7 @@ Create `apps/server/app/flows/suggest-tags/step.pg.test.ts`:
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
 import { LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TagKeys } from "../../crypto/tagKeys";
 import { PG_URL } from "../../db/testSupport";
@@ -3325,9 +3325,9 @@ import {
   LlmRequestError,
   LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import { tainted } from "@loom/classify";
-import type { Effect } from "@loom/effect-runtime";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import type { Effect } from "@loomwork/effect-runtime";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import type { Pool } from "pg";
 import { type FieldCrypto, FieldKeyStoreError } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";
@@ -3455,7 +3455,7 @@ Create `apps/server/app/flows/suggest-tags/start.test.ts`:
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { ExecutionAlreadyExistsError, type ExecutionHandle } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError, type ExecutionHandle } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { executionIdFor } from "../../subject";
 import { loomSuggestTagsStarter, suggestTagsExecutionId } from "./start";
@@ -3595,7 +3595,7 @@ import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import { type UserExecutionId, executionIdFor } from "../../subject";
 import { MAX_RERUNS, rerunTracker } from "../rerunTracker";
 import { SuggestTagsInput, suggestTagsFlow } from "./flow";
@@ -3734,8 +3734,8 @@ Create `apps/server/app/flows/suggest-tags/flow.pg.test.ts`:
 ```ts
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider } from "@loom/llm";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { TagKeys } from "../../crypto/tagKeys";
@@ -4159,7 +4159,7 @@ git commit -m "feat(tags): on-demand suggest-tags flow, accept, dismiss and refr
   - `Api`: `listTags(): Promise<ListTagsResponse>`, `createTag(name): Promise<TagResponse>`, `renameTag(id, name): Promise<DocumentTag>`, `deleteTag(id): Promise<void>`, `addDocumentTag(id, name): Promise<DocumentTagsResponse>`, `removeDocumentTag(id, tagId): Promise<DocumentTagsResponse>`, `acceptTagSuggestion(id, name): Promise<DocumentTagsResponse>`, `dismissTagSuggestion(id, name): Promise<DocumentTagsResponse>`, `refreshTagSuggestions(id): Promise<void>`
   - `<dm-tag-bar>`: properties `tags: TagSummary[]`, `selected: string[]`, `match: "any" | "all"`, `count: number | null`, `managing: boolean`; events `tag-selection` (`detail: { tags: string[]; match: "any" | "all" }`) and `manage-toggle`
   - `<dm-tag-manage>`: property `tags: TagSummary[]`; event `tags-changed`
-  - `<dm-documents-page>` answers the table's `TABLE_TOKEN` action (`payload: { rowKey, tokenId }`, from `@loom-ui/core/browser`) by navigating to `{ name: "documents", tags: [tokenId] }` when the served table holds that token in that row (the selection is replaced, not added to); it is not an `intentOf` intent, because it only navigates
+  - `<dm-documents-page>` answers the table's `TABLE_TOKEN` action (`payload: { rowKey, tokenId }`, from `@loomwork/ui-core/browser`) by navigating to `{ name: "documents", tags: [tokenId] }` when the served table holds that token in that row (the selection is replaced, not added to); it is not an `intentOf` intent, because it only navigates
   - `apps/web/src/testing/tags.ts`: `tag(n, name, documents)`, `root(el)`, `q(el, selector)`, `all(el, selector)`
 
 - [ ] **Step 0: Gate: the linked loom-ui has token cells (preflight F1)**
@@ -4236,7 +4236,7 @@ In `views.ts`, the `documents` provider: `overridable: ["status", "tags", "match
     ]),
 ```
 
-and extend `reshapers.test.ts`'s library-table case: the columns are `["Name", "Tags", "Type", "Size", "Status", "Added"]` and column 1 is a token cell: a document with tags `[{ id: a, name: "Finance" }, { id: b, name: "Q3" }]` gives `{ tokens: [{ id: a, label: "Finance" }, { id: b, label: "Q3" }] }` (and `{ tokens: [] }` with none). In the same case assert that loom-ui accepts the whole value: `expect(tableRowProblems({ rows: out.rows, rowKeys: out.rowKeys, rowActions: out.rowActions })).toEqual([])` (`import { tableRowProblems } from "@loom-ui/core"`, as the other experiences tests import loom-ui). Run the experiences suite: PASS.
+and extend `reshapers.test.ts`'s library-table case: the columns are `["Name", "Tags", "Type", "Size", "Status", "Added"]` and column 1 is a token cell: a document with tags `[{ id: a, name: "Finance" }, { id: b, name: "Q3" }]` gives `{ tokens: [{ id: a, label: "Finance" }, { id: b, label: "Q3" }] }` (and `{ tokens: [] }` with none). In the same case assert that loom-ui accepts the whole value: `expect(tableRowProblems({ rows: out.rows, rowKeys: out.rowKeys, rowActions: out.rowActions })).toEqual([])` (`import { tableRowProblems } from "@loomwork/ui-core"`, as the other experiences tests import loom-ui). Run the experiences suite: PASS.
 
 - [ ] **Step 2: The reader filters, test first**
 
@@ -5325,7 +5325,7 @@ describe("dm-documents-page tag filter", () => {
 
 Run: `pnpm --filter @docmind/web exec vitest run src/components/dm-documents-page.test.ts` Expected: FAIL. Now edit `apps/web/src/components/dm-documents-page.ts`:
 
-- imports: `import type { TagSummary } from "@docmind/contracts";` (next to the existing contracts import), `import { TABLE_TOKEN } from "@loom-ui/core/browser";` (the browser entry: the main entry of `@loom-ui/core` is Node-only), `import "./dm-tag-bar"; import "./dm-tag-manage"; import type { TagSelectionDetail } from "./dm-tag-bar";`, and add `type ActionAnswer` to the existing import from `"../ui/session"`; a module constant `/** The Tags column of the library table (see the reshaper). */ const TAGS_COLUMN = 1;`
+- imports: `import type { TagSummary } from "@docmind/contracts";` (next to the existing contracts import), `import { TABLE_TOKEN } from "@loomwork/ui-core/browser";` (the browser entry: the main entry of `@loomwork/ui-core` is Node-only), `import "./dm-tag-bar"; import "./dm-tag-manage"; import type { TagSelectionDetail } from "./dm-tag-bar";`, and add `type ActionAnswer` to the existing import from `"../ui/session"`; a module constant `/** The Tags column of the library table (see the reshaper). */ const TAGS_COLUMN = 1;`
 - `static properties = { empty: { state: true }, tags: { state: true }, managing: { state: true }, count: { state: true } };` with `declare tags: TagSummary[]; declare managing: boolean; declare count: number | null;` and in the constructor `this.tags = []; this.managing = false; this.count = null;`
 - `private readonly ctx = new ServicesController(this, (s) => [s.uploads, s.router]);` (the page re-renders when the address changes)
 - in `start()`, after `services.uploads.startEvents(…)`: `void this.loadTags();`
@@ -6035,7 +6035,7 @@ git commit -m "feat(tags): tags row and suggested tags on the document page"
 In `apps/server/app/documents/testHarness.ts`:
 - add `tags: TagService` as the last parameter of `makeIngest(...)` and pass `tags` where it is called (`makeIngest(app, fields, keys, (id) => effectiveBlobs(id), wiring, twinOverPgChunks(app, wiring), tags)`; move the existing `const tags = new TagService(...)` line above that call if needed);
 - in `makeIngest`'s `buildApp(..., { onEvent: …, ingest: {…} })` add `suggestTags: { pool: app, fields, tags, bus, ...(wiring.llm.summary && { llm: wiring.llm.summary }) },`;
-- add `runtime: loom.runtime,` to the object `makeIngest` returns (and `runtime: WorkflowRuntime` to its return type, imported as `type WorkflowRuntime` from `@loom/workflow-runtime`);
+- add `runtime: loom.runtime,` to the object `makeIngest` returns (and `runtime: WorkflowRuntime` to its return type, imported as `type WorkflowRuntime` from `@loomwork/workflow-runtime`);
 - in `startDocumentServer`, change the `suggestRoutes({ … })` default starter from the disabled one to `overrides.suggest?.starter ?? loomSuggestTagsStarter(ingest.runtime, { enabled: () => wiring.llm.summary !== undefined })` (import `loomSuggestTagsStarter`).
 
 Run `pnpm --filter @docmind/server exec vitest run app/tags app/documents/visualsRetry.pg.test.ts` with the Postgres env: still PASS (the suggest route tests inject their own starter).

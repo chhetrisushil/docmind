@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyChatConversationId } from "../../chats/ids";
 import { OpaqueIds, opaqueIds } from "../../opaqueIds";

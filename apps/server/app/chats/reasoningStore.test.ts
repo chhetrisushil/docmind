@@ -1,12 +1,12 @@
-import { unwrapTainted } from "@loom/classify";
+import { unwrapTainted } from "@loomwork/classify";
 import {
   LLM_REASONING_CAPTURED,
   captureReasoning,
   readReasoningBounded,
   reasoningStoreResolver,
   sealReasoningText,
-} from "@loom/llm";
-import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+} from "@loomwork/llm";
+import { InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { legacyChatConversationId } from "./ids";

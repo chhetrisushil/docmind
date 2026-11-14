@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import type { Pool } from "pg";
 import type { Kek } from "./kek";
 import { unwrapKey, wrapKey } from "./wrap";

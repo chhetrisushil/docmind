@@ -1,13 +1,13 @@
 import { createHmac } from "node:crypto";
 import type { SurfaceName, ViewName } from "@docmind/contracts";
-import { type CompileResult, type Experience, compile } from "@loom-ui/core";
+import type { Blueprint } from "@loomwork/blueprint-runtime";
+import { type CompileResult, type Experience, compile } from "@loomwork/ui-core";
 import {
   HYDRATION_PROJECTION_ID,
   HYDRATION_PROJECTION_VERSION,
   type HandleInventory,
   handleInventory,
-} from "@loom-ui/hydration";
-import type { Blueprint } from "@loom/blueprint-runtime";
+} from "@loomwork/ui-hydration";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { EXPERIENCES } from "./views";
 import { OWNER_READ, TURN_READ, mergedCatalog } from "./visuals";

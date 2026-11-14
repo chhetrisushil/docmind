@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ParseAbortedError, type ParsedDocument } from "@docmind/parsers";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../../crypto/fields";
 import { PG_URL } from "../../db/testSupport";

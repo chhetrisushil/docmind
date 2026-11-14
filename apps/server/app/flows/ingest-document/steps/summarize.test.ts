@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
 import type { ParsedDocument } from "@docmind/parsers";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
 import { describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError } from "../../../crypto/fields";
 import { bounded } from "../../../llm/bounded";

@@ -1,5 +1,5 @@
 import type { DocumentProgressEvent, DocumentStatus, IngestStep } from "@docmind/contracts";
-import { type EventEnvelope, projection$ } from "@loom/core";
+import { type EventEnvelope, projection$ } from "@loomwork/core";
 import { FAILURE_CODES, type FailureCode } from "../flows/ingest-document/errors";
 import { opaqueIds } from "../opaqueIds";
 

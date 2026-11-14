@@ -4,9 +4,9 @@
 
 **Goal:** After M1, a user can sign up, log in and log out over HTTP with an argon2id password and an HTTP-only session cookie, behind an `Authenticator` interface that every request passes through; sign-up does not reveal which emails are registered, and login and sign-up are rate limited per client address and per email; every user has a data key held by a Postgres key store that passes Loom's KeyStore contract, and the master key that wraps them can be rotated with a resumable tool; and Loom's event log and snapshots live in Postgres, encrypted per user with that key store, so destroying a user's key makes their sealed snapshots and principal fields unreadable. Event payloads are sealed only once M2 registers its sensitive event paths (`sensitive: {}` in M1).
 
-**Architecture:** `packages/auth` holds the `Authenticator` interface, its conformance suite and the password/session logic over an `AuthStore` interface (an in-memory store for unit tests); the server implements `AuthStore` on Postgres through `SECURITY DEFINER` functions for the steps that happen before a tenant is known, and mounts the routes behind a `requireAuth` middleware on a router that turns every handler failure into a 500. Sign-up always answers the same `202` and starts no session; login and sign-up go through a Postgres-backed `Throttle` (exponential, time-boxed locks keyed by client address and by a hash of the email). `packages/keystore-pg` implements Loom's `KeyStore` (`@loom/plugin-crypto`) with one random data key per user, wrapped by a master key (KEK) from the environment and reachable only through `SECURITY DEFINER` functions; a rotation command re-wraps every key to a new KEK, as the owner role, never exposing a data key. Loom's Postgres stores migrate themselves, so they get their own role (`docmind_loom`) and schema (`loom`); `apps/server` wraps them in `EncryptingEventStore` and `EncryptingSnapshotStore` (whole-state sealing), keyed by the owning user.
+**Architecture:** `packages/auth` holds the `Authenticator` interface, its conformance suite and the password/session logic over an `AuthStore` interface (an in-memory store for unit tests); the server implements `AuthStore` on Postgres through `SECURITY DEFINER` functions for the steps that happen before a tenant is known, and mounts the routes behind a `requireAuth` middleware on a router that turns every handler failure into a 500. Sign-up always answers the same `202` and starts no session; login and sign-up go through a Postgres-backed `Throttle` (exponential, time-boxed locks keyed by client address and by a hash of the email). `packages/keystore-pg` implements Loom's `KeyStore` (`@loomwork/plugin-crypto`) with one random data key per user, wrapped by a master key (KEK) from the environment and reachable only through `SECURITY DEFINER` functions; a rotation command re-wraps every key to a new KEK, as the owner role, never exposing a data key. Loom's Postgres stores migrate themselves, so they get their own role (`docmind_loom`) and schema (`loom`); `apps/server` wraps them in `EncryptingEventStore` and `EncryptingSnapshotStore` (whole-state sealing), keyed by the owning user.
 
-**Tech Stack:** everything in M0, plus `argon2` ^0.45.1 (node-argon2, prebuilt binaries), `zod` ^3.23.8 in the server, and the Loom packages `@loom/plugin-crypto`, `@loom/plugin-postgres` and (tests) `@loom/conformance`, all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db`.
+**Tech Stack:** everything in M0, plus `argon2` ^0.45.1 (node-argon2, prebuilt binaries), `zod` ^3.23.8 in the server, and the Loom packages `@loomwork/plugin-crypto`, `@loomwork/plugin-postgres` and (tests) `@loomwork/conformance`, all linked from `../loom` at commit `8f9eab2492c85bb994d746855f06d2eccc9f45db`.
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3.1 interfaces, §4.2 tables, §4.3 tenancy, §4.4 crypto-shredding, §8 gates and PR rules, §9 M1 = items 5-8). M0 plan: `/Users/such/workspace/docmind/docs/superpowers/plans/2026-10-18-m0-foundations.md`. Executors read all three.
 
@@ -40,14 +40,14 @@ Checked on this machine on 2026-10-18. The code in this plan was built and run: 
 
 | Need | Real export | Where |
 |---|---|---|
-| KeyStore interface | `KeyStore { getOrCreate(subjectId): Promise<Buffer>; get(subjectId): Promise<Buffer \| null>; destroy(subjectId): Promise<void>; wasDestroyed?(subjectId): Promise<boolean>; readonly durable?: boolean }` from `@loom/plugin-crypto`. Keys are 32-byte `Buffer`s. After `destroy`, `getOrCreate` MUST NOT mint a new key. | `plugins/crypto/src/keystore.ts`, re-exported by `plugins/crypto/src/index.ts` |
-| KeyStore contract suite | `runKeyStoreConformance(factory: () => KeyStoreLike, label?)` from `@loom/conformance` (ESM-only package; registers vitest `describe`/`it`). 8 tests: durable is a boolean, stable key, distinct subjects, get before/after create, destroy, never resurrected, idempotent destroy, `wasDestroyed`. | `packages/conformance/src/index.ts:2913` |
+| KeyStore interface | `KeyStore { getOrCreate(subjectId): Promise<Buffer>; get(subjectId): Promise<Buffer \| null>; destroy(subjectId): Promise<void>; wasDestroyed?(subjectId): Promise<boolean>; readonly durable?: boolean }` from `@loomwork/plugin-crypto`. Keys are 32-byte `Buffer`s. After `destroy`, `getOrCreate` MUST NOT mint a new key. | `plugins/crypto/src/keystore.ts`, re-exported by `plugins/crypto/src/index.ts` |
+| KeyStore contract suite | `runKeyStoreConformance(factory: () => KeyStoreLike, label?)` from `@loomwork/conformance` (ESM-only package; registers vitest `describe`/`it`). 8 tests: durable is a boolean, stable key, distinct subjects, get before/after create, destroy, never resurrected, idempotent destroy, `wasDestroyed`. | `packages/conformance/src/index.ts:2913` |
 | Reference KeyStore | `InMemoryKeyStore` (`durable = false`, tombstone set) | `plugins/crypto/src/keystore.ts` |
 | Event-log encryption | `new EncryptingEventStore(inner: EventStore, keys: KeyStore, { sensitive: Record<eventType, string[]>, subjectOf?: (e: Pick<EventEnvelope,"executionId"\|"workflowId">) => string, onShredded?: "throw"\|"tolerate", ivSource? })`; `registerSensitive(eventType, paths)`; a read after a shred throws `PayloadShreddedError`. `subjectOf` defaults to `executionId`. | `plugins/crypto/src/EncryptingEventStore.ts:143`, `:169` |
 | Snapshot encryption | `new EncryptingSnapshotStore(inner: SnapshotStore, keys: KeyStore, { sealState: true, subjectOf?, events?: EventStore, legacyPlaintext?, ... })`. `sealState: true` seals the whole folded state; `subjectOf` takes `{executionId, workflowId}`. | `plugins/crypto/src/EncryptingSnapshotStore.ts:124`, `:139` |
 | Erasure primitive | `shredSubject(keys, rawEventStore, executionId, { subjectId?, executionIds?, snapshotStore?, reason?, force? })`: writes an erase intent, calls `keys.destroy(subject)`, then a `PAYLOAD_SHREDDED` tombstone per execution; idempotent. M5 calls it; M1 only proves it works against our stores. | `plugins/crypto/src/shred.ts:188` |
 | Postgres stores | `postgresStorage({ url: PgConfig, branching?, ... })` returns `{ kind: "custom", eventStore, snapshotStore, leaseStore }`. `PgConfig = string \| PoolConfig \| Pool`. The event store **creates and migrates its own tables at boot** (`CREATE TABLE IF NOT EXISTS events, snapshots, refs, lineage, fences, timers, leases, durable_state, read_model_rows, memory_entries ...`, a `SECURITY DEFINER` trigger function, `CREATE INDEX`), unqualified, in the connection's `search_path` schema. | `plugins/postgres/src/preset.ts`, `schema.ts`, `PostgresEventStore.ts`; `MAX_EXECUTION_ID_BYTES = 1024` (`PostgresEventStore.ts:37`) |
-| Composition | `defineConfig({ storage: { kind: "custom", eventStore, snapshotStore, leaseStore? }, security: { strict, crypto?: PrincipalCryptoOptions, principalCodec?, ... } })`. With `crypto` composed, the principal's identity is recorded encrypted and no `principalCodec` is needed under `strict`; `PrincipalCryptoOptions = { events: SensitivePathRegistry, snapshots?: SensitiveSnapshotRegistry, allowPlaintextCheckpoints? }`. `StorageConfig` and `PrincipalCryptoOptions` are exported from `@loom/app`. The kernel refuses a non-sealing snapshot store beside a sealing event store. | `packages/app/src/defineConfig.ts:140`, `:285`; `packages/app/src/principalPolicy.ts:31`; `packages/app/src/index.ts` |
+| Composition | `defineConfig({ storage: { kind: "custom", eventStore, snapshotStore, leaseStore? }, security: { strict, crypto?: PrincipalCryptoOptions, principalCodec?, ... } })`. With `crypto` composed, the principal's identity is recorded encrypted and no `principalCodec` is needed under `strict`; `PrincipalCryptoOptions = { events: SensitivePathRegistry, snapshots?: SensitiveSnapshotRegistry, allowPlaintextCheckpoints? }`. `StorageConfig` and `PrincipalCryptoOptions` are exported from `@loomwork/app`. The kernel refuses a non-sealing snapshot store beside a sealing event store. | `packages/app/src/defineConfig.ts:140`, `:285`; `packages/app/src/principalPolicy.ts:31`; `packages/app/src/index.ts` |
 | Compliance wiring (M5, not M1) | `security.compliance: { subjectOf: SubjectResolver /* (event: EventEnvelope) => string \| undefined */, tenantOf?, erase?: { shred, destroyed? } }`, `app.eraseSubject(subjectId, tenant, options)`. | `packages/app/src/defineConfig.ts:290-325`, `packages/compliance/src/SubjectIndex.ts:26` |
 
 ### Loom does not have
@@ -60,7 +60,7 @@ Checked on this machine on 2026-10-18. The code in this plan was built and run: 
 | Finding | Consequence |
 |---|---|
 | Loom's Postgres stores run DDL at boot, so they cannot connect as `docmind_app` (which owns nothing). Run as a role that **owns a dedicated schema** with `options: "-c search_path=loom"`, they work: spiked against Postgres 17, all 11 tables landed in `loom`, and an encrypting wrapper round-tripped. | PR 8a adds the `docmind_loom` role and `loom` schema; the M0 "RLS on every table" guard only looks at `public`, so Loom's tables do not trip it. |
-| `@loom/conformance` is ESM with extensionless relative imports. Node's native ESM cannot load it, so it must be **inlined by Vite**; and the server's `external: [/@loom\//]` rule would externalize it. | PR 7b adds `server.deps.inline` for it in `apps/server/vitest.config.ts`. |
+| `@loomwork/conformance` is ESM with extensionless relative imports. Node's native ESM cannot load it, so it must be **inlined by Vite**; and the server's `external: [/@loomwork\//]` rule would externalize it. | PR 7b adds `server.deps.inline` for it in `apps/server/vitest.config.ts`. |
 | A package's `testing` kit that imports `vitest` cannot be `require()`d from the CommonJS build ("Vitest cannot be imported in a CommonJS module"). | `packages/auth` exposes it as a subpath (`@docmind/auth/testing`) and the server's vitest config aliases that subpath to the TypeScript source (PR 6f). Type checking still uses `testing.d.ts`. |
 | `node-argon2` and Postgres make a rate limiter easy to get subtly wrong, so one suite (`runThrottleConformance`, `packages/auth/src/throttleConformance.ts`) pins the behaviour and runs on both the in-memory and the Postgres throttle; time is moved by shifting stored timestamps, never by sleeping. | The two implementations cannot drift apart; route tests use the in-memory one with a fixed clock. |
 | Node `server.close()` waits for keep-alive sockets that go idle **after** the call; they are not closed for you. | `shutdown()` (PR 5d) sweeps idle connections until the server is down. |
@@ -89,7 +89,7 @@ Decided here so executors are not blocked. Items 2, 8, 9 and 10 carry the owner'
 10. **KEK rotation (owner decision; PRs 7d-7g).** `pnpm --filter @docmind/server keys:rotate` re-wraps every live `data_keys` row from the previous KEK to the current one as the owner role: atomic batches, idempotent, resumable after a crash, tombstones untouched, data keys unchanged and never printed or returned; it then verifies every key opens with the new KEK alone and exits non-zero if any key failed to open or is on a KEK nobody provided. Steps are in `docs/operations/rotate-kek.md` (delivered in 7g). Trade-offs: rotation does not change data keys, so it does not help if a data key itself leaked (re-encryption is not built); the old KEK must be kept until database backups taken before the rotation expire (30 days by default, spec §4.4); `PostgresKeyStore` and `loadKeks` support one current and one previous KEK at a time.
 11. **Carried to M5 (`DELETE /api/me`):** `docmind_app` cannot insert or delete `tenants` (migration 0003), so erasure needs a new `SECURITY DEFINER` function to hard-delete the tenant; `security.compliance.subjectOf` must resolve an event to the same user id that `subjectOfExecution` yields (read `input.userId`, or parse the execution id), and `tenantOf` must return the tenant; `shredSubject` needs `createDurableStorage(...).raw` (the unwrapped stores), which PR 8c already returns. The `data_keys` tombstone for an erased user stays (it holds a user id and no key material).
 12. **Carried to M4:** conversation-sse runs its own HTTP server; its `authenticate` callback must adapt `Authenticator` (an `Identity` becomes a `PrincipalChain` with `tenant` and `actor`). `chat_sessions.id` is a Loom conversation id, which must be built with `executionIdFor(userId, ...)` or the chat is encrypted under the wrong key.
-13. **CI is still unproven** (billing). When it is restored the first push to `main` must be watched: it exercises `LOOM_TOKEN`, building `@loom/conformance`, `@loom/plugin-crypto` and `@loom/plugin-postgres` in the Loom checkout, and the superuser `postgres` role the Postgres suites need.
+13. **CI is still unproven** (billing). When it is restored the first push to `main` must be watched: it exercises `LOOM_TOKEN`, building `@loomwork/conformance`, `@loomwork/plugin-crypto` and `@loomwork/plugin-postgres` in the Loom checkout, and the superuser `postgres` role the Postgres suites need.
 14. **Not in M1, by design:** password change or reset, email verification, account deletion (M5), the `documents`/`chunks`/`chat_sessions` tables, sign-up UI (M6).
 
 **Still unresolved (for the owner, none blocks M1):** (a) whether the thresholds in decision 8 suit real use (they are constants in `packages/auth/src/throttle.ts`); (b) whether to harden against the email-lock residual (8a) or an attacker rotating across /64s (8c) before launch; (c) whether the hourly purge cadence and the one-day retention of throttle rows are acceptable for the privacy notice (they hold addresses); (d) an automated re-encryption story for a leaked data key (out of scope here).
@@ -98,7 +98,7 @@ M2 must register sensitive event paths before its first user flow, and add a tes
 
 ## Decision D1 (decided by the owner; applies from M2 / `apps/web`; NOT an M1 task)
 
-**`apps/web` (Vite) consumes `@docmind/contracts` through a Vite `resolve.alias` to its TypeScript source** (`@docmind/contracts` maps to `packages/contracts/src/index.ts`), exactly as spec §7 already aliases `@loom/*` and `@loom-ui/*`. `packages/contracts` stays CommonJS with no `exports` map: the server keeps consuming `dist`, and no ESM build is added. Consequences the M2/M6 plans must honour: contracts source stays free of Node-only imports (today only `zod`); the web app typechecks that source under its own tsconfig; if a consumer outside the workspace ever appears, revisit (an ESM build with an `exports` map is then a one-file change plus a test importing both entry points, and is the same moment to publish `@loom/*`, see the loom-repo-topology note). The M2 plan header and M6 PR 36 (web scaffold: aliases, router, tokens) record this; there is no longer an open question here.
+**`apps/web` (Vite) consumes `@docmind/contracts` through a Vite `resolve.alias` to its TypeScript source** (`@docmind/contracts` maps to `packages/contracts/src/index.ts`), exactly as spec §7 already aliases `@loomwork/*` and `@loomwork/ui-*`. `packages/contracts` stays CommonJS with no `exports` map: the server keeps consuming `dist`, and no ESM build is added. Consequences the M2/M6 plans must honour: contracts source stays free of Node-only imports (today only `zod`); the web app typechecks that source under its own tsconfig; if a consumer outside the workspace ever appears, revisit (an ESM build with an `exports` map is then a one-file change plus a test importing both entry points, and is the same moment to publish `@loomwork/*`, see the loom-repo-topology note). The M2 plan header and M6 PR 36 (web scaffold: aliases, router, tokens) record this; there is no longer an open question here.
 
 ## Preconditions (once, before PR 5a)
 
@@ -208,7 +208,7 @@ git switch -c feat/m1-auth-interface
 
 - [ ] **Step 2: Scaffold the package**
 
-`packages/auth/package.json` (vitest is a peer: the conformance suite registers vitest tests, as Loom's own `@loom/conformance` does):
+`packages/auth/package.json` (vitest is a peer: the conformance suite registers vitest tests, as Loom's own `@loomwork/conformance` does):
 
 ```json
 {
@@ -256,7 +256,7 @@ git switch -c feat/m1-auth-interface
 }
 ```
 
-`packages/auth/testing.js` and `packages/auth/testing.d.ts` (a subpath at the package root, the layout `@loom/plugin-crypto/testing` uses, because the CommonJS build and `moduleResolution: Node` ignore `exports` maps):
+`packages/auth/testing.js` and `packages/auth/testing.d.ts` (a subpath at the package root, the layout `@loomwork/plugin-crypto/testing` uses, because the CommonJS build and `moduleResolution: Node` ignore `exports` maps):
 
 ```js
 // Subpath entry for test support: the conformance suite imports vitest, so the main entry must not.
@@ -730,8 +730,8 @@ Add the contracts dependency in `apps/server/package.json` (`dependencies`, firs
    },
    "dependencies": {
 +    "@docmind/contracts": "workspace:*",
-     "@loom/app": "*",
-     "@loom/effect-runtime": "*",
+     "@loomwork/app": "*",
+     "@loomwork/effect-runtime": "*",
 ```
 
 - [ ] **Step 5: Run the tests, then the gate**
@@ -1008,7 +1008,7 @@ Add the auth dependency in `apps/server/package.json`:
    "dependencies": {
 +    "@docmind/auth": "workspace:*",
      "@docmind/contracts": "workspace:*",
-     "@loom/app": "*",
+     "@loomwork/app": "*",
 ```
 
 - [ ] **Step 5: Run the tests, then the gate**
@@ -2414,7 +2414,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: {
     conditions: ["node", "require", "default"],
     // The auth test kit imports vitest, which cannot be require()d from the CommonJS build, so
@@ -2425,7 +2425,7 @@ export default defineConfig({
   test: {
     environment: "node",
     fileParallelism: false,
-    server: { deps: { external: [/@loom\//, /[\/]loom[\/]/] } },
+    server: { deps: { external: [/@loomwork\//, /[\/]loom[\/]/] } },
   },
 });
 ```
@@ -2575,8 +2575,8 @@ Add `zod` to the server's dependencies (same range as `@docmind/contracts`):
 
 ```diff
 @@ -18,5 +18,6 @@
-     "@loom/effect-runtime": "*",
-     "@loom/workflow-runtime": "*",
+     "@loomwork/effect-runtime": "*",
+     "@loomwork/workflow-runtime": "*",
 -    "pg": "^8.13.0"
 +    "pg": "^8.13.0",
 +    "zod": "^3.23.8"
@@ -4698,7 +4698,7 @@ Expected: about `138 lines, 8 files`, then the PR URL.
 - Modify: `/Users/such/workspace/docmind/packages/keystore-pg/src/index.ts`, `packages/keystore-pg/package.json`, `package.json` (root), `apps/server/package.json`, `apps/server/vitest.config.ts`
 
 **Interfaces:**
-- Consumes: `Kek`, `wrapKey`, `unwrapKey` (PR 7a); from Loom `KeyStore` (`@loom/plugin-crypto`, `plugins/crypto/src/keystore.ts`) and `runKeyStoreConformance` (`@loom/conformance`, `packages/conformance/src/index.ts:2913`); the server test helpers (M0, PR 6a) `createTestDb`, `migrate`, `setAppRolePassword`.
+- Consumes: `Kek`, `wrapKey`, `unwrapKey` (PR 7a); from Loom `KeyStore` (`@loomwork/plugin-crypto`, `plugins/crypto/src/keystore.ts`) and `runKeyStoreConformance` (`@loomwork/conformance`, `packages/conformance/src/index.ts:2913`); the server test helpers (M0, PR 6a) `createTestDb`, `migrate`, `setAppRolePassword`.
 - Produces: SQL `key_get(p_subject text) RETURNS TABLE (dek bytea, kek text)` (live key only), `key_put(p_subject text, p_dek bytea, p_kek text) RETURNS TABLE (dek bytea, kek text)` (insert if absent, return the stored row; raises SQLSTATE `DM001` "was destroyed and cannot be recreated" for a destroyed subject), `key_destroy(p_subject text) RETURNS void` (wipe and tombstone, idempotent, also for a never-seen subject), `key_was_destroyed(p_subject text) RETURNS boolean`; table `data_keys (subject_id text PRIMARY KEY, wrapped_dek bytea, kek_id text, created_at, destroyed_at)` with RLS enabled, no policy, no privileges for `docmind_app`. TypeScript `class PostgresKeyStore implements KeyStore { constructor(pool: Pool, keks: readonly [Kek, ...Kek[]]); readonly durable = true; getOrCreate(subjectId): Promise<Buffer>; get(subjectId): Promise<Buffer | null>; destroy(subjectId): Promise<void>; wasDestroyed(subjectId): Promise<boolean> }` exported from `@docmind/keystore-pg`. `pool` is the `docmind_app` pool; `keks[0]` wraps new keys and every KEK can unwrap keys written under its id.
 
 - [ ] **Step 1: Create the branch**
@@ -4711,16 +4711,16 @@ git switch -c feat/m1-keystore-pg
 
 - [ ] **Step 2: Link the Loom packages and wire the server's test config**
 
-Add `@loom/conformance` and `@loom/plugin-crypto` to the root `pnpm.overrides` (a `link:` for every `@loom/*` package that is imported, as in M0):
+Add `@loomwork/conformance` and `@loomwork/plugin-crypto` to the root `pnpm.overrides` (a `link:` for every `@loomwork/*` package that is imported, as in M0):
 
 ```diff
 @@ -26,5 +26,7 @@
-       "@loom/app": "link:../loom/packages/app",
-       "@loom/cli": "link:../loom/tools/cli",
-+      "@loom/conformance": "link:../loom/packages/conformance",
-       "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
-+      "@loom/plugin-crypto": "link:../loom/plugins/crypto",
-       "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
+       "@loomwork/app": "link:../loom/packages/app",
+       "@loomwork/cli": "link:../loom/tools/cli",
++      "@loomwork/conformance": "link:../loom/packages/conformance",
+       "@loomwork/effect-runtime": "link:../loom/packages/effect-runtime",
++      "@loomwork/plugin-crypto": "link:../loom/plugins/crypto",
+       "@loomwork/workflow-runtime": "link:../loom/packages/workflow-runtime"
      }
 ```
 
@@ -4731,27 +4731,27 @@ Add the dependencies in `apps/server/package.json` (the workspace package, and t
      "@docmind/auth": "workspace:*",
      "@docmind/contracts": "workspace:*",
 +    "@docmind/keystore-pg": "workspace:*",
-     "@loom/app": "*",
-     "@loom/effect-runtime": "*",
+     "@loomwork/app": "*",
+     "@loomwork/effect-runtime": "*",
 @@ -26,5 +27,7 @@
      "tsx": "^4.19.2",
      "vitest": "^2.1.8",
 -    "@types/pg": "^8.11.0"
 +    "@types/pg": "^8.11.0",
-+    "@loom/conformance": "*",
-+    "@loom/plugin-crypto": "*"
++    "@loomwork/conformance": "*",
++    "@loomwork/plugin-crypto": "*"
    }
  }
 ```
 
-`@loom/conformance` is ESM with extensionless relative imports, which Node's native ESM loader rejects, so Vite must load it; the server's `external: [/@loom\//]` rule would otherwise externalize it. `apps/server/vitest.config.ts`:
+`@loomwork/conformance` is ESM with extensionless relative imports, which Node's native ESM loader rejects, so Vite must load it; the server's `external: [/@loomwork\//]` rule would otherwise externalize it. `apps/server/vitest.config.ts`:
 
 ```ts
 import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: {
     conditions: ["node", "require", "default"],
     // The auth test kit imports vitest, which cannot be require()d from the CommonJS build, so
@@ -4764,9 +4764,9 @@ export default defineConfig({
     fileParallelism: false,
     server: {
       deps: {
-        external: [/@loom\//, /[\\/]loom[\\/]/],
+        external: [/@loomwork\//, /[\\/]loom[\\/]/],
         // Loom's conformance kits are ESM with extensionless imports, so Vite must load them.
-        inline: [/@loom\/conformance/, /[\\/]conformance[\\/]dist/],
+        inline: [/@loomwork\/conformance/, /[\\/]conformance[\\/]dist/],
       },
     },
   },
@@ -4783,7 +4783,7 @@ Add the runtime dependencies to `packages/keystore-pg/package.json`:
      "vitest": "^2.1.8"
 +  },
 +  "dependencies": {
-+    "@loom/plugin-crypto": "*",
++    "@loomwork/plugin-crypto": "*",
 +    "pg": "^8.13.0"
    }
  }
@@ -4800,8 +4800,8 @@ Loom's suite names its subjects `"s1"`, `"s2"` in every test, so a random prefix
 ```ts
 import { randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { runKeyStoreConformance } from "@loom/conformance";
-import type { KeyStore } from "@loom/plugin-crypto";
+import { runKeyStoreConformance } from "@loomwork/conformance";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe } from "vitest";
 import { migrate, setAppRolePassword } from "../db/migrate";
@@ -4928,7 +4928,7 @@ GRANT EXECUTE ON FUNCTION key_get(text), key_put(text, bytea, text), key_destroy
 
 ```ts
 import { randomBytes } from "node:crypto";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import type { Pool } from "pg";
 import type { Kek } from "./kek";
 import { unwrapKey, wrapKey } from "./wrap";
@@ -5033,9 +5033,9 @@ git push -u origin feat/m1-keystore-pg
 gh pr create --draft --base main --head feat/m1-keystore-pg --title "feat(keystore-pg): PostgresKeyStore passing Loom's KeyStore contract" --body "$(cat <<'EOF'
 ## Summary
 - Migration 0007 data_keys + key_get/key_put/key_destroy/key_was_destroyed (SECURITY DEFINER, pinned search_path, explicit grants). docmind_app has no privilege on the table, only on the functions. destroy wipes the wrapped key and leaves a tombstone, because Loom's contract forbids minting a new key for a destroyed subject; this differs from spec §4.4's "deletes the row" (plan deviation 4).
-- PostgresKeyStore (durable) implements @loom/plugin-crypto's KeyStore incl. wasDestroyed; the DEK is AES-GCM-wrapped by the KEK (PR 7a); several KEKs can unwrap (rotation), the first wraps.
-- Passes runKeyStoreConformance from @loom/conformance (8 tests). The conformance test lives in apps/server because the DB test harness does.
-- Root pnpm.overrides links @loom/conformance and @loom/plugin-crypto; the server's vitest config inlines @loom/conformance (ESM with extensionless imports).
+- PostgresKeyStore (durable) implements @loomwork/plugin-crypto's KeyStore incl. wasDestroyed; the DEK is AES-GCM-wrapped by the KEK (PR 7a); several KEKs can unwrap (rotation), the first wraps.
+- Passes runKeyStoreConformance from @loomwork/conformance (8 tests). The conformance test lives in apps/server because the DB test harness does.
+- Root pnpm.overrides links @loomwork/conformance and @loomwork/plugin-crypto; the server's vitest config inlines @loomwork/conformance (ESM with extensionless imports).
 
 ## Not counted toward the 200-line / 10-file limit
 pnpm-lock.yaml.
@@ -5080,8 +5080,8 @@ Replace `apps/server/app/keys/postgresKeyStore.test.ts` with:
 ```ts
 import { randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { runKeyStoreConformance } from "@loom/conformance";
-import type { KeyStore } from "@loom/plugin-crypto";
+import { runKeyStoreConformance } from "@loomwork/conformance";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword } from "../db/migrate";
@@ -6457,7 +6457,7 @@ Expected: about `43 lines, 2 files`, then the PR URL.
 - Modify: `/Users/such/workspace/docmind/package.json` (root), `apps/server/package.json`
 
 **Interfaces:**
-- Consumes: `PostgresKeyStore` (PR 7b); `subjectOfExecution`, `executionIdFor` (PR 8b); the `docmind_loom` role (PR 8a); from Loom `postgresStorage` (`@loom/plugin-postgres`), `EncryptingEventStore`, `EncryptingSnapshotStore`, `KeyStore`, `shredSubject`, `PayloadShreddedError` (`@loom/plugin-crypto`), `StorageConfig`, `PrincipalCryptoOptions` (`@loom/app`).
+- Consumes: `PostgresKeyStore` (PR 7b); `subjectOfExecution`, `executionIdFor` (PR 8b); the `docmind_loom` role (PR 8a); from Loom `postgresStorage` (`@loomwork/plugin-postgres`), `EncryptingEventStore`, `EncryptingSnapshotStore`, `KeyStore`, `shredSubject`, `PayloadShreddedError` (`@loomwork/plugin-crypto`), `StorageConfig`, `PrincipalCryptoOptions` (`@loomwork/app`).
 - Produces: `interface DurableStorageOptions { loomUrl: string; keys: KeyStore }`; `interface DurableStorage { storage: Extract<StorageConfig, {kind:"custom"}>; crypto: PrincipalCryptoOptions; sealed: { eventStore; snapshotStore }; raw: { eventStore; snapshotStore } }`; `createDurableStorage(options: DurableStorageOptions): DurableStorage`. `storage` goes to `defineConfig({ storage })`, `crypto` to `security.crypto`; `sealed` is the encrypting pair (what `storage` hands Loom); `raw` is the unwrapped pair, which M5's `shredSubject` needs. The event store seals nothing until event types are registered with `crypto.events.registerSensitive(eventType, paths)` (M2 onwards registers its own; `defineConfig` registers the principal's identity paths itself). The snapshot store seals the whole folded state (`sealState: true`). Both use `subjectOfExecution` and the same `keys`.
 
 - [ ] **Step 1: Create the branch**
@@ -6468,33 +6468,33 @@ git switch main && git pull --ff-only
 git switch -c feat/m1-durable-storage
 ```
 
-- [ ] **Step 2: Link `@loom/plugin-postgres` and declare the dependencies**
+- [ ] **Step 2: Link `@loomwork/plugin-postgres` and declare the dependencies**
 
 ```diff
 @@ -29,4 +29,5 @@
-       "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
-       "@loom/plugin-crypto": "link:../loom/plugins/crypto",
-+      "@loom/plugin-postgres": "link:../loom/plugins/postgres",
-       "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
+       "@loomwork/effect-runtime": "link:../loom/packages/effect-runtime",
+       "@loomwork/plugin-crypto": "link:../loom/plugins/crypto",
++      "@loomwork/plugin-postgres": "link:../loom/plugins/postgres",
+       "@loomwork/workflow-runtime": "link:../loom/packages/workflow-runtime"
      }
 ```
 
-`@loom/plugin-crypto` moves from `devDependencies` to `dependencies` (the server now uses it at runtime):
+`@loomwork/plugin-crypto` moves from `devDependencies` to `dependencies` (the server now uses it at runtime):
 
 ```diff
 @@ -19,4 +19,6 @@
-     "@loom/app": "*",
-     "@loom/effect-runtime": "*",
-+    "@loom/plugin-crypto": "*",
-+    "@loom/plugin-postgres": "*",
-     "@loom/workflow-runtime": "*",
+     "@loomwork/app": "*",
+     "@loomwork/effect-runtime": "*",
++    "@loomwork/plugin-crypto": "*",
++    "@loomwork/plugin-postgres": "*",
+     "@loomwork/workflow-runtime": "*",
      "pg": "^8.13.0",
 @@ -29,6 +31,5 @@
      "vitest": "^2.1.8",
      "@types/pg": "^8.11.0",
--    "@loom/conformance": "*",
--    "@loom/plugin-crypto": "*"
-+    "@loom/conformance": "*"
+-    "@loomwork/conformance": "*",
+-    "@loomwork/plugin-crypto": "*"
++    "@loomwork/conformance": "*"
    }
  }
 ```
@@ -6510,7 +6510,7 @@ Three behaviours against a real database: events are sealed under the user's key
 ```ts
 import { randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { PayloadShreddedError, shredSubject } from "@loom/plugin-crypto";
+import { PayloadShreddedError, shredSubject } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";
@@ -6638,9 +6638,9 @@ Expected: FAIL, `Failed to resolve import "./storage"`.
 `apps/server/app/storage.ts` (the connection option `-c search_path=loom` puts every table Loom creates in the `loom` schema, whatever the role's default):
 
 ```ts
-import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
-import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loom/plugin-crypto";
-import { postgresStorage } from "@loom/plugin-postgres";
+import type { PrincipalCryptoOptions, StorageConfig } from "@loomwork/app";
+import { EncryptingEventStore, EncryptingSnapshotStore, type KeyStore } from "@loomwork/plugin-crypto";
+import { postgresStorage } from "@loomwork/plugin-postgres";
 import { subjectOfExecution } from "./subject";
 
 type CustomStorage = Extract<StorageConfig, { kind: "custom" }>;
@@ -6729,9 +6729,9 @@ git diff main...HEAD --numstat -- . ':!pnpm-lock.yaml' | awk '{a+=$1+$2; n++} EN
 git push -u origin feat/m1-durable-storage
 gh pr create --draft --base main --head feat/m1-durable-storage --title "feat(server): Postgres event store and snapshots sealed per user" --body "$(cat <<'EOF'
 ## Summary
-- createDurableStorage: @loom/plugin-postgres stores (schema loom, role docmind_loom) wrapped by EncryptingEventStore and EncryptingSnapshotStore (sealState) over PostgresKeyStore, both keyed by subjectOfExecution so one user = one key. Returns the config pieces (storage, security.crypto) and the raw stores M5's shredSubject needs.
+- createDurableStorage: @loomwork/plugin-postgres stores (schema loom, role docmind_loom) wrapped by EncryptingEventStore and EncryptingSnapshotStore (sealState) over PostgresKeyStore, both keyed by subjectOfExecution so one user = one key. Returns the config pieces (storage, security.crypto) and the raw stores M5's shredSubject needs.
 - Tests on a real database: events and snapshots are ciphertext at rest under the user's key (not the execution's); shredSubject makes that user's events unreadable while another user's stay readable; a destroyed key makes the snapshot unreadable.
-- Links @loom/plugin-postgres; @loom/plugin-crypto becomes a runtime dependency. Not wired into main yet (PR 8d).
+- Links @loomwork/plugin-postgres; @loomwork/plugin-crypto becomes a runtime dependency. Not wired into main yet (PR 8d).
 
 ## Not counted toward the 200-line / 10-file limit
 pnpm-lock.yaml.
@@ -6833,7 +6833,7 @@ Expected: FAIL, `"./config" has no exported member "buildApp"` / `buildApp is no
 `apps/server/app/config.ts`:
 
 ```ts
-import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loom/app";
+import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loomwork/app";
 import {
   agentModules,
   flowModules,

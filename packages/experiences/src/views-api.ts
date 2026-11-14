@@ -1,13 +1,13 @@
 import type { SurfaceName, ViewName } from "@docmind/contracts";
-import type { Experience } from "@loom-ui/core";
+import { TypedFailure } from "@loomwork/core";
+import type { Experience } from "@loomwork/ui-core";
 import {
   type HandleLoadRequest,
   type HandleLoadResult,
   defineDataProviders,
   publicFinding,
   serveHandles,
-} from "@loom-ui/hydration";
-import { TypedFailure } from "@loom/core";
+} from "@loomwork/ui-hydration";
 import { DOCMIND_CATALOG } from "./catalog";
 import { SURFACES } from "./catalog";
 import { INVOKE_ID, type UiReaders, createInvoker } from "./invoker";

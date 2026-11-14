@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
 import { buildApp } from "../../config";
 import { legacyIngestId } from "../../opaqueIds/testing";
 import type { IngestDeps } from "./deps";

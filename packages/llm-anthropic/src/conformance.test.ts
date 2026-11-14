@@ -1,5 +1,5 @@
-import { runLlmProviderConformance } from "@loom/conformance";
-import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loom/llm";
+import { runLlmProviderConformance } from "@loomwork/conformance";
+import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { LlmRefusalError } from "./errors";

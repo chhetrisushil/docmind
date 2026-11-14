@@ -1,4 +1,4 @@
-import { FRAMEWORK_KINDS } from "@loom-ui/core";
+import { FRAMEWORK_KINDS } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { DOCMIND_CATALOG, ENTRY_KINDS, KINDS, SURFACES } from "./catalog";
 

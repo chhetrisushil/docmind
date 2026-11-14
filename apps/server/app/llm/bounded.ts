@@ -6,7 +6,7 @@ import {
   LlmStreamError,
   LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import type { LlmProvider, LlmRequest, LlmStreamChunk } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmStreamChunk } from "@loomwork/llm";
 
 export interface BoundedOptions {
   maxTokens: number;
@@ -127,7 +127,7 @@ function chain(err: unknown): unknown[] {
 /**
  * A Loom provider's failure as DocMind's typed, content-free error (D7). Only the HTTP status survives: the
  * provider's message can hold a prompt, a document or the key, and the mapped error has no `cause`. Loom's errors
- * are matched by name, not instanceof, so a second copy of @loom/llm is handled; the `cause` chain is walked to
+ * are matched by name, not instanceof, so a second copy of @loomwork/llm is handled; the `cause` chain is walked to
  * depth 5, like Loom's own classifier. An error that is already one of ours is returned as is.
  */
 export function mapLlmError(err: unknown, caller?: AbortSignal): Error {

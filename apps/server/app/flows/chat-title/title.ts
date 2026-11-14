@@ -1,5 +1,5 @@
-import { tainted } from "@loom/classify";
-import { type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import { type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 
 export const TITLE_MAX_CHARS = 60;
 const TEXT_MAX = 2000;

@@ -5,9 +5,9 @@ import {
   LlmRequestError,
   LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import type { ConversationReader } from "@loom/conversation";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { ConversationReader } from "@loomwork/conversation";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import type { Pool } from "pg";
 import type { ChatIdResolver } from "../../chats/chatIds";
 import { chatTitleBind, getChat, setTitle } from "../../chats/sessions";

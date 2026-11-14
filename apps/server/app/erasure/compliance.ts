@@ -1,7 +1,7 @@
-import type { Shredder, SubjectIndex } from "@loom/compliance";
-import type { EventEnvelope } from "@loom/core";
-import type { EventStore } from "@loom/event-runtime";
-import { type KeyStore, type ShredOptions, shredSubject } from "@loom/plugin-crypto";
+import type { Shredder, SubjectIndex } from "@loomwork/compliance";
+import type { EventEnvelope } from "@loomwork/core";
+import type { EventStore } from "@loomwork/event-runtime";
+import { type KeyStore, type ShredOptions, shredSubject } from "@loomwork/plugin-crypto";
 import {
   HANDLE_PATTERN,
   LINEAGE_ID_PATTERN,

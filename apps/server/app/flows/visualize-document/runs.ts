@@ -1,6 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import { factFormatFingerprint } from "@docmind/experiences";
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import type { Pool } from "pg";
 import { withTenant } from "../../db/tenant";
 import type { ProgressBus } from "../../documents/progress";

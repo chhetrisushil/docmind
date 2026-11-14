@@ -1,8 +1,8 @@
 import { VISUALS_CATALOG, visualCapabilities } from "@docmind/experiences";
 import { LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { Intent, SemanticCatalog } from "@loom-ui/core";
-import type { CapabilityRef, DecideContext, PlanResult, Planner } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { Intent, SemanticCatalog } from "@loomwork/ui-core";
+import type { CapabilityRef, DecideContext, PlanResult, Planner } from "@loomwork/ui-planner";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import {

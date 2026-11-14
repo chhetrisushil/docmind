@@ -1,6 +1,6 @@
-import type { Planner } from "@loom-ui/planner";
-import { flow$, step$ } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { Planner } from "@loomwork/ui-planner";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "../ingest-document/stepEffect";
 import { dropUnfittingOps, fittedSummary, logDropped } from "../visualize-document/fit";

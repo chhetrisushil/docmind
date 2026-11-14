@@ -1,5 +1,5 @@
 import { createHmac, hkdfSync } from "node:crypto";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";
 
 export const ENTITY_KINDS = [

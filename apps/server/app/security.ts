@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { GrantTable, type PrincipalChain } from "@loom/effect-runtime";
+import { GrantTable, type PrincipalChain } from "@loomwork/effect-runtime";
 import {
   type ExecutionAccessPolicy,
   type PrincipalCodec,
   executionAccessPolicy,
   signedResumeAuthenticator,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TITLE_FLOW_ID } from "./chats/ids";
 import { SUGGEST_TAGS_FLOW_ID } from "./flows/suggest-tags/flow";
 

@@ -6,7 +6,7 @@
 
 **Architecture:** A new `visualize-structure` step runs after `visualize-extract` (and on the extraction-skipping re-plan path too). It reads this document's passage heading paths and entity mentions under the owner's key, builds two derived facts (`outline`, `cooccurrence`) with pure builders, and stores them sealed in `visual_facts` on reserved ordinals 16 and 17 (migration 0035 relaxes the `kind` and `ordinal` CHECKs for them). The document catalogue becomes `docmind.visuals.v3` with `DocumentOutline` and `EntityMap` (loom-ui `Diagram`), whose reshapers build `DiagramValue`s that pass `diagramProblems`; `fitsShape` guards them at plan time. Chat is untouched.
 
-**Tech Stack:** TypeScript, zod, Postgres (RLS, `withTenant`), Loom (`step$`, `flow$`, `stepEffectOf`), loom-ui pinned at 3b4d046 (`@loom-ui/core` `DiagramValue`, `diagramProblems`, `MAX_DIAGRAM_NODES`; `Diagram` kind; `MAX_WIDGET_REFS` 16), vitest, pnpm/turbo, biome.
+**Tech Stack:** TypeScript, zod, Postgres (RLS, `withTenant`), Loom (`step$`, `flow$`, `stepEffectOf`), loom-ui pinned at 3b4d046 (`@loomwork/ui-core` `DiagramValue`, `diagramProblems`, `MAX_DIAGRAM_NODES`; `Diagram` kind; `MAX_WIDGET_REFS` 16), vitest, pnpm/turbo, biome.
 
 **Spec:** `docs/specs/2026-11-10-structure-diagrams-c1-design.md` (binding; read it first). Background: `docs/specs/2026-11-08-document-visuals-design.md` §10.
 
@@ -1723,7 +1723,7 @@ export class PgStructureReader implements StructureReader {
 Create `apps/server/app/flows/visualize-document/structure.ts`:
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import {
   type StepGuard,
   StepResult,
@@ -1804,7 +1804,7 @@ The flow now loads facts of five kinds, and `visualCapabilities` takes `VisualFa
 
 - [ ] **Step 12b: Write the failing capability tests, then extend `VisualFactRaw`, `describeFact` and the planner sample.**
 
-First the tests. In `packages/experiences/src/visuals.test.ts` add `import { jsonPathSelect } from "@loom-ui/hydration";`, extend the existing import from `./visuals` with `type EntityMapFact, type OutlineFact`, and add after the `TABLE` fixture (Task 4 reuses `cid`, `OUTLINE` and `MAP`):
+First the tests. In `packages/experiences/src/visuals.test.ts` add `import { jsonPathSelect } from "@loomwork/ui-hydration";`, extend the existing import from `./visuals` with `type EntityMapFact, type OutlineFact`, and add after the `TABLE` fixture (Task 4 reuses `cid`, `OUTLINE` and `MAP`):
 
 ```ts
 const cid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -2121,7 +2121,7 @@ Replace the `buildApp(...)` call and the `run` function so both flow versions ar
   };
 ```
 
-and add `structured: () => structured,` to the returned object of `stack`. Imports for the file: `type StructureFact` (from `./facts`, beside `type Fact`), `type StructureReader` (from `./structure`), `noStructure` (from `./testing`, beside `childrenOf`), `flowContentHash, flowHashMatches` (from `@loom/core`, beside the `EventEnvelope` type import), and `visualizeStructureStep`, `LEGACY_VISUALIZE_STEPS` (from `./flow`).
+and add `structured: () => structured,` to the returned object of `stack`. Imports for the file: `type StructureFact` (from `./facts`, beside `type Fact`), `type StructureReader` (from `./structure`), `noStructure` (from `./testing`, beside `childrenOf`), `flowContentHash, flowHashMatches` (from `@loomwork/core`, beside the `EventEnvelope` type import), and `visualizeStructureStep`, `LEGACY_VISUALIZE_STEPS` (from `./flow`).
 
 2. Add `noStructure` to `apps/server/app/flows/visualize-document/testing.ts`:
 
@@ -2491,7 +2491,7 @@ git commit -m "feat(visuals): structure facts (outline, co-occurrence), shared r
 - Test: `packages/experiences/src/visuals.test.ts`, `packages/experiences/src/providers.test.ts`, `packages/experiences/src/views.test.ts` (existing), `apps/server/app/flows/visualize-document/{plan,fit,flow}.test.ts`
 
 **Interfaces:**
-- Consumes: the stored shapes of Task 3 and `OutlineFact`, `EntityMapFact`, the extended `VisualFactRaw` and the content-free sample, all defined in Task 3 step 12b (not here, P14); `diagramProblems`, `MAX_DIAGRAM_NODES` from `@loom-ui/core`.
+- Consumes: the stored shapes of Task 3 and `OutlineFact`, `EntityMapFact`, the extended `VisualFactRaw` and the content-free sample, all defined in Task 3 step 12b (not here, P14); `diagramProblems`, `MAX_DIAGRAM_NODES` from `@loomwork/ui-core`.
 - Produces:
   - `visuals.ts`: catalogue entries `DocumentOutline` and `EntityMap` (kind `Diagram`); `VISUALS_CATALOG.id === "docmind.visuals.v3"`; `VisualEntry` includes both; reshaper families `visual-outline`, `visual-entitymap`, built into `VISUAL_SHAPES` only as `visual-outline-16` and `visual-entitymap-17`; `entryFitsOrdinal(entry: string, ordinal: number): boolean` (a structure entry reads only its own ordinal, any other entry ordinals 0..15); `fitsShape("DocumentOutline" | "EntityMap", fact)`.
   - `structureShapes.ts`: `outlineDiagram(f: OutlineFact): DiagramShape | null`, `entityMapDiagram(f: EntityMapFact): DiagramShape | null` where `DiagramShape = { layout: "tree" | "network"; nodes: DiagramNode[]; edges: DiagramEdge[] }` (null = does not fit).
@@ -2500,7 +2500,7 @@ git commit -m "feat(visuals): structure facts (outline, co-occurrence), shared r
 - [ ] **Step 1: Write the failing tests.** First the shape tests, create `packages/experiences/src/structureShapes.test.ts`:
 
 ```ts
-import { DiagramValue, MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
+import { DiagramValue, MAX_DIAGRAM_NODES, diagramProblems } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { entityMapDiagram, outlineDiagram } from "./structureShapes";
 import type { EntityMapFact, OutlineFact } from "./visuals";
@@ -2929,7 +2929,7 @@ Expected: FAIL (`./structureShapes` missing, catalogue still v2).
 - [ ] **Step 3: Implement the diagram builders**, create `packages/experiences/src/structureShapes.ts`:
 
 ```ts
-import { MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
+import { MAX_DIAGRAM_NODES, diagramProblems } from "@loomwork/ui-core";
 import type { EntityMapFact, OutlineFact } from "./visuals";
 
 export interface DiagramNode {

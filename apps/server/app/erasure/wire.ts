@@ -1,7 +1,7 @@
 import type { Identity } from "@docmind/auth";
-import { ConversationNotFoundError } from "@loom/conversation";
-import type { KeyStore } from "@loom/plugin-crypto";
-import { InboxClosedError, type WorkflowRuntime } from "@loom/workflow-runtime";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import type { KeyStore } from "@loomwork/plugin-crypto";
+import { InboxClosedError, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { principalOf } from "../chats/access";
 import type { ChatIdResolver } from "../chats/chatIds";
 import type { ChatWiring } from "../chats/wiring";

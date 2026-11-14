@@ -1,4 +1,4 @@
-import { flowContentHash } from "@loom/core";
+import { flowContentHash } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { ingestDocumentFlow } from "./flow";
 

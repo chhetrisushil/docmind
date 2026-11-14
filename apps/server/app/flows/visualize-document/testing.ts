@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ReferencePlanner } from "@loom-ui/planner";
-import type { DecideContext, PlanResult, PlannerModel } from "@loom-ui/planner";
+import { ReferencePlanner } from "@loomwork/ui-planner";
+import type { DecideContext, PlanResult, PlannerModel } from "@loomwork/ui-planner";
 import { type AggregateFact, type Fact, RELATIONS_ORDINAL, TIMELINE_ORDINAL } from "./facts";
 import { planVisuals } from "./plan";
 import type { StructureReader } from "./structure";

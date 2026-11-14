@@ -1,6 +1,6 @@
-import { flow$, step$ } from "@loom/core";
-import type { RetryPolicy } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { RetryPolicy } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 
 export const SUGGEST_TAGS_FLOW_ID = "suggest-tags";

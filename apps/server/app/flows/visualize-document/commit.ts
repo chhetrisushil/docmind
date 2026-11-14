@@ -1,7 +1,7 @@
-import type { Operation } from "@loom-ui/core";
-import { LineErasedError, LineUnreadableError, type Lineage } from "@loom-ui/lineage";
-import type { PlanReport, PlanResult } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { Operation } from "@loomwork/ui-core";
+import { LineErasedError, LineUnreadableError, type Lineage } from "@loomwork/ui-lineage";
+import type { PlanReport, PlanResult } from "@loomwork/ui-planner";
 import type { UserIdSource } from "../../documents/executionCandidates";
 import type { ProgressBus } from "../../documents/progress";
 import { DocumentGoneError, VisualsLineageError } from "../ingest-document/errors";

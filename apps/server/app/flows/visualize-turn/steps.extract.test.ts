@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError } from "@docmind/llm-anthropic";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { Fact } from "../visualize-document/facts";
 import type { TurnRef } from "./ids";

@@ -1,4 +1,4 @@
-import { runEmbeddingProviderConformance } from "@loom/conformance";
+import { runEmbeddingProviderConformance } from "@loomwork/conformance";
 import { afterAll, beforeAll, describe } from "vitest";
 import { OllamaEmbeddingProvider } from "./ollama";
 import { type FakeOllama, startFakeOllama } from "./testing/fakeOllama";

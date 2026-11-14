@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
-import { EmbeddingError, type EmbeddingProvider, HashingEmbeddingProvider } from "@loom/memory";
+import { EmbeddingError, type EmbeddingProvider, HashingEmbeddingProvider } from "@loomwork/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentGoneError } from "../errors";
 import { EMBED_BACKOFF_CAP_MS, EMBED_RETRY } from "../stepEffect";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { isChatExecution } from "../../chats/activity";
 import { isRecoverableChatExecution } from "../../chats/ids";

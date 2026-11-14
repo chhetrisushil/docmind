@@ -6,7 +6,7 @@
 
 **Architecture:** The document extraction answer gains two optional top-level fields, `timeline` and `relations`. Pure normalisers validate each item (date precision, clipping, citations, dedupe, order, caps, minimums) and drop bad items without touching the facts. The survivors are two sealed aggregate facts in `visual_facts` at reserved ordinals 18 (`timeline`) and 19 (`relations`); migration 0037 widens the ordinal and kind rules; the extraction write owns ordinals 0..15 and 18..19 together, the c1 structure write keeps 16..17. The document catalogue becomes `docmind.visuals.v4` with `DocumentTimeline` (loom-ui `Diagram`, `timeline` layout) and `Relationships` (`Diagram`, `network` layout); `factFormatFingerprint()` and the flow hash do not move, so nothing re-plans at boot.
 
-**Tech Stack:** TypeScript, zod, Postgres (RLS, `withTenant`), Loom (`step$`, `flow$`, `stepEffectOf`, `flowContentHash`), loom-ui pinned at fc34435 (`@loom-ui/core` `DiagramValue`, `diagramProblems`, `TimeFormat`, `MAX_DIAGRAM_NODES`; `MAX_WIDGET_REFS` 16), vitest, pnpm/turbo, biome.
+**Tech Stack:** TypeScript, zod, Postgres (RLS, `withTenant`), Loom (`step$`, `flow$`, `stepEffectOf`, `flowContentHash`), loom-ui pinned at fc34435 (`@loomwork/ui-core` `DiagramValue`, `diagramProblems`, `TimeFormat`, `MAX_DIAGRAM_NODES`; `MAX_WIDGET_REFS` 16), vitest, pnpm/turbo, biome.
 
 **Spec:** `docs/specs/2026-11-10-structure-diagrams-c2-design.md` (binding; read it first). Precedent: `docs/specs/2026-11-10-structure-diagrams-c1-design.md` and `docs/superpowers/plans/2026-11-10-structure-diagrams-c1.md`. Background: `docs/specs/2026-11-08-document-visuals-design.md` §10.
 
@@ -2863,7 +2863,7 @@ git commit -m "feat(visuals): c2 catalogue v4, timeline and relationships diagra
 
 In `apps/server/app/flows/visualize-document/extract.test.ts`:
 
-1. Change the imports to include `import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";` (merge with the existing `@loom/llm` import: `import { type LlmProvider, type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";`), `import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";`, `import type { ExtractionWrite, Fact } from "./facts";`, `import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM } from "./prompts";` and `import { aggregateFacts } from "./testing";`.
+1. Change the imports to include `import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";` (merge with the existing `@loomwork/llm` import: `import { type LlmProvider, type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";`), `import { EXTRACT_WINDOW_CHARS, askForExtraction, askForFacts, extractEffect } from "./extract";`, `import type { ExtractionWrite, Fact } from "./facts";`, `import { EXTRACT_DOCUMENT_SYSTEM, EXTRACT_SYSTEM } from "./prompts";` and `import { aggregateFacts } from "./testing";`.
 2. Replace the `store` fake inside `setup` with:
 
 ```ts
@@ -3259,7 +3259,7 @@ describe("visualize-document flow: timeline and relations", () => {
 Create `apps/server/app/flows/visualize-document/flowHash.test.ts`:
 
 ```ts
-import { flowContentHash } from "@loom/core";
+import { flowContentHash } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { visualizeDocumentFlow } from "./flow";
 
@@ -3417,9 +3417,9 @@ Replace `apps/server/app/flows/visualize-document/extract.ts` with:
 
 ```ts
 import { LlmOutputError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import { tainted } from "@loom/classify";
-import type { Effect } from "@loom/effect-runtime";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import type { Effect } from "@loomwork/effect-runtime";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import { z } from "zod";
 import { parseVisualizeExecution, visualizeGenerationOf } from "../../status/model";
 import { FAILURE_CODES } from "../ingest-document/errors";

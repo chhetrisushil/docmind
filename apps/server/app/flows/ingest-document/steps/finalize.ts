@@ -1,4 +1,4 @@
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";
 import type { ParsedStore } from "../pgParsed";

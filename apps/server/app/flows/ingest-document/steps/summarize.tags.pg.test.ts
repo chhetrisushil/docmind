@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ParsedDocument } from "@docmind/parsers";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TagKeys } from "../../../crypto/tagKeys";
 import { PG_URL } from "../../../db/testSupport";

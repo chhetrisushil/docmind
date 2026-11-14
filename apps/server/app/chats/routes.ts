@@ -6,7 +6,7 @@ import {
   ListChatsQuery,
   type ListChatsResponse,
 } from "@docmind/contracts";
-import type { EventStore } from "@loom/event-runtime";
+import type { EventStore } from "@loomwork/event-runtime";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";

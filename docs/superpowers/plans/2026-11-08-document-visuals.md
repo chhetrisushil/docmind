@@ -8,11 +8,11 @@
 - `visualize-extract`: an LLM extracts facts, the grounding check filters them, and the survivors are sealed in `visual_facts`.
 - `visualize-load`: reads the facts back as planner capabilities. Its output is sealed.
 - A `ctx.decide` made by `ReferencePlanner.compose` inside the flow runner.
-- `visualize-commit`: writes the composed experience to `@loom-ui/lineage` and notifies the browser.
+- `visualize-commit`: writes the composed experience to `@loomwork/ui-lineage` and notifies the browser.
 
 The server serves a per-document detail experience: the static detail view plus a Visuals panel built from the lineage head. Facts hydrate through one memoised `visual.facts` read.
 
-**Tech Stack:** TypeScript, Loom (`@loom/core`, `@loom/workflow-runtime`, `@loom/llm`), loom-ui (`@loom-ui/core`, `@loom-ui/planner`, `@loom-ui/lineage`, `@loom-ui/hydration`), Postgres with RLS, vitest, Lit.
+**Tech Stack:** TypeScript, Loom (`@loomwork/core`, `@loomwork/workflow-runtime`, `@loomwork/llm`), loom-ui (`@loomwork/ui-core`, `@loomwork/ui-planner`, `@loomwork/ui-lineage`, `@loomwork/ui-hydration`), Postgres with RLS, vitest, Lit.
 
 **Spec:** `docs/specs/2026-11-08-document-visuals-design.md`. Read it first: decisions V1 to V10, and sections 3 to 8.
 
@@ -468,7 +468,7 @@ git commit -m "feat(visuals): visual_facts table (RLS, sealed, cascades) and its
   - `LLM_RETRY`, `LLM_BACKOFF_CAP_MS`.
   - `ChunkStore.sectionsOf` and `.read` (`ID/pgChunks.ts:11`).
   - `jsonAnswer` (`ID/llmJson.ts`).
-  - `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE` and `LlmProvider` from `@loom/llm`, and `tainted` from `@loom/classify`.
+  - `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE` and `LlmProvider` from `@loomwork/llm`, and `tainted` from `@loomwork/classify`.
   - `admit` and `ExtractAnswer` (Task 3), and `VisualFactStore` (Task 4).
 - Produces:
 
@@ -562,7 +562,7 @@ git commit -m "feat(visuals): visualize-extract step (windowed, fenced, grounded
 - Modify: `PE/reshapers.ts` (spread in `VISUAL_SHAPES`)
 - Modify: `PE/index.ts` (export `VISUALS_CATALOG`, `capabilitiesOf`, `VisualFactRaw`)
 - Modify: `S/ui/readers.ts` (implement `visualFacts`)
-- Modify: `packages/experiences/package.json` (add `"@loom-ui/planner": "link:../../../loom-ui/packages/planner"` for the `CapabilityRef` type only), and `pnpm-workspace.yaml` (lines 35-38: add the planner link next to the others)
+- Modify: `packages/experiences/package.json` (add `"@loomwork/ui-planner": "link:../../../loom-ui/packages/planner"` for the `CapabilityRef` type only), and `pnpm-workspace.yaml` (lines 35-38: add the planner link next to the others)
 - Test: `PE/visuals.test.ts`, `PE/hydrate.test.ts` (one new case), `S/ui/readers.test.ts` (one new case)
 
 **Interfaces:**
@@ -626,8 +626,8 @@ Expected: FAIL, because the module isn't found.
 - [ ] **Step 3: Implement `PE/visuals.ts`**
 
 ```ts
-import { type SemanticCatalog, defineSemanticCatalog, type ProviderSpec } from "@loom-ui/core";
-import type { CapabilityRef } from "@loom-ui/planner";
+import { type SemanticCatalog, defineSemanticCatalog, type ProviderSpec } from "@loomwork/ui-core";
+import type { CapabilityRef } from "@loomwork/ui-planner";
 import { KIND, PINS, provider } from "./providers";
 import { SURFACES } from "./catalog";
 
@@ -735,7 +735,7 @@ git commit -m "feat(visuals): visuals catalogue, fact capabilities, reshapers an
 - Create: `VD/plan.ts` (`loadEffect`, `planVisuals`, `VISUALS_INTENT`)
 - Test: `VD/plan.test.ts`
 - Modify: `S/sensitive.ts` (the `STEP_COMPLETED` output path of the load step, and the `DECISION_RECORDED` choice paths)
-- Modify: `apps/server/package.json` (add `@loom-ui/planner` and `@loom-ui/core` links), and `pnpm-workspace.yaml` if it isn't already linked
+- Modify: `apps/server/package.json` (add `@loomwork/ui-planner` and `@loomwork/ui-core` links), and `pnpm-workspace.yaml` if it isn't already linked
 
 **Interfaces:**
 - Consumes: `VisualFactStore` (Task 4), and `capabilitiesOf` and `VISUALS_CATALOG` (Task 6).
@@ -811,7 +811,7 @@ git commit -m "feat(visuals): load step and the recorded planner decision (confo
 - Create: `VD/commit.ts` (`commitEffect`)
 - Test: `VD/lineage.test.ts`, `VD/lineage.erasure.pg.test.ts`
 - Modify: `S/storage.ts` (register the lineage stream's subject resolver and sensitive paths with the encrypting store, using the API the V8 change delivers)
-- Modify: `apps/server/package.json` and `pnpm-workspace.yaml` (link `@loom-ui/lineage`)
+- Modify: `apps/server/package.json` and `pnpm-workspace.yaml` (link `@loomwork/ui-lineage`)
 
 **Interfaces:**
 - Produces:
@@ -844,7 +844,7 @@ export function commitEffect(deps: { guard; lineage: Lineage; bus: ProgressBus; 
     - In `S/storage.ts`, extend DocMind's `subjectOfExecution`: for `__loom_ui_lineage__:visuals-<userId>-<documentId>`, return the subject of `userId`. The user id is inside the experience id, so no lookup is needed.
     - Anything else under `__loom_ui_lineage__:` returns no subject. The store then refuses the write, which is the fail-closed behaviour we want.
   - **Content store.** Wrap DocMind's content store for lineage artifacts in `EncryptingContentStore` over the same `KeyStore` and `subjectOf`.
-  - **Sensitive paths.** Call `registerLineageSensitivePaths(events)` from `@loom-ui/lineage` on the encrypting event store. It seals COMPOSED `ops`, `summary` and `by`, and the `by` of every other lineage event.
+  - **Sensitive paths.** Call `registerLineageSensitivePaths(events)` from `@loomwork/ui-lineage` on the encrypting event store. It seals COMPOSED `ops`, `summary` and `by`, and the `by` of every other lineage event.
   - **Erasure.** DocMind's existing key destruction (`keys.destroy(subject)`) is the erasure, so the Eraser needs no change for lineage. A reserved stream is never tombstoned. `shredSubject(..., { executionIds: [] })` also works now.
   - **After erasure,** reads fail with the finding `line-erased` (`LineErasedError`). The commit step maps it to `document_gone`, and the detail route treats it as "no visuals".
   - **The erasure test** asserts `line-erased` on `resolveLatest`, `isKeyUnavailable` on the raw blob, and no plaintext label in the raw events.

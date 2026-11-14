@@ -6,7 +6,7 @@ import {
   ReasoningResponse,
   type UploadDocumentResponse,
 } from "@docmind/contracts";
-import { inboxChainOf } from "@loom/event-runtime";
+import { inboxChainOf } from "@loomwork/event-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";

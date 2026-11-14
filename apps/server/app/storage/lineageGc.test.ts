@@ -1,4 +1,4 @@
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionLock } from "../db/sessionLock";
 import { StartupConfigError } from "../startupError";

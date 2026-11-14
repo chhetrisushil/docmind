@@ -7,8 +7,8 @@ import {
   formatSemanticNumber,
   genesis,
   replay,
-} from "@loom-ui/core";
-import type { ProviderSpec } from "@loom-ui/core";
+} from "@loomwork/ui-core";
+import type { ProviderSpec } from "@loomwork/ui-core";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, MAX_READS_PER_BATCH, type UiReaders, createInvoker } from "./invoker";
 import type { ViewPayload } from "./payload";

@@ -23,7 +23,7 @@ bound by the planner once, not snapshot facts revised whenever another document 
 | K8 | Connections are planned even when extraction finds no facts. `visualize-document` then runs the planner with only the connections capability (one planner call, no extraction), so a text-only document gets a Connections section. If the planner emits nothing, the outcome stays `empty`. |
 
 Rejected:
-- **Snapshot `crossDoc` facts revised with `planner.revise` plus `@loom-ui/changes`** (the original §9). Every upload would cost model calls for each neighbouring document, and it needs affected-set and coalescing rules plus persistent unread cursors. Live data has no staleness to repair.
+- **Snapshot `crossDoc` facts revised with `planner.revise` plus `@loomwork/ui-changes`** (the original §9). Every upload would cost model calls for each neighbouring document, and it needs affected-set and coalescing rules plus persistent unread cursors. Live data has no staleness to repair.
 - **A fixed Connections panel outside the planner.** Always current, but not part of the planned experience, and every document would get the same layout.
 
 ## 3. The provider `doc.connections`
@@ -52,7 +52,7 @@ Rejected:
   - At most 21 nodes. Ids are prefixed (`doc:` / `ent:`) and unique, and the value passes loom-ui's `diagramProblems`.
   - Empty: a single self node.
 - Both values carry no fact refs (they cite no passages).
-- The web registers `@loom-ui/renderer-lit/diagram`, covered by the element-registration test.
+- The web registers `@loomwork/ui-renderer-lit/diagram`, covered by the element-registration test.
 
 ## 5. Planning and rollout
 
@@ -101,4 +101,4 @@ Rejected:
 
 ## 7. Out of scope
 
-Comparing figures across documents; connections in chat answers; revising visuals in place and `@loom-ui/changes`; user-edited or pinned connections.
+Comparing figures across documents; connections in chat answers; revising visuals in place and `@loomwork/ui-changes`; user-edited or pinned connections.

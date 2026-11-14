@@ -1,4 +1,4 @@
-import type { LlmRequest, LlmStreamChunk } from "@loom/llm";
+import type { LlmRequest, LlmStreamChunk } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { allReleased, sseFetch } from "./__helpers__/bodyOf";
 import * as f from "./__helpers__/frames";

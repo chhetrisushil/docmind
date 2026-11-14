@@ -168,7 +168,7 @@ DocMind's screens are loom-ui experiences, not hand-built views. The design is i
   server served held beside the action); the REST routes re-check ownership, so the intent filter is not the
   security boundary.
 - The same experiences compile for the =terminal= surface. A test renders them with
-  =@loom-ui/renderer-terminal=; no terminal surface is shipped, and one is planned as a second thin surface over
+  =@loomwork/ui-renderer-terminal=; no terminal surface is shipped, and one is planned as a second thin surface over
   the same package and routes.
 - View keys are random per server process. Run one server process (the same rule as one flow engine per
   database, see Operations).
@@ -247,7 +247,7 @@ pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live
 - PostgreSQL 16 (CI and =docker-compose.yml= use the =pgvector/pgvector:pg16= image). pgvector is not
   needed until M3.
 - A sibling Loom checkout at =../loom=, built with =pnpm build=. =package.json= overrides every
-  =@loom/*= dependency with =link:../loom/...=, so install fails without it.
+  =@loomwork/*= dependency with =link:../loom/...=, so install fails without it.
 - Optional: Docker, for the compose services (Postgres, and Ollama on port 11434 for embeddings in M3).
 
 * Getting started

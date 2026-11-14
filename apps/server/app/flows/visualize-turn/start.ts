@@ -1,10 +1,10 @@
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type RegisteredFlow,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import type { ChatIdResolver } from "../../chats/chatIds";
 import { rerunTracker } from "../rerunTracker";
 import { TurnGoneError } from "./errors";

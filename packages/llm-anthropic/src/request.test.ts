@@ -1,4 +1,4 @@
-import type { LlmContentPart, LlmReasoningPart, LlmRequest } from "@loom/llm";
+import type { LlmContentPart, LlmReasoningPart, LlmRequest } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { LlmRequestError } from "./errors";
 import { toMessagesBody } from "./request";

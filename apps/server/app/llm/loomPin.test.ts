@@ -1,4 +1,4 @@
-import { GeminiProvider, LlmHttpError, OpenAiProvider } from "@loom/llm";
+import { GeminiProvider, LlmHttpError, OpenAiProvider } from "@loomwork/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(() => vi.unstubAllGlobals());

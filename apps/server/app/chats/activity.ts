@@ -1,11 +1,11 @@
-import { RECORD_SOURCE } from "@loom/conversation";
-import { type EventEnvelope, projection$ } from "@loom/core";
+import { RECORD_SOURCE } from "@loomwork/conversation";
+import { type EventEnvelope, projection$ } from "@loomwork/core";
 import {
   type ReadModelEventSource,
   ReadModelService,
   type ReadModelStore,
   type SensitiveMap,
-} from "@loom/plugin-read-model";
+} from "@loomwork/plugin-read-model";
 import { opaqueIds } from "../opaqueIds";
 import { ensureGate } from "../status/ensureGate";
 import { type UserExecutionLister, forgetUserRows } from "../status/forgetUser";

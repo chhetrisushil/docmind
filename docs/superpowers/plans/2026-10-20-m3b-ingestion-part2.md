@@ -19,12 +19,12 @@ This covers spec §9 items 15–20 and 24–26, plus the `link` step of the acce
 - **Parsers.** The five library parsers (md, org, docx, doc, pdf) run in the existing sandboxed child. The child is now one esbuild bundle, so it reads exactly one directory.
 - **Vision.** Images, and PDF pages with no text layer, are transcribed by Claude in the server process. No untrusted image is decoded locally.
 - **LLM access.** Claude is reached through `packages/llm-anthropic`, which spec §9 item 31 planned for M4. Part 2 builds its non-streaming half now, because Loom's provider has no typed transient/permanent errors and no injectable `fetch`.
-- **Scheduling.** Every step's work passes an `IngestGate`: Loom's `@loom/fair-scheduler` (one process-wide cap, round-robin across tenants) in front of a per-tenant semaphore.
+- **Scheduling.** Every step's work passes an `IngestGate`: Loom's `@loomwork/fair-scheduler` (one process-wide cap, round-robin across tenants) in front of a per-tenant semaphore.
 
 **Tech Stack:** everything in M0–M3a, plus:
 - `marked` (markdown lexer), `orga` (org-mode), `mammoth` (docx), `word-extractor` (doc), `unpdf` (pdf.js, no worker);
 - `esbuild` (bundles the parse child);
-- `@loom/llm` (`LlmProvider`, `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE`), `@loom/classify` (`tainted`), `@loom/fair-scheduler` (`createFairScheduler`), `@loom/conformance` (`runLlmProviderConformance`);
+- `@loomwork/llm` (`LlmProvider`, `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE`), `@loomwork/classify` (`tainted`), `@loomwork/fair-scheduler` (`createFairScheduler`), `@loomwork/conformance` (`runLlmProviderConformance`);
 - Anthropic's Messages API over `fetch`.
 
 Loom stays pinned at `006dfdaf63319fa61594c42e2d5b2c8b87add2ca`; nothing here needs a Loom change.
@@ -55,7 +55,7 @@ Read from DocMind `main` `5429da9` and Loom `main` `006dfdaf`. Libraries were in
 | G6 | `orga` 5.0.0 is ESM-only but `require`-able on Node ≥ 22.13 (and bundled anyway). Every node has `position.start.offset` / `end.offset`. Sections nest. 1 MB with 20k headlines parses in 0.19 s / 127 MB. | The org parser maps `section` nodes to `chars` sections with heading paths. |
 | G7 | Loom's `AnthropicProvider` has no `fetch` injection. It throws a plain `Error("Anthropic API error <status>: <body>")`, which carries the response body. It has no transient/permanent classification, maps `refusal` to `end_turn`, and fixes the model per instance (default `claude-opus-4-8`). | **Decision D6**: DocMind builds the non-streaming part of `packages/llm-anthropic` now (spec §9 item 31 moves partly forward), with typed errors and an injectable `fetch`. M4 adds streaming and thinking to the same package. |
 | G8 | `guardRequest(request, {maxInlineBytes?, maxInlineTotalBytes?})` refuses tainted content anywhere but a user message and fences it there. Its default inline caps are 64 KiB per part and 256 KiB per request, too small for a photo. `UNTRUSTED_CONTENT_SYSTEM_NOTE` must be appended to the system prompt by the caller. | Every LLM request goes through `guardRequest` with explicit caps (`VISION_MAX_BYTES`). Document text, image bytes and PDF bytes are wrapped with `tainted(value, "document")` or `untrusted: {origin: "document"}`. |
-| G9 | `@loom/fair-scheduler` is one global `concurrency` cap with weighted round-robin across tenant lanes. It has no per-tenant cap and is in memory only. `schedule(task: (signal) => Promise<T>, {tenant, signal})` is the whole API. | **Decision D10**: `IngestGate` = a per-tenant semaphore (cap `DOCMIND_INGEST_TENANT_CONCURRENCY`, default 2) inside the fair scheduler (cap `DOCMIND_INGEST_CONCURRENCY`, default 4). It wraps each step attempt, and the wait does not count against the attempt timeout. |
+| G9 | `@loomwork/fair-scheduler` is one global `concurrency` cap with weighted round-robin across tenant lanes. It has no per-tenant cap and is in memory only. `schedule(task: (signal) => Promise<T>, {tenant, signal})` is the whole API. | **Decision D10**: `IngestGate` = a per-tenant semaphore (cap `DOCMIND_INGEST_TENANT_CONCURRENCY`, default 2) inside the fair scheduler (cap `DOCMIND_INGEST_CONCURRENCY`, default 4). It wraps each step attempt, and the wait does not count against the attempt timeout. |
 | G10 | The status model already keeps one row per execution and picks the highest generation (`forPage`). Generation 2 is a constant (`INGEST_GENERATION`). `cancel` loops 1..2. The sweep's SQL takes the generation as an argument. | **Decision D1**: a per-document generation column. Reads count only the row of the document's **current** generation, so a retried document shows `uploaded` until its new execution's first event folds. A late event of an old generation can no longer flip the document. |
 | G11 | `parsed_documents` is dropped by the chunk step, so analyze and summarize would have to rebuild sections from overlapping chunks. | **Decision D2**: the parsed row lives until `finalize` drops it. analyze and summarize read the parsed document; `parse` skips when the row is there. |
 | G12 | `parse` has no per-attempt timeout (`steps/parse.ts` passes only retry, sleep and shutdown). Its database and blob calls are bounded only by the runner's clock, which covers the child alone. | Task 102 gives `parse` `ingestStepOptions` with a timeout of `PARSE_STEP_TIMEOUT_MS = 2 × DOCMIND_PARSE_TIMEOUT_MS + 30 s` (part 1 carry). |
@@ -254,10 +254,10 @@ Copied from the spec, the M3a plan and the owner's standing rules; every task in
   - There are no process globals: the LLM provider, the gate, the vision reader and the stores are built in the wiring and passed down.
   - New dependencies:
     - `packages/parsers`: `marked`, `orga`, `mammoth`, `word-extractor`, `unpdf` (runtime, bundled), `esbuild` (dev);
-    - `packages/llm-anthropic`: `@loom/llm` only;
-    - `apps/server`: `@docmind/llm-anthropic`, `@loom/llm`, `@loom/classify`, `@loom/fair-scheduler`.
+    - `packages/llm-anthropic`: `@loomwork/llm` only;
+    - `apps/server`: `@docmind/llm-anthropic`, `@loomwork/llm`, `@loomwork/classify`, `@loomwork/fair-scheduler`.
     
-    `@loom/llm` and `@loom/fair-scheduler` join the root `pnpm.overrides` (Task 101 adds the scheduler, Task 110 the llm).
+    `@loomwork/llm` and `@loomwork/fair-scheduler` join the root `pnpm.overrides` (Task 101 adds the scheduler, Task 110 the llm).
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=22.13.0`. New library versions are pinned exactly (no caret) in `packages/parsers/package.json`, because their output is part of the parse contract:
   - `marked` `18.1.1`
   - `orga` `5.0.0`
@@ -1158,7 +1158,7 @@ Implements spec §5.2 "Scaling" and D10.
 - Create: `apps/server/app/flows/ingest-document/gate.ts`
 - Create: `apps/server/app/flows/ingest-document/gate.test.ts`
 - Modify: `apps/server/app/flows/ingest-document/errors.ts` (`IngestAbortedError`, added to `isAbort`)
-- Modify: `package.json` (root: `pnpm.overrides["@loom/fair-scheduler"] = "link:../loom/packages/fair-scheduler"`, alongside the existing ones), `apps/server/package.json` (dependency `"@loom/fair-scheduler": "*"`)
+- Modify: `package.json` (root: `pnpm.overrides["@loomwork/fair-scheduler"] = "link:../loom/packages/fair-scheduler"`, alongside the existing ones), `apps/server/package.json` (dependency `"@loomwork/fair-scheduler": "*"`)
 
 **Files (101b: wiring):**
 - Modify: `apps/server/app/flows/ingest-document/stepEffect.ts` (`StepOptions.gate`, `StepSeams.gate`; `ingestStepOptions` passes it)
@@ -1258,7 +1258,7 @@ The round-robin test pins the fair scheduler's documented behaviour. If its lane
 - [ ] **Step 3: Implement `gate.ts`**
 
 ```ts
-import { createFairScheduler } from "@loom/fair-scheduler";
+import { createFairScheduler } from "@loomwork/fair-scheduler";
 import { IngestAbortedError } from "./errors";
 
 interface Lane {
@@ -2424,7 +2424,7 @@ Implements D6 and finding G7. This is the first half of spec §9 item 31; M4 add
 **Files (110a: package, errors, request mapping):**
 - Create: `packages/llm-anthropic/{package.json,tsconfig.json,tsconfig.test.json,vitest.config.ts}`. Copy the shape of `packages/embeddings`; the package name is `@docmind/llm-anthropic` and its description is "Claude Messages API provider for Loom's LlmProvider SPI: typed transient/permanent errors, no content in errors".
 - Create: `packages/llm-anthropic/src/errors.ts`, `src/request.ts`, `src/request.test.ts`, `src/index.ts`
-- Modify: root `package.json` (`pnpm.overrides["@loom/llm"] = "link:../loom/packages/llm"`)
+- Modify: root `package.json` (`pnpm.overrides["@loomwork/llm"] = "link:../loom/packages/llm"`)
 
 **Files (110b: provider, fake, conformance):**
 - Create: `packages/llm-anthropic/src/provider.ts`, `src/provider.test.ts`, `src/testing/fakeAnthropic.ts`, `src/conformance.test.ts`, `testing.js`, `testing.d.ts` (the same `testing` subpath pattern as `packages/embeddings`)
@@ -2454,7 +2454,7 @@ Implements D6 and finding G7. This is the first half of spec §9 item 31; M4 add
 - [ ] **Step 1 (110a): Write the failing request-mapping tests** (`request.test.ts`)
 
 ```ts
-import type { LlmRequest } from "@loom/llm";
+import type { LlmRequest } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { LlmRequestError } from "./errors";
 import { toMessagesBody } from "./request";
@@ -2546,7 +2546,7 @@ export class LlmOutputError extends Error {
 
 ```ts
 // request.ts
-import type { LlmContentPart, LlmRequest } from "@loom/llm";
+import type { LlmContentPart, LlmRequest } from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 
 type Block =
@@ -2667,14 +2667,14 @@ it("refuses a baseUrl with credentials, a query or a non-http scheme, naming the
 
 `FakeReply` gains `hang?: true`: the fake accepts the request and never answers. On `close()` it destroys every open socket, so no handle leaks. `HI = { messages: [{ role: "user", content: "hi" }] }`. Usage `3 / 1` is what the fake reports for the default reply: `input_tokens` = the character count of the user text plus 1, `output_tokens` = 1. Make the fake compute exactly that, and document it in its header.
 
-`conformance.test.ts` runs `runLlmProviderConformance(() => provider(fake), "AnthropicMessagesProvider", { toolRequest: null })` from `@loom/conformance`, against the fake. Check its options. If the suite insists on tool support, pass `toolRequest: null` to skip that case (it exists for providers without tools) and record that in the test.
+`conformance.test.ts` runs `runLlmProviderConformance(() => provider(fake), "AnthropicMessagesProvider", { toolRequest: null })` from `@loomwork/conformance`, against the fake. Check its options. If the suite insists on tool support, pass `toolRequest: null` to skip that case (it exists for providers without tools) and record that in the test.
 
 The opt-in real suite: `describe.skipIf(!process.env.DOCMIND_TEST_ANTHROPIC_KEY)` with one `complete` of "Reply with the word ok" against `claude-haiku-5-5`. It is never run in CI, and the key is never printed.
 
 - [ ] **Step 5: Implement `provider.ts`**
 
 ```ts
-import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmResponse } from "@loomwork/llm";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";
 import { toMessagesBody } from "./request";
 
@@ -2791,7 +2791,7 @@ Implements D7 and the error half of D6 inside the ingest flow. After this task t
 - Modify: `apps/server/app/status/model.ts` (`STATUS_MESSAGES.vision_unavailable`)
 - Modify: `packages/contracts/src/documents.ts` (`ProgressDetail` gains `vision_unavailable`)
 - Modify: `apps/server/app/main.ts` (one boot log line when no key is set)
-- Modify: `apps/server/package.json` (`@docmind/llm-anthropic`, `@loom/llm`, `@loom/classify`)
+- Modify: `apps/server/package.json` (`@docmind/llm-anthropic`, `@loomwork/llm`, `@loomwork/classify`)
 - Test: `limits.test.ts`, `errors.test.ts` (create it if absent), `status/model.test.ts`, `packages/contracts/src/documents.test.ts`
 
 **Interfaces:**
@@ -3044,8 +3044,8 @@ export function jsonAnswer<T>(content: string, schema: z.ZodType<T>): T {
 `vision.ts`:
 
 ```ts
-import { tainted } from "@loom/classify";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import { z } from "zod";
 import { jsonAnswer } from "./llmJson";
 
@@ -3628,7 +3628,7 @@ The M0 guard test (every table has RLS) passes because both tables enable it.
 
 ```ts
 import { createHmac, hkdfSync } from "node:crypto";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyUnavailableError } from "./fields";
 
 export const ENTITY_KINDS = ["person", "organization", "product", "project", "place", "other"] as const;

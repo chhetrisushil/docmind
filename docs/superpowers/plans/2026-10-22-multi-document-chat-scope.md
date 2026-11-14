@@ -47,7 +47,7 @@ PR 4 is additive (nothing uses it yet). PR 5 changes the intent, the experience 
 - Test: `loom-ui/packages/core/src/chatValue.test.ts`
 
 **Interfaces:**
-- Produces (exported from `@loom-ui/core`, `@loom-ui/core/browser` via `kindValues`, and `@loom-ui/core/chat-ui`, which re-exports `chatValue` wholesale):
+- Produces (exported from `@loomwork/ui-core`, `@loomwork/ui-core/browser` via `kindValues`, and `@loomwork/ui-core/chat-ui`, which re-exports `chatValue` wholesale):
   - `MULTI_SELECT_INPUT_KIND = "MultiSelectInput"`, now the 4th entry of `CHAT_INPUT_KINDS`
   - `MAX_MULTI_OPTIONS = 500`, `MAX_MULTI_SELECTED = 100`
   - `interface MultiSelectOption { readonly value: string; readonly label: string; readonly hint?: string }`
@@ -566,7 +566,7 @@ Branch `feat/multi-select-input-web` from `main` after PR 1 merges.
 - Modify: `loom-ui/packages/core/src/messages.ts:184` (strings)
 
 **Interfaces:**
-- Consumes: `MultiSelectValue`, `MultiSelectOption`, `multiSelectValueIssues`, `MAX_MULTI_SELECTED`, `SELECT_MANY_ACTION`, `newSubmitKey`, `oneLineChatText` from `@loom-ui/core/chat-ui`; `dispatch`, `failureText`, `inputStyles`, `DispatchResult` from `./chatShared`; `LuWidget` from `./base`.
+- Consumes: `MultiSelectValue`, `MultiSelectOption`, `multiSelectValueIssues`, `MAX_MULTI_SELECTED`, `SELECT_MANY_ACTION`, `newSubmitKey`, `oneLineChatText` from `@loomwork/ui-core/chat-ui`; `dispatch`, `failureText`, `inputStyles`, `DispatchResult` from `./chatShared`; `LuWidget` from `./base`.
 - Produces: `<lu-multi-select-input>`, class `LuMultiSelectInput`; DOM hooks for tests and hosts: `[data-multi-select][data-phase]`, `[data-chip="<value>"]` with a `button`, `[data-empty]`, `[data-add]`, `input[data-search]`, `[data-option="<value>"]`, `[data-note]`, `#status`.
 
 - [ ] **Step 1: Add the strings** (`core/src/messages.ts`, after `"lu.input.chooseEllipsis"`)
@@ -588,8 +588,8 @@ If an i18n fitness test requires every key in every locale, add them wherever th
 - [ ] **Step 2: Write the failing tests** (`multiSelect.test.ts`)
 
 ```ts
-import { SELECT_MANY_ACTION, isSubmitKey } from "@loom-ui/core/chat-ui";
-import { customWidget$ } from "@loom/blueprint-runtime";
+import { SELECT_MANY_ACTION, isSubmitKey } from "@loomwork/ui-core/chat-ui";
+import { customWidget$ } from "@loomwork/blueprint-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../elements/lu-inputs";
 
@@ -746,7 +746,7 @@ import {
   multiSelectValueIssues,
   newSubmitKey,
   oneLineChatText,
-} from "@loom-ui/core/chat-ui";
+} from "@loomwork/ui-core/chat-ui";
 import { type TemplateResult, css, html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 
@@ -1023,7 +1023,7 @@ const multiPrompt =
     return [host ? head : `${title(w)}: ${head}`, ...rows].join("\n");
   };
 ```
-Register: `.register("MultiSelectInput", multiPrompt(host, x))` after `SelectInput`. Import the two names from `@loom-ui/core/chat-ui` next to `optionsProblem`.
+Register: `.register("MultiSelectInput", multiPrompt(host, x))` after `SelectInput`. Import the two names from `@loomwork/ui-core/chat-ui` next to `optionsProblem`.
 
 - [ ] **Step 4: Run the suite**
 

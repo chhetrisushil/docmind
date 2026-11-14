@@ -1,7 +1,7 @@
-import type { Operation } from "@loom-ui/core";
-import type { Lineage } from "@loom-ui/lineage";
-import type { PlanReport, PlanResult } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { Operation } from "@loomwork/ui-core";
+import type { Lineage } from "@loomwork/ui-lineage";
+import type { PlanReport, PlanResult } from "@loomwork/ui-planner";
 import type { ChatBus } from "../../chats/bus";
 import type { ChatIdResolver } from "../../chats/chatIds";
 import { VisualsLineageError } from "../ingest-document/errors";

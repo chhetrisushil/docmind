@@ -1,7 +1,7 @@
 import type { Identity } from "@docmind/auth";
 import type { Citation } from "@docmind/contracts";
-import { tainted } from "@loom/classify";
-import { checkCitations } from "@loom/knowledge";
+import { tainted } from "@loomwork/classify";
+import { checkCitations } from "@loomwork/knowledge";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";

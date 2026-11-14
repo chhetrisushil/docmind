@@ -1,6 +1,6 @@
 import { type FactRef, type VisualFactRaw, factRefOfPin, fitsShape } from "@docmind/experiences";
-import type { Operation } from "@loom-ui/core";
-import type { PlanReport } from "@loom-ui/planner";
+import type { Operation } from "@loomwork/ui-core";
+import type { PlanReport } from "@loomwork/ui-planner";
 
 /** The fact a provider handle reads, from the `remapProvider` op that declares it; null for a provider this module did not mint. */
 function factOfHandle(op: Operation): { handle: string; ref: FactRef | null } | null {

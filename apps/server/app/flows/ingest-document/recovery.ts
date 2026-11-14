@@ -1,10 +1,10 @@
-import type { ExecutionEnumerable, LeaseStore } from "@loom/event-runtime";
+import type { ExecutionEnumerable, LeaseStore } from "@loomwork/event-runtime";
 import {
   FlowCodeMismatchError,
   type WorkflowRuntime,
   collectGhostLeases,
   recoverAbandoned,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import { isRecoverableChatExecution } from "../../chats/ids";
 import {
   FLOW_MISMATCH_REASON,

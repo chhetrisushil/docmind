@@ -1,14 +1,14 @@
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import {
   type DecoratorPlan,
   type EventStore,
   type OptionalEventStoreMethod,
   installOptional,
-} from "@loom/event-runtime";
+} from "@loomwork/event-runtime";
 
 /**
  * The decision under which Loom's conversation records the trimmed rolling summary (`conv#o<ord>:summary-fit`,
- * `@loom/conversation`). Its `choice` is the summary STRING, which no sealed path can reach without also sealing
+ * `@loomwork/conversation`). Its `choice` is the summary STRING, which no sealed path can reach without also sealing
  * every conversation record's `choice` (spec: docs/specs/2026-11-03-chat-rolling-summary-design.md §4).
  */
 export const SUMMARY_FIT_DECISION = /^conv#o[1-9][0-9]{0,8}:summary-fit$/;

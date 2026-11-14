@@ -1,4 +1,4 @@
-import type { Lineage } from "@loom-ui/lineage";
+import type { Lineage } from "@loomwork/ui-lineage";
 import type { ChatIdResolver } from "./chatIds";
 import type { ChatRef } from "./turnItems";
 

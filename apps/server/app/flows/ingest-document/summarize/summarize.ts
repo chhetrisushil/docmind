@@ -1,8 +1,8 @@
 import type { DocumentSummary } from "@docmind/contracts";
 import { LlmOutputError } from "@docmind/llm-anthropic";
 import type { ParsedDocument } from "@docmind/parsers";
-import { tainted } from "@loom/classify";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import type { z } from "zod";
 import type { EntityKind } from "../../../crypto/entityKeys";
 import { jsonAnswer } from "../llmJson";

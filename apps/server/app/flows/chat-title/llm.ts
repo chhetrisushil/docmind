@@ -1,4 +1,4 @@
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import type { ChatSettings } from "../../chats/settings";
 import { createRoleProvider } from "../../llm/factory";
 import { loadLlmRoles } from "../../llm/roles";

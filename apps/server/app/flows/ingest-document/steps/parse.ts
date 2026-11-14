@@ -6,7 +6,7 @@ import type {
   ParsedSection,
   ParserRegistry,
 } from "@docmind/parsers";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { LlmConfigError } from "../../../llm/bounded";
 import { BlobMissingError, PermanentIngestError } from "../errors";
 import type { IngestStartInput } from "../flow";

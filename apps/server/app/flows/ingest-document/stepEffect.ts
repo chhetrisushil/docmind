@@ -1,6 +1,6 @@
 import { ParseAbortedError } from "@docmind/parsers";
-import type { RetryPolicy } from "@loom/core";
-import type { Effect } from "@loom/effect-runtime";
+import type { RetryPolicy } from "@loomwork/core";
+import type { Effect } from "@loomwork/effect-runtime";
 import { z } from "zod";
 import { generationOf } from "../../status/model";
 import { defaultSleep } from "../sleep";

@@ -1,4 +1,4 @@
-import type { BargeInHandlers, BargeInSource } from "@loom/conversation";
+import type { BargeInHandlers, BargeInSource } from "@loomwork/conversation";
 import { describe, expect, it, vi } from "vitest";
 import { StopRegistry, stoppableBargeIn } from "./stop";
 

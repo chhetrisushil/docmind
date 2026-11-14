@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ProgressDetail } from "@docmind/contracts";
-import { InMemoryReadModelStore, ReadModelService } from "@loom/plugin-read-model";
+import { InMemoryReadModelStore, ReadModelService } from "@loomwork/plugin-read-model";
 import { afterEach, describe, expect, it } from "vitest";
 import { FAILURE_CODES } from "../flows/ingest-document/errors";
 import { opaqueIds } from "../opaqueIds";

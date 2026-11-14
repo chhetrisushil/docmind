@@ -4,8 +4,8 @@ import { link, mkdir, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ContentRef, ContentStore } from "@loom/plugin-content";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { ContentRef, ContentStore } from "@loomwork/plugin-content";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import {
   addressOf,
   deriveFingerprintKey,

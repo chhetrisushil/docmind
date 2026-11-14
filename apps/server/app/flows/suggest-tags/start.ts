@@ -3,7 +3,7 @@ import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import {
   type UserIdSource,
   existingUser,

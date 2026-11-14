@@ -2,7 +2,7 @@ import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import type { ChatIdResolver } from "../../chats/chatIds";
 import type { ChatRef } from "../../chats/turnItems";
 import { ChatTitleInput, chatTitleFlow } from "./flow";

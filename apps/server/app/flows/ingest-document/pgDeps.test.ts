@@ -1,5 +1,5 @@
 import { InMemoryChunkVectors } from "@docmind/vector-pg";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import type { FieldCrypto } from "../../crypto/fields";

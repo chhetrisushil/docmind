@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 
 type Observer = (event: EventEnvelope) => void | Promise<void>;
 

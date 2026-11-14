@@ -4,7 +4,7 @@ import {
   type TagSummary,
   intentOf,
 } from "@docmind/contracts";
-import { TABLE_TOKEN } from "@loom-ui/core/browser";
+import { TABLE_TOKEN } from "@loomwork/ui-core/browser";
 import { LitElement, css, html } from "lit";
 import { ServicesController } from "../state/services-controller";
 import { baseStyles } from "../styles/base";

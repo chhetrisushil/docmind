@@ -1,6 +1,6 @@
 import { createHmac, hkdfSync } from "node:crypto";
 import { normaliseTagName } from "@docmind/contracts";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "./fields";
 
 const TAG_INFO = "docmind-tag-v1";

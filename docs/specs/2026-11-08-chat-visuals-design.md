@@ -20,7 +20,7 @@ the turn's hot path. An answer streams exactly as it does today; its visuals arr
 | C1 | Facts are layered. A turn first uses the stored facts (sub-project 1) of the documents its answer cited, kept only when they cite a chunk the answer cited. Only when none survive does the turn extract facts from its own retrieved chunks, with the same grounding rules. |
 | C2 | Trigger: automatic for every completed answer that cites at least one document, plus an on-demand "Visualize" / "Re-visualize" action on any cited answer. |
 | C3 | Placement: a collapsible "Visuals" strip under the assistant message, collapsed by default, expanding in place. The answer text above it never reflows. |
-| C4 | The turn-end trigger is a generic Loom hook, `turnSettledObserver`, added to `@loom/conversation` first (sub-project 1 V7: gaps are closed generically upstream). DocMind does not poll and does not depend on a browser being open. |
+| C4 | The turn-end trigger is a generic Loom hook, `turnSettledObserver`, added to `@loomwork/conversation` first (sub-project 1 V7: gaps are closed generically upstream). DocMind does not poll and does not depend on a browser being open. |
 | C5 | One lineage per turn, `turnvisuals-<userId>-<chatId>-<ord>`. A re-run replaces its head (sub-project 1 R18). |
 | C6 | No backfill and no boot sweep. A turn whose hook call was missed (crash, role off) is recovered by the on-demand action. |
 | C7 | Visuals are optional. A failed, empty or disabled run leaves the strip hidden; the turn is never affected. |
@@ -36,9 +36,9 @@ Approaches considered and rejected for the fact source (C1): extracting only fro
 past the summary cap, or over documents without facts, get nothing), and per-turn extraction only (a
 model call on every turn even when stored facts already cover it).
 
-## 3. Prerequisite: `turnSettledObserver` in `@loom/conversation`
+## 3. Prerequisite: `turnSettledObserver` in `@loomwork/conversation`
 
-A generic helper in `@loom/conversation`, naming no DocMind concept, built on the runtime's existing
+A generic helper in `@loomwork/conversation`, naming no DocMind concept, built on the runtime's existing
 `onDurableEvent` (ADR 0147). No kernel change. Loom branch `feat/conversation-turn-settled`; the plan
 pins the merged Loom SHA in CI.
 

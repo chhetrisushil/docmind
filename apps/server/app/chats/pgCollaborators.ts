@@ -1,5 +1,5 @@
 import type { ChunkVectorStore } from "@docmind/vector-pg";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";

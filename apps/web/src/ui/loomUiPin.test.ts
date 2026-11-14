@@ -1,4 +1,4 @@
-import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
+import { createChatLitRegistry } from "@loomwork/ui-renderer-lit/chat";
 import { describe, expect, it } from "vitest";
 
 // The pinned loom-ui carries the per-entry attachment point from loom-ui PR #125 (`chatAccessories`); a pin from before it fails here.

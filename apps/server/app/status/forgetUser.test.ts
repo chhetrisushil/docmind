@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
+import { InMemoryReadModelStore, foldedStates } from "@loomwork/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { CHAT_ACTIVITY_MODEL, ChatActivity } from "../chats/activity";
 import { legacyChatConversationId } from "../chats/ids";

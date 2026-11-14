@@ -1,12 +1,12 @@
 import type { Identity } from "@docmind/auth";
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import {
   type ReadModelEventSource,
   ReadModelService,
   type ReadModelStore,
   type SensitiveMap,
   foldedStates,
-} from "@loom/plugin-read-model";
+} from "@loomwork/plugin-read-model";
 import { existingUser } from "../documents/executionCandidates";
 import type { ProgressBus } from "../documents/progress";
 import { legacyIds, opaqueIds } from "../opaqueIds";

@@ -1,7 +1,11 @@
-import type { StepDefinition } from "@loom/core";
-import type { EventStore } from "@loom/event-runtime";
-import { sensitivePathsFromSteps } from "@loom/plugin-crypto";
-import { type SensitiveMap, mergeSensitive, sensitiveMapFromCovers } from "@loom/plugin-read-model";
+import type { StepDefinition } from "@loomwork/core";
+import type { EventStore } from "@loomwork/event-runtime";
+import { sensitivePathsFromSteps } from "@loomwork/plugin-crypto";
+import {
+  type SensitiveMap,
+  mergeSensitive,
+  sensitiveMapFromCovers,
+} from "@loomwork/plugin-read-model";
 import { ingestDocumentFlow } from "../flows/ingest-document/flow";
 
 /** The steps of every flow the app registers. Add a flow here so its `sensitive(...)` outputs reach the model's guard (ADR 0132 D11). */

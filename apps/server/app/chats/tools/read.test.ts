@@ -1,4 +1,4 @@
-import { isTainted, taintOf, unwrapTainted } from "@loom/classify";
+import { isTainted, taintOf, unwrapTainted } from "@loomwork/classify";
 import { describe, expect, it } from "vitest";
 import { ChatScopeError } from "../scope";
 import { C, T, U } from "../testing";

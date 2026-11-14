@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import { ChatSessionDto, type UploadDocumentResponse } from "@docmind/contracts";
-import { LogLifecycle } from "@loom/workflow-runtime";
+import { LogLifecycle } from "@loomwork/workflow-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { DOC, collectUntil, isReply, scriptChat } from "../chats/e2eSupport";
 import { pgSessionLock } from "../db/sessionLock";

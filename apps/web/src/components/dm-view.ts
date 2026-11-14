@@ -1,5 +1,5 @@
 import type { ViewName } from "@docmind/contracts";
-import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryAccessories } from "@loomwork/ui-renderer-lit/chat";
 import { LitElement, css, html } from "lit";
 import type { ViewSource } from "../api/client";
 import { report } from "../report";

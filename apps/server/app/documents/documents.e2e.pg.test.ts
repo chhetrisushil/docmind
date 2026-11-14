@@ -10,9 +10,9 @@ import type {
 } from "@docmind/contracts";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
-import type { ExecutionHandle } from "@loom/workflow-runtime";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
+import type { ExecutionHandle } from "@loomwork/workflow-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildServer } from "../compose";

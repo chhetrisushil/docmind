@@ -1,7 +1,7 @@
 import { LlmOutputError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import { tainted } from "@loom/classify";
-import type { Effect } from "@loom/effect-runtime";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import type { Effect } from "@loomwork/effect-runtime";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import { z } from "zod";
 import { visualizeGenerationOf, visualizeRunOf } from "../../status/model";
 import { FAILURE_CODES } from "../ingest-document/errors";

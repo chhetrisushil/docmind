@@ -1,5 +1,5 @@
 import type { ChatOutcome, ChatToolStep, Citation, Intent } from "@docmind/contracts";
-import type { ChatEntry, ChatReasoning, ChatValue } from "@loom-ui/core/chat-ui";
+import type { ChatEntry, ChatReasoning, ChatValue } from "@loomwork/ui-core/chat-ui";
 import type { Api } from "../api/client";
 import { ApiError } from "../api/http";
 import type { OpenSse } from "../api/sse";

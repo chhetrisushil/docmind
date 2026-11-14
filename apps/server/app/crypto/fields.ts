@@ -1,4 +1,4 @@
-import { type KeyStore, decryptValue, encryptValue, envelopeAad } from "@loom/plugin-crypto";
+import { type KeyStore, decryptValue, encryptValue, envelopeAad } from "@loomwork/plugin-crypto";
 
 const AAD_VERSION = "docmind-field-v1";
 const ENVELOPE_TAG = "loom/aes-256-gcm";

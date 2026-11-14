@@ -1,6 +1,6 @@
 import { LlmRefusalError } from "@docmind/llm-anthropic";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import { FieldKeyStoreError } from "../../../crypto/fields";
 import type { TagService } from "../../../tags/service";
 import { normaliseSuggestions } from "../../../tags/suggestions";

@@ -1,7 +1,7 @@
-import type { Lineage } from "@loom-ui/lineage";
-import type { Planner } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
+import type { Lineage } from "@loomwork/ui-lineage";
+import type { Planner } from "@loomwork/ui-planner";
 import type { UserIdSource } from "../../documents/executionCandidates";
 import type { ProgressBus } from "../../documents/progress";
 import { visualizeGenerationOf } from "../../status/model";

@@ -1,5 +1,5 @@
-import { ConversationNotFoundError } from "@loom/conversation";
-import { InboxClosedError } from "@loom/workflow-runtime";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import { InboxClosedError } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { legacyChatConversationId } from "../chats/ids";
 import { existingUser } from "../documents/executionCandidates";

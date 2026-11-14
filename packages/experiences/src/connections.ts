@@ -1,5 +1,5 @@
-import type { Experience, ProviderSpec } from "@loom-ui/core";
-import type { CapabilityRef } from "@loom-ui/planner";
+import type { Experience, ProviderSpec } from "@loomwork/ui-core";
+import type { CapabilityRef } from "@loomwork/ui-planner";
 import type { RawConnections } from "./invoker";
 import { CONNECTIONS_CAPS, KIND, PINS, provider } from "./providers";
 

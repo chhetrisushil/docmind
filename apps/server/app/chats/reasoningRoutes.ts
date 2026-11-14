@@ -1,5 +1,5 @@
 import { ReasoningQuery } from "@docmind/contracts";
-import { ConversationNotFoundError, InvalidCursorError } from "@loom/conversation";
+import { ConversationNotFoundError, InvalidCursorError } from "@loomwork/conversation";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChatWithIds, notFound, principalOf } from "./access";

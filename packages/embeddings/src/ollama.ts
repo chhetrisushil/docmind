@@ -1,4 +1,4 @@
-import { type EmbedOptions, EmbeddingError, type EmbeddingProvider } from "@loom/memory";
+import { type EmbedOptions, EmbeddingError, type EmbeddingProvider } from "@loomwork/memory";
 import { z } from "zod";
 
 /** Worth retrying: the service is down, slow or overloaded. Permanent problems are plain EmbeddingError. */

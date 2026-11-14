@@ -1,4 +1,4 @@
-import type { ChatEntry, ChatReasoning, ChatValue } from "@loom-ui/core/chat-ui";
+import type { ChatEntry, ChatReasoning, ChatValue } from "@loomwork/ui-core/chat-ui";
 import type { ChatFold } from "./feedAdapter";
 
 const CURSOR = /^[0-9]{1,9}\.[0-9]{1,15}$/;

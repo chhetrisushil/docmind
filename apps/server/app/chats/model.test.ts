@@ -1,7 +1,7 @@
-import { createAgentModelEffect } from "@loom/agent";
-import type { AgentModelCall } from "@loom/agent";
-import { type Effect, EffectRuntime } from "@loom/effect-runtime";
-import type { LlmProvider, LlmResponse } from "@loom/llm";
+import { createAgentModelEffect } from "@loomwork/agent";
+import type { AgentModelCall } from "@loomwork/agent";
+import { type Effect, EffectRuntime } from "@loomwork/effect-runtime";
+import type { LlmProvider, LlmResponse } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { ChatBus, type LiveChatEvent } from "./bus";
 import { chatModelEffect } from "./model";

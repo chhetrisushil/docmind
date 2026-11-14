@@ -6,9 +6,9 @@ import {
   LlmRequestError,
   LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import { tainted } from "@loom/classify";
-import type { Effect } from "@loom/effect-runtime";
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import type { Effect } from "@loomwork/effect-runtime";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import type { Pool } from "pg";
 import { type FieldCrypto, FieldKeyStoreError } from "../../crypto/fields";
 import { withTenant } from "../../db/tenant";

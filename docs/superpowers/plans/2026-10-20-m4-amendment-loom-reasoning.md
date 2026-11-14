@@ -22,7 +22,7 @@
 | Durable endpoint | `GET /api/chats/:id/reasoning?cursor=` mirroring Loom's endpoint, owner-checked twice (the chat row, then `reasoningTarget`). |
 | Refusal, usage | `CallObserver` shrinks to `onRefusal` and `onUsage`. |
 
-**Tech stack:** unchanged. Loom pin moves to `58fb2f5c4de9ac1dac85dbd7412b44cd81fdd03d`. No new dependency: `@loom/llm`, `@loom/conversation`, `@loom/classify` are already in `apps/server`.
+**Tech stack:** unchanged. Loom pin moves to `58fb2f5c4de9ac1dac85dbd7412b44cd81fdd03d`. No new dependency: `@loomwork/llm`, `@loomwork/conversation`, `@loomwork/classify` are already in `apps/server`.
 
 ---
 
@@ -38,7 +38,7 @@
     - `thinking` with empty text is `kind: "text"` with `text: ""`;
     - `redacted_thinking` is `kind: "redacted"` with `signature: <data>` and no text;
     - every part has `provider: "anthropic"` and `signature` when the block had one.
-  - **Layout.** `layoutOf(entries)` from `@loom/llm`, entries `"reasoning"`, `{call: id}`, `{text: length}`; absent unless there is reasoning and the order is not canonical.
+  - **Layout.** `layoutOf(entries)` from `@loomwork/llm`, entries `"reasoning"`, `{call: id}`, `{text: length}`; absent unless there is reasoning and the order is not canonical.
   - **Streaming.** `reasoningDelta` chunks (`{delta: "", done: false, reasoningDelta}`) carry thinking text; `thinking` text never enters `delta`. The terminal chunk carries `reasoning` and `layout`.
   - **Requests.** An assistant `reasoning` part of provider `"anthropic"` becomes its block, in the order it sits in the message (Loom's `assistantMessageOf` already puts it in vendor order). Rules: parts of another provider are omitted; all reasoning parts are omitted when `thinking` is off; a reasoning part with no signature is dropped together with every later reasoning part of that message (a signature binds what is before it); a reasoning part in a non-assistant message is `LlmRequestError`.
   - **Capabilities.** `capabilities.reasoning` is `true` only when the provider was built with `thinking: true`. Ingest providers have thinking off, so Loom's boot warning (one per reasoning-capable effect without a store) never names them.
@@ -392,7 +392,7 @@ Read first (Loom, read-only): `packages/llm/src/types.ts` (`LlmResponse.reasonin
 - Test: `packages/llm-anthropic/src/request.test.ts`, `packages/llm-anthropic/src/provider.test.ts`
 
 **Interfaces:**
-- Consumes: `@loom/llm` `LlmContentPart`, `LlmReasoningPart`, `LlmRequest`, `fenceUntrustedMedia`.
+- Consumes: `@loomwork/llm` `LlmContentPart`, `LlmReasoningPart`, `LlmRequest`, `fenceUntrustedMedia`.
 - Produces:
   - `reasoning.ts`: `PROVIDER_ID = "anthropic"`; `ThinkingBlock`, `RedactedBlock`; `wireBlockOf(part): ThinkingBlock | RedactedBlock`; `usableReasoning(parts, thinking): LlmContentPart[]`.
   - `request.ts`: `Block` includes both block types; `BodyOptions` is `{thinking?, effort?, cache?, stream?}` (the `reasoning` map is gone); `toolUseGroups` is gone.
@@ -401,7 +401,7 @@ Read first (Loom, read-only): `packages/llm/src/types.ts` (`LlmResponse.reasonin
 - [ ] **Step 1: Write the failing request tests.** In `request.test.ts`:
 
 1. Delete these five cases of `describe("toMessagesBody options")`: "replaces the assistant message's content with the stored blocks, verbatim and in stored order", "round-trips an interleaved thinking, tool_use, thinking, tool_use response in order", "never marks a thinking block as a cache breakpoint, and refuses an entry that is not a content block", "lists the tool_use ids of each assistant message by its index in request.messages", "does not mutate a stored reasoning block when marking the cache breakpoint". Remove `toolUseGroups` and `ReasoningBlock` from the imports and the `THINKING` constant if now unused.
-2. Add `LlmContentPart` and `LlmReasoningPart` to the `@loom/llm` type import, and append:
+2. Add `LlmContentPart` and `LlmReasoningPart` to the `@loomwork/llm` type import, and append:
 
 ```ts
 describe("toMessagesBody: reasoning parts (ADR 0133 D5)", () => {
@@ -593,7 +593,7 @@ Expected: FAIL (`reasoning` parts throw `LlmRequestError` from `block()`).
 - [ ] **Step 3: Implement `reasoning.ts`.**
 
 ```ts
-import type { LlmContentPart, LlmReasoningPart } from "@loom/llm";
+import type { LlmContentPart, LlmReasoningPart } from "@loomwork/llm";
 
 /** The provider id on every reasoning part: a part is only sent back to the provider that produced it (ADR 0133 D2). */
 export const PROVIDER_ID = "anthropic";
@@ -653,7 +653,7 @@ import {
   type LlmRequest,
   type LlmResultPart,
   fenceUntrustedMedia,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 import { type RedactedBlock, type ThinkingBlock, usableReasoning, wireBlockOf } from "./reasoning";
 
@@ -1020,7 +1020,7 @@ In `apps/server/app/chats/wiring.ts` change `o.llm.observer.current = chatObserv
 - Test (modify): `provider.test.ts`, `provider.stream.test.ts`, `conformance.test.ts`, `realApi.test.ts`
 
 **Interfaces:**
-- Consumes: Task 159a `PROVIDER_ID`; `@loom/llm` `layoutOf`, `LlmLayoutEntry`, `LlmReasoning`, `LlmToolCall`, `LlmCapabilities`, `assembleStream`.
+- Consumes: Task 159a `PROVIDER_ID`; `@loomwork/llm` `layoutOf`, `LlmLayoutEntry`, `LlmReasoning`, `LlmToolCall`, `LlmCapabilities`, `assembleStream`.
 - Produces:
   - `reasoning.ts`: `reasoningOf(block): LlmReasoning | undefined`; `Outcome { content; toolCalls; reasoning?; layout? }`; `outcomeOf(blocks): Outcome`; `refusedOutcomeOf(blocks): Outcome` (text only).
   - `mapping.ts`: `ContentBlock` (the open validated block; replaces `ReasoningBlock`), `toContentBlock(...): ContentBlock | undefined`.
@@ -1032,7 +1032,7 @@ In `apps/server/app/chats/wiring.ts` change `o.llm.observer.current = chatObserv
 - [ ] **Step 1: Write the failing tests.** Create `packages/llm-anthropic/src/provider.reasoning.test.ts`:
 
 ```ts
-import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loom/llm";
+import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { allReleased, sseFetch } from "./__helpers__/bodyOf";
 import * as f from "./__helpers__/frames";
@@ -1446,7 +1446,7 @@ export function parseResponse(raw: string): Parsed {
 }
 ```
 
-- [ ] **Step 5: Implement the response half of `reasoning.ts`.** Add to the file (keep the 159a exports; extend the import to `import type { LlmContentPart, LlmLayoutEntry, LlmReasoning, LlmReasoningPart, LlmToolCall } from "@loom/llm"; import { layoutOf } from "@loom/llm"; import type { ContentBlock } from "./mapping";`):
+- [ ] **Step 5: Implement the response half of `reasoning.ts`.** Add to the file (keep the 159a exports; extend the import to `import type { LlmContentPart, LlmLayoutEntry, LlmReasoning, LlmReasoningPart, LlmToolCall } from "@loomwork/llm"; import { layoutOf } from "@loomwork/llm"; import type { ContentBlock } from "./mapping";`):
 
 ```ts
 /**
@@ -1529,7 +1529,7 @@ export function refusedOutcomeOf(blocks: readonly ContentBlock[]): Outcome {
 - [ ] **Step 6: `streamState.ts`.** Replace the file:
 
 ```ts
-import type { LlmStreamChunk } from "@loom/llm";
+import type { LlmStreamChunk } from "@loomwork/llm";
 import { LlmRequestError, LlmStreamError } from "./errors";
 import {
   type ContentBlock,
@@ -1783,7 +1783,7 @@ In `provider.ts`:
 
 1. Imports:
 ```ts
-import type { LlmCapabilities, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loom/llm";
+import type { LlmCapabilities, LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loomwork/llm";
 ...
 import type { CallObserver } from "./observer";
 import { outcomeOf, refusedOutcomeOf } from "./reasoning";
@@ -1914,7 +1914,7 @@ pnpm --filter @docmind/llm-anthropic build && pnpm --filter @docmind/llm-anthrop
 
 Expected: green; Loom's reasoning parity rule runs inside the thinking conformance and passes. Then `pnpm build && pnpm typecheck && pnpm typecheck:tests` at the root and `pnpm --filter @docmind/server exec vitest run app/chats/observer.test.ts` (the new thinking case there).
 
-- [ ] **Step 9: Opt-in real-API check, and the fallback probe.** Replace the tool-loop test in `realApi.test.ts` (add `assistantMessageOf` and `LlmReasoningPart` to the `@loom/llm` imports):
+- [ ] **Step 9: Opt-in real-API check, and the fallback probe.** Replace the tool-loop test in `realApi.test.ts` (add `assistantMessageOf` and `LlmReasoningPart` to the `@loomwork/llm` imports):
 
 ```ts
   it("runs a tool loop with adaptive thinking, effort and caching: the API accepts the reasoning parts sent back", async () => {
@@ -2265,7 +2265,7 @@ Loom's sealing of a reasoning blob (`{e: executionId, t: text}`) binds it to the
 - Test: `apps/server/app/chats/reasoningStore.test.ts`
 
 **Interfaces:**
-- Consumes: `FieldCrypto`, `FieldKeyUnavailableError` (`crypto/fields.ts`); `chatScope` (`scope.ts`); `chatIdOfConversation` (`ids.ts`); `ChatRef` (`turnItems.ts`); `@loom/llm` `ReasoningStore`, `ReasoningReader`.
+- Consumes: `FieldCrypto`, `FieldKeyUnavailableError` (`crypto/fields.ts`); `chatScope` (`scope.ts`); `chatIdOfConversation` (`ids.ts`); `ChatRef` (`turnItems.ts`); `@loomwork/llm` `ReasoningStore`, `ReasoningReader`.
 - Produces:
   - `ReasoningScopeError` (fixed message `"no chat scope for this reasoning access"`), `MAX_REASONING_BYTES = 512 * 1024`, `chatReasoningBind(chatId, address)`.
   - `ReasoningRows { put(ref: ChatRef, address: string, sealed: unknown): Promise<void>; get(ref: ChatRef, address: string): Promise<unknown | null> }`.
@@ -2275,15 +2275,15 @@ Loom's sealing of a reasoning blob (`{e: executionId, t: text}`) binds it to the
 - [ ] **Step 1: Write the failing tests** (`reasoningStore.test.ts`):
 
 ```ts
-import { unwrapTainted } from "@loom/classify";
+import { unwrapTainted } from "@loomwork/classify";
 import {
   LLM_REASONING_CAPTURED,
   captureReasoning,
   readReasoningBounded,
   reasoningStoreResolver,
   sealReasoningText,
-} from "@loom/llm";
-import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+} from "@loomwork/llm";
+import { InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { chatConversationId } from "./ids";
@@ -2492,7 +2492,7 @@ export class MemoryReasoningRows implements ReasoningRows {
 
 ```ts
 import { randomBytes } from "node:crypto";
-import type { ReasoningReader, ReasoningStore } from "@loom/llm";
+import type { ReasoningReader, ReasoningStore } from "@loomwork/llm";
 import { type FieldCrypto, FieldKeyUnavailableError } from "../crypto/fields";
 import { chatIdOfConversation } from "./ids";
 import { chatScope } from "./scope";
@@ -2625,7 +2625,7 @@ export class ChatReasoningStore implements ReasoningStore {
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { sealReasoningText } from "@loom/llm";
+import { sealReasoningText } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";
@@ -2915,7 +2915,7 @@ export class PgReasoningRows implements ReasoningRows {
   });
 ```
 
-4. `wiring.test.ts`: in `collaborators()` add `reasoning: new ChatReasoningStore(new MemoryReasoningRows(), new FieldCrypto(new InMemoryKeyStore())),` (imports: `FieldCrypto` from `../crypto/fields`, `InMemoryKeyStore` from `@loom/plugin-crypto`, `ChatReasoningStore` from `./reasoningStore`, `MemoryReasoningRows` from `./testing`, `CHAT_MODEL_TOOL_ID` from `./ids`), and add to `describe("prepareChat")`:
+4. `wiring.test.ts`: in `collaborators()` add `reasoning: new ChatReasoningStore(new MemoryReasoningRows(), new FieldCrypto(new InMemoryKeyStore())),` (imports: `FieldCrypto` from `../crypto/fields`, `InMemoryKeyStore` from `@loomwork/plugin-crypto`, `ChatReasoningStore` from `./reasoningStore`, `MemoryReasoningRows` from `./testing`, `CHAT_MODEL_TOOL_ID` from `./ids`), and add to `describe("prepareChat")`:
 
 ```ts
   it("gives the chat model effect the reasoning store and the hub's live sink, so Loom's boot warning has nobody to name", () => {
@@ -3020,8 +3020,8 @@ const THINK2 = "Checking the figure against the passage.";
 6. Create `reasoning.chat.test.ts` (the live channel, the continuation and the audit read, over the real flow):
 
 ```ts
-import { unwrapTainted } from "@loom/classify";
-import { readReasoningBounded } from "@loom/llm";
+import { unwrapTainted } from "@loomwork/classify";
+import { readReasoningBounded } from "@loomwork/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { chatConversationId } from "./ids";
 import { type ChatStack, startChatStack } from "./testStack";
@@ -3206,7 +3206,7 @@ The pure and testable half of A6. The routes that use it are Tasks 151 (history)
 - Modify: `apps/server/app/chats/testing.ts` (`FakeReplyReasoning`)
 
 **Interfaces:**
-- Consumes: Task 161 `ChatReasoningStore.readerFor`; Task 158 `ChatReasoningDto`, `ReasoningResponse`; Loom `readReasoningBounded`, `ReasoningLogReader`, `ReasoningStepRead` (`@loom/llm`), `generationId`, `parseCursor`, `Conversations.reasoningTarget` (`@loom/conversation`), `unwrapTainted` (`@loom/classify`).
+- Consumes: Task 161 `ChatReasoningStore.readerFor`; Task 158 `ChatReasoningDto`, `ReasoningResponse`; Loom `readReasoningBounded`, `ReasoningLogReader`, `ReasoningStepRead` (`@loomwork/llm`), `generationId`, `parseCursor`, `Conversations.reasoningTarget` (`@loomwork/conversation`), `unwrapTainted` (`@loomwork/classify`).
 - Produces:
   - `REPLY_LIMITS = { maxParts: 64, maxBytes: 256 KiB }`, `ENDPOINT_LIMITS = { maxParts: 256, maxBytes: 1 MiB }`, `MAX_REASONING_CHARS = 32_000`.
   - `memoLog(log): ReasoningLogReader` (one `read` per execution id, per request).
@@ -3219,10 +3219,10 @@ The pure and testable half of A6. The routes that use it are Tasks 151 (history)
 
 ```ts
 import { ReasoningResponse } from "@docmind/contracts";
-import { tainted } from "@loom/classify";
-import { ConversationNotFoundError } from "@loom/conversation";
-import { type LlmReasoning, type ReasoningStepRead, captureReasoning } from "@loom/llm";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { tainted } from "@loomwork/classify";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import { type LlmReasoning, type ReasoningStepRead, captureReasoning } from "@loomwork/llm";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { chatConversationId } from "./ids";
@@ -3499,9 +3499,9 @@ describe("reasoningBody", () => {
 
 ```ts
 import type { ChatReasoningDto, ReasoningResponse } from "@docmind/contracts";
-import { unwrapTainted } from "@loom/classify";
-import { type Conversations, generationId, parseCursor } from "@loom/conversation";
-import { type ReasoningLogReader, type ReasoningStepRead, readReasoningBounded } from "@loom/llm";
+import { unwrapTainted } from "@loomwork/classify";
+import { type Conversations, generationId, parseCursor } from "@loomwork/conversation";
+import { type ReasoningLogReader, type ReasoningStepRead, readReasoningBounded } from "@loomwork/llm";
 import type { ChatReasoningStore } from "./reasoningStore";
 import type { ChatRef } from "./turnItems";
 
@@ -3720,7 +3720,7 @@ export class FakeReplyReasoning implements ReplyReasoning {
 }
 ```
 
-- [ ] **Step 4: Run.** `pnpm --filter @docmind/server exec vitest run app/chats/reasoningRead.test.ts`, then `pnpm build && pnpm typecheck && pnpm typecheck:tests`. Expected: green. If `parseCursor` is not exported from `@loom/conversation` in this Loom build, import it from `@loom/conversation/dist/...`: it is exported at `packages/conversation/src/index.ts:56`; verify with `grep -n parseCursor ../loom/packages/conversation/src/index.ts`.
+- [ ] **Step 4: Run.** `pnpm --filter @docmind/server exec vitest run app/chats/reasoningRead.test.ts`, then `pnpm build && pnpm typecheck && pnpm typecheck:tests`. Expected: green. If `parseCursor` is not exported from `@loomwork/conversation` in this Loom build, import it from `@loomwork/conversation/dist/...`: it is exported at `packages/conversation/src/index.ts:56`; verify with `grep -n parseCursor ../loom/packages/conversation/src/index.ts`.
 
 - [ ] **Step 5: Run the gate. Commit** with `feat(chats): fold, group and serve the model's reasoning for history and the reasoning endpoint`. Open the stacked draft PR. **Task 149's branch is cut from this one.**
 
@@ -3883,7 +3883,7 @@ Import `chatConversationId` from `./ids` in `messages.ts` and `ReplyReasoning` i
 
 **152a.** In `stream.ts`'s durable loop delete the three lines that ended the bus partial (`// The reply is durable: a later joiner must not be shown its thinking again.`, `const key = ...`, `if (key !== undefined) deps.chat.bus.end(chatId, key);`), and the `turnKeyOf` import if nothing else uses it. The hub forgets a finished turn's partial itself.
 
-**152b: replace Step 6's first three cases and delete the fourth** ("does not show a finished turn's thinking to a joiner..."; nothing in DocMind holds that state any more). Add `import { tainted } from "@loom/classify";` and use:
+**152b: replace Step 6's first three cases and delete the fourth** ("does not show a finished turn's thinking to a joiner..."; nothing in DocMind holds that state any more). Add `import { tainted } from "@loomwork/classify";` and use:
 
 ```ts
   const step = { name: "search_docs", label: 'Searched documents: "x"', count: 3 } as const;
@@ -4075,7 +4075,7 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/reasoning (needs DOCMIND_TEST_PG_UR
 
 ```ts
 import { ReasoningQuery } from "@docmind/contracts";
-import { ConversationNotFoundError, InvalidCursorError } from "@loom/conversation";
+import { ConversationNotFoundError, InvalidCursorError } from "@loomwork/conversation";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf } from "./access";
@@ -4216,7 +4216,7 @@ export function chatReasoningRoutes(deps: ChatRouteDeps): Record<string, Handler
 Apply these replacements to Step 1 and Step 2 of the M4 plan's Task 157; every other bullet stands.
 
 - **§3.1, `LlmProvider` row:** "`packages/llm-anthropic` on `fetch` with its own byte-capped SSE reader (no `@anthropic-ai/sdk`; open question 7); streaming, effort, cache breakpoints and, from the M4 amendment, Loom's ADR 0133 reasoning contract (reasoning parts, layout, live reasoning deltas, `capabilities.reasoning`). Loom's own `AnthropicProvider` is not used: it sends no effort or cache breakpoints, reports no refusal or cache usage, and puts the response body in its errors."
-- **§3.2:** add a row "`@loom/llm` model reasoning (ADR 0133): `createAgentModelEffect(..., { reasoning })` captures, `ConversationHub.reasoningSink` streams, `Conversations.reasoningTarget` plus `readReasoningBounded` read it back. DocMind supplies the `ReasoningStore`, sealed under the owner's key." The `@loom/plugin-conversation-sse` row stays ("`frame` and `SseSink` only").
+- **§3.2:** add a row "`@loomwork/llm` model reasoning (ADR 0133): `createAgentModelEffect(..., { reasoning })` captures, `ConversationHub.reasoningSink` streams, `Conversations.reasoningTarget` plus `readReasoningBounded` read it back. DocMind supplies the `ReasoningStore`, sealed under the owner's key." The `@loomwork/plugin-conversation-sse` row stays ("`frame` and `SseSink` only").
 - **§4.1,** the chat row: "Chat messages: Loom event log. Citations and tool steps: sealed `chat_turn_items`, merged on read. Model reasoning: Loom's ADR 0133 capture; the readable text is a sealed `chat_reasoning_texts` row, the signatures are sealed in the log."
 - **§4.2:** replace "Add `chat_turn_items` and `chat_reasoning_blocks` with their columns and the unique key (D5)" with: "Add `chat_turn_items` (kinds `tool`, `passages`, `outcome`; columns and the unique key as D5) and `chat_reasoning_texts (tenant_id, user_id, chat_id, address, text_enc, created_at)`: `address` is 32 random hex digits, the composite foreign key to `chat_sessions` cascades, RLS `tenant_isolation`."
 - **§4.4:** the sealed list becomes `chat_sessions.title_enc` (`chat:<id>:title`), `chat_turn_items.body_enc` (`chatitem:<id>`), `chat_reasoning_texts.text_enc` (`chatreasoning:<chatId>:<address>`), and every conversation event path that can hold content, including `STEP_COMPLETED` `output.reasoning` and `output.layout` and `LLM_REASONING_CAPTURED` `parts` (signatures, text references, digests, sizes). Trade-offs: `ord`, `kind` and `step_key` of a turn item and the capture event's `stepId`, `attempt`, `provider` and `model` are plaintext; the live reasoning, partial answer and stop registry live in process memory only (D16); crypto-shredding the owner's key leaves the references in the log dangling, which Loom reports as erased and treats as a hole in continuation.
@@ -4259,11 +4259,11 @@ Added exports and their first consumers: `ChatReasoningStore` (162 wiring; 163 r
 - `chatModelEffect` already runs `inner.execute` inside `chatScope.run(scope, ...)` (`model.ts`), and `createLlmEffect` resolves request-time reasoning inside that execute, so the store's model-path `get` sees the scope. It already forwards every key of the inner effect (`reasoning`, `reasoningSink`) bound to it (`model.test.ts`, "forwards every key"), which the hub's live sink and Loom's boot posture need.
 - `FieldCrypto.forUser(id).seal(bind, value)` takes any JSON value (the store seals a string), `openText` returns that string; `FieldKeyUnavailableError` is what `get` of a destroyed key throws, mapped to `null`.
 - `PgTurnItems.put` and `remove` keep their signatures; `TurnItem["kind"]` loses one member, so `remove(..., "thinking")` stops compiling, which is the intended break (found by the grep gate).
-- `LlmCapabilities` (from `@loom/llm`) has `reasoning?: boolean`; `hub.wrapProvider` copies `capabilities`, so the effect's hook is `capable: true` for the chat provider and `false` for ingest.
+- `LlmCapabilities` (from `@loomwork/llm`) has `reasoning?: boolean`; `hub.wrapProvider` copies `capabilities`, so the effect's hook is `capable: true` for the chat provider and `false` for ingest.
 - `ConversationHub.reasoningSink()` returns `(delta: TaintedValue<string>) => void`, assignable to `LlmReasoningOptions.onDelta?: (delta, ctx) => void`.
 - `HistoryEntry.cursor` is the string the plan already uses for the SSE id (`frame("message", message, item.entry.cursor)`), hence `ChatMessageDto.cursor`.
 - `tsconfig.base.json` has `noUncheckedIndexedAccess` and no `exactOptionalPropertyTypes`: the new code spreads optional fields conditionally (the repo's idiom) and avoids `!`.
-- `@loom/llm` exports `layoutOf`, `LlmLayoutEntry`, `LlmReasoningPart`, `captureReasoning`, `readReasoningBounded`, `reasoningStoreResolver`, `sealReasoningText`, `assistantMessageOf`, `LlmCapabilities` (verified in `packages/llm/src/index.ts` at `58fb2f5c`); `@loom/conversation` exports `generationId`, `parseCursor`, `ConversationNotFoundError`, `InvalidCursorError`, `withTurnScope`.
+- `@loomwork/llm` exports `layoutOf`, `LlmLayoutEntry`, `LlmReasoningPart`, `captureReasoning`, `readReasoningBounded`, `reasoningStoreResolver`, `sealReasoningText`, `assistantMessageOf`, `LlmCapabilities` (verified in `packages/llm/src/index.ts` at `58fb2f5c`); `@loomwork/conversation` exports `generationId`, `parseCursor`, `ConversationNotFoundError`, `InvalidCursorError`, `withTurnScope`.
 
 ### Open risks and probes (each has a step above)
 

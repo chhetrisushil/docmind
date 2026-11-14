@@ -6,7 +6,7 @@
 
 **Architecture:** A new provider `doc.connections` (pin `docmind:doc.connections@1`) is read at hydrate time by one owner-scoped Postgres query over `chunk_links`, `chunk_entities`, `entities`, `chunks` and `documents`; its args come only from the server-held view. Two new catalogue entries, `RelatedDocuments` (Table with an "Open" row action) and `ConnectionMap` (Diagram, network layout), are bound by the document planner to an always-offered `connections` capability, so another document's ingest or deletion needs no re-plan. A document with no extracted facts is still planned, over the connections capability alone. Existing visualized documents are re-planned once at the next boot (NULL fact-format counts as stale for this release, through a new migration 0032 that replaces the stale-format definer).
 
-**Tech Stack:** TypeScript, Node, Postgres (RLS, `withTenant`, SECURITY DEFINER functions), Vitest, loom-ui (pinned 3b4d046: `@loom-ui/core` Diagram and Table contracts, `@loom-ui/renderer-lit/diagram`), Lit web app, pnpm + turbo, Biome.
+**Tech Stack:** TypeScript, Node, Postgres (RLS, `withTenant`, SECURITY DEFINER functions), Vitest, loom-ui (pinned 3b4d046: `@loomwork/ui-core` Diagram and Table contracts, `@loomwork/ui-renderer-lit/diagram`), Lit web app, pnpm + turbo, Biome.
 
 **Spec:** `docs/specs/2026-11-08-document-connections-design.md` (binding). Background: `docs/specs/2026-11-08-document-visuals-design.md`, `docs/superpowers/plans/2026-11-08-document-visuals.md`.
 
@@ -28,7 +28,7 @@ Copied from the spec; every task's requirements include them.
 - `RelatedDocuments` columns: Document, Why, Strength. "Why" is built from the kinds and the top shared entity names (e.g. "shares Acme Corp, Jane Doe", "similar content", "referenced"). Each row carries a row key and an "Open" row action (`TABLE_ROW_ACTION`); the web answers it by navigating to `/documents/<id>`, owner-checked by the existing routes. Empty: caption "No connected documents yet".
 - `ConnectionMap` nodes: this document (`group: "self"`), related documents (`group: "document"`), shared entities (`group: "entity"`, `kind`: the entity kind). Edges: document -> entity for each shared entity, and self -> document for a reference or similar link, labelled with the kind. At most 21 nodes. Ids prefixed `doc:` / `ent:`, unique, and the value passes loom-ui's `diagramProblems`. Empty: a single self node.
 - Both values carry no fact refs (they cite no passages). The reshapers never throw on empty data.
-- The web registers `@loom-ui/renderer-lit/diagram`, covered by the element-registration test.
+- The web registers `@loomwork/ui-renderer-lit/diagram`, covered by the element-registration test.
 - The capability is always offered and the widgets show an empty state (K5). `visualize-document` always adds the connections capability (handle `connections`, one per document) next to the fact capabilities.
 - `VISUALS_INTENT` gains one sentence: connections are live and may grow; include a compact Connections section when the document has, or is likely to gain, related material.
 - `factFormatFingerprint()` includes the connections pin. For this release, the boot stale pass treats done runs with a NULL format as stale (K6): each visualized document is re-planned once over its stored facts (no extraction), one planner call each, at most 2 at a time, then stamped so it runs once.
@@ -740,9 +740,9 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 Create `packages/experiences/src/connections.test.ts`:
 
 ```ts
-import { genesis, replay } from "@loom-ui/core";
-import type { Operation, ProviderSpec } from "@loom-ui/core";
-import { declaredToolClassesFrom } from "@loom-ui/planner";
+import { genesis, replay } from "@loomwork/ui-core";
+import type { Operation, ProviderSpec } from "@loomwork/ui-core";
+import { declaredToolClassesFrom } from "@loomwork/ui-planner";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONNECTIONS_HANDLE,
@@ -967,8 +967,8 @@ In `packages/experiences/src/invoker.ts`:
 Create `packages/experiences/src/connections.ts`:
 
 ```ts
-import type { Experience, ProviderSpec } from "@loom-ui/core";
-import type { CapabilityRef } from "@loom-ui/planner";
+import type { Experience, ProviderSpec } from "@loomwork/ui-core";
+import type { CapabilityRef } from "@loomwork/ui-planner";
 import type { RawConnections } from "./invoker";
 import { CONNECTIONS_CAPS, KIND, PINS, provider } from "./providers";
 
@@ -1153,14 +1153,14 @@ Plan decision: this lands before the catalogue entries, because `apps/web/src/ui
 - Modify: `.github/workflows/ci.yml` (`LOOM_UI_REF` and its comment)
 
 **Interfaces:**
-- Consumes: `registerDiagramWidgets(registry: DomRegistry, opts?: LitRegistryOptions): DomRegistry` from `@loom-ui/renderer-lit/diagram`; `createChatLitRegistry(opts)` from `@loom-ui/renderer-lit/chat`.
+- Consumes: `registerDiagramWidgets(registry: DomRegistry, opts?: LitRegistryOptions): DomRegistry` from `@loomwork/ui-renderer-lit/diagram`; `createChatLitRegistry(opts)` from `@loomwork/ui-renderer-lit/chat`.
 - Produces: `export function createViewRegistry(opts?: Parameters<typeof createChatLitRegistry>[0]): ReturnType<typeof createChatLitRegistry>` in `apps/web/src/ui/session.ts`: the registry every `ViewSession.mount` draws with (chat kinds over loom-ui's defaults, plus Diagram).
 
 - [ ] **Step 1: Write the failing test**
 
 In `apps/web/src/ui/elements.test.ts`:
 
-1. Replace `import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";` with nothing (delete it), and replace `import "./session";` with `import { createViewRegistry } from "./session";`.
+1. Replace `import { createChatLitRegistry } from "@loomwork/ui-renderer-lit/chat";` with nothing (delete it), and replace `import "./session";` with `import { createViewRegistry } from "./session";`.
 2. In `TAG`, after `Chat: "lu-chat",` add `Diagram: "lu-diagram",`.
 3. Replace the lines
 ```ts
@@ -1194,7 +1194,7 @@ Expected: FAIL (`createViewRegistry` is not exported).
 In `apps/web/src/ui/session.ts`, add after the `createChatLitRegistry` import line:
 
 ```ts
-import { registerDiagramWidgets } from "@loom-ui/renderer-lit/diagram";
+import { registerDiagramWidgets } from "@loomwork/ui-renderer-lit/diagram";
 ```
 
 Add above `export class ViewSession` (after `fetchPayload`):
@@ -1227,7 +1227,7 @@ loom-ui PR #130 (widget hosts contain their sr-only and absolute descendants, so
 - [ ] **Step 4: Run the web suite and checks**
 
 Run: `pnpm --filter @docmind/web exec vitest run src/ui && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
-Expected: PASS. Then `pnpm build` (the web bundle must resolve `@loom-ui/renderer-lit/diagram`).
+Expected: PASS. Then `pnpm build` (the web bundle must resolve `@loomwork/ui-renderer-lit/diagram`).
 
 - [ ] **Step 5: Commit**
 
@@ -1261,7 +1261,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 Create `packages/experiences/src/connectionShapes.test.ts`:
 
 ```ts
-import { DiagramValue, MAX_DIAGRAM_NODES, TableValue, diagramProblems } from "@loom-ui/core";
+import { DiagramValue, MAX_DIAGRAM_NODES, TableValue, diagramProblems } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { EMPTY_RELATED, SELF_LABEL } from "./connectionShapes";
 import type { RawConnections } from "./invoker";
@@ -1595,8 +1595,8 @@ import {
   compile,
   genesis,
   replay,
-} from "@loom-ui/core";
-import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loom-ui/hydration";
+} from "@loomwork/ui-core";
+import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loomwork/ui-hydration";
 import { describe, expect, it, vi } from "vitest";
 import { connectionsProvider } from "./connections";
 import type { RawConnections, UiReaders } from "./invoker";
@@ -2540,7 +2540,7 @@ Expected: PASS with every test running (not skipped). If the first `visualizeRun
 3. Insert before the line starting `- **Retry.** \`POST /api/documents/:id/visuals/retry\``:
 
 ```
-- **Connections.** The Visuals tab can show how a document relates to the rest of the owner's library, as live data rather than stored facts. The planner is always offered a `connections` capability (tool `doc.connections`, pin `docmind:doc.connections@1`, sensitive) beside the fact capabilities, and may bind `RelatedDocuments` (a Table with an "Open" row action) and `ConnectionMap` (a Diagram, network layout, at most 21 nodes). `detailWithVisuals` serves them from providers it generates (`connections-table`, `connections-map`) whose only argument is the server's own document id and which nothing can override; hydration is under the owner's `sensitive` clearance. One owner-scoped query (`ui/connections.ts`, `readConnections`) reads `chunk_links`, `chunk_entities`, `entities`, `chunks` and `documents` for ready, live documents of the owner (readiness from the status read model): up to 8 related documents (links grouped per document, by strength, link count, id) and up to 12 shared entities (rarest first, up to 5 documents each); titles and entity names are opened with the owner's key, an entity whose name does not open is dropped, and nothing is logged. A new upload or a deletion changes what the next hydrate returns and needs no re-plan. An empty library shows the empty states (a table with one "No connected documents yet" row, a map of a single node). Chat turns never offer connections. A document with no extracted facts is still planned, over the connections capability alone (one planner call, no extraction); if the planner emits nothing the run ends `empty`. `Open` is answered by `intentOf("detail")` as `document.open` for a row key the served table holds, and the web navigates to `/documents/<id>`. The web registers loom-ui's opt-in `@loom-ui/renderer-lit/diagram` entry (`createViewRegistry`).
+- **Connections.** The Visuals tab can show how a document relates to the rest of the owner's library, as live data rather than stored facts. The planner is always offered a `connections` capability (tool `doc.connections`, pin `docmind:doc.connections@1`, sensitive) beside the fact capabilities, and may bind `RelatedDocuments` (a Table with an "Open" row action) and `ConnectionMap` (a Diagram, network layout, at most 21 nodes). `detailWithVisuals` serves them from providers it generates (`connections-table`, `connections-map`) whose only argument is the server's own document id and which nothing can override; hydration is under the owner's `sensitive` clearance. One owner-scoped query (`ui/connections.ts`, `readConnections`) reads `chunk_links`, `chunk_entities`, `entities`, `chunks` and `documents` for ready, live documents of the owner (readiness from the status read model): up to 8 related documents (links grouped per document, by strength, link count, id) and up to 12 shared entities (rarest first, up to 5 documents each); titles and entity names are opened with the owner's key, an entity whose name does not open is dropped, and nothing is logged. A new upload or a deletion changes what the next hydrate returns and needs no re-plan. An empty library shows the empty states (a table with one "No connected documents yet" row, a map of a single node). Chat turns never offer connections. A document with no extracted facts is still planned, over the connections capability alone (one planner call, no extraction); if the planner emits nothing the run ends `empty`. `Open` is answered by `intentOf("detail")` as `document.open` for a row key the served table holds, and the web navigates to `/documents/<id>`. The web registers loom-ui's opt-in `@loomwork/ui-renderer-lit/diagram` entry (`createViewRegistry`).
 ```
 
 `docs/codebase-guide.md`: replace `| \`apps/server/app/ui/\` | \`GET /api/ui/views/:view\` and \`POST /api/ui/hydrate\`: compiled experiences and their owner-scoped readers |` with `| \`apps/server/app/ui/\` | \`GET /api/ui/views/:view\` and \`POST /api/ui/hydrate\`: compiled experiences and their owner-scoped readers (\`connections.ts\`: a document's related documents and shared entities) |`.
@@ -2595,7 +2595,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 | 4 table columns, "Why", row key, "Open" `TABLE_ROW_ACTION`, empty state | Task 4 reshaper + tests; Task 6 (navigation) |
 | 4 map nodes, groups, edges, 21 cap, prefixes, `diagramProblems`, empty single node | Task 4 |
 | 4 no fact refs | Task 4 (`refs` undefined assertions) |
-| 4 web registers `@loom-ui/renderer-lit/diagram`, element-registration test | Task 3 |
+| 4 web registers `@loomwork/ui-renderer-lit/diagram`, element-registration test | Task 3 |
 | K5, 5 capability always offered; widgets show an empty state | Task 2 (`visualCapabilities`), Task 4/7 (empty states) |
 | 5 `VISUALS_INTENT` sentence | Task 5 (Plan decision 8) |
 | K8, 5 connections planned without facts (zero facts plus a connection gives done; planner emits nothing gives empty; a refusal still plans) | Task 5 (`runVisualize`, `flow.test.ts`; Plan decision 12) |

@@ -1,6 +1,6 @@
-import type { AgentModelCall } from "@loom/agent";
-import type { Effect, EffectContext } from "@loom/effect-runtime";
-import type { LlmResponse } from "@loom/llm";
+import type { AgentModelCall } from "@loomwork/agent";
+import type { Effect, EffectContext } from "@loomwork/effect-runtime";
+import type { LlmResponse } from "@loomwork/llm";
 import type { ChatBus } from "./bus";
 import { chatScope, scopeOfEffect } from "./scope";
 import type { PgTurnItems } from "./turnItems";

@@ -1,7 +1,7 @@
 import { EmbeddingAbortedError } from "@docmind/embeddings";
 import type { ChunkVectorStore } from "@docmind/vector-pg";
-import type { Effect } from "@loom/effect-runtime";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import { DocumentGoneError, IngestConfigError } from "../errors";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";

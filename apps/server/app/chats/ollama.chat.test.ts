@@ -1,5 +1,5 @@
-import { unwrapTainted } from "@loom/classify";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE, readReasoningBounded } from "@loom/llm";
+import { unwrapTainted } from "@loomwork/classify";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE, readReasoningBounded } from "@loomwork/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CompatReply } from "../llm/testing";
 import { DOC_ASSISTANT_PROMPT } from "./agent";

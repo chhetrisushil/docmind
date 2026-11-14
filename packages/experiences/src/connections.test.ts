@@ -1,6 +1,6 @@
-import { genesis, replay } from "@loom-ui/core";
-import type { Operation, ProviderSpec } from "@loom-ui/core";
-import { declaredToolClassesFrom } from "@loom-ui/planner";
+import { genesis, replay } from "@loomwork/ui-core";
+import type { Operation, ProviderSpec } from "@loomwork/ui-core";
+import { declaredToolClassesFrom } from "@loomwork/ui-planner";
 import { describe, expect, it, vi } from "vitest";
 import {
   CONNECTIONS_HANDLE,

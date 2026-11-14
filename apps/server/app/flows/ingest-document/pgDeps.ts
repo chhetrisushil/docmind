@@ -1,5 +1,5 @@
 import type { ChunkVectorStore } from "@docmind/vector-pg";
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import type { Pool } from "pg";
 import { EntityKeys } from "../../crypto/entityKeys";
 import type { FieldCrypto } from "../../crypto/fields";

@@ -1,5 +1,5 @@
-import { turnSettledObserver } from "@loom/conversation";
-import type { EventEnvelope } from "@loom/core";
+import { turnSettledObserver } from "@loomwork/conversation";
+import type { EventEnvelope } from "@loomwork/core";
 import { describe, expect, it, vi } from "vitest";
 
 // A guard that the Loom DocMind links to exports the turn-settled hook (loom PR #776). It fails on an older ../loom checkout.

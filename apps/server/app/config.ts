@@ -1,8 +1,8 @@
-import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loom/app";
-import type { EventEnvelope } from "@loom/core";
-import type { Effect } from "@loom/effect-runtime";
-import type { TimerStore } from "@loom/event-runtime";
-import type { RegisteredFlow } from "@loom/workflow-runtime";
+import { type PrincipalCryptoOptions, type StorageConfig, defineConfig } from "@loomwork/app";
+import type { EventEnvelope } from "@loomwork/core";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { TimerStore } from "@loomwork/event-runtime";
+import type { RegisteredFlow } from "@loomwork/workflow-runtime";
 import { isChatExecution } from "./chats/activity";
 import { type ErasureWiring, complianceConfig, warningFor } from "./erasure/compliance";
 import { type ChatTitleDeps, chatTitleEffect } from "./flows/chat-title/step";

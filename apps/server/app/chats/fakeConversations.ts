@@ -6,10 +6,10 @@ import {
   type ReadOptions,
   type ReadResult,
   parseCursor,
-} from "@loom/conversation";
-import type { EventEnvelope } from "@loom/core";
-import type { PrincipalChain } from "@loom/effect-runtime";
-import type { EventStore } from "@loom/event-runtime";
+} from "@loomwork/conversation";
+import type { EventEnvelope } from "@loomwork/core";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
+import type { EventStore } from "@loomwork/event-runtime";
 
 const keyOf = (p?: PrincipalChain) => `${p?.tenant}|${p?.actor}`;
 

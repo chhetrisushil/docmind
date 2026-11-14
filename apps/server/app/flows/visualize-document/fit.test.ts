@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { FACT_VISUALS_CATALOG, factCapabilities } from "@docmind/experiences";
 import type { FactRef, VisualFactRaw } from "@docmind/experiences";
-import { ReferencePlanner } from "@loom-ui/planner";
+import { ReferencePlanner } from "@loomwork/ui-planner";
 import { describe, expect, it } from "vitest";
 import { CONNECTIONS_PLAN_NODE } from "../../ui/testSupport";
 import type { Fact, StructureFact } from "./facts";
