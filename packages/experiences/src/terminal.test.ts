@@ -1,10 +1,15 @@
 import type { DocumentDto } from "@docmind/contracts";
 import { InMemoryProjectionRuntime } from "@loomwork/projection-runtime";
+import { useChatContracts } from "@loomwork/ui-core";
 import { HydrationStore, SplitHydrationController } from "@loomwork/ui-hydration";
 import { renderExperience } from "@loomwork/ui-renderer-terminal";
 import { describe, expect, it, vi } from "vitest";
 import type { UiReaders } from "./invoker";
 import { createViews } from "./views-api";
+
+// loom-ui defers the Chat and MultiSelectInput contracts and only renderer-lit loads them, so a terminal host
+// (this test) loads them itself.
+useChatContracts();
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const doc = (n: number, over: Partial<DocumentDto> = {}): DocumentDto => ({

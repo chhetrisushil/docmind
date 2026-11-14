@@ -46,8 +46,6 @@ export default defineConfig({
       deps: {
         // loom only: loom-ui shares the scope as @loomwork/ui-*.
         external: [/@loomwork\/(?!ui-)/, /[\\/]loom[\\/]/],
-        // Loom's conformance kits are ESM with extensionless imports, so Vite must load them.
-        inline: [/@loomwork\/conformance/, /[\\/]conformance[\\/]dist/],
       },
     },
   },

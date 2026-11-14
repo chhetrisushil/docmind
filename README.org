@@ -248,8 +248,11 @@ pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live
 
 * Getting started
 
-Loom and loom-ui come from npm (=@loomwork/*= and =@loomwork/ui-*=, =^0.1.0=), so DocMind needs no other
-checkout.
+Loom and loom-ui come from npm (=@loomwork/*= and =@loomwork/ui-*=), so DocMind needs no other checkout. They
+are prereleases published under the =next= dist-tag, and =latest= can lag behind it. pnpm prefers =latest= when it
+satisfies a range, so a transitive =^0.1.0= would pull an old release beside the new one. Every =@loomwork=
+dependency, direct or transitive, therefore resolves to =next=: the =package.json= files say =next=, and
+=.pnpmfile.cjs= rewrites the ranges inside the =@loomwork= packages.
 
 #+begin_src bash
 cd docmind

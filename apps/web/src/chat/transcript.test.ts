@@ -1,9 +1,12 @@
 import type { ChatReasoningDto, ChatToolStep, Citation } from "@docmind/contracts";
-import { checkKindValue } from "@loomwork/ui-core/browser";
+import { checkKindValue, useChatContracts } from "@loomwork/ui-core/browser";
 import type { ChatValue } from "@loomwork/ui-core/chat-ui";
 import { describe, expect, it } from "vitest";
 import type { Extras } from "./feedAdapter";
 import { toTranscript } from "./transcript";
+
+// loom-ui defers the Chat contract; in the app the chat registry (createViewRegistry) loads it.
+useChatContracts();
 
 const P = "c0ffee00-0000-4000-8000-000000000001";
 const cite = (id: string): Citation => ({
