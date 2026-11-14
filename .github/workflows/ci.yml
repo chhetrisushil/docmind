@@ -1,10 +1,5 @@
-# DocMind consumes the sibling ../loom checkout via pnpm.overrides (link:), because @loomwork/* is not
-# published. CI therefore checks loom and loom-ui out NEXT TO this repo at pinned refs, builds them, then builds,
-# typechecks, lints and tests DocMind against them.
-#
-# chhetrisushil/loom and chhetrisushil/loom-ui are private: the LOOM_TOKEN repository secret must hold a token with read access
-# to both (a fine-grained PAT with "Contents: read" on those repositories). Without it the loom
-# checkout fails, and so does the run: loudly, rather than testing against nothing.
+# Builds, typechecks, lints and tests DocMind, and builds and smoke-tests its container image. Loom and
+# loom-ui come from the npm registry (@loomwork/*, @loomwork/ui-*) through pnpm-lock.yaml, like any other dependency.
 name: ci
 
 # Actions minutes are a budget: a PR runs CI once it is READY. Draft PRs skip every job (iterate
@@ -21,16 +16,6 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  # The loom commit DocMind is built and tested against. Bump deliberately: rebuild ../loom at the
-  # new commit, re-run the whole gate, then change this line.
-  # 9f3554e: the @loomwork npm scope rename and its publish tooling (loom PRs #782, #783). Contains 370d7a7: TimerService retires an erased execution's timer rows instead of reporting every poll (loom PR #781). Contains 669219c: an erased execution no longer ends a recovery pass or the census (loom PR #780). Contains cc90b33: a completed erasure closes its ERASURE_PENDING rows (ERASURE_PENDING_CLEARED, row ids only; loom PR #779). Contains 37fe337: eraseSubject record:false and a keyed erasure control stream (loom PR #778). Contains 4af27ea: turnSettledObserver (@loomwork/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
-  LOOM_REF: 9f3554ee7d0bde296b84c3dd77eef169680d5c9a
-  # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
-  # 5759da4: the @loomwork/ui-* scope rename (loom-ui PRs #133, #134). Contains fc34435: token-list Table cells, chips that emit TABLE_TOKEN (loom-ui PR #131). Contains 3b4d046: widget hosts contain their sr-only and absolute descendants (loom-ui PR #130). Contains 9bcf82b: source references on data widgets (value-level refs, REF_OPEN; loom-ui PR #129). Contains 254d277 (Diagram, PR #128), 5ab86f8 (TimeFormat, PR #127), c107ede (date-only time ticks drawn as the written date in every viewer zone, PR #126), d036e84 (chatAccessories, loom-ui PR #125: host content drawn under a chat transcript entry) and 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
-  # Bump deliberately, like LOOM_REF.
-  LOOM_UI_REF: 5759da4c81e6445d54e5fad9ca9e51014e700d8f
 
 jobs:
   gate:
@@ -58,13 +43,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: docmind
-      - name: Checkout loom (the framework DocMind links to)
-        uses: actions/checkout@v4
-        with:
-          repository: chhetrisushil/loom
-          ref: ${{ env.LOOM_REF }}
-          token: ${{ secrets.LOOM_TOKEN }}
-          path: loom
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: docmind/package.json
@@ -72,23 +50,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: |
-            loom/pnpm-lock.yaml
-            loom-ui/pnpm-lock.yaml
-            docmind/pnpm-lock.yaml
-      - name: Install and build loom
-        working-directory: loom
-        run: pnpm install --frozen-lockfile && pnpm build
-      - name: Checkout loom-ui (the UI library DocMind links to)
-        uses: actions/checkout@v4
-        with:
-          repository: chhetrisushil/loom-ui
-          ref: ${{ env.LOOM_UI_REF }}
-          token: ${{ secrets.LOOM_TOKEN }}
-          path: loom-ui
-      - name: Install and build loom-ui
-        working-directory: loom-ui
-        run: pnpm install --frozen-lockfile && pnpm --filter @loomwork/ui-core --filter @loomwork/ui-hydration --filter @loomwork/ui-lineage --filter @loomwork/ui-planner --filter @loomwork/ui-renderer-lit --filter @loomwork/ui-renderer-terminal build
+          cache-dependency-path: docmind/pnpm-lock.yaml
       - name: Install DocMind
         working-directory: docmind
         run: pnpm install --frozen-lockfile
@@ -108,8 +70,7 @@ jobs:
         working-directory: docmind
         run: pnpm test
 
-  # The container image (Dockerfile): builds it from the same pinned loom and loom-ui checkouts as the gate, then
-  # runs infra/smoke-image.sh: migration job, read-only boot, /healthz, and a clean exit 0 on `docker stop`.
+  # The container image (Dockerfile): builds it, then runs infra/smoke-image.sh: migration job, read-only boot, /healthz, and a clean exit 0 on `docker stop`.
   # Independent of the gate, so the two run in parallel. Nothing is pushed anywhere.
   image:
     name: container image + smoke test
@@ -134,29 +95,11 @@ jobs:
         with:
           path: docmind
           persist-credentials: false
-      - name: Checkout loom (the framework DocMind links to)
-        uses: actions/checkout@v4
-        with:
-          repository: chhetrisushil/loom
-          ref: ${{ env.LOOM_REF }}
-          token: ${{ secrets.LOOM_TOKEN }}
-          path: loom
-          persist-credentials: false
-      - name: Checkout loom-ui (the UI library DocMind links to)
-        uses: actions/checkout@v4
-        with:
-          repository: chhetrisushil/loom-ui
-          ref: ${{ env.LOOM_UI_REF }}
-          token: ${{ secrets.LOOM_TOKEN }}
-          path: loom-ui
-          persist-credentials: false
       - uses: docker/setup-buildx-action@v3
       - name: Build the image
         working-directory: docmind
         run: >-
           docker buildx build
-          --build-context loom=../loom
-          --build-context loom-ui=../loom-ui
           --cache-from type=gha,scope=docmind-image
           --cache-to type=gha,mode=max,scope=docmind-image
           --load -t docmind:ci .

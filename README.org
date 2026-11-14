@@ -187,10 +187,8 @@ DocMind's screens are loom-ui experiences, not hand-built views. The design is i
   attribute, which the strict CSP above (=style-src 'self'=, no =unsafe-inline=) refuses. That is why the lists are
   capped (library 200 rows, sidebar 50) instead of windowed. Do not turn =virtualize= on, or raise those caps
   without a plan for the rendering cost.
-- loom-ui and Loom's browser runtimes are linked as built ESM (=link:../loom-ui/packages/...= and
-  =link:../loom/...=), so both repositories must be checked out next to this one and built. CI checks loom-ui
-  out at =LOOM_UI_REF= (see =.github/workflows/ci.yml=); =LOOM_TOKEN= must be able to read both
-  =chhetrisushil/loom= and =chhetrisushil/loom-ui=. Two generic additions to loom-ui carry the UI: =Table= row
+- loom-ui and Loom's browser runtimes are consumed as built ESM from the npm packages (=@loomwork/ui-*= and
+  =@loomwork/projection-runtime=, =@loomwork/blueprint-runtime=). Two generic additions to loom-ui carry the UI: =Table= row
   actions and =Chat= reference markers, and a third, opt-in markdown rendering for chat text.
 
 ** Answers are markdown
@@ -246,19 +244,12 @@ pnpm workspace (=apps/*=, =packages/*=) driven by Turborepo; SQL migrations live
 - pnpm 9.14.4 (pinned in =packageManager=).
 - PostgreSQL 16 (CI and =docker-compose.yml= use the =pgvector/pgvector:pg16= image). pgvector is not
   needed until M3.
-- A sibling Loom checkout at =../loom=, built with =pnpm build=. =package.json= overrides every
-  =@loomwork/*= dependency with =link:../loom/...=, so install fails without it.
 - Optional: Docker, for the compose services (Postgres, and Ollama on port 11434 for embeddings in M3).
 
 * Getting started
 
-Clone DocMind beside Loom:
-
-#+begin_src text
-workspace/
-  loom/      (run: pnpm install && pnpm build)
-  docmind/
-#+end_src
+Loom and loom-ui come from npm (=@loomwork/*= and =@loomwork/ui-*=, =^0.1.0=), so DocMind needs no other
+checkout.
 
 #+begin_src bash
 cd docmind
@@ -280,6 +271,16 @@ example =postgres://docmind:docmind@127.0.0.1:55442/postgres=) and run =pnpm db:
 =~/.docmind/pgdata-test= (or =DOCMIND_TEST_PGDATA=) with that user and password, and =db:start=, =db:stop= and
 =db:status= then drive both clusters. The suites reset the cluster-wide =docmind_app= and =docmind_loom= passwords,
 so they refuse to run when =DOCMIND_TEST_PG_URL= points at the cluster in =DATABASE_URL=.
+
+To work against a local Loom or loom-ui checkout (for example to try an unreleased change), build it beside
+this repo and add =link:= overrides to =pnpm-workspace.yaml= for the packages you need, then =pnpm install=.
+Do not commit them: CI and the image install from npm.
+
+#+begin_src yaml
+overrides:
+  '@loomwork/core': link:../loom/packages/core
+  '@loomwork/ui-core': link:../loom-ui/packages/core
+#+end_src
 
 =pnpm serve= does the rest in one go: start the local cluster (if there is one), build, migrate, start. The scripts run from the repo root, so the relative
 paths in =.env= (=./apps/web/dist=, =./data/blobs=) resolve there.
@@ -340,8 +341,8 @@ needs =CREATE DATABASE=, because each suite creates and drops its own database. 
 cluster from the app's =DATABASE_URL= (see =pnpm db:init-test=). Migrations are a
 Turbo test input, so changing one reruns tests.
 
-CI (=.github/workflows/ci.yml=) checks out Loom next to this repo, builds it, then builds,
-typechecks, lints and tests DocMind. Draft pull requests skip CI. The design spec asks for pull
+CI (=.github/workflows/ci.yml=) builds, typechecks, lints and tests DocMind, and builds and
+smoke-tests the container image. Draft pull requests skip CI. The design spec asks for pull
 requests of at most 200 changed lines and 10 files, opened as drafts.
 
 * Operations

@@ -40,7 +40,7 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     restoreMocks: true,
     setupFiles: ["./src/testing/setup.ts"],
-    // loom-ui and Loom's runtimes are linked built ESM with extensionless specifiers: Vite must transform them.
-    server: { deps: { inline: [/\/loom-ui\//, /\/loom\/packages\//] } },
+    // Some @loomwork packages (ui-renderer-lit 0.1.0) ship ESM with extensionless specifiers: Vite must transform them.
+    server: { deps: { inline: [/@loomwork\//] } },
   },
 });

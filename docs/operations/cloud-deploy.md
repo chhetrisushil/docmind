@@ -37,16 +37,12 @@ not from a run against that platform. The image itself is built and smoke-tested
 
 ## 2. Build the image
 
-DocMind links the sibling `loom` and `loom-ui` checkouts, so they are passed as named build contexts. Use
-the commits pinned as `LOOM_REF` and `LOOM_UI_REF` in `.github/workflows/ci.yml`, in **clean** checkouts
-(a working checkout's `node_modules` and caches would be uploaded as context):
+Loom and loom-ui come from npm through the lockfile, so the repo is the only build context. Build from a
+**clean** checkout (a working checkout's caches would be uploaded as context; `.dockerignore` keeps
+`node_modules` out):
 
 ```sh
-git clone <loom> ../loom && git -C ../loom checkout <LOOM_REF>
-git clone <loom-ui> ../loom-ui && git -C ../loom-ui checkout <LOOM_UI_REF>
-docker buildx build \
-  --build-context loom=../loom --build-context loom-ui=../loom-ui \
-  -t <registry>/docmind:<tag> .
+docker buildx build -t <registry>/docmind:<tag> .
 docker push <registry>/docmind:<tag>
 ```
 
@@ -55,8 +51,7 @@ What is in the image:
 - Base `node:22-bookworm-slim` (override with `--build-arg NODE_IMAGE=...`). It is Debian, not
   distroless, because the parser sandbox starts `/bin/sh -c 'ulimit ...; exec /usr/bin/env -i node --permission ...'`
   and needs both `/bin/sh` and `/usr/bin/env`. glibc keeps the prebuilt argon2 and esbuild binaries usable.
-- The built workspace at `/src/docmind`, with `/src/loom` and `/src/loom-ui` beside it (pnpm's `link:`
-  symlinks are relative, so the layout must not change), the web app at `apps/web/dist` and
+- The built workspace at `/src/docmind` (pnpm's symlinks are relative, so the layout must not change), the web app at `apps/web/dist` and
   `infra/migrations`. The parser child bundle is `packages/parsers/dist/child/child.cjs`.
 - It runs from source with `tsx` (`node --import tsx apps/server/app/main.ts`), like `pnpm start`. A
   compiled build exists (`apps/server/dist`) but is not used: `db/migrate.ts` finds `infra/migrations`
@@ -72,8 +67,8 @@ What is in the image:
   `DOCMIND_WEB_DIR=/src/docmind/apps/web/dist`, `DOCMIND_BLOB_DIR=/var/lib/docmind/blobs` (a `VOLUME`),
   `STOPSIGNAL SIGTERM` and a `HEALTHCHECK` on `/healthz`. `.env` never enters the image (`.dockerignore`).
 
-Image size: the runtime stage keeps the full installed workspaces (dev dependencies included) of docmind, loom
-and loom-ui, so the image is large. It is deliberately not pruned, because the pruned layout cannot be
+Image size: the runtime stage keeps the full installed workspace (dev dependencies included), so the image is
+large. It is deliberately not pruned, because the pruned layout cannot be
 tested here. Pull time matters mostly on a cold start.
 
 Read-only root filesystem: the server writes only under `DOCMIND_BLOB_DIR`. `TSX_DISABLE_CACHE=1` stops
