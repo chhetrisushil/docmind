@@ -276,13 +276,13 @@ importers:
         version: 0.1.1
       '@loomwork/ui-core':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-lineage':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-planner':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/workflow-runtime':
         specifier: next
         version: 0.1.1
@@ -337,13 +337,13 @@ importers:
         version: 0.1.1
       '@loomwork/ui-core':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-hydration':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-renderer-lit':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@phosphor-icons/core':
         specifier: ^2.1.1
         version: 2.1.1
@@ -359,7 +359,7 @@ importers:
         version: link:../../packages/experiences
       '@loomwork/ui-renderer-terminal':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -450,13 +450,13 @@ importers:
         version: 0.1.1
       '@loomwork/ui-core':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-hydration':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-planner':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -466,7 +466,7 @@ importers:
         version: 0.1.1
       '@loomwork/ui-renderer-terminal':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -1149,28 +1149,28 @@ packages:
     resolution: {integrity: sha512-h3ryP4kY4X9ls6KygvBJ2GG0NBNIKtbMOz8aAoVCr991xUmRPYr4RL7zmxq9qDlYa4v8NHQVV6oMyMB2d4zzQg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-core@0.1.1':
-    resolution: {integrity: sha512-/frNXM1ZtHL1E1YT9+mrqr+w22+3w5vA5mHbNdnG4NxOtUTHta7xuj+v1SVAGq+7ddSWmGumRtUU9UArKmZzYA==}
+  '@loomwork/ui-core@0.1.2':
+    resolution: {integrity: sha512-SdQk5N2X/WJpCVbJ3lT70+gyLQCDHJD1QCQ1mJGmyKNMRsET10EEXKR4krpuU0qmBtUAGv9krEXvKzDMSyDi4g==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-hydration@0.1.1':
-    resolution: {integrity: sha512-marzlGZgM8HLDqKYoi0kpQ3EEjW1Zr7PmTap0lbSReSJibazKbkZ/w11NaNGem7pPEe9BWx12avTHCIHDfz5pQ==}
+  '@loomwork/ui-hydration@0.1.2':
+    resolution: {integrity: sha512-bKdSw1h2Rdl+5b3BYk55lt3gsmV/SMat6o8sOpMH0Ygz30g9SpL4muQ7uMN5GCLa/RA8wm770lAl0br2YrgXCg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-lineage@0.1.1':
-    resolution: {integrity: sha512-aLVlpEgZLG4VuOaY84Emnr0xpLo+S0D44KNtmkumolBQ0O83TRI0xrBnjWGrDlNqb6BGswzMVkgza1RuVC70aA==}
+  '@loomwork/ui-lineage@0.1.2':
+    resolution: {integrity: sha512-VE8sKtUyXk4dW1RctFbW3CNLVaUvzKYeSowiVNMmNeZy1km1JAwNEbxQNfd21dfptV7Q/sllMOsj1QWBMvzLag==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-planner@0.1.1':
-    resolution: {integrity: sha512-II/M++ZLxmSQq8HD4N1eAhFaG5jNKJdpm7YA4ycaysJ9Q9hQEFlNYcdOslORjBxwHiMDQ7v3qSPk/hlCYhOitA==}
+  '@loomwork/ui-planner@0.1.2':
+    resolution: {integrity: sha512-p4CWlPZlDCrYsw20kgKw0XrDZ1u0GGzCDfwllAZPBrWyP+Z/4oUXhZq60XFH3lBqFkabF5tgutFz6cQ229HElA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-renderer-lit@0.1.1':
-    resolution: {integrity: sha512-AiWsacctep3uOBoBKnCpLaYAl6DUMOKufOFZTjpk4zqRZx1qaz05ghCx/wmY31wo5MYRYtB0OBzfqmx6XNHuLA==}
+  '@loomwork/ui-renderer-lit@0.1.2':
+    resolution: {integrity: sha512-Nc7rsI3vdmRMvIRhtjsDw5eNvEOgLS9p5UgFb364tjVMUSkwNn/8Zj8ssTYVytD7Hn1tE7Dv9LTjYuHihq47qA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/ui-renderer-terminal@0.1.1':
-    resolution: {integrity: sha512-6M95JCpY4HkbUFLecXFhJggUXJb6nfR2GRuVZFvxTk861QsxeeNPfso6EMQfqfItTWfa0UYM8bDf5bzJ5p6tUQ==}
+  '@loomwork/ui-renderer-terminal@0.1.2':
+    resolution: {integrity: sha512-zk8N6FmXmB/RXFUHk3VffE7jXaK3X0k2HryPS9qT1fmh07DM0XIraCUhdhrZSOZ1kd4DNSdCx7NVFHfpcPGkOA==}
     engines: {node: '>=20.0.0'}
 
   '@loomwork/verify@0.1.1':
@@ -2809,7 +2809,7 @@ snapshots:
       '@loomwork/classify': 0.1.1
       '@loomwork/core': 0.1.1
 
-  '@loomwork/ui-core@0.1.1':
+  '@loomwork/ui-core@0.1.2':
     dependencies:
       '@loomwork/blueprint-runtime': 0.1.1
       '@loomwork/classify': 0.1.1
@@ -2817,7 +2817,7 @@ snapshots:
       '@loomwork/plugin-content': 0.1.1
       zod: 3.25.76
 
-  '@loomwork/ui-hydration@0.1.1':
+  '@loomwork/ui-hydration@0.1.2':
     dependencies:
       '@loomwork/agent': 0.1.1
       '@loomwork/classify': 0.1.1
@@ -2826,40 +2826,40 @@ snapshots:
       '@loomwork/plugin-mcp': 0.1.1
       '@loomwork/plugin-sandbox': 0.1.1
       '@loomwork/projection-runtime': 0.1.1
-      '@loomwork/ui-core': 0.1.1
+      '@loomwork/ui-core': 0.1.2
 
-  '@loomwork/ui-lineage@0.1.1':
+  '@loomwork/ui-lineage@0.1.2':
     dependencies:
       '@loomwork/event-runtime': 0.1.1
       '@loomwork/plugin-content': 0.1.1
-      '@loomwork/ui-core': 0.1.1
+      '@loomwork/ui-core': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/ui-planner@0.1.1':
+  '@loomwork/ui-planner@0.1.2':
     dependencies:
       '@loomwork/blueprint-runtime': 0.1.1
       '@loomwork/classify': 0.1.1
       '@loomwork/core': 0.1.1
       '@loomwork/learning': 0.1.1
       '@loomwork/plugin-content': 0.1.1
-      '@loomwork/ui-core': 0.1.1
-      '@loomwork/ui-hydration': 0.1.1
+      '@loomwork/ui-core': 0.1.2
+      '@loomwork/ui-hydration': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/ui-renderer-lit@0.1.1':
+  '@loomwork/ui-renderer-lit@0.1.2':
     dependencies:
       '@loomwork/blueprint-runtime': 0.1.1
       '@loomwork/projection-runtime': 0.1.1
-      '@loomwork/ui-core': 0.1.1
+      '@loomwork/ui-core': 0.1.2
       lit: 3.3.3
 
-  '@loomwork/ui-renderer-terminal@0.1.1':
+  '@loomwork/ui-renderer-terminal@0.1.2':
     dependencies:
       '@loomwork/blueprint-runtime': 0.1.1
       '@loomwork/plugin-renderer-terminal': 0.1.1
       '@loomwork/projection-runtime': 0.1.1
-      '@loomwork/ui-core': 0.1.1
-      '@loomwork/ui-hydration': 0.1.1
+      '@loomwork/ui-core': 0.1.2
+      '@loomwork/ui-hydration': 0.1.2
 
   '@loomwork/verify@0.1.1': {}
 
