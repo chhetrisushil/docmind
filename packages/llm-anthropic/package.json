@@ -25,10 +25,10 @@
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loomwork/llm": "*"
+    "@loomwork/llm": "^0.1.0"
   },
   "devDependencies": {
-    "@loomwork/conformance": "*",
+    "@loomwork/conformance": "^0.1.0",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
   }

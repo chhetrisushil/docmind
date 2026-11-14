@@ -6,9 +6,9 @@ Last updated 2026-10-23. This guide says where to start reading and in what orde
 
 DocMind is one Node server plus one web app in a pnpm monorepo. You upload documents and it reads them. You can then chat with an agent that answers only from your documents and cites the passages it used. Read it as three layers:
 
-- **Loom** (the sibling repo `../loom`) is the framework underneath. It provides durable flows (steps that survive a crash and replay from a log), the event store, the agent loop, LLM effects and crypto-shredding. DocMind never runs a long job outside a Loom flow.
+- **Loom** (the `@loomwork/*` npm packages) is the framework underneath. It provides durable flows (steps that survive a crash and replay from a log), the event store, the agent loop, LLM effects and crypto-shredding. DocMind never runs a long job outside a Loom flow.
 - **DocMind's server** (`apps/server`) plugs DocMind's pieces into Loom: the HTTP API, the `ingest-document` flow, the chat agent and its tools, tenancy, and keys. Postgres holds everything: Loom's event log, the relational tables and the pgvector embeddings.
-- **loom-ui** (the sibling repo `../loom-ui`) draws the screens. Each screen is a surface-neutral *experience* defined in `packages/experiences`. The server compiles it per surface (web, terminal). `apps/web` is a thin host that renders it and turns user actions into calls to the API.
+- **loom-ui** (the `@loomwork/ui-*` npm packages) draws the screens. Each screen is a surface-neutral *experience* defined in `packages/experiences`. The server compiles it per surface (web, terminal). `apps/web` is a thin host that renders it and turns user actions into calls to the API.
 
 ```mermaid
 flowchart TB

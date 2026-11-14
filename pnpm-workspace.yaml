@@ -7,34 +7,10 @@ allowBuilds:
   '@biomejs/biome': true
   argon2: true
   esbuild: true
+  # Only @loomwork/cli's SQLite plugin needs it; DocMind runs on Postgres and `loom gen` opens no store.
+  better-sqlite3: false
 
-# The sibling loom and loom-ui checkouts (see .github/workflows/ci.yml).
-overrides:
-  '@loomwork/agent': link:../loom/packages/agent
-  '@loomwork/app': link:../loom/packages/app
-  '@loomwork/classify': link:../loom/packages/classify
-  '@loomwork/compliance': link:../loom/packages/compliance
-  '@loomwork/cli': link:../loom/tools/cli
-  '@loomwork/conformance': link:../loom/packages/conformance
-  '@loomwork/conversation': link:../loom/packages/conversation
-  '@loomwork/core': link:../loom/packages/core
-  '@loomwork/effect-runtime': link:../loom/packages/effect-runtime
-  '@loomwork/event-runtime': link:../loom/packages/event-runtime
-  '@loomwork/fair-scheduler': link:../loom/packages/fair-scheduler
-  '@loomwork/knowledge': link:../loom/packages/knowledge
-  '@loomwork/llm': link:../loom/packages/llm
-  '@loomwork/memory': link:../loom/packages/memory
-  '@loomwork/plugin-content': link:../loom/plugins/content
-  '@loomwork/plugin-conversation-sse': link:../loom/plugins/conversation-sse
-  '@loomwork/plugin-crypto': link:../loom/plugins/crypto
-  '@loomwork/plugin-postgres': link:../loom/plugins/postgres
-  '@loomwork/plugin-read-model': link:../loom/plugins/read-model
-  '@loomwork/workflow-runtime': link:../loom/packages/workflow-runtime
-  '@loomwork/blueprint-runtime': link:../loom/packages/blueprint-runtime
-  '@loomwork/projection-runtime': link:../loom/packages/projection-runtime
-  '@loomwork/ui-core': link:../loom-ui/packages/core
-  '@loomwork/ui-hydration': link:../loom-ui/packages/hydration
-  '@loomwork/ui-lineage': link:../loom-ui/packages/lineage
-  '@loomwork/ui-planner': link:../loom-ui/packages/planner
-  '@loomwork/ui-renderer-lit': link:../loom-ui/packages/renderer-lit
-  '@loomwork/ui-renderer-terminal': link:../loom-ui/packages/renderer-terminal
+# pnpm's minimum release age holds back newly published versions. @loomwork is our own scope, published
+# from loom, loom-ui and loom-plugins, so its releases are taken as soon as they are out.
+minimumReleaseAgeExclude:
+  - '@loomwork/*'

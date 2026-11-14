@@ -12,7 +12,6 @@ model call goes to a stub with fixed latency.
 ## Prerequisites
 
 - Postgres: `pnpm db:start`, then `pnpm db:migrate` (needs `.env`, see `.env.example`).
-- The sibling `../loom` and `../loom-ui` checkouts, built as for `pnpm start`.
 - The workspace installed: `pnpm install`.
 
 The scenarios sign up users in the database named by `DATABASE_URL`. Use a throwaway database, or remove the

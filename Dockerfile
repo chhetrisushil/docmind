@@ -3,14 +3,11 @@
 # DocMind's container image. One image runs both the server and the migration job (see
 # docs/operations/cloud-deploy.md).
 #
-# DocMind links the sibling loom and loom-ui checkouts (`link:../loom/...` in pnpm-workspace.yaml), so
-# they come in as BuildKit named build contexts and are laid out as /src/{docmind,loom,loom-ui}, the
-# same relative layout the links expect. Build from a CLEAN checkout of each (as CI does): a
-# local checkout's node_modules, .turbo or model caches would be sent as context.
+# Loom and loom-ui come from the npm registry (@loomwork/*), so the repo is the only build context. Build
+# from a CLEAN checkout (as CI does): a local checkout's node_modules, .turbo or model caches would be sent
+# as context.
 #
-#   docker buildx build \
-#     --build-context loom=../loom --build-context loom-ui=../loom-ui \
-#     -t docmind:local .
+#   docker buildx build -t docmind:local .
 #
 # Base: Debian bookworm-slim. The parser sandbox spawns `/bin/sh -c 'ulimit ...; exec /usr/bin/env -i
 # node --permission ...'` (packages/parsers/src/runner/protocol.ts), so the image needs /bin/sh and
@@ -19,44 +16,21 @@ ARG NODE_IMAGE=node:22-bookworm-slim
 
 # ---------------------------------------------------------------- build
 FROM ${NODE_IMAGE} AS build
-# pnpm comes from each project's `packageManager` field (docmind, loom and loom-ui pin their own).
-# The pnpm store lives outside every project, so no .pnpm-store lands in a project layer; the cache
-# mounts below point at it.
+# pnpm comes from the `packageManager` field. The pnpm store lives outside the project, so no
+# .pnpm-store lands in a project layer; the cache mount below points at it.
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     CI=true \
     npm_config_store_dir=/pnpm-store
 RUN corepack enable
 WORKDIR /src
 
-# Same steps, same order as .github/workflows/ci.yml. `find` clears any node_modules a local
-# context carried in (another platform's binaries); pnpm then installs from the lockfile.
-COPY --from=loom . /src/loom
-RUN find /src/loom -name node_modules -type d -prune -exec rm -rf {} + \
- && rm -rf /src/loom/.git
-WORKDIR /src/loom
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
-    pnpm install --frozen-lockfile && pnpm build
-
-COPY --from=loom-ui . /src/loom-ui
-RUN find /src/loom-ui -name node_modules -type d -prune -exec rm -rf {} + \
- && rm -rf /src/loom-ui/.git
-WORKDIR /src/loom-ui
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
-    pnpm install --frozen-lockfile \
- && pnpm --filter @loomwork/ui-core --filter @loomwork/ui-hydration --filter @loomwork/ui-lineage --filter @loomwork/ui-planner --filter @loomwork/ui-renderer-lit --filter @loomwork/ui-renderer-terminal build
-
-# The whole tree is copied before the install (no manifests-first layer): the link: targets above must
-# already be in place, and pnpm needs every workspace package.json. The pnpm store cache mount keeps
-# reinstalls cheap.
+# The whole tree is copied before the install (no manifests-first layer): pnpm needs every workspace
+# package.json, and .dockerignore keeps any local node_modules out. pnpm installs from the lockfile; the
+# pnpm store cache mount keeps reinstalls cheap.
 COPY . /src/docmind
 WORKDIR /src/docmind
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     pnpm install --frozen-lockfile && pnpm build
-
-# Drop what the runtime never reads, so the next stage copies less. Nothing here is a link target of
-# the server (it needs loom's packages/ and plugins/, loom-ui's packages/, and their node_modules).
-RUN rm -rf /src/loom/.turbo /src/loom/.models /src/loom/.superpowers /src/loom/docs /src/loom/evals \
-        /src/loom/examples /src/loom/apps /src/loom-ui/.turbo /src/loom-ui/docs
 
 # ---------------------------------------------------------------- runtime
 FROM ${NODE_IMAGE} AS runtime
@@ -85,8 +59,6 @@ ENV NODE_ENV=production \
     TSX_DISABLE_CACHE=1
 
 # The same layout as the build, so pnpm's relative symlinks keep resolving. Read-only to the app user.
-COPY --from=build /src/loom /src/loom
-COPY --from=build /src/loom-ui /src/loom-ui
 COPY --from=build /src/docmind /src/docmind
 
 # uid/gid 1000 ("node", already in the base image). Mount points for EFS/Filestore access points

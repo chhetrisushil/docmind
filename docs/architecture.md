@@ -111,7 +111,7 @@ From loom-ui it takes:
 - the Lit renderer for the web
 - the terminal renderer, used in tests
 
-Both are sibling repositories linked with `link:`. CI checks them out at the pinned `LOOM_REF` and `LOOM_UI_REF`.
+Both come from npm: `@loomwork/*` and `@loomwork/ui-*`, at `^0.1.0`, locked in `pnpm-lock.yaml`.
 
 ## 5. Data architecture
 
