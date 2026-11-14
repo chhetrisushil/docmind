@@ -228,52 +228,52 @@ importers:
         version: link:../../packages/vector-pg
       '@loomwork/agent':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/app':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/classify':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/compliance':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/conversation':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/core':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/effect-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/fair-scheduler':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/knowledge':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/llm':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/memory':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-content':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-conversation-sse':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-crypto':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-postgres':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-read-model':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-core':
         specifier: next
         version: 0.1.2
@@ -285,7 +285,7 @@ importers:
         version: 0.1.2
       '@loomwork/workflow-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       busboy:
         specifier: ^1.6.0
         version: 1.6.0
@@ -298,13 +298,13 @@ importers:
     devDependencies:
       '@loomwork/cli':
         specifier: next
-        version: 0.1.1(vite@5.4.21(@types/node@22.20.5))
+        version: 0.1.2(vite@5.4.21(@types/node@22.20.5))
       '@loomwork/conformance':
         specifier: next
-        version: 0.1.1(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
+        version: 0.1.2(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
       '@loomwork/event-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@types/busboy':
         specifier: ^1.5.4
         version: 1.5.5
@@ -334,7 +334,7 @@ importers:
         version: 1.1.6
       '@loomwork/projection-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-core':
         specifier: next
         version: 0.1.2
@@ -393,14 +393,14 @@ importers:
     dependencies:
       '@loomwork/plugin-content':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/plugin-crypto':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
     devDependencies:
       '@loomwork/conformance':
         specifier: next
-        version: 0.1.1(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
+        version: 0.1.2(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -422,14 +422,14 @@ importers:
     dependencies:
       '@loomwork/memory':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       zod:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
       '@loomwork/conformance':
         specifier: next
-        version: 0.1.1(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
+        version: 0.1.2(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -444,10 +444,10 @@ importers:
         version: link:../contracts
       '@loomwork/blueprint-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/core':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-core':
         specifier: next
         version: 0.1.2
@@ -463,7 +463,7 @@ importers:
     devDependencies:
       '@loomwork/projection-runtime':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       '@loomwork/ui-renderer-terminal':
         specifier: next
         version: 0.1.2
@@ -478,7 +478,7 @@ importers:
     dependencies:
       '@loomwork/plugin-crypto':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
       pg:
         specifier: ^8.13.0
         version: 8.23.1
@@ -497,11 +497,11 @@ importers:
     dependencies:
       '@loomwork/llm':
         specifier: next
-        version: 0.1.1
+        version: 0.1.2
     devDependencies:
       '@loomwork/conformance':
         specifier: next
-        version: 0.1.1(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
+        version: 0.1.2(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.5
@@ -951,8 +951,8 @@ packages:
   '@lit/reactive-element@2.1.2':
     resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
 
-  '@loomwork/agent-surface@0.1.1':
-    resolution: {integrity: sha512-A0sz+YX4mYom0Hwh7EN9f9PpfxnVKQK3bkXkAD42dwUCZpbNjtfBRFsk+vJIQkROTeYNTy3I4CByu4CRqO0/Ww==}
+  '@loomwork/agent-surface@0.1.2':
+    resolution: {integrity: sha512-4QiDu0bqzNkQgRo7BsGFzclk9YY17CpTC5XFNi3g7bFn+N7cELOGnjv3QTF2CSZ0NE9kmZGi9WfMz5s/ZnDjsQ==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@loomwork/workflow-runtime': next
@@ -960,37 +960,42 @@ packages:
       '@loomwork/workflow-runtime':
         optional: true
 
-  '@loomwork/agent@0.1.1':
-    resolution: {integrity: sha512-zS65+HnjHk4m5sR7tcutxipQypjazC8927DaPNQidFS5n1rJ6Ehn3DvGj/WgOYyjQS9Py8yiXaF41wDxiknjVA==}
+  '@loomwork/agent@0.1.2':
+    resolution: {integrity: sha512-CiwfRq7JfeaGW/QaOwYq2Qfpd3BVAuUCVTWG4fMu2y0o7vZiIC4Z1eqNbjuw2gNiOe3AQJDKGaHlodjHh6Surw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/analytics@0.1.1':
-    resolution: {integrity: sha512-wxGgt+icqKOvx5XOvHpHDIZgrUN0VTKrAtQkAMbCq4IrJOTFWXPLwVSz5q0uLHuBiM64CH1yAmeQG+tAHa4eFQ==}
+  '@loomwork/analytics@0.1.2':
+    resolution: {integrity: sha512-F61mOrJE8OO6o3mXMVKzigU1JZo/QUtdEGDcrPYJnWvQ977tc+VxcA8DnTqoZV2IRApaQWDqwrjnsQFwZo5rRg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/app@0.1.1':
-    resolution: {integrity: sha512-ggEIlt4DKHeOU62i4Zy+xwPJOS/k2x5YcMO/cNkLj7k6BVFLZyYjJKV8XhZbgr9XkNBpotMJrLRA3wK5ZtGB/w==}
+  '@loomwork/app@0.1.2':
+    resolution: {integrity: sha512-TNSrKStYLcq0X4cibQcxPbBt1UXA1Y9H/aWZYSfQuwBuKQaxUUgHaXAqYg7u94KEErJ7imjEo08I2zCmG/BTtA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/appgen@0.1.1':
-    resolution: {integrity: sha512-WB72RT+FJVvwJJCUAEQX6qklEJ3j8MmQr9HfUZrIbiRUZzcREyolRU8RqAz19T9bZGdS7aWcWU7/PwbhzfaUhA==}
+  '@loomwork/appgen@0.1.2':
+    resolution: {integrity: sha512-3155y9G1gGXmiBTyZtsBfbsTk43gO8yuZAcjh6a4ZEXXRN3I1RDTkxZewToO3a744H4IW7nxFgRvAwffyCCl0A==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/blueprint-runtime@0.1.1':
-    resolution: {integrity: sha512-vuZarDxyyJWjMKV8sM/BentYOnanBKsfNbmu4eo/Iiu+VQXouKMH/8OI8Hfk0IYOood7bJTF5nzAhvLvtcAifA==}
+  '@loomwork/blueprint-runtime@0.1.2':
+    resolution: {integrity: sha512-KdBCl7eKuJD2bNshwYZQ1GPeYTV6CyBlADv8pYgvrRZKI8IeaE8WKQ56m8PkNc2dX0fVMKpR45dsEdCsSIYGNw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/classify@0.1.1':
-    resolution: {integrity: sha512-6WFEZO8aMI664DbUXRFzcj+MvlEE00LUO/KyGNaSYSSXjvIPOh1hoOaEJBCsFGHwsovMXG1x79tzra3dqq7lhA==}
+  '@loomwork/classify@0.1.2':
+    resolution: {integrity: sha512-nFDcxF9BZDXd7rkmr6+e/eXvcdiTrjRORYbWvAYMAuqT1X8RInawZHtotmJng0Io5IEfJZa1bAgNgiJtl3ZhTg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/cli@0.1.1':
-    resolution: {integrity: sha512-Tmt5b4yL871DD4SDVv+VFdd5pYX6ZWPN/VxXdUZ3SnihZT3BjdCcKxlklT3JGWis6F0cDMHz6sJ/WBk4locaoA==}
+  '@loomwork/cli@0.1.2':
+    resolution: {integrity: sha512-ilCkgDERlnI2kDFoD4bpYk1Tmw6PComvfmntYST+wu765EzrrBFgjL4s2rf0upmXAp9GkbU71Xu0zWstuGj6bg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
+    peerDependencies:
+      '@loomwork/plugin-sqlite': next
+    peerDependenciesMeta:
+      '@loomwork/plugin-sqlite':
+        optional: true
 
-  '@loomwork/compiler@0.1.1':
-    resolution: {integrity: sha512-gxlKx0dQu8H6QFIrxRvRz+qcZYR5n5tua4/H/SsPamP0xbNNIyloHb17RJtbpNGthwvn4wqAYksSiKeyfG6Row==}
+  '@loomwork/compiler@0.1.2':
+    resolution: {integrity: sha512-Unn4oT/mPW/HY3/1pZlcZ1pZkPZSnpr6ShyZ6YCC/68SH1hSM6XWy0xMWsJ6qlCGi5TrJr6u7hlH3xh0v0l0mQ==}
     engines: {node: '>=20.0.0'}
     hasBin: true
     peerDependencies:
@@ -999,154 +1004,150 @@ packages:
       vite:
         optional: true
 
-  '@loomwork/compliance@0.1.1':
-    resolution: {integrity: sha512-clkMPZgsqR05ZDlQSzN5ZpEG/MZW3d7i1v6Q6BdtRwVkWpKGqv6oqGxgpFYwVu1fWbG2fNuBGVn+80uaEmMrKQ==}
+  '@loomwork/compliance@0.1.2':
+    resolution: {integrity: sha512-L8+lq0aoCSLSCQSY7u0cRcTHIz21bPsY8b1WWDdqFCGona3RbK9q6RGfjOf6u1rAD2bLkaEnCdkGUSgX10ZRfg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/conformance@0.1.1':
-    resolution: {integrity: sha512-PcaCohjJzqrWYgDCj9XtEH5paTn6scMCTnQKacBlAE83U8sie/Ay5Dl6lx4KFnCNIP/aRSVbVDDZbdGzpwxzXA==}
+  '@loomwork/conformance@0.1.2':
+    resolution: {integrity: sha512-tc8PLBS6icBpJ8fRckNYMyi1VrFotOLuPXoCZwyhLJWod5aVdx+OGL8z80h9ykE+BW0Ntu7MI9H+V8y94c9YMA==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       vitest: '>=2'
 
-  '@loomwork/conversation@0.1.1':
-    resolution: {integrity: sha512-3wm7IQuE0geJJEdHhibyibIBJuVqY3NRwW3exl7s8KWjrpIIGr0JKzDgRLVZ9nw/+UTju0LO8TCV+yprhnY7Fg==}
+  '@loomwork/conversation@0.1.2':
+    resolution: {integrity: sha512-m5GFz+BdTiSASRbyS/dYmOk7E1oWIJRLl1d7sGbtWtDgJLhkQAPAnkKZjV9bQFJqdqnZeT7cfMkw2tjA9w8soA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/core@0.1.1':
-    resolution: {integrity: sha512-+pyjy6ubI3QJqs+LH7kWqjwZhGUmiJNW/3EUy7Xr1m3PAeAE60HW5/Ldc2NwXGoQe6jlaq5GEOMmwUKR4oa7Dg==}
+  '@loomwork/core@0.1.2':
+    resolution: {integrity: sha512-3P3pKE/S95pVSktqSYmzsDxSSFXZ/eQH1xdcDWy0cDhzZ26PDVXh8eyM9DYyeFL6Ba7N4p7ufCm5ZguEAOBEqg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/deploy-sim@0.1.1':
-    resolution: {integrity: sha512-w1gcJjd5ABMqdji0Aj3+a4NMIKNYweia4ZPLr4noqMaRlx3gqtDaQIWygbpkqbY6MxnsO13WbSj0f20Guap/Vg==}
+  '@loomwork/deploy-sim@0.1.2':
+    resolution: {integrity: sha512-OILMGQZDKYFpe7AR8kIJggFVHpZJVOCfiVBg4mbeCceMRJGddVyvfuFUOt5hVszbXN4xiznKrlXsysJgf8LZoQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/dispatcher@0.1.1':
-    resolution: {integrity: sha512-pyA423OT+MRMCfHU6iPkV2Ui1iIZR+p8X4z/fnuBQnOCgmbtjXty/qtgHctB9Xvnuxs8qCSR25uL2Tlu3u0bpg==}
+  '@loomwork/dispatcher@0.1.2':
+    resolution: {integrity: sha512-DqxU3pMSBHrxuUAeU5L5+Yhned77YtvcqIupKwAtPAkp/py2h2JpKReZLs8Q+wOiYumTm83dIqLCCrUEoKd1dQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/effect-runtime@0.1.1':
-    resolution: {integrity: sha512-If0SYdyaWz7AJbwlRn9V+Ebqi8u0bJGpYprteKsrDBw9dSxm2ub4mVDB9OpoXZpVoe28AaVUYogMegxXXUy7GA==}
+  '@loomwork/effect-runtime@0.1.2':
+    resolution: {integrity: sha512-6AiR49cLnsN/+r5/sEhI3+voZnnWPsW+G5WmLmOeigylVsqhxKq7ZhkDESag8jLmEw9uAzy/7MtbuBYl1r/Ezw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/eval@0.1.1':
-    resolution: {integrity: sha512-QNPw7MKWeXqlaS+cHCCGlBnJ33lW4QwkSWdbzzWai+71QoirM0Y2GHlJ+EIjYG9GCZ2PLwQwmz0SA+/7OkmKxA==}
+  '@loomwork/eval@0.1.2':
+    resolution: {integrity: sha512-nzQNOH9gioMAA+SSSH1s/SUkeLaPsF4IqJgkgoh0wy49L8kkqbLySJdYTXLQi66UqZ5VVrUA5KRcbA2j966+vA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/event-runtime@0.1.1':
-    resolution: {integrity: sha512-0zSGrRYEm0xBQxiVPoNgyovBf2tqVF+uBTFllmBdb2Ae17W7qPthQk4XrbbwUi5BJTIQ80BEd0EjD+jgDvDMIA==}
+  '@loomwork/event-runtime@0.1.2':
+    resolution: {integrity: sha512-ooB1EsBArNYOTpDuYm5pZcCb7A6VJ5HKojglduqOd/Hx4Zg8RyYZsPtc6gOTpPk6Nl7N2HWWsrDb95gsIs2UFQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/fair-scheduler@0.1.1':
-    resolution: {integrity: sha512-YhKjaxh7G2SpvNgb3UTzGsTYI2VCsXPaGJ9jdNMDjnwWrqB0ejoVJxopCH7CnOedXb7WhETjUqG81xRI5FztpQ==}
+  '@loomwork/fair-scheduler@0.1.2':
+    resolution: {integrity: sha512-pbdxQ0js+OHjR4KlX1ls9dPySgnIfBtTuj9YRvW4GQj22eiTUXii2kp6JUhGUOACUSg7ZFF1LApXf9iKMOhYZw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/knowledge@0.1.1':
-    resolution: {integrity: sha512-KVsjHAFy0XD1lMTyb66hAtYdNazWfUYqKbX4WxKlol1nwKJWQGaXCwq/56gaGWC6UwL4sjVbpJrB/53SfU3G+w==}
+  '@loomwork/knowledge@0.1.2':
+    resolution: {integrity: sha512-yIlGiuJDaIF7ZPovn9zemuOiWIPdFm0dQ3HQl2sTOhh/gxRJFHcmwXXvumsRnm9VjX/PP1/IyOf5l6cNfPl3qQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/learning@0.1.1':
-    resolution: {integrity: sha512-0GkV3c5G4KC3zGZvu11wvVCX8k8Fmf/GtOTipen93O2GZZzVgjfFtcR66wC3XHiwkBpABSg/UwMh8cVQAfyJ3w==}
+  '@loomwork/learning@0.1.2':
+    resolution: {integrity: sha512-pDNjI/+N3QnLgcUWzvN5Dwpy4T5zfTB2iOtqAxb2rDA1v3NyyywccZ8UB5nzeTWGknBOFb/iPHJ/wyZcWcLDRQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/llm@0.1.1':
-    resolution: {integrity: sha512-rnPDMUiHtVcfJxCIk6CCavZRfL7zhRcq06Vi+JdIpMBIuD/U0/dFox4ZE583z9N0teXLelb917LNmb01A1aAoA==}
+  '@loomwork/llm@0.1.2':
+    resolution: {integrity: sha512-kULNVBULKB7iU7CcAKiYJmGWucoO5pemYwa7jvTfyP4fYeSjRaN7r79zQY/V2Z9+ca8C8rMoYbiENy1kw+J53A==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/memory@0.1.1':
-    resolution: {integrity: sha512-A5yARamGwE3FdY5C2XUhRmxtrtK3n0GMsN0ETLf9kA27gOpg11Ds4+GqGbiGwX/lri5H4f+NK/ibMo3t34mv8g==}
+  '@loomwork/memory@0.1.2':
+    resolution: {integrity: sha512-/kARwRclW6WjLsNlbBO1+hrwuZOjMM0HAtJTsrEd//GKqPEFsnSbfNYD78kXpiCJCUvpwH7olaPsklW4s+wS7A==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/middleware@0.1.1':
-    resolution: {integrity: sha512-HWaNEtEjvH9SwdKCDme2kNCmyIUOL4tw5u/49477WJIIfgb3YJy8gIKPe4p/37I8lAxkxBF2ptLlnoLVKuUN8w==}
+  '@loomwork/middleware@0.1.2':
+    resolution: {integrity: sha512-wSBcGQ7vZsufWVlod4KtMJMHjdbFUGh6c98biRtrMh37rwPYhgboAq7IrvVA71nvCvsb1CZOKz8jPiCjl68nVA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/orchestration@0.1.1':
-    resolution: {integrity: sha512-g8m1ZzGTmSpI+p2Iw5JCjXhZ7liSCnsmnNK5jAjvq7mzHb+aE7BZR7mTL/09FLJrjL/hbrYRVbCMB7IER6KFLQ==}
+  '@loomwork/orchestration@0.1.2':
+    resolution: {integrity: sha512-EANuhNJhUN8cMGfX2xlbjqtyDlYi6dvre7rElXHv7XetPPrdIlSjpw+FZuLR6ggzDGCg27mKAI4y1KOP8DhYDQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-a2a@0.1.1':
-    resolution: {integrity: sha512-uIatTcdhQtce9Xer7tyuCXUVTGAAAG918/d+kHwupCH8o9tB0tcX3DJ7r6Gzd0O2W5ITQWWQgc6XgKP+FXdXCQ==}
+  '@loomwork/plugin-a2a@0.1.2':
+    resolution: {integrity: sha512-76e6JAosw8NjWAXrUeUxjYehBVqmRCeMyvH4NcFz2ZUJPZGUwoMf1cRxXnBnZT+7buRq9nj0qRHu3a2s0eU+/Q==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-content@0.1.1':
-    resolution: {integrity: sha512-lnlHMR9SB+kmVPpqEL58B3V8THVPKtqrvmcLWFK/423HCINrRzn7tXAwzr+QKRf1/DEVdiULXXDupkRUHJa06w==}
+  '@loomwork/plugin-content@0.1.2':
+    resolution: {integrity: sha512-3S4JIQlvDYTH58mHY2S/7bgfBnrdyhQxZhA5PE+Jkir9/lBkD9p8TwErGUSfT1hT4g5Yd6AA4RFN8fhrm5EtQQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-conversation-sse@0.1.1':
-    resolution: {integrity: sha512-jAejnqz56RC3kWFw2+i4WC58lrIKEfS2CE6UhKYDCsLCf8sM033ry59lXVvATbHRJzRriPJcZXuXiITYRYoCBw==}
+  '@loomwork/plugin-conversation-sse@0.1.2':
+    resolution: {integrity: sha512-0hampPHXUSFa80rf6t1vuNicQUr7NH+BB/6uQhjCxLp6FUdfPEGQPxR6iXy48iy5y7W4m7foeSXPVg4zhNrYyw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-crypto@0.1.1':
-    resolution: {integrity: sha512-NItMqDJTFZVVbL58Zsz7NeC9cxK+qZ5S7lnR0PZFWP8+tw3yyGZvJSrHSrPuPCbMrZoEAE9IvXd3fqKi9mf+Lg==}
+  '@loomwork/plugin-crypto@0.1.2':
+    resolution: {integrity: sha512-tv9pPtcZA56IJDs+LgEZEbntOqQSiM4lxpG+aEGYsxt8zyLrE5lk/BcfUkcZjpsue3jp5Nkol/JN8gZwFxuEkQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-durable-state@0.1.1':
-    resolution: {integrity: sha512-fkv14WNULwokTEt9wl/alObI0XvEK10OTawVJLg9ihIprw1NAIzt/X65hrZY5sBi0HQxKcwtrboU5a34n5JM1w==}
+  '@loomwork/plugin-durable-state@0.1.2':
+    resolution: {integrity: sha512-+uQFmQoJR5zw/YfoOYK4+m+qGeSziJZzRSxlE/2ef+35df6+McqAE0bDHOC/DNs98Txce7wQtk0v5dMujVikzw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-kit@0.1.1':
-    resolution: {integrity: sha512-Jjs66+Xe92vUBpw1F9o1wfK0UqFX3f+56YL9YThZt9S4LdURUtI1sl3DbwDLWaUbwe9qU/bd8zk/TLG/X8z8RA==}
+  '@loomwork/plugin-kit@0.1.2':
+    resolution: {integrity: sha512-lg2V+NoHYJ2sng7smX4dMdQ2HcCxmobAcu6tzUSOAWLMe5Ut0tppMOjWGvyV1gXOZMfjXKvqliAXm13T4oXb7g==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-mcp@0.1.1':
-    resolution: {integrity: sha512-eFIFkTwyuL/XXnboVWsJAcFQPr5zTnhuNB7BktQEM1cGGa4X0TkCO4eYYC1ilu1MmZEClNf+oP9SBSBmIaosfA==}
+  '@loomwork/plugin-mcp@0.1.2':
+    resolution: {integrity: sha512-Jf/fHdisSMrXJdkvCPiEQ+dmZyA5QJ0ZI3GCXw1mWC0BZKile/xn4bgt8M7t5VumfueWrNxi+M0p0fVS4huu/Q==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-postgres@0.1.1':
-    resolution: {integrity: sha512-r2XN2ocEd7yPQzkOSOQtBBdjhgyeSisf9jaFEdsBrD1CXkVoScGaKFOelyQZMdUBF3xNT6LIt6Re43ladJpceA==}
+  '@loomwork/plugin-postgres@0.1.2':
+    resolution: {integrity: sha512-vktZk0d8PR7TlrfuEsU7b1SkGHmdHT6YDYaczekd8lSmU7Nj7zUdqhVZt9c8lPsmZOEHVNYa3k2ySt7HNgr9wA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-read-model@0.1.1':
-    resolution: {integrity: sha512-ognKhlBupynGUwrleDXF2FTj3cQWWD93NPkvdQ1L3ov4GAzjoW21cTlIXCVjIMWjF4u+CFEca9ImJDDhokO/ng==}
+  '@loomwork/plugin-read-model@0.1.2':
+    resolution: {integrity: sha512-0ZmyebIrXHw68a2QaXbA/OE1dnAreNbNgRuuAFhK0hop3xhAYrhAbh6qhKngNqrbUAzouw7VrNn/NeOC6GOarw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-renderer-terminal@0.1.1':
-    resolution: {integrity: sha512-cypLHq2rrSwbYBz9bNJCIjBfQnMnQn3pd5YJUfjGwauTCwmrb7ct3AA1rWnNO7WDzeaq6q+uztwiaf5MT4Bx6w==}
+  '@loomwork/plugin-renderer-terminal@0.1.2':
+    resolution: {integrity: sha512-Yk9hjUMOwsVG/uLghfEAEJJ+PY3t2g+7qPVzpUX7tZDg5XLMf+k3C5JFK7umkish2dFZQAAqxdWTLjjkVmO9PA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-sandbox@0.1.1':
-    resolution: {integrity: sha512-+Rwtw1DOnv9k26LByVsX2B9oK42GIVp1hu5OrcG2UTBFbDwm5e7KdrKyHN1UL2eO1YY9jxeTFQCjE6Zh4uqIgw==}
+  '@loomwork/plugin-sandbox@0.1.2':
+    resolution: {integrity: sha512-kdzxxKd5CAtnKxiRPzQzoxR4d5S6RDqxusqjnZWw28Ihw1TY4xdMzI1bVRl8e6H9zm4V6YXFBC7XPfWrmWWEVg==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/plugin-sqlite@0.1.1':
-    resolution: {integrity: sha512-QXApW8xWZHgW9yQ/zoTvgRnU9v8iO2wvpaI/ZpM/8WG0x7T3N+gn0+xQ6kdrIZAglYvI2l0WOqJcdhZm8Ffpug==}
+  '@loomwork/projection-runtime@0.1.2':
+    resolution: {integrity: sha512-bMxFFtYLcMoK1xYceIQy3RDjboX3EZ9li6kWDWnfp1FH7I4lDdqcfEJBfBlv1Cl5I+4Oc6hjCF82p3iTHJQIcw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/projection-runtime@0.1.1':
-    resolution: {integrity: sha512-AU3qNAsJZoNx0/TlCXkaEvXCgy+m94458pJWxGT+0b/WwEhE1EnUVatx6rCc3H8weafNYM5qbGD5XNVtYdseXQ==}
+  '@loomwork/reasoning@0.1.2':
+    resolution: {integrity: sha512-u3XHJRs1YcMiD0xwmGz3EzTRZ2JvCFE4w017eCjHmBHVrOQBJUFu9tCEb95mpm6Kcm1523pGg0kZy75W5BxNoQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/reasoning@0.1.1':
-    resolution: {integrity: sha512-3r1+9cmDdKPEji1PVqkEIRL1nEtr8HpPLKzeWn6wxwF4Wda0TgyOtzzji5/vgmATLiOopWxttkgxsUjBE8vG+Q==}
+  '@loomwork/replay-vm@0.1.2':
+    resolution: {integrity: sha512-gWyEpNAFKjdDH90r9HCrqYEEnpOqsF7f2Vx7MMRW8aMs6/jpEjMZtn2j+9rD0hjFikQfkpcSsU2HXC3LbH5mYw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/replay-vm@0.1.1':
-    resolution: {integrity: sha512-Vy382t1pwbrnIpcydPx8WwkQcCmcDJV0FmnnuVe12/47LlpPUBKynbRTQxU6T7OzxB9zR/GoXMQxnzk1NbjCsQ==}
+  '@loomwork/sandbox@0.1.2':
+    resolution: {integrity: sha512-xozG/qhU5UvttL9vQTI+E67/gNMS6JKCmIKbNl7orkIr345xdkKM90hurxOLtrs25buuMI9XZhvw+b8aUNlHVA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/sandbox@0.1.1':
-    resolution: {integrity: sha512-hk2147gu/kKLErG+oLAOCUVDCJs25wKuS+o/M/2inH54VxQ6apxcKJ2UTsJmHkCelQD5QgG4s9LD1tRL3LawAg==}
+  '@loomwork/scaffold@0.1.2':
+    resolution: {integrity: sha512-yMlcYUghzaCzpkP5A7OjYHCiShPdWUU5ZU3Re07OW+XDdST0jbz2XF6Nph96kBw2mef+8dUWB1rrE25/TVzJew==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/scaffold@0.1.1':
-    resolution: {integrity: sha512-91Y8XEnPQaOeh0dC8puK8vmmm72tjWN43396R0cuo++uKumFihMjN7/xSacYhcDjYtZGoJQpU1bV3QqV2f+rFg==}
+  '@loomwork/scheduler@0.1.2':
+    resolution: {integrity: sha512-KqogjnK6Wp9u1iXJQmd+AhJy8JYrmfDi0c8EK15V67Z7fPDvpcFB/1GNaqoSoGP6YquRzQRpVe6DpXFYn+J90Q==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/scheduler@0.1.1':
-    resolution: {integrity: sha512-zaZ1Eav6zyCVEI/M11wYALD1/ZOqZBXlOD3v/ajIVClK0mvi01FC+tyDgc7c+58lLlMKM6JGdvjrnlfqgqAcwQ==}
+  '@loomwork/snapshot-runtime@0.1.2':
+    resolution: {integrity: sha512-RMnsKDhmWHU6Mc6PsiiD6ySXSX5CLWPba/jXaqcUWRSEWgn8Lgt2BG+rAFmdWHc05qccJCxx+CXdCsS3d15vhA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/snapshot-runtime@0.1.1':
-    resolution: {integrity: sha512-X1XXKo1NimlvwBpsRbq1QNnpqr/o8j/uJawmjGByjqA1NR3GAvwlgpwStwTNxXPp9DYfyQ2rE2JxCzxJrUAXFQ==}
+  '@loomwork/spec@0.1.2':
+    resolution: {integrity: sha512-XA8UmibgyOifeSL2K9H2+ENXsWSZM9ISBN4OAAa/CeM+pHeRLbxtnKIhBKcH+xJmNVhCsWVX4EqjegyEjUqXUA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/spec@0.1.1':
-    resolution: {integrity: sha512-oE2J61rQEQZSr9PQXqKFzLIL2iQ+QTJqCZ8m1MWnyztXdBFidhFzbAaickhD7GSgXdoDrmrcP1NyLp75cda2Ng==}
-    engines: {node: '>=20.0.0'}
-
-  '@loomwork/telemetry@0.1.1':
-    resolution: {integrity: sha512-h3ryP4kY4X9ls6KygvBJ2GG0NBNIKtbMOz8aAoVCr991xUmRPYr4RL7zmxq9qDlYa4v8NHQVV6oMyMB2d4zzQg==}
+  '@loomwork/telemetry@0.1.2':
+    resolution: {integrity: sha512-YicYrRhaczghN3ITvVhLhFvzDvzHGy0X9z6WQRBPTWHlF8anJkv/9jRQL8CqzDbV4f2NqfCpAG4GzHGtCrIVLg==}
     engines: {node: '>=20.0.0'}
 
   '@loomwork/ui-core@0.1.2':
@@ -1173,24 +1174,24 @@ packages:
     resolution: {integrity: sha512-zk8N6FmXmB/RXFUHk3VffE7jXaK3X0k2HryPS9qT1fmh07DM0XIraCUhdhrZSOZ1kd4DNSdCx7NVFHfpcPGkOA==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/verify@0.1.1':
-    resolution: {integrity: sha512-/V/EjzXxIbEJdOcXx1sBjXVlTm5JzQmvTt5trbkENBu/toNFPwGQcQ5/Rn0tRrW8mQPLFYdHYVrwGz6OoCx3fg==}
+  '@loomwork/verify@0.1.2':
+    resolution: {integrity: sha512-AcNceLJ49gxXQePNR4fHtq7+eQekY2O2M362n4sQ/DnORCumQ8YkMISEPBPrrTe+AKMaVPDkX0VAY7SpZIeUJQ==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/wire-abi@0.1.1':
-    resolution: {integrity: sha512-Bmkn7/pGg5Amo8TduvPXzkcClErJkj539HHnOkkCzO6cuPBDxQCJ3KidkxyAlYBzPkLhgBeJn6wEH7p2eYWKew==}
+  '@loomwork/wire-abi@0.1.2':
+    resolution: {integrity: sha512-zbungqM/S1R/OAZNdvd5yl8wmlh+GOKS3F0CpWAy5IC5iF6FVGUvscYHgRYEdHTGGoQruPnRsuOO6L/8TciADw==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/worker-runtime-local@0.1.1':
-    resolution: {integrity: sha512-tAVbk0TbkceBu1t9ByVY7Q5+DNHs+pS16NKLCVon4wsv2LWdabMvpQuH2onx31dETTlPOl3qHfdVw7m1tkn9bg==}
+  '@loomwork/worker-runtime-local@0.1.2':
+    resolution: {integrity: sha512-/Ryt9j/stMm2FV7Lc3+DUCtFzEO9S+d+ATknBL8v3NWL0b94Ac9/uixKLf9nYj6C5S6sK/qsdXw1z6+PB0hu9g==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/worker-runtime@0.1.1':
-    resolution: {integrity: sha512-7M4Huf/sWwfBtgtHg+d/arXU1D+8ACvQWdnVPRRTtzVRIIr982G7Ps7sL7OIrpoarbbsPgGAIr4wdXiH8WnNBA==}
+  '@loomwork/worker-runtime@0.1.2':
+    resolution: {integrity: sha512-1IGdcAMYNvs4F0k/4LVPAF/pHsnW7PgVwWHbHkbKJhZhoIBivF2kt7QCxbaft2idglCRDnHuY9PUHccwON+h7Q==}
     engines: {node: '>=20.0.0'}
 
-  '@loomwork/workflow-runtime@0.1.1':
-    resolution: {integrity: sha512-Ee0d8gIp3vU+J77AW1x99ruYqIBKLg9dbcVFDaiGVfHYx69iPC9uwGSgSxsZdP6ZrgqeBOJruVriviWCHcOqfw==}
+  '@loomwork/workflow-runtime@0.1.2':
+    resolution: {integrity: sha512-qOd/3uxrtwLn1zozNR6+TRFcKV9rZHqL7KazA1+cWfqToK37r5ezV8NsKX9im82plKyztnWN4fEeR0cFI5K7Lw==}
     engines: {node: '>=20.0.0'}
 
   '@minimistjs/subarg@1.0.0':
@@ -1470,15 +1471,6 @@ packages:
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
-  better-sqlite3@11.10.0:
-    resolution: {integrity: sha512-EwhOpyXiOEL/lKzHz9AW1msWFNzGc/z+LzeB3/jnFJpxu+th2yqvzsSWas1v9jgs9+xiXJcD5A8CJxAG2TaghQ==}
-
-  bindings@1.5.0:
-    resolution: {integrity: sha512-p2q/t/mhvuOj/UeLlV6566GD/guowlr0hHxClI0W9m7MWYkL1F0hLo+0Aexs9HSPCtR1SXQ0TD3MMKrXZajbiQ==}
-
-  bl@4.1.0:
-    resolution: {integrity: sha512-1W07cM9gS6DcLperZfFSj+bWLtaPGSOHWhPiGzXmvVJbRLdG82sH/Kn8EtW1VqWVA54AKf2h5k5BbnIbwF3h6w==}
-
   buffer-crc32@0.2.13:
     resolution: {integrity: sha512-VO9Ht/+p3SN7SKWqcrgEzjGbRSJYTx+Q1pTQC0wrWqHx0vpJraQ6GtHx8tvcg1rlK1byhU5gccxgOgj7B0TDkQ==}
 
@@ -1515,9 +1507,6 @@ packages:
   check-error@2.1.3:
     resolution: {integrity: sha512-PAJdDJusoxnwm1VwW07VWwUN1sl7smmC3OKggvndJFadxxDRyFJBX/ggnu/KE4kQAB7a3Dp8f/YXC1FlUprWmA==}
     engines: {node: '>= 16'}
-
-  chownr@1.1.4:
-    resolution: {integrity: sha512-jJ0bqzaylmJtVnNgzTeSOs8DPavpbYgEr/b0YL8/2GO3xJEhInFmhKMUnEJQjZumK7KXGFhUy89PrsJWlakBVg==}
 
   cli-table3@0.6.5:
     resolution: {integrity: sha512-+W/5efTR7y5HRD7gACw9yQjqMVvEMLBHmboM/kPWam+H+Hmyrgjh6YncVKK122YZkXrLudzTuAukUw9FnMf7IQ==}
@@ -1562,25 +1551,13 @@ packages:
       supports-color:
         optional: true
 
-  decompress-response@6.0.0:
-    resolution: {integrity: sha512-aW35yZM6Bb/4oJlZncMH2LCoZtJXTRxES17vE3hoRiowU2kWHaJKFkSBDnDR+cm9J+9QhXmREyIfv0pji9ejCQ==}
-    engines: {node: '>=10'}
-
   deep-eql@5.0.2:
     resolution: {integrity: sha512-h5k/5U50IJJFpzfL6nO9jaaumfjO/f2NjK/oYB2Djzm4p9L+3T9qWpZqZ2hAbLPuuYq9wrU08WQyBTL5GbPk5Q==}
     engines: {node: '>=6'}
 
-  deep-extend@0.6.0:
-    resolution: {integrity: sha512-LOHxIOaPYdHlJRtCQfDIVZtfw/ufM8+rVj649RIHzcm/vGwQRXFt6OPqIFWsm2XEMrNIEtWR64sY1LEKD2vAOA==}
-    engines: {node: '>=4.0.0'}
-
   delayed-stream@1.0.0:
     resolution: {integrity: sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==}
     engines: {node: '>=0.4.0'}
-
-  detect-libc@2.1.2:
-    resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
-    engines: {node: '>=8'}
 
   dingbat-to-unicode@1.0.2:
     resolution: {integrity: sha512-R0bRerYzy/EZP6QzD3Hkl6JjUDA1Mnn+pd928w0nWjPzihnbAR6dcjGJGiRyznj5E4S1duEKzWrTqw02DPcdzg==}
@@ -1594,9 +1571,6 @@ packages:
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
-
-  end-of-stream@1.4.5:
-    resolution: {integrity: sha512-ooEGc6HP26xXq/N+GCGOT0JKCLDGrq2bQUZrQ7gyrJiZANJ/8YDTxTpQBXGMn+WbIQXNVpyWymm7KYVICQnyOg==}
 
   entities@7.0.1:
     resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
@@ -1634,10 +1608,6 @@ packages:
   estree-walker@3.0.3:
     resolution: {integrity: sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g==}
 
-  expand-template@2.0.3:
-    resolution: {integrity: sha512-XYfuKMvj4O35f/pOXLObndIRvyQ+/+6AhODh+OKWj9S9498pHHn/IMszH+gt0fBCRWMNfk1ZSp5x3AifmnI2vg==}
-    engines: {node: '>=6'}
-
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
@@ -1645,15 +1615,9 @@ packages:
   fd-slicer@1.1.0:
     resolution: {integrity: sha512-cE1qsB/VwyQozZ+q1dGxR8LBYNZeofhEdUNGSMbQD3Gw2lAzX9Zb3uIU6Ebc/Fmyjo9AWWfnn0AUCHqtevs/8g==}
 
-  file-uri-to-path@1.0.0:
-    resolution: {integrity: sha512-0Zt+s3L7Vf1biwWZ29aARiVYLx7iMGnEUl9x33fbB/j3jR81u/O2LbqK+Bm1CDSNDKVtJ/YjwY7TUd5SkeLQLw==}
-
   form-data@4.0.6:
     resolution: {integrity: sha512-vKatAh4SlVfgbv+YtmhiRjhEMJsYpsG1Y2rMQtR+SVSbytsSD1YGzDIcrAJmdFec88u/+VoGmxnl+80gL1tRCQ==}
     engines: {node: '>= 6'}
-
-  fs-constants@1.0.0:
-    resolution: {integrity: sha512-y6OAwoSIf7FyjMIv94u+b5rdheZEjzR63GTyZJm5qh4Bi+2YgwLCcI/fPFZkL5PSixOt6ZNKm+w+Hfp/Bciwow==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -1670,9 +1634,6 @@ packages:
   get-proto@1.0.1:
     resolution: {integrity: sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==}
     engines: {node: '>= 0.4'}
-
-  github-from-package@0.0.0:
-    resolution: {integrity: sha512-SyHy3T1v2NUXn29OsWdxmK6RwHD+vkj3v8en8AOBZ1wBQ/hCAQ5bAQTD02kW4W9tUp/3Qh6J8r9EvntiyCmOOw==}
 
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
@@ -1722,9 +1683,6 @@ packages:
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
-
-  ini@1.3.8:
-    resolution: {integrity: sha512-JV/yugV2uzW5iMRSiZAyDtQd+nxtUnjeLt0acNdw98kKLrvuRVyB80tsREOE7yvGVgalhZ6RNXCmEHkUKBKxew==}
 
   is-fullwidth-code-point@3.0.0:
     resolution: {integrity: sha512-zymm5+u+sCsSWyD9qNaejV3DFvhCKclKdizYaJUuHA83RLjb7nSuGnddCHGv0hk+KY7BMAlsWeK4Ueg6EV6XQg==}
@@ -1794,15 +1752,8 @@ packages:
     resolution: {integrity: sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==}
     engines: {node: '>= 0.6'}
 
-  mimic-response@3.1.0:
-    resolution: {integrity: sha512-z0yWI+4FDrrweS8Zmt4Ej5HdJmky15+L2e6Wgn3+iK5fWzb6T3fhNFq2+MeTRb064c6Wr4N/wv0DzQTjNzHNGQ==}
-    engines: {node: '>=10'}
-
   minimist@1.2.8:
     resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
-
-  mkdirp-classic@0.5.3:
-    resolution: {integrity: sha512-gKLcREMhtuZRwRAfqP3RFW+TK4JqApVBtOIftVgjuABpAtpxhPGaDcfvbhNvD0B8iD1oUr/txX35NjcaY6Ns/A==}
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
@@ -1811,13 +1762,6 @@ packages:
     resolution: {integrity: sha512-uKdg2G3GNCKQn9byYOpxbGqrT2fGO5KRt5J/8b3pok8rT6qxGWF6hxMyJiEYtAf+FVyYuD9hRaDqX5uPFYJ4ZQ==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
-
-  napi-build-utils@2.0.0:
-    resolution: {integrity: sha512-GEbrYkbfF7MoNaoh2iGG84Mnf/WZfB0GdGEsM8wz7Expx/LlWf5U8t9nvJKXSp3qr5IsEbK04cBGhol/KwOsWA==}
-
-  node-abi@3.101.0:
-    resolution: {integrity: sha512-bkb/RkuWCE64eWu1PCh3Fu2pGc9mKRs+kOE+FU2bGHRYlQa86/D321DSATV54AsCQMKz3/xSt9sRgraZTpqdhQ==}
-    engines: {node: '>=10'}
 
   node-addon-api@8.9.2:
     resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
@@ -1830,9 +1774,6 @@ packages:
   on-net-listen@1.1.2:
     resolution: {integrity: sha512-y1HRYy8s/RlcBvDUwKXSmkODMdx4KSuIvloCnQYJ2LdBBC1asY4HtfhXwe3UWknLakATZDnbzht2Ijw3M1EqFg==}
     engines: {node: '>=9.4.0 || ^8.9.4'}
-
-  once@1.4.0:
-    resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
   option@0.2.4:
     resolution: {integrity: sha512-pkEqbDyl8ou5cpq+VsnQbe/WlEy5qS7xPzMS1U55OCG9KPvwFD46zDbxQIj3egJSFc3D+XhYOPUzz49zQAVy7A==}
@@ -1917,12 +1858,6 @@ packages:
     resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
     engines: {node: '>=0.10.0'}
 
-  prebuild-install@7.1.3:
-    resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
-    engines: {node: '>=10'}
-    deprecated: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
-    hasBin: true
-
   pretty-bytes@5.6.0:
     resolution: {integrity: sha512-FFw039TmrBqFK8ma/7OL3sDz/VytdtJr044/QUJtH0wK9lb9jLq9tJyIxUwtQJHwar2BqtiA4iCWSwo9JLkzFg==}
     engines: {node: '>=6'}
@@ -1934,9 +1869,6 @@ packages:
     resolution: {integrity: sha512-7PiHtLll5LdnKIMw100I+8xJXR5gW2QwWYkT6iJva0bXitZKa/XMrSbdmg3r2Xnaidz9Qumd0VPaMrZlF9V9sA==}
     engines: {node: '>=0.4.0'}
 
-  pump@3.0.4:
-    resolution: {integrity: sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA==}
-
   quickjs-emscripten-core@0.31.0:
     resolution: {integrity: sha512-oQz8p0SiKDBc1TC7ZBK2fr0GoSHZKA0jZIeXxsnCyCs4y32FStzCW4d1h6E1sE0uHDMbGITbk2zhNaytaoJwXQ==}
 
@@ -1944,16 +1876,8 @@ packages:
     resolution: {integrity: sha512-K7Yt78aRPLjPcqv3fIuLW1jW3pvwO21B9pmFOolsjM/57ZhdVXBr51GqJpalgBlkPu9foAvhEAuuQPnvIGvLvQ==}
     engines: {node: '>=16.0.0'}
 
-  rc@1.2.8:
-    resolution: {integrity: sha512-y3bGgqKj3QBdxLbLkomlohkvsA8gdAiUQlSBJnBhfn+BPxg4bc62d8TcBW15wavDfgexCgccckhcZvywyQYPOw==}
-    hasBin: true
-
   readable-stream@2.3.8:
     resolution: {integrity: sha512-8p0AUk4XODgIewSi0l8Epjs+EVnWiK7NoDIEGU0HhE7+ZyY8D1IMY7odu5lRrFXGg71L15KG8QrPmum45RTtdA==}
-
-  readable-stream@3.6.2:
-    resolution: {integrity: sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==}
-    engines: {node: '>= 6'}
 
   reinterval@1.1.0:
     resolution: {integrity: sha512-QIRet3SYrGp0HUHO88jVskiG6seqUGC5iAG7AwI/BV4ypGcuqk9Du6YQBUOUqm9c8pw1eyLoIaONifRua1lsEQ==}
@@ -1992,12 +1916,6 @@ packages:
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
-  simple-concat@1.0.1:
-    resolution: {integrity: sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q==}
-
-  simple-get@4.0.1:
-    resolution: {integrity: sha512-brv7p5WgH0jmQJr1ZDDfKDOSeWWg+OVypG99A/5vYGPqJ6pxiaHLy8nxtFjBA7oMa01ebA9gfh1uMCFqOuXxvA==}
-
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
@@ -2030,20 +1948,9 @@ packages:
     resolution: {integrity: sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==}
     engines: {node: '>=8'}
 
-  strip-json-comments@2.0.1:
-    resolution: {integrity: sha512-4gB8na07fecVVkOI6Rs4e7T6NOTki5EmL7TUduTs6bu3EdnSycntVJ4re8kgZA+wx9IueI2Y11bfbgwtzuE0KQ==}
-    engines: {node: '>=0.10.0'}
-
   supports-color@7.2.0:
     resolution: {integrity: sha512-qpCAvRl9stuOHveKsn7HncJRvv501qIacKzQlO/+Lwxc9+0q2wLyv4Dfvt80/DPn2pqOBsJdDiogXGR9+OvwRw==}
     engines: {node: '>=8'}
-
-  tar-fs@2.1.5:
-    resolution: {integrity: sha512-OboTd8mmMhZDNPV+UjQcK9yKAatXu2aJ+r1w4im1Otd4M4fl2hwvdoXUxIYHFTHWK/3y3FarBP70v3vwmGlOxw==}
-
-  tar-stream@2.2.0:
-    resolution: {integrity: sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ==}
-    engines: {node: '>=6'}
 
   text-kit@4.5.1:
     resolution: {integrity: sha512-f6Q0eXek4NuPh+PX1TnOpXXaFKmQRbvTFPBJsQUIfEoU2O15JajAU7XVNu55yDdSg/uPP89IRNZYA/3XPaPioQ==}
@@ -2077,9 +1984,6 @@ packages:
     resolution: {integrity: sha512-Yiex1Ovn8z2xPpOWckIiysV1SSyRMY9BkLF++q0yKiDxCqRhosKfMg3janKkiLBwZ5c/YryloKwGZcrEmtwxKw==}
     engines: {node: '>=18.0.0'}
     hasBin: true
-
-  tunnel-agent@0.6.0:
-    resolution: {integrity: sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w==}
 
   turbo@2.11.11:
     resolution: {integrity: sha512-AI4UJbUE/2cVZdoXJ4PODc8qvrjhQQX9Fa93eKGOI6Ims/w7+kUIb9T1jhlgSnZcf+gtUruci/ohSwqtNNC5Yw==}
@@ -2197,9 +2101,6 @@ packages:
 
   word-extractor@1.0.4:
     resolution: {integrity: sha512-PyAGZQ2gjnVA5kcZAOAxoYciCMaAvu0dbVlw/zxHphhy+3be8cDeYKHJPO8iedIM3Sx0arA/ugKTJyXhZNgo6g==}
-
-  wrappy@1.0.2:
-    resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
   ws@8.22.0:
     resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
@@ -2453,441 +2354,428 @@ snapshots:
     dependencies:
       '@lit-labs/ssr-dom-shim': 1.6.0
 
-  '@loomwork/agent-surface@0.1.1(@loomwork/workflow-runtime@0.1.1)':
+  '@loomwork/agent-surface@0.1.2(@loomwork/workflow-runtime@0.1.2)':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
     optionalDependencies:
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/workflow-runtime': 0.1.2
 
-  '@loomwork/agent@0.1.1':
+  '@loomwork/agent@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/reasoning': 0.1.1
-      '@loomwork/scheduler': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/memory': 0.1.2
+      '@loomwork/reasoning': 0.1.2
+      '@loomwork/scheduler': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/analytics@0.1.1':
+  '@loomwork/analytics@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/verify': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/verify': 0.1.2
 
-  '@loomwork/app@0.1.1':
+  '@loomwork/app@0.1.2':
     dependencies:
-      '@loomwork/agent': 0.1.1
-      '@loomwork/agent-surface': 0.1.1(@loomwork/workflow-runtime@0.1.1)
-      '@loomwork/classify': 0.1.1
-      '@loomwork/compliance': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/dispatcher': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/knowledge': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/middleware': 0.1.1
-      '@loomwork/orchestration': 0.1.1
-      '@loomwork/plugin-a2a': 0.1.1
-      '@loomwork/plugin-crypto': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
-      '@loomwork/telemetry': 0.1.1
-      '@loomwork/verify': 0.1.1
-      '@loomwork/worker-runtime-local': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/agent': 0.1.2
+      '@loomwork/agent-surface': 0.1.2(@loomwork/workflow-runtime@0.1.2)
+      '@loomwork/classify': 0.1.2
+      '@loomwork/compliance': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/dispatcher': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/knowledge': 0.1.2
+      '@loomwork/memory': 0.1.2
+      '@loomwork/middleware': 0.1.2
+      '@loomwork/orchestration': 0.1.2
+      '@loomwork/plugin-a2a': 0.1.2
+      '@loomwork/plugin-crypto': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
+      '@loomwork/telemetry': 0.1.2
+      '@loomwork/verify': 0.1.2
+      '@loomwork/worker-runtime-local': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/appgen@0.1.1':
+  '@loomwork/appgen@0.1.2':
     dependencies:
-      '@loomwork/scaffold': 0.1.1
+      '@loomwork/scaffold': 0.1.2
       typescript: 5.9.3
 
-  '@loomwork/blueprint-runtime@0.1.1':
+  '@loomwork/blueprint-runtime@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/scheduler': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/scheduler': 0.1.2
 
-  '@loomwork/classify@0.1.1':
+  '@loomwork/classify@0.1.2':
     dependencies:
       zod: 3.25.76
 
-  '@loomwork/cli@0.1.1(vite@5.4.21(@types/node@22.20.5))':
+  '@loomwork/cli@0.1.2(vite@5.4.21(@types/node@22.20.5))':
     dependencies:
-      '@loomwork/analytics': 0.1.1
-      '@loomwork/app': 0.1.1
-      '@loomwork/appgen': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/compliance': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/deploy-sim': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/eval': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/knowledge': 0.1.1
-      '@loomwork/learning': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/orchestration': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
-      '@loomwork/plugin-kit': 0.1.1
-      '@loomwork/plugin-sqlite': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/scaffold': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
-      '@loomwork/spec': 0.1.1(vite@5.4.21(@types/node@22.20.5))
-      '@loomwork/verify': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/analytics': 0.1.2
+      '@loomwork/app': 0.1.2
+      '@loomwork/appgen': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/compliance': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/deploy-sim': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/eval': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/knowledge': 0.1.2
+      '@loomwork/learning': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/orchestration': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
+      '@loomwork/plugin-kit': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/scaffold': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
+      '@loomwork/spec': 0.1.2(vite@5.4.21(@types/node@22.20.5))
+      '@loomwork/verify': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
       zod: 3.25.76
     transitivePeerDependencies:
       - vite
 
-  '@loomwork/compiler@0.1.1(vite@5.4.21(@types/node@22.20.5))':
+  '@loomwork/compiler@0.1.2(vite@5.4.21(@types/node@22.20.5))':
     dependencies:
       magic-string: 0.30.21
       typescript: 5.9.3
     optionalDependencies:
       vite: 5.4.21(@types/node@22.20.5)
 
-  '@loomwork/compliance@0.1.1':
+  '@loomwork/compliance@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
 
-  '@loomwork/conformance@0.1.1(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))':
+  '@loomwork/conformance@0.1.2(vitest@2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0))':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/dispatcher': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
-      '@loomwork/sandbox': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
-      '@loomwork/worker-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/dispatcher': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
+      '@loomwork/sandbox': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
+      '@loomwork/worker-runtime': 0.1.2
       vitest: 2.1.9(@types/node@22.20.5)(happy-dom@20.14.6)(supports-color@7.2.0)
 
-  '@loomwork/conversation@0.1.1':
+  '@loomwork/conversation@0.1.2':
     dependencies:
-      '@loomwork/agent': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/agent': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/core@0.1.1':
+  '@loomwork/core@0.1.2':
     dependencies:
       ulid: 2.4.0
       zod: 3.25.76
 
-  '@loomwork/deploy-sim@0.1.1':
+  '@loomwork/deploy-sim@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/eval': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/eval': 0.1.2
 
-  '@loomwork/dispatcher@0.1.1':
+  '@loomwork/dispatcher@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/worker-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/worker-runtime': 0.1.2
 
-  '@loomwork/effect-runtime@0.1.1':
+  '@loomwork/effect-runtime@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/scheduler': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/scheduler': 0.1.2
 
-  '@loomwork/eval@0.1.1':
+  '@loomwork/eval@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
 
-  '@loomwork/event-runtime@0.1.1':
+  '@loomwork/event-runtime@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
+      '@loomwork/core': 0.1.2
 
-  '@loomwork/fair-scheduler@0.1.1':
+  '@loomwork/fair-scheduler@0.1.2':
     dependencies:
-      '@loomwork/scheduler': 0.1.1
+      '@loomwork/scheduler': 0.1.2
 
-  '@loomwork/knowledge@0.1.1':
+  '@loomwork/knowledge@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/verify': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/memory': 0.1.2
+      '@loomwork/verify': 0.1.2
 
-  '@loomwork/learning@0.1.1':
+  '@loomwork/learning@0.1.2':
     dependencies:
-      '@loomwork/analytics': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/verify': 0.1.1
+      '@loomwork/analytics': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/verify': 0.1.2
 
-  '@loomwork/llm@0.1.1':
+  '@loomwork/llm@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
 
-  '@loomwork/memory@0.1.1':
+  '@loomwork/memory@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
 
-  '@loomwork/middleware@0.1.1':
+  '@loomwork/middleware@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
 
-  '@loomwork/orchestration@0.1.1':
+  '@loomwork/orchestration@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/verify': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/verify': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
 
-  '@loomwork/plugin-a2a@0.1.1':
+  '@loomwork/plugin-a2a@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/plugin-content@0.1.1':
+  '@loomwork/plugin-content@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
 
-  '@loomwork/plugin-conversation-sse@0.1.1':
+  '@loomwork/plugin-conversation-sse@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/conversation': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/llm': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/conversation': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/llm': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
 
-  '@loomwork/plugin-crypto@0.1.1':
+  '@loomwork/plugin-crypto@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
 
-  '@loomwork/plugin-durable-state@0.1.1':
+  '@loomwork/plugin-durable-state@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/plugin-kit@0.1.1':
+  '@loomwork/plugin-kit@0.1.2':
     dependencies:
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
 
-  '@loomwork/plugin-mcp@0.1.1':
+  '@loomwork/plugin-mcp@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/plugin-postgres@0.1.1':
+  '@loomwork/plugin-postgres@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/plugin-durable-state': 0.1.1
-      '@loomwork/plugin-kit': 0.1.1
-      '@loomwork/plugin-read-model': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/memory': 0.1.2
+      '@loomwork/plugin-durable-state': 0.1.2
+      '@loomwork/plugin-kit': 0.1.2
+      '@loomwork/plugin-read-model': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
       pg: 8.23.1
     transitivePeerDependencies:
       - pg-native
 
-  '@loomwork/plugin-read-model@0.1.1':
+  '@loomwork/plugin-read-model@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
 
-  '@loomwork/plugin-renderer-terminal@0.1.1':
+  '@loomwork/plugin-renderer-terminal@0.1.2':
     dependencies:
-      '@loomwork/blueprint-runtime': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
+      '@loomwork/blueprint-runtime': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
 
-  '@loomwork/plugin-sandbox@0.1.1':
+  '@loomwork/plugin-sandbox@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/sandbox': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/sandbox': 0.1.2
       quickjs-emscripten: 0.31.0
       zod: 3.25.76
 
-  '@loomwork/plugin-sqlite@0.1.1':
+  '@loomwork/projection-runtime@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
-      '@loomwork/plugin-durable-state': 0.1.1
-      '@loomwork/plugin-kit': 0.1.1
-      '@loomwork/plugin-read-model': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
-      better-sqlite3: 11.10.0
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
 
-  '@loomwork/projection-runtime@0.1.1':
+  '@loomwork/reasoning@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/llm': 0.1.2
 
-  '@loomwork/reasoning@0.1.1':
+  '@loomwork/replay-vm@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/llm': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
 
-  '@loomwork/replay-vm@0.1.1':
+  '@loomwork/sandbox@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-
-  '@loomwork/sandbox@0.1.1':
-    dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
       zod: 3.25.76
 
-  '@loomwork/scaffold@0.1.1': {}
+  '@loomwork/scaffold@0.1.2': {}
 
-  '@loomwork/scheduler@0.1.1': {}
+  '@loomwork/scheduler@0.1.2': {}
 
-  '@loomwork/snapshot-runtime@0.1.1':
+  '@loomwork/snapshot-runtime@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
 
-  '@loomwork/spec@0.1.1(vite@5.4.21(@types/node@22.20.5))':
+  '@loomwork/spec@0.1.2(vite@5.4.21(@types/node@22.20.5))':
     dependencies:
-      '@loomwork/compiler': 0.1.1(vite@5.4.21(@types/node@22.20.5))
-      '@loomwork/dispatcher': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/memory': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/sandbox': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
-      '@loomwork/wire-abi': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/compiler': 0.1.2(vite@5.4.21(@types/node@22.20.5))
+      '@loomwork/dispatcher': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/memory': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/sandbox': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
+      '@loomwork/wire-abi': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
     transitivePeerDependencies:
       - vite
 
-  '@loomwork/telemetry@0.1.1':
+  '@loomwork/telemetry@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
 
   '@loomwork/ui-core@0.1.2':
     dependencies:
-      '@loomwork/blueprint-runtime': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
+      '@loomwork/blueprint-runtime': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
       zod: 3.25.76
 
   '@loomwork/ui-hydration@0.1.2':
     dependencies:
-      '@loomwork/agent': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/plugin-mcp': 0.1.1
-      '@loomwork/plugin-sandbox': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
+      '@loomwork/agent': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/plugin-mcp': 0.1.2
+      '@loomwork/plugin-sandbox': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
       '@loomwork/ui-core': 0.1.2
 
   '@loomwork/ui-lineage@0.1.2':
     dependencies:
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
       '@loomwork/ui-core': 0.1.2
       zod: 3.25.76
 
   '@loomwork/ui-planner@0.1.2':
     dependencies:
-      '@loomwork/blueprint-runtime': 0.1.1
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/learning': 0.1.1
-      '@loomwork/plugin-content': 0.1.1
+      '@loomwork/blueprint-runtime': 0.1.2
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/learning': 0.1.2
+      '@loomwork/plugin-content': 0.1.2
       '@loomwork/ui-core': 0.1.2
       '@loomwork/ui-hydration': 0.1.2
       zod: 3.25.76
 
   '@loomwork/ui-renderer-lit@0.1.2':
     dependencies:
-      '@loomwork/blueprint-runtime': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
+      '@loomwork/blueprint-runtime': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
       '@loomwork/ui-core': 0.1.2
       lit: 3.3.3
 
   '@loomwork/ui-renderer-terminal@0.1.2':
     dependencies:
-      '@loomwork/blueprint-runtime': 0.1.1
-      '@loomwork/plugin-renderer-terminal': 0.1.1
-      '@loomwork/projection-runtime': 0.1.1
+      '@loomwork/blueprint-runtime': 0.1.2
+      '@loomwork/plugin-renderer-terminal': 0.1.2
+      '@loomwork/projection-runtime': 0.1.2
       '@loomwork/ui-core': 0.1.2
       '@loomwork/ui-hydration': 0.1.2
 
-  '@loomwork/verify@0.1.1': {}
+  '@loomwork/verify@0.1.2': {}
 
-  '@loomwork/wire-abi@0.1.1':
+  '@loomwork/wire-abi@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
 
-  '@loomwork/worker-runtime-local@0.1.1':
+  '@loomwork/worker-runtime-local@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
-      '@loomwork/worker-runtime': 0.1.1
-      '@loomwork/workflow-runtime': 0.1.1
+      '@loomwork/core': 0.1.2
+      '@loomwork/worker-runtime': 0.1.2
+      '@loomwork/workflow-runtime': 0.1.2
 
-  '@loomwork/worker-runtime@0.1.1':
+  '@loomwork/worker-runtime@0.1.2':
     dependencies:
-      '@loomwork/core': 0.1.1
+      '@loomwork/core': 0.1.2
 
-  '@loomwork/workflow-runtime@0.1.1':
+  '@loomwork/workflow-runtime@0.1.2':
     dependencies:
-      '@loomwork/classify': 0.1.1
-      '@loomwork/core': 0.1.1
-      '@loomwork/effect-runtime': 0.1.1
-      '@loomwork/event-runtime': 0.1.1
-      '@loomwork/replay-vm': 0.1.1
-      '@loomwork/scheduler': 0.1.1
-      '@loomwork/snapshot-runtime': 0.1.1
+      '@loomwork/classify': 0.1.2
+      '@loomwork/core': 0.1.2
+      '@loomwork/effect-runtime': 0.1.2
+      '@loomwork/event-runtime': 0.1.2
+      '@loomwork/replay-vm': 0.1.2
+      '@loomwork/scheduler': 0.1.2
+      '@loomwork/snapshot-runtime': 0.1.2
       ulid: 2.4.0
 
   '@minimistjs/subarg@1.0.0':
@@ -3121,21 +3009,6 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  better-sqlite3@11.10.0:
-    dependencies:
-      bindings: 1.5.0
-      prebuild-install: 7.1.3
-
-  bindings@1.5.0:
-    dependencies:
-      file-uri-to-path: 1.0.0
-
-  bl@4.1.0:
-    dependencies:
-      buffer: 5.7.1
-      inherits: 2.0.4
-      readable-stream: 3.6.2
-
   buffer-crc32@0.2.13: {}
 
   buffer-image-size@0.6.4:
@@ -3174,8 +3047,6 @@ snapshots:
   char-spinner@1.0.1: {}
 
   check-error@2.1.3: {}
-
-  chownr@1.1.4: {}
 
   cli-table3@0.6.5:
     dependencies:
@@ -3216,17 +3087,9 @@ snapshots:
     optionalDependencies:
       supports-color: 7.2.0
 
-  decompress-response@6.0.0:
-    dependencies:
-      mimic-response: 3.1.0
-
   deep-eql@5.0.2: {}
 
-  deep-extend@0.6.0: {}
-
   delayed-stream@1.0.0: {}
-
-  detect-libc@2.1.2: {}
 
   dingbat-to-unicode@1.0.2: {}
 
@@ -3241,10 +3104,6 @@ snapshots:
       gopd: 1.2.0
 
   emoji-regex@8.0.0: {}
-
-  end-of-stream@1.4.5:
-    dependencies:
-      once: 1.4.0
 
   entities@7.0.1: {}
 
@@ -3324,15 +3183,11 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.9
 
-  expand-template@2.0.3: {}
-
   expect-type@1.4.0: {}
 
   fd-slicer@1.1.0:
     dependencies:
       pend: 1.2.0
-
-  file-uri-to-path@1.0.0: {}
 
   form-data@4.0.6:
     dependencies:
@@ -3341,8 +3196,6 @@ snapshots:
       es-set-tostringtag: 2.1.0
       hasown: 2.0.4
       mime-types: 2.1.35
-
-  fs-constants@1.0.0: {}
 
   fsevents@2.3.3:
     optional: true
@@ -3366,8 +3219,6 @@ snapshots:
     dependencies:
       dunder-proto: 1.0.1
       es-object-atoms: 1.1.2
-
-  github-from-package@0.0.0: {}
 
   gopd@1.2.0: {}
 
@@ -3419,8 +3270,6 @@ snapshots:
   immediate@3.0.6: {}
 
   inherits@2.0.4: {}
-
-  ini@1.3.8: {}
 
   is-fullwidth-code-point@3.0.0: {}
 
@@ -3496,31 +3345,17 @@ snapshots:
     dependencies:
       mime-db: 1.52.0
 
-  mimic-response@3.1.0: {}
-
   minimist@1.2.8: {}
-
-  mkdirp-classic@0.5.3: {}
 
   ms@2.1.3: {}
 
   nanoid@3.3.20: {}
-
-  napi-build-utils@2.0.0: {}
-
-  node-abi@3.101.0:
-    dependencies:
-      semver: 7.8.5
 
   node-addon-api@8.9.2: {}
 
   node-gyp-build@4.8.4: {}
 
   on-net-listen@1.1.2: {}
-
-  once@1.4.0:
-    dependencies:
-      wrappy: 1.0.2
 
   option@0.2.4: {}
 
@@ -3598,31 +3433,11 @@ snapshots:
     dependencies:
       xtend: 4.0.2
 
-  prebuild-install@7.1.3:
-    dependencies:
-      detect-libc: 2.1.2
-      expand-template: 2.0.3
-      github-from-package: 0.0.0
-      minimist: 1.2.8
-      mkdirp-classic: 0.5.3
-      napi-build-utils: 2.0.0
-      node-abi: 3.101.0
-      pump: 3.0.4
-      rc: 1.2.8
-      simple-get: 4.0.1
-      tar-fs: 2.1.5
-      tunnel-agent: 0.6.0
-
   pretty-bytes@5.6.0: {}
 
   process-nextick-args@2.0.1: {}
 
   progress@2.0.3: {}
-
-  pump@3.0.4:
-    dependencies:
-      end-of-stream: 1.4.5
-      once: 1.4.0
 
   quickjs-emscripten-core@0.31.0:
     dependencies:
@@ -3636,13 +3451,6 @@ snapshots:
       '@jitl/quickjs-wasmfile-release-sync': 0.31.0
       quickjs-emscripten-core: 0.31.0
 
-  rc@1.2.8:
-    dependencies:
-      deep-extend: 0.6.0
-      ini: 1.3.8
-      minimist: 1.2.8
-      strip-json-comments: 2.0.1
-
   readable-stream@2.3.8:
     dependencies:
       core-util-is: 1.0.3
@@ -3650,12 +3458,6 @@ snapshots:
       isarray: 1.0.0
       process-nextick-args: 2.0.1
       safe-buffer: 5.1.2
-      string_decoder: 1.1.1
-      util-deprecate: 1.0.2
-
-  readable-stream@3.6.2:
-    dependencies:
-      inherits: 2.0.4
       string_decoder: 1.1.1
       util-deprecate: 1.0.2
 
@@ -3713,14 +3515,6 @@ snapshots:
 
   siginfo@2.0.0: {}
 
-  simple-concat@1.0.1: {}
-
-  simple-get@4.0.1:
-    dependencies:
-      decompress-response: 6.0.0
-      once: 1.4.0
-      simple-concat: 1.0.1
-
   source-map-js@1.2.2: {}
 
   split2@4.2.0: {}
@@ -3747,26 +3541,9 @@ snapshots:
     dependencies:
       ansi-regex: 5.0.1
 
-  strip-json-comments@2.0.1: {}
-
   supports-color@7.2.0:
     dependencies:
       has-flag: 4.0.0
-
-  tar-fs@2.1.5:
-    dependencies:
-      chownr: 1.1.4
-      mkdirp-classic: 0.5.3
-      pump: 3.0.4
-      tar-stream: 2.2.0
-
-  tar-stream@2.2.0:
-    dependencies:
-      bl: 4.1.0
-      end-of-stream: 1.4.5
-      fs-constants: 1.0.0
-      inherits: 2.0.4
-      readable-stream: 3.6.2
 
   text-kit@4.5.1: {}
 
@@ -3789,10 +3566,6 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
-
-  tunnel-agent@0.6.0:
-    dependencies:
-      safe-buffer: 5.1.2
 
   turbo@2.11.11:
     optionalDependencies:
@@ -3897,8 +3670,6 @@ snapshots:
     dependencies:
       saxes: 5.0.1
       yauzl: 2.10.0
-
-  wrappy@1.0.2: {}
 
   ws@8.22.0: {}
 
