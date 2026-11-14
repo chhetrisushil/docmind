@@ -111,7 +111,7 @@ From loom-ui it takes:
 - the Lit renderer for the web
 - the terminal renderer, used in tests
 
-Both come from npm: `@loomwork/*` and `@loomwork/ui-*`, at `^0.1.0`, locked in `pnpm-lock.yaml`.
+Both come from npm: `@loomwork/*` and `@loomwork/ui-*` at the `next` dist-tag (`.pnpmfile.cjs` applies it to transitive `@loomwork` dependencies too), locked in `pnpm-lock.yaml`.
 
 ## 5. Data architecture
 

@@ -17,7 +17,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
-    "@loomwork/plugin-crypto": "^0.1.0",
+    "@loomwork/plugin-crypto": "next",
     "pg": "^8.13.0"
   }
 }
