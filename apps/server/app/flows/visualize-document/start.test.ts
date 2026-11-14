@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { LineErasedError } from "@loom-ui/lineage";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
-import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
+import { LineErasedError } from "@loomwork/ui-lineage";
+import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { FieldKeyStoreError } from "../../crypto/fields";
@@ -435,8 +435,8 @@ describe("IngestStatus onReady starts the visualize flow", () => {
 
 describe("a start still pending when the cancel runs", () => {
   it("leaves no live execution: settle lets the start land, then the cancel ends it", async () => {
-    const { InMemoryLineageStore, Lineage } = await import("@loom-ui/lineage");
-    const { InMemoryContentStore } = await import("@loom/plugin-content");
+    const { InMemoryLineageStore, Lineage } = await import("@loomwork/ui-lineage");
+    const { InMemoryContentStore } = await import("@loomwork/plugin-content");
     const hang = new Promise<never>(() => {});
     const flow = visualizeDocumentFlow();
     const app = buildApp({ kind: "memory" }, undefined, {

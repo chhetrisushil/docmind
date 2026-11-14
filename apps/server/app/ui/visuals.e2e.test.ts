@@ -8,10 +8,10 @@ import {
   visualCapabilities,
 } from "@docmind/experiences";
 import type { UiReaders } from "@docmind/experiences";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { declaredToolClassesFrom } from "@loom-ui/planner";
-import { ReferencePlanner } from "@loom-ui/planner";
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { declaredToolClassesFrom } from "@loomwork/ui-planner";
+import { ReferencePlanner } from "@loomwork/ui-planner";
 import { describe, expect, it, vi } from "vitest";
 import type { Fact } from "../flows/visualize-document/facts";
 import { commitPlan } from "../flows/visualize-document/lineage";

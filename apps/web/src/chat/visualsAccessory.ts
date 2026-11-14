@@ -1,4 +1,4 @@
-import type { ChatEntryAccessories, ChatEntryRef } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryAccessories, ChatEntryRef } from "@loomwork/ui-renderer-lit/chat";
 import type { VisualsView } from "./visuals";
 
 /** The element the page puts under a reply: `<dm-turn-visuals>` in the app, a stand-in in tests. */

@@ -28,7 +28,7 @@ import {
   type ViewName,
   VisualizeTurnResponse,
 } from "@docmind/contracts";
-import type { HandleLoadRequest } from "@loom-ui/hydration/client";
+import type { HandleLoadRequest } from "@loomwork/ui-hydration/client";
 import { ApiError, type Http, apiErrorFrom } from "./http";
 
 const qs = (o: Record<string, string | number | undefined>): string => {

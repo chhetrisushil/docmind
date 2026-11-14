@@ -5,8 +5,8 @@ import {
   type ProviderSpec,
   type SemanticNode,
   genesis,
-} from "@loom-ui/core";
-import { seal } from "@loom-ui/core/log";
+} from "@loomwork/ui-core";
+import { seal } from "@loomwork/ui-core/log";
 import { type EntryName, entryVersion } from "./catalog";
 
 export type Child = SemanticNode | ContainerNode;

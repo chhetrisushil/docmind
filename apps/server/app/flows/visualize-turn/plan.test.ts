@@ -1,4 +1,4 @@
-import { type Planner, ReferencePlanner } from "@loom-ui/planner";
+import { type Planner, ReferencePlanner } from "@loomwork/ui-planner";
 import { describe, expect, it } from "vitest";
 import { recording, scriptedPlannerModel } from "../visualize-document/testing";
 import { TURN_INTENT, planTurn } from "./plan";

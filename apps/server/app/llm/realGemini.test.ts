@@ -1,5 +1,5 @@
 import { LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { VisionReader } from "../flows/ingest-document/vision";
 import { createRoleProvider } from "./factory";

@@ -1,6 +1,6 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
+import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";

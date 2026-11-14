@@ -1,4 +1,4 @@
-import { tool$ } from "@loom/core";
+import { tool$ } from "@loomwork/core";
 import { z } from "zod";
 import type { Passage, PassageReader, Retriever } from "../retrieval";
 import { SECTION_MAX_CHARS, SECTION_MAX_CHUNKS } from "../retrieval/passages";

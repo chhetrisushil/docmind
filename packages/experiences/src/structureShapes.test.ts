@@ -1,4 +1,4 @@
-import { DiagramValue, MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
+import { DiagramValue, MAX_DIAGRAM_NODES, diagramProblems } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import {
   entityMapDiagram,

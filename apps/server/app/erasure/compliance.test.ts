@@ -1,10 +1,10 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SubjectIndex } from "@loom/compliance";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { SubjectIndex } from "@loomwork/compliance";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
 import { legacyChatConversationId } from "../chats/ids";
 import { loomWarn } from "../config";

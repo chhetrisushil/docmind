@@ -1,5 +1,5 @@
 import type { ChunkVectorStore } from "@docmind/vector-pg";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import type { IngestStartInput } from "../flow";
 import {
   LINK_STEP_TIMEOUT_MS,

@@ -1,5 +1,5 @@
 import type { ChatSessionDto, DocumentDto, DocumentPassage } from "@docmind/contracts";
-import { checkKindValue, tableRowProblems } from "@loom-ui/core";
+import { checkKindValue, tableRowProblems } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { formatBytes } from "./format";
 import { shape } from "./reshapers";

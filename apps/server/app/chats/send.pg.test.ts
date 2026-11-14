@@ -5,8 +5,8 @@ import {
   InvalidTurnError,
   QueueFullError,
   SubscriberLimitError,
-} from "@loom/conversation";
-import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
+} from "@loomwork/conversation";
+import { InboxClosedError, InboxFullError } from "@loomwork/workflow-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";

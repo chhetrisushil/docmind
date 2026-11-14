@@ -1,4 +1,4 @@
-import type { ConversationReader, HistoryEntry } from "@loom/conversation";
+import type { ConversationReader, HistoryEntry } from "@loomwork/conversation";
 import type { Pool } from "pg";
 import type { ChatIdResolver } from "../../chats/chatIds";
 import { citeReply, documentTitles } from "../../chats/citations";

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Identity } from "@docmind/auth";
-import { ExecutionDeniedError, type WorkflowRuntime } from "@loom/workflow-runtime";
+import { ExecutionDeniedError, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../config";
 import { FieldKeyStoreError } from "../crypto/fields";

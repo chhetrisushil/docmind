@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore, isKeyUnavailable } from "@loom/event-runtime";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore, isKeyUnavailable } from "@loomwork/event-runtime";
 import {
   EncryptingEventStore,
   InMemoryKeyStore,
   PayloadShreddedError,
   isShredded,
-} from "@loom/plugin-crypto";
+} from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { legacyIds } from "../opaqueIds";
 import { subjectOfExecution } from "../subject";

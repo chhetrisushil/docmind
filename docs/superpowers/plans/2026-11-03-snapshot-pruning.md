@@ -6,7 +6,7 @@
 
 **Architecture:** A `snapshots/pruner.ts` module holds the sweep (page the `u_…` executions, keep chat conversations, call `prune(id)` for each, under a session advisory lock) and an interval runner modelled on `documents/sweeper.ts`. `snapshots/pgPruner.ts` binds it to production: Loom's `LogLifecycle.pruneSnapshots(id, { keepLatest: 1 })` over the RAW stores, on a `LogLifecycle` built WITHOUT `compactionExempt`, and a session advisory lock on the Loom pool. `bootIngest` starts it after listen and drains it with the upload sweeper at shutdown.
 
-**Tech Stack:** TypeScript (ESM), Node >= 22.13, vitest 2, node-postgres, Loom `@loom/workflow-runtime` (`LogLifecycle`, SnapshotStore SPI 1.3.0), pnpm + turbo, biome.
+**Tech Stack:** TypeScript (ESM), Node >= 22.13, vitest 2, node-postgres, Loom `@loomwork/workflow-runtime` (`LogLifecycle`, SnapshotStore SPI 1.3.0), pnpm + turbo, biome.
 
 **Spec:** `docs/specs/2026-11-03-snapshot-pruning-design.md`
 
@@ -636,7 +636,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Test: `apps/server/app/snapshots/prune.e2e.pg.test.ts`
 
 **Interfaces:**
-- Consumes: `SnapshotPruneDeps`, `sweepChatSnapshots` (Task 2); `pgSessionLock` (Task 1); `DurableStorage` from `apps/server/app/storage.ts` (`raw.eventStore`, `raw.snapshotStore`, `pool`); `LogLifecycle` from `@loom/workflow-runtime`.
+- Consumes: `SnapshotPruneDeps`, `sweepChatSnapshots` (Task 2); `pgSessionLock` (Task 1); `DurableStorage` from `apps/server/app/storage.ts` (`raw.eventStore`, `raw.snapshotStore`, `pool`); `LogLifecycle` from `@loomwork/workflow-runtime`.
 - Produces: `export const SNAPSHOT_PRUNE_LOCK_KEY = "docmind:snapshot-prune";` and `export function snapshotPruneDeps(durable: Pick<DurableStorage, "raw" | "pool">): SnapshotPruneDeps` from `apps/server/app/snapshots/pgPruner.ts`.
 
 - [ ] **Step 1: Write the failing acceptance test**
@@ -806,7 +806,7 @@ Expected: FAIL, `Failed to resolve import "./pgPruner"`.
 Create `apps/server/app/snapshots/pgPruner.ts`:
 
 ```ts
-import { LogLifecycle } from "@loom/workflow-runtime";
+import { LogLifecycle } from "@loomwork/workflow-runtime";
 import { pgSessionLock } from "../db/sessionLock";
 import type { DurableStorage } from "../storage";
 import type { SnapshotPruneDeps } from "./pruner";

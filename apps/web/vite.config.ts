@@ -25,8 +25,8 @@ export default defineConfig({
     outDir: "dist",
     sourcemap: false,
     rollupOptions: {
-      // `node:crypto` in the bundle means a Node-only loom-ui entry (the main entry of @loom-ui/core or the root of
-      // @loom-ui/hydration) was imported by mistake: fail the build instead of shipping a broken page.
+      // `node:crypto` in the bundle means a Node-only loom-ui entry (the main entry of @loomwork/ui-core or the root of
+      // @loomwork/ui-hydration) was imported by mistake: fail the build instead of shipping a broken page.
       onwarn(warning, handler) {
         if (/externalized for browser compatibility/.test(warning.message)) {
           throw new Error(`the web bundle must be browser-clean: ${warning.message}`);

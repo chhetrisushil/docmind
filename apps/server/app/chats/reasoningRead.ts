@@ -1,7 +1,11 @@
 import type { ChatReasoningDto, ReasoningResponse } from "@docmind/contracts";
-import { unwrapTainted } from "@loom/classify";
-import { type Conversations, generationId, parseCursor } from "@loom/conversation";
-import { type ReasoningLogReader, type ReasoningStepRead, readReasoningBounded } from "@loom/llm";
+import { unwrapTainted } from "@loomwork/classify";
+import { type Conversations, generationId, parseCursor } from "@loomwork/conversation";
+import {
+  type ReasoningLogReader,
+  type ReasoningStepRead,
+  readReasoningBounded,
+} from "@loomwork/llm";
 import type { ChatReasoningStore } from "./reasoningStore";
 import type { ChatRef } from "./turnItems";
 

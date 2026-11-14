@@ -1,4 +1,4 @@
-import type { Effect, EffectContext } from "@loom/effect-runtime";
+import type { Effect, EffectContext } from "@loomwork/effect-runtime";
 
 type SummarizerInput = { messages: { role: string; content?: unknown }[] };
 type SummarizerOutput = { summary?: string };

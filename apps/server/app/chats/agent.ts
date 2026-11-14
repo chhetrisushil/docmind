@@ -3,9 +3,9 @@ import {
   type ConversationFlow,
   type ConversationHub,
   conversation$,
-} from "@loom/conversation";
-import { agent$ } from "@loom/core";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+} from "@loomwork/conversation";
+import { agent$ } from "@loomwork/core";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_MODEL_TOOL_ID } from "./ids";
 import { CHAT_TOOL_DEFS } from "./tools";
 

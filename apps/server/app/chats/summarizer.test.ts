@@ -1,4 +1,4 @@
-import type { Effect, EffectContext } from "@loom/effect-runtime";
+import type { Effect, EffectContext } from "@loomwork/effect-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { tolerantSummarizer } from "./summarizer";
 

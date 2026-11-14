@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryContentStore } from "@loom/plugin-content";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { legacyIds } from "../../opaqueIds";

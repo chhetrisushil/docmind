@@ -1,7 +1,7 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { PayloadShreddedError, shredSubject } from "@loom/plugin-crypto";
-import { PostgresEventStore } from "@loom/plugin-postgres";
+import { PayloadShreddedError, shredSubject } from "@loomwork/plugin-crypto";
+import { PostgresEventStore } from "@loomwork/plugin-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "./db/migrate";

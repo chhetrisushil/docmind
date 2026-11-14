@@ -13,16 +13,16 @@
   },
   "dependencies": {
     "@docmind/contracts": "workspace:*",
-    "@loom-ui/core": "*",
-    "@loom-ui/hydration": "*",
-    "@loom-ui/planner": "*",
-    "@loom/blueprint-runtime": "*",
-    "@loom/core": "*",
+    "@loomwork/ui-core": "*",
+    "@loomwork/ui-hydration": "*",
+    "@loomwork/ui-planner": "*",
+    "@loomwork/blueprint-runtime": "*",
+    "@loomwork/core": "*",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@loom-ui/renderer-terminal": "*",
-    "@loom/projection-runtime": "*",
+    "@loomwork/ui-renderer-terminal": "*",
+    "@loomwork/projection-runtime": "*",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
   }

@@ -1,4 +1,4 @@
-import type { ProviderSpec } from "@loom-ui/core";
+import type { ProviderSpec } from "@loomwork/ui-core";
 
 export const LIST_CAP = 200;
 export const CHAT_LIST_CAP = 50;

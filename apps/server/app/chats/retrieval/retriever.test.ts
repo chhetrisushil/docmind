@@ -1,6 +1,6 @@
 import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import { InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import { describe, expect, it } from "vitest";
 import type { LinkKind } from "../../flows/ingest-document/pgLinks";
 import type { LinkHop } from "./links";

@@ -10,8 +10,8 @@ import {
   compile,
   genesis,
   replay,
-} from "@loom-ui/core";
-import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loom-ui/hydration";
+} from "@loomwork/ui-core";
+import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loomwork/ui-hydration";
 import { describe, expect, it } from "vitest";
 import { SOURCES_VIEW } from "./a2ui";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";

@@ -19,8 +19,8 @@ type Claim = {
   };
 };
 const seen = vi.hoisted(() => [] as Claim[]);
-vi.mock("@loom/workflow-runtime", async (orig) => ({
-  ...(await orig<typeof import("@loom/workflow-runtime")>()),
+vi.mock("@loomwork/workflow-runtime", async (orig) => ({
+  ...(await orig<typeof import("@loomwork/workflow-runtime")>()),
   collectGhostLeases: vi.fn(async () => 0),
   recoverAbandoned: vi.fn(async (_rt: unknown, options: Claim) => {
     seen.push(options);
@@ -28,7 +28,7 @@ vi.mock("@loom/workflow-runtime", async (orig) => ({
   }),
 }));
 
-import { FlowCodeMismatchError } from "@loom/workflow-runtime";
+import { FlowCodeMismatchError } from "@loomwork/workflow-runtime";
 import { isRecoverableChatExecution, legacyChatConversationId } from "../../chats/ids";
 import { recoverIngest } from "./recovery";
 

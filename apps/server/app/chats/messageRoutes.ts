@@ -7,8 +7,8 @@ import {
   InvalidTurnError,
   QueueFullError,
   SubscriberLimitError,
-} from "@loom/conversation";
-import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
+} from "@loomwork/conversation";
+import { InboxClosedError, InboxFullError } from "@loomwork/workflow-runtime";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";

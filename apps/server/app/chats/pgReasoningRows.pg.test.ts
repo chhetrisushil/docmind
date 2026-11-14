@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { sealReasoningText } from "@loom/llm";
+import { sealReasoningText } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withTenant } from "../db/tenant";
 import { PG_URL } from "../db/testSupport";

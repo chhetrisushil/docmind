@@ -1,17 +1,21 @@
 import { ChatStreamEvent } from "@docmind/contracts";
-import { TABLE_ROW_ACTION, compileFingerprint, tableRowProblems } from "@loom-ui/core/browser";
-import { ChatFeed } from "@loom-ui/core/chat";
+import { TABLE_ROW_ACTION, compileFingerprint, tableRowProblems } from "@loomwork/ui-core/browser";
+import { ChatFeed } from "@loomwork/ui-core/chat";
 import {
   CHAT_REF_OPEN_ACTION,
   chatMarkdownLines,
   parseChatMarkdown,
   resolveMdMarkers,
   splitRefMarkers,
-} from "@loom-ui/core/chat-ui";
-import { HydrationStore } from "@loom-ui/hydration/client";
-import { type DomRenderHandle, litRegistry, renderBlueprintDom } from "@loom-ui/renderer-lit/dom";
-import "@loom-ui/renderer-lit/elements/lu-note";
-import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
+} from "@loomwork/ui-core/chat-ui";
+import { HydrationStore } from "@loomwork/ui-hydration/client";
+import {
+  type DomRenderHandle,
+  litRegistry,
+  renderBlueprintDom,
+} from "@loomwork/ui-renderer-lit/dom";
+import "@loomwork/ui-renderer-lit/elements/lu-note";
+import { InMemoryProjectionRuntime } from "@loomwork/projection-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { report } from "./report";
 
@@ -66,7 +70,7 @@ describe("the web scaffold", () => {
     handle.dispose();
   });
 
-  it("resolves the chat fold entry of @loom-ui/core", () => {
+  it("resolves the chat fold entry of @loomwork/ui-core", () => {
     const feed = new ChatFeed({ mode: "owner", reasoning: true });
     feed.applyEvent("status", { state: "open", running: true });
     expect(feed.value().running).toBe(true);

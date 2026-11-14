@@ -1,7 +1,7 @@
 import type { ChatScope, ChatToolStep } from "@docmind/contracts";
 import type { VectorScope } from "@docmind/vector-pg";
-import { type TaintedValue, tainted } from "@loom/classify";
-import { type EffectContext, ToolEffect } from "@loom/effect-runtime";
+import { type TaintedValue, tainted } from "@loomwork/classify";
+import { type EffectContext, ToolEffect } from "@loomwork/effect-runtime";
 import type { ZodType, ZodTypeDef } from "zod";
 import type { ChatBus } from "../bus";
 import { type Passage, SearchUnavailableError } from "../retrieval";

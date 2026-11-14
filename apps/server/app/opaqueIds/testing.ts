@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { UserIds, legacyIds } from "./ids";
 import type { HandleStore } from "./opaqueIds";
 import { HandleMismatchError, OpaqueIds } from "./opaqueIds";

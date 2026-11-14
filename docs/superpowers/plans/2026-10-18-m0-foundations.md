@@ -4,9 +4,9 @@
 
 **Goal:** Stand up the DocMind repo so that `main` has a green, CI-gated pnpm/Turborepo workspace with a Loom-scaffolded server answering `/healthz`, the zod HTTP contracts for auth, documents and chats, and a migration runner plus row-level-security tenancy tables proven isolated by a test that runs as a non-owner Postgres role.
 
-**Architecture:** A pnpm workspace (`apps/server`, `packages/contracts`, `infra/`) that consumes the unpublished `@loom/*` packages from a sibling `../loom` checkout through `link:` overrides. The server is a `create-loom-app` project (composition root in `loom.config.ts`) with a small `node:http` edge on top. Tenancy is enforced by Postgres RLS: the server connects as `docmind_app` (owns nothing, cannot bypass RLS) and every request runs inside `withTenant`, which sets a transaction-local tenant id.
+**Architecture:** A pnpm workspace (`apps/server`, `packages/contracts`, `infra/`) that consumes the unpublished `@loomwork/*` packages from a sibling `../loom` checkout through `link:` overrides. The server is a `create-loom-app` project (composition root in `loom.config.ts`) with a small `node:http` edge on top. Tenancy is enforced by Postgres RLS: the server connects as `docmind_app` (owns nothing, cannot bypass RLS) and every request runs inside `withTenant`, which sets a transaction-local tenant id.
 
-**Tech Stack:** pnpm 9.14.4, Turborepo ^2.3.3, Biome 1.9.4, TypeScript ^5.6.3 (CommonJS, like Loom), Vitest ^2.1.8, zod ^3.23.8 (Loom's version), `pg` ^8.13.0 (the driver `@loom/plugin-postgres` uses), Node >=20 (local is v24), Postgres 16 + pgvector for CI and docker-compose.
+**Tech Stack:** pnpm 9.14.4, Turborepo ^2.3.3, Biome 1.9.4, TypeScript ^5.6.3 (CommonJS, like Loom), Vitest ^2.1.8, zod ^3.23.8 (Loom's version), `pg` ^8.13.0 (the driver `@loomwork/plugin-postgres` uses), Node >=20 (local is v24), Postgres 16 + pgvector for CI and docker-compose.
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md` (§3 layout, §4.2-4.3 tables and RLS, §8 gates/CI/PR rules, §9 M0). Executors read both documents.
 
@@ -36,10 +36,10 @@ Everything below was checked on this machine on 2026-10-18; the code in this pla
 | Loom `main` HEAD, pushed to `origin/main`, is `8f9eab2492c85bb994d746855f06d2eccc9f45db` | `git rev-parse HEAD origin/main`; used as the initial `LOOM_REF` |
 | CI therefore needs a **`LOOM_TOKEN` repository secret**: a token with read access to `chhetrisushil/loom` (fine-grained PAT, "Contents: read", that one repo) | the same convention loom-ui's CI uses (`/Users/such/workspace/loom-ui/.github/workflows/ci.yml`) |
 | Loom checkout pattern: `actions/checkout` docmind into `path: docmind`, loom into `path: loom`, build loom (`pnpm install --frozen-lockfile && pnpm build`), then docmind | loom-ui `ci.yml`; `../loom` resolves from `docmind/` because both live in `$GITHUB_WORKSPACE` |
-| `@loom/*` is consumed with `"*"` dependencies plus `pnpm.overrides` of the form `"@loom/app": "link:../loom/packages/app"` in the **root** `package.json` | loom-examples and loom-ui `package.json`; the scaffolder emits the same shape |
-| Loom's vitest pattern: `resolve.conditions` including `require` (Loom's `exports` map declares only `require` and `types`), and `@loom/*` externalized | `loom-examples`, scaffolder `vitest.config.ts`, aetherOS `apps/war-room/vitest.config.ts` |
-| `@loom/plugin-postgres` uses **`pg`** (`"pg": "^8.13.0"`, `"@types/pg": "^8.11.0"`), not postgres.js | `/Users/such/workspace/loom/plugins/postgres/package.json`; aetherOS war-room uses the same |
-| `defineConfig` (`@loom/app`) exposes **no HTTP server**; `@loom/plugin-conversation-sse` creates **its own** `http.Server` on its own port (`createConversationSseServer(...).http`, `server.ts:667`) and exports no mountable handler | `grep` of `packages/app/src/defineConfig.ts` and `plugins/conversation-sse/src/server.ts` |
+| `@loomwork/*` is consumed with `"*"` dependencies plus `pnpm.overrides` of the form `"@loomwork/app": "link:../loom/packages/app"` in the **root** `package.json` | loom-examples and loom-ui `package.json`; the scaffolder emits the same shape |
+| Loom's vitest pattern: `resolve.conditions` including `require` (Loom's `exports` map declares only `require` and `types`), and `@loomwork/*` externalized | `loom-examples`, scaffolder `vitest.config.ts`, aetherOS `apps/war-room/vitest.config.ts` |
+| `@loomwork/plugin-postgres` uses **`pg`** (`"pg": "^8.13.0"`, `"@types/pg": "^8.11.0"`), not postgres.js | `/Users/such/workspace/loom/plugins/postgres/package.json`; aetherOS war-room uses the same |
+| `defineConfig` (`@loomwork/app`) exposes **no HTTP server**; `@loomwork/plugin-conversation-sse` creates **its own** `http.Server` on its own port (`createConversationSseServer(...).http`, `server.ts:667`) and exports no mountable handler | `grep` of `packages/app/src/defineConfig.ts` and `plugins/conversation-sse/src/server.ts` |
 | So `/healthz` is served by a ~20-line `node:http` router, no framework | aetherOS war-room (`apps/war-room/src/server/http.ts`) also uses bare `node:http` `createServer` |
 | Loom test style: Postgres suites are gated on an env var and skip cleanly (`LOOM_TEST_POSTGRES_URL`); DocMind uses `DOCMIND_TEST_PG_URL` the same way | `plugins/postgres/src/conformance.test.ts` |
 | **Turborepo strict env mode hides env vars from tasks.** Without `"env": ["DOCMIND_TEST_PG_URL"]` on the `test` task, `pnpm test` silently skipped every Postgres suite even with the variable exported | observed while building PR 4a; fixed in `turbo.json` |
@@ -59,9 +59,9 @@ Run: `node /Users/such/workspace/loom/tools/create-loom-app/dist/index.js <scrat
 | `app/main.ts` | **Replaced**: starts the HTTP server instead of running the greet flow once |
 | `app/middleware.ts` | **Dropped** (`retryMiddleware`); come back with the first effect |
 | `app/flows/greet/flow.ts`, `app/greet.test.ts` | **Dropped** (demo flow) |
-| `package.json` | **Rewritten**: `"*"` for `@loom/app`, `@loom/effect-runtime`, `@loom/workflow-runtime`, `@loom/cli`; removed unused `@loom/agent-surface`, `@loom/core`, `@loom/middleware`, `@loom/testing`, `zod`; added `build`/`typecheck`/`typecheck:tests`/`gen` scripts and `@types/node`. The **75-entry `pnpm.overrides` block moves to the repo root and shrinks to the 4 packages actually imported** |
+| `package.json` | **Rewritten**: `"*"` for `@loomwork/app`, `@loomwork/effect-runtime`, `@loomwork/workflow-runtime`, `@loomwork/cli`; removed unused `@loomwork/agent-surface`, `@loomwork/core`, `@loomwork/middleware`, `@loomwork/testing`, `zod`; added `build`/`typecheck`/`typecheck:tests`/`gen` scripts and `@types/node`. The **75-entry `pnpm.overrides` block moves to the repo root and shrinks to the 4 packages actually imported** |
 | `tsconfig.json` | **Replaced** by one that extends `tsconfig.base.json`, plus a new `tsconfig.test.json` (the scaffold's config typechecks tests inside the build config, which `typecheck:tests` must keep separate) |
-| `vitest.config.ts` | **Kept and extended**: same `require` condition, plus `node` and `@loom/` externalization (the war-room pattern) |
+| `vitest.config.ts` | **Kept and extended**: same `require` condition, plus `node` and `@loomwork/` externalization (the war-room pattern) |
 | `README.md` | **Dropped** (the real README is M7 PR 47) |
 
 Scaffolder surprises worth knowing: it targets a standalone app (relative `link:` paths computed from the app directory, a `loom.gen.ts` imported by `config.ts`, demo principal `{ actor: "demo-user", tenant: "demo" }`), so it needs adapting for a monorepo; `security.strict` refuses to start without the four security pieces, which is why `security.ts` stays.
@@ -147,7 +147,7 @@ This PR has no behavior to test-drive; its verification is that the tools instal
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: root scripts `build`, `test`, `typecheck`, `typecheck:tests`, `lint`, `lint:fix` (all later PRs and CI call these); Turbo tasks of the same names, where `build`/`typecheck`/`typecheck:tests`/`test` depend on `^build`; `tsconfig.base.json` that every package extends; the `link:` overrides for `@loom/app`, `@loom/cli`, `@loom/effect-runtime`, `@loom/workflow-runtime` (add an override here whenever a later PR imports another `@loom/*` package).
+- Produces: root scripts `build`, `test`, `typecheck`, `typecheck:tests`, `lint`, `lint:fix` (all later PRs and CI call these); Turbo tasks of the same names, where `build`/`typecheck`/`typecheck:tests`/`test` depend on `^build`; `tsconfig.base.json` that every package extends; the `link:` overrides for `@loomwork/app`, `@loomwork/cli`, `@loomwork/effect-runtime`, `@loomwork/workflow-runtime` (add an override here whenever a later PR imports another `@loomwork/*` package).
 
 - [ ] **Step 1: Create the branch**
 
@@ -197,10 +197,10 @@ dist
   },
   "pnpm": {
     "overrides": {
-      "@loom/app": "link:../loom/packages/app",
-      "@loom/cli": "link:../loom/tools/cli",
-      "@loom/effect-runtime": "link:../loom/packages/effect-runtime",
-      "@loom/workflow-runtime": "link:../loom/packages/workflow-runtime"
+      "@loomwork/app": "link:../loom/packages/app",
+      "@loomwork/cli": "link:../loom/tools/cli",
+      "@loomwork/effect-runtime": "link:../loom/packages/effect-runtime",
+      "@loomwork/workflow-runtime": "link:../loom/packages/workflow-runtime"
     }
   }
 }
@@ -378,12 +378,12 @@ git switch -c feat/m0-scaffold-server
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loom/app": "*",
-    "@loom/effect-runtime": "*",
-    "@loom/workflow-runtime": "*"
+    "@loomwork/app": "*",
+    "@loomwork/effect-runtime": "*",
+    "@loomwork/workflow-runtime": "*"
   },
   "devDependencies": {
-    "@loom/cli": "*",
+    "@loomwork/cli": "*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
     "vitest": "^2.1.8"
@@ -419,15 +419,15 @@ git switch -c feat/m0-scaffold-server
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: { conditions: ["node", "require", "default"] },
-  test: { environment: "node", server: { deps: { external: [/@loom\//, /[\\/]loom[\\/]/] } } },
+  test: { environment: "node", server: { deps: { external: [/@loomwork\//, /[\\/]loom[\\/]/] } } },
 });
 ```
 
 - [ ] **Step 6: Install and check the Loom links**
 
-Run: `pnpm install && ls -l apps/server/node_modules/@loom`
+Run: `pnpm install && ls -l apps/server/node_modules/@loomwork`
 Expected: four symlinks, e.g. `app -> ../../../../../loom/packages/app`, `cli -> ../../../../../loom/tools/cli`, `effect-runtime -> ...`, `workflow-runtime -> ...`. If a link is missing, the matching override in the root `package.json` is wrong.
 
 ### Task 3: `/healthz` (test first)
@@ -537,7 +537,7 @@ EOF
 - Create: `apps/server/app/main.ts`
 
 **Interfaces:**
-- Consumes: `createHttpServer()` (Task 3); `defineConfig` from `@loom/app`.
+- Consumes: `createHttpServer()` (Task 3); `defineConfig` from `@loomwork/app`.
 - Produces: `app` (the Loom app) exported from `app/config.ts` and as the default export of `loom.config.ts`; `authorizer`, `executionAuthorizer`, `principalCodec`, `resumeAuthenticator` from `app/security.ts`; `pnpm --filter @docmind/server start` listening on `HOST:PORT` (defaults `127.0.0.1:3000`).
 
 - [ ] **Step 1: Create `apps/server/loom.config.ts`**
@@ -550,13 +550,13 @@ export { app as default } from "./app/config";
 
 ```ts
 import { createHash } from "node:crypto";
-import { GrantTable, type PrincipalChain } from "@loom/effect-runtime";
+import { GrantTable, type PrincipalChain } from "@loomwork/effect-runtime";
 import {
   type ExecutionAuthorizer,
   type PrincipalCodec,
   executionAccessPolicy,
   signedResumeAuthenticator,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 
 // What `security.strict` refuses to start without. M0 has no flows, so the grant table is empty;
 // every flow added later lists the tool ids it may run here (a step id doubles as its tool id).
@@ -591,7 +591,7 @@ export const resumeAuthenticator = signedResumeAuthenticator({
 - [ ] **Step 3: Create `apps/server/app/config.ts`**
 
 ```ts
-import { defineConfig } from "@loom/app";
+import { defineConfig } from "@loomwork/app";
 import {
   agentModules,
   flowModules,
@@ -735,7 +735,7 @@ git switch -c feat/m0-ci-infra
 - [ ] **Step 2: Create `.github/workflows/ci.yml`**
 
 ```yaml
-# DocMind consumes the sibling ../loom checkout via pnpm.overrides (link:), because @loom/* is not
+# DocMind consumes the sibling ../loom checkout via pnpm.overrides (link:), because @loomwork/* is not
 # published. CI therefore checks loom out NEXT TO this repo at a pinned ref, builds it, then builds,
 # typechecks, lints and tests DocMind against it. The same pattern as loom-ui.
 #
@@ -1734,13 +1734,13 @@ Replace `apps/server/package.json` with:
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loom/app": "*",
-    "@loom/effect-runtime": "*",
-    "@loom/workflow-runtime": "*",
+    "@loomwork/app": "*",
+    "@loomwork/effect-runtime": "*",
+    "@loomwork/workflow-runtime": "*",
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@loom/cli": "*",
+    "@loomwork/cli": "*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
     "vitest": "^2.1.8",
@@ -1779,13 +1779,13 @@ Replace `apps/server/vitest.config.ts` with:
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  // @loom/* publish require-only `exports`; resolve them the same way under Vite.
+  // @loomwork/* publish require-only `exports`; resolve them the same way under Vite.
   resolve: { conditions: ["node", "require", "default"] },
   // Suites share cluster-wide state (the docmind_app role), so test files run one at a time.
   test: {
     environment: "node",
     fileParallelism: false,
-    server: { deps: { external: [/@loom\//, /[\\/]loom[\\/]/] } },
+    server: { deps: { external: [/@loomwork\//, /[\\/]loom[\\/]/] } },
   },
 });
 ```
@@ -2317,13 +2317,13 @@ Replace `apps/server/package.json` with:
     "db:migrate": "tsx app/db/migrate.ts"
   },
   "dependencies": {
-    "@loom/app": "*",
-    "@loom/effect-runtime": "*",
-    "@loom/workflow-runtime": "*",
+    "@loomwork/app": "*",
+    "@loomwork/effect-runtime": "*",
+    "@loomwork/workflow-runtime": "*",
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@loom/cli": "*",
+    "@loomwork/cli": "*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
     "vitest": "^2.1.8",

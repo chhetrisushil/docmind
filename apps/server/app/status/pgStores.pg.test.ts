@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { foldedStates } from "@loom/plugin-read-model";
+import { foldedStates } from "@loomwork/plugin-read-model";
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../db/migrate";

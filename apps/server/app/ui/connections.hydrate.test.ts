@@ -6,7 +6,7 @@ import {
   type SemanticNode,
   genesis,
   replay,
-} from "@loom-ui/core";
+} from "@loomwork/ui-core";
 import { describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError } from "../crypto/fields";
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";

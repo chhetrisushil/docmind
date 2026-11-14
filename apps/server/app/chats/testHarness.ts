@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Identity } from "@docmind/auth";
-import { ConversationHub } from "@loom/conversation";
-import type { EventStore } from "@loom/event-runtime";
-import { captureReasoning } from "@loom/llm";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
+import { ConversationHub } from "@loomwork/conversation";
+import type { EventStore } from "@loomwork/event-runtime";
+import { captureReasoning } from "@loomwork/llm";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
 import { Pool } from "pg";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";

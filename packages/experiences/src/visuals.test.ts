@@ -7,8 +7,8 @@ import {
   formatTimeLabel,
   isTimeFormat,
   widgetRefProblems,
-} from "@loom-ui/core";
-import { jsonPathSelect } from "@loom-ui/hydration";
+} from "@loomwork/ui-core";
+import { jsonPathSelect } from "@loomwork/ui-hydration";
 import { describe, expect, it, vi } from "vitest";
 import { INVOKE_ID, createInvoker } from "./invoker";
 import { PINS } from "./providers";

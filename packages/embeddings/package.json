@@ -25,11 +25,11 @@
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loom/memory": "*",
+    "@loomwork/memory": "*",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@loom/conformance": "*",
+    "@loomwork/conformance": "*",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
   }

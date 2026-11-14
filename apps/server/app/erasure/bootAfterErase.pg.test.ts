@@ -1,9 +1,9 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { RECORD_SOURCE } from "@loom/conversation";
-import { type EventEnvelope, projection$ } from "@loom/core";
-import { PayloadShreddedError, isShredded } from "@loom/plugin-crypto";
-import { ReadModelService } from "@loom/plugin-read-model";
+import { RECORD_SOURCE } from "@loomwork/conversation";
+import { type EventEnvelope, projection$ } from "@loomwork/core";
+import { PayloadShreddedError, isShredded } from "@loomwork/plugin-crypto";
+import { ReadModelService } from "@loomwork/plugin-read-model";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {

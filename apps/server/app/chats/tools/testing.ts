@@ -1,5 +1,5 @@
 import type { ChatScope } from "@docmind/contracts";
-import type { EffectContext } from "@loom/effect-runtime";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { ChatBus, type LiveChatEvent } from "../bus";
 import type { Passage } from "../retrieval";
 import { C, FakeItems, T, U, modelCtx } from "../testing";

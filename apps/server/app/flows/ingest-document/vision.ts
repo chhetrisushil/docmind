@@ -1,4 +1,4 @@
-import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { type LlmProvider, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 import { z } from "zod";
 import { PermanentIngestError } from "./errors";
 import { jsonAnswer } from "./llmJson";

@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { HashingEmbeddingProvider } from "@loom/memory";
+import { HashingEmbeddingProvider } from "@loomwork/memory";
 
 export interface FakeOllama {
   url: string;

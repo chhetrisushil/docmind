@@ -1,10 +1,10 @@
+import { type LlmProvider, guardRequest } from "@loomwork/llm";
 import {
   MIN_DECISION_KEY_BYTES,
   type Planner,
   type PlannerModel,
   ReferencePlanner,
-} from "@loom-ui/planner";
-import { type LlmProvider, guardRequest } from "@loom/llm";
+} from "@loomwork/ui-planner";
 import { StartupConfigError } from "../../startupError";
 
 const KEY_VARIABLE = "DOCMIND_PLANNER_DECISION_KEY";

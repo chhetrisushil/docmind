@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { conversationIdOf } from "@loom/conversation";
-import type { EffectContext } from "@loom/effect-runtime";
+import { conversationIdOf } from "@loomwork/conversation";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { chatIdOfConversation, isChatFlowId } from "./ids";
 import type { ChatRef } from "./turnItems";
 

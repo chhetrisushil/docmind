@@ -7,8 +7,8 @@ import {
   SubscriberLimitError,
   followConversation,
   parseCursor,
-} from "@loom/conversation";
-import { SseSink, frame } from "@loom/plugin-conversation-sse";
+} from "@loomwork/conversation";
+import { SseSink, frame } from "@loomwork/plugin-conversation-sse";
 import { withTenant } from "../db/tenant";
 import { type Schedule, intervalSchedule } from "../documents/events";
 import { requireAuth } from "../http/requireAuth";

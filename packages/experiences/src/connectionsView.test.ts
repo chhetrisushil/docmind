@@ -8,8 +8,8 @@ import {
   compile,
   genesis,
   replay,
-} from "@loom-ui/core";
-import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loom-ui/hydration";
+} from "@loomwork/ui-core";
+import { HYDRATION_PROJECTION_ID, HYDRATION_PROJECTION_VERSION } from "@loomwork/ui-hydration";
 import { describe, expect, it, vi } from "vitest";
 import { connectionsProvider } from "./connections";
 import type { RawConnections, UiReaders } from "./invoker";

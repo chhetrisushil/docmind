@@ -1,13 +1,13 @@
-import { registerLineageSensitivePaths } from "@loom-ui/lineage";
-import type { PrincipalCryptoOptions, StorageConfig } from "@loom/app";
-import type { ContentStore } from "@loom/plugin-content";
+import type { PrincipalCryptoOptions, StorageConfig } from "@loomwork/app";
+import type { ContentStore } from "@loomwork/plugin-content";
 import {
   EncryptingContentStore,
   EncryptingEventStore,
   EncryptingSnapshotStore,
   type KeyStore,
-} from "@loom/plugin-crypto";
-import { PostgresTimerStore, postgresStorage } from "@loom/plugin-postgres";
+} from "@loomwork/plugin-crypto";
+import { PostgresTimerStore, postgresStorage } from "@loomwork/plugin-postgres";
+import { registerLineageSensitivePaths } from "@loomwork/ui-lineage";
 import { Pool } from "pg";
 import { SummaryChoiceEventStore } from "./chats/summaryChoice";
 import { SENSITIVE_EVENT_PATHS } from "./sensitive";

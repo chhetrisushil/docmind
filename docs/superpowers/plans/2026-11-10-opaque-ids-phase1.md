@@ -6,7 +6,7 @@
 
 **Architecture:** One module, `apps/server/app/opaqueIds/`, builds and parses every id family in both formats. A new-format id is `h_<H>` for the user (`H` = a 128-bit handle from the user's id key, stored in `users.id_handle`) plus `base32(IV || AES-256-CTR(uuid))` tokens (a synthetic-IV seal under keys derived from the user's data key); generation, run and ordinal stay in the clear. Synchronous parsers read a process-wide in-memory key cache that boot warms, that every async entry point fills on a miss, and that never needs a key for classification, generation or the erasure subject. SQL stops building ids: the application stores each document's current ingest and visualize execution ids in two new `documents` columns. Erasure covers both id formats and both Loom subjects (the user's UUID and `h_<H>`).
 
-**Tech Stack:** TypeScript, Node `crypto` (HKDF, HMAC-SHA256, AES-256-CTR), Postgres (RLS, `withTenant`, SECURITY DEFINER functions), Loom (`@loom/plugin-crypto` KeyStore and encrypting stores, `@loom/compliance` subject index, `@loom/plugin-read-model`), vitest, pnpm/turbo, biome.
+**Tech Stack:** TypeScript, Node `crypto` (HKDF, HMAC-SHA256, AES-256-CTR), Postgres (RLS, `withTenant`, SECURITY DEFINER functions), Loom (`@loomwork/plugin-crypto` KeyStore and encrypting stores, `@loomwork/compliance` subject index, `@loomwork/plugin-read-model`), vitest, pnpm/turbo, biome.
 
 **Spec:** `docs/specs/2026-11-10-opaque-ids-design.md` (binding; read it first). Phase 2 (a separate later plan) switches the chat builders (conversation, chat-title, visualize-turn, turn lineage) and their call sites.
 
@@ -205,7 +205,7 @@ Modified: `subject.ts`, `erasure/{compliance,eraser,wire,pgSteps}.ts`, `status/{
 - Test: `apps/server/app/opaqueIds/siv.test.ts`, `apps/server/app/opaqueIds/opaqueIds.test.ts`
 
 **Interfaces:**
-- Consumes: `KeyStore` (`@loom/plugin-crypto`: `get`, `getOrCreate`, `wasDestroyed?`), `FieldKeyStoreError` and `FieldKeyUnavailableError` (`crypto/fields.ts`), `ORD_PATTERN` (`@docmind/contracts`), `LINEAGE_STREAM_PREFIX` (`@loom-ui/lineage`), `isValidConversationId` (`@loom/conversation`), `MAX_EXECUTION_ID_BYTES` (`@loom/plugin-postgres`).
+- Consumes: `KeyStore` (`@loomwork/plugin-crypto`: `get`, `getOrCreate`, `wasDestroyed?`), `FieldKeyStoreError` and `FieldKeyUnavailableError` (`crypto/fields.ts`), `ORD_PATTERN` (`@docmind/contracts`), `LINEAGE_STREAM_PREFIX` (`@loomwork/ui-lineage`), `isValidConversationId` (`@loomwork/conversation`), `MAX_EXECUTION_ID_BYTES` (`@loomwork/plugin-postgres`).
 - Produces (all from `apps/server/app/opaqueIds/index.ts`):
   - `class OpaqueIds { constructor(keys: Pick<KeyStore,"get"|"getOrCreate"|"wasDestroyed">, store: HandleStore, options?: { warmPage?: number }); ensureUser(who: {tenantId; userId}): Promise<UserIds>; ensureHandle(handle: string): Promise<UserIds | null>; load(who): Promise<boolean>; warm(): Promise<number>; cached(userId): UserIds | undefined; knows(handle): boolean; forget(userId): void; forgetSubject(subjectId): void; parse(id): ParsedId | null; parseLineage(id): ParsedId | null; handleOfId(id): string | null }`
   - `interface HandleStore { read(who); claim(who, handle): Promise<string>; userOf(handle): Promise<string | null>; page(after: string, limit: number): Promise<{userId; handle}[]> }`; `class HandleMismatchError`; `WARM_PAGE` (500), `WARM_CONCURRENCY` (8).
@@ -296,7 +296,7 @@ describe("the id key and the SIV token", () => {
 `apps/server/app/opaqueIds/opaqueIds.test.ts`:
 
 ```ts
-import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+import { MAX_EXECUTION_ID_BYTES } from "@loomwork/plugin-postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyUnavailableError } from "../crypto/fields";
 import { OpaqueIds, WARM_CONCURRENCY, legacyIds, opaqueIds } from "./index";
@@ -862,9 +862,9 @@ export function openToken(key: IdKey, family: TokenFamily, token: string): strin
 
 ```ts
 import { ORD_PATTERN } from "@docmind/contracts";
-import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
-import { isValidConversationId } from "@loom/conversation";
-import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";
+import { isValidConversationId } from "@loomwork/conversation";
+import { MAX_EXECUTION_ID_BYTES } from "@loomwork/plugin-postgres";
 import { type IdKey, TOKEN_LENGTH, sealToken } from "./siv";
 
 /** The canonical lower-case UUID source (8-4-4-4-12), defined once; `chats/ids.ts` re-exports it. */
@@ -1270,7 +1270,7 @@ export class UserIds {
 `apps/server/app/opaqueIds/opaqueIds.ts`:
 
 ```ts
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../crypto/fields";
 import {
   type IdFamily,
@@ -1597,7 +1597,7 @@ export const opaqueIds = {
 
 ```ts
 import { createHash } from "node:crypto";
-import { InMemoryKeyStore, type KeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { UserIds, legacyIds } from "./ids";
 import type { HandleStore } from "./opaqueIds";
 import { OpaqueIds } from "./opaqueIds";
@@ -1833,7 +1833,7 @@ describe.skipIf(!PG_URL)("users.id_handle and its lookups (needs DOCMIND_TEST_PG
 `apps/server/app/db/executionIds.pg.test.ts` (it uses the helpers added in step 5):
 
 ```ts
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
@@ -2539,7 +2539,7 @@ git commit -m "feat(ids): migration 0038, users.id_handle, stored execution ids,
 - Test: `apps/server/app/opaqueIds/prefixes.test.ts`, `apps/server/app/subject.test.ts`, `apps/server/app/erasure/compliance.test.ts`, `apps/server/app/erasure/eraser.test.ts`, `apps/server/app/erasure/wire.test.ts`, `apps/server/app/erasure/pgSteps.pg.test.ts`, `apps/server/app/status/forgetUser.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 (`opaqueIds.subjectOf`, `legacyIds`, `OpaqueIds.load/cached/forgetSubject`), `shredSubject` (`@loom/plugin-crypto`), `SubjectIndex` (`@loom/compliance`).
+- Consumes: Task 1 (`opaqueIds.subjectOf`, `legacyIds`, `OpaqueIds.load/cached/forgetSubject`), `shredSubject` (`@loomwork/plugin-crypto`), `SubjectIndex` (`@loomwork/compliance`).
 - Produces:
   - `opaqueIds/prefixes.ts`: `USER_ID_PREFIXES = ["u_", "h_"] as const`; `userPrefixes(userId: string, handle?: string | null): string[]`; `isOwnedBy(executionId: string, userId: string, handle?: string | null): boolean`; `listerPrefixes(userId, handle?): { exact: string[]; starts: string[] }`, `handleListerPrefixes(handle): { exact: string; starts: string[] }`.
   - `subjectOfExecution(e: { executionId: string }): string` (unchanged signature; now `opaqueIds.subjectOf`); `executionIdFor` stays exported (an alias of `legacyIds.named`) until Task 7.
@@ -3262,7 +3262,7 @@ Add `handleOf,` to the returned object, and replace the body of `rows` with:
 `apps/server/app/status/forgetUser.ts`: replace the top of the file (the lister type, `isUserExecution` and `userExecutionsInLog`) and the signature and body of `forgetUserRows` as follows; the doc comment above `forgetUserRows` gains "and, with a `handle`, the user's `h_<handle>` executions":
 
 ```ts
-import type { ReadModelEventSource, ReadModelService } from "@loom/plugin-read-model";
+import type { ReadModelEventSource, ReadModelService } from "@loomwork/plugin-read-model";
 import { isOwnedBy, userPrefixes } from "../opaqueIds";
 
 /** The user's rows of a model that are not yet tombstoned (their execution ids, never their state), under both id formats when the user has a handle. */
@@ -4524,7 +4524,7 @@ describe("candidates", () => {
 `apps/server/app/flows/suggest-tags/flowHash.test.ts`:
 
 ```ts
-import { flowContentHash } from "@loom/core";
+import { flowContentHash } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { suggestTagsFlow } from "./flow";
 
@@ -4547,7 +4547,7 @@ describe("the suggest-tags flow identity", () => {
 `apps/server/app/flows/chat-title/flowHash.test.ts`:
 
 ```ts
-import { flowContentHash } from "@loom/core";
+import { flowContentHash } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { chatTitleFlow } from "./flow";
 
@@ -5635,7 +5635,7 @@ const snippet = (body: string) =>
     new Map([
       [
         VIRTUAL,
-        `import type { WorkflowRuntime } from "@loom/workflow-runtime";
+        `import type { WorkflowRuntime } from "@loomwork/workflow-runtime";
          import { legacyIds } from "./opaqueIds";
          declare const rt: WorkflowRuntime; declare const flow: never; declare const user: string;
          export async function f() { ${body} }`,
@@ -5701,7 +5701,7 @@ describe("no id is built or parsed outside opaqueIds", () => {
     ["a conversation separator", "export const a = `${prefix}.c-${chat}`;"],
     ["a lineage template", "export const a = `visuals-${user}-${doc}`;"],
     ["a turn lineage regex", "export const a = new RegExp(`^turnvisuals-(${U})`);"],
-    ["the lineage stream prefix", 'import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";'],
+    ["the lineage stream prefix", 'import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";'],
   ])("flags %s (the scan is not blind)", (_name, body) => {
     expect(idShapesIn([], new Map([[join(APP, "__virtual__.ts"), body]]))).toEqual([
       "__virtual__.ts:1",

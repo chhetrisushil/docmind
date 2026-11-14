@@ -1,5 +1,5 @@
-import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loomwork/event-runtime";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../config";
 import { FieldCrypto } from "../crypto/fields";

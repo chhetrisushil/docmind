@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { FieldCrypto } from "../crypto/fields";

@@ -1,4 +1,4 @@
-import { compile } from "@loom-ui/core";
+import { compile } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { build, panel, tabs, widget } from "./compose";

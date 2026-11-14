@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { ChatMessageDto, ChatStreamEvent } from "@docmind/contracts";
-import { tainted } from "@loom/classify";
-import { withTurnScope } from "@loom/conversation";
-import { frame } from "@loom/plugin-conversation-sse";
+import { tainted } from "@loomwork/classify";
+import { withTurnScope } from "@loomwork/conversation";
+import { frame } from "@loomwork/plugin-conversation-sse";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, openSse } from "../documents/testHarness";

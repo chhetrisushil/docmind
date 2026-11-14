@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
 import { factFormatFingerprint } from "@docmind/experiences";
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import { describe, expect, it, vi } from "vitest";
 import { InMemoryProgressBus } from "../../documents/progress";
 import { OpaqueIds, opaqueIds } from "../../opaqueIds";

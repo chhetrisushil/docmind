@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { COMPOSE_SYSTEM } from "@loom-ui/planner";
-import { flowHashMatches } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { flowHashMatches } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { COMPOSE_SYSTEM } from "@loomwork/ui-planner";
 import { afterEach, describe, expect, it } from "vitest";
 import { recoveryOwns } from "../../bootIngest";
 import { legacyChatConversationId } from "../../chats/ids";

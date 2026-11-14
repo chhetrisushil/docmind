@@ -1,4 +1,4 @@
-import type { LlmStreamChunk } from "@loom/llm";
+import type { LlmStreamChunk } from "@loomwork/llm";
 import { LlmRequestError, LlmStreamError } from "./errors";
 import {
   type ContentBlock,

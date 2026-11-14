@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { replay } from "@loom-ui/core";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { registerLineageSensitivePaths } from "@loom-ui/lineage";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
 import {
   EncryptingContentStore,
   EncryptingEventStore,
   InMemoryKeyStore,
-} from "@loom/plugin-crypto";
+} from "@loomwork/plugin-crypto";
+import { replay } from "@loomwork/ui-core";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { registerLineageSensitivePaths } from "@loomwork/ui-lineage";
 import { describe, expect, it } from "vitest";
 import { subjectOfExecution } from "../../subject";
 import { TURN_INTENT } from "../visualize-turn/plan";

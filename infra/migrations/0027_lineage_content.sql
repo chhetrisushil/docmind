@@ -1,4 +1,4 @@
--- 0027: artifact blobs of the visuals lineages (@loom-ui/lineage over loom's ContentStore SPI; Ruling R17).
+-- 0027: artifact blobs of the visuals lineages (@loomwork/ui-lineage over loom's ContentStore SPI; Ruling R17).
 --
 -- Deliberately NOT tenant-scoped: loom's content API has no tenant (a blob is
 -- addressed by its hash alone, and a put of identical bytes is one row), so there is no tenant for a policy to

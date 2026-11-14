@@ -8,8 +8,8 @@ import type {
   Citation,
   ListMessagesResponse,
 } from "@docmind/contracts";
-import { ChatFeed } from "@loom-ui/core/chat";
-import type { ChatValue } from "@loom-ui/core/chat-ui";
+import { ChatFeed } from "@loomwork/ui-core/chat";
+import type { ChatValue } from "@loomwork/ui-core/chat-ui";
 
 /** What the feed's contract has no room for, kept beside it and keyed by the entry id the feed assigns. */
 export interface Extras {

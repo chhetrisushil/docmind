@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 
 const MIN_SECRET_CHARS = 12;
 const isEnvelope = (v: unknown): boolean =>

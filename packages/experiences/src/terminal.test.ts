@@ -1,7 +1,7 @@
 import type { DocumentDto } from "@docmind/contracts";
-import { HydrationStore, SplitHydrationController } from "@loom-ui/hydration";
-import { renderExperience } from "@loom-ui/renderer-terminal";
-import { InMemoryProjectionRuntime } from "@loom/projection-runtime";
+import { InMemoryProjectionRuntime } from "@loomwork/projection-runtime";
+import { HydrationStore, SplitHydrationController } from "@loomwork/ui-hydration";
+import { renderExperience } from "@loomwork/ui-renderer-terminal";
 import { describe, expect, it, vi } from "vitest";
 import type { UiReaders } from "./invoker";
 import { createViews } from "./views-api";

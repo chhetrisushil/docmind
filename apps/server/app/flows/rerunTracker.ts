@@ -1,4 +1,4 @@
-import type { ExecutionHandle } from "@loom/workflow-runtime";
+import type { ExecutionHandle } from "@loomwork/workflow-runtime";
 
 /** `-r<n>`: the execution-id patterns (status/model.ts, visualize-turn/ids.ts) allow 3 digits. */
 export const MAX_RERUNS = 999;

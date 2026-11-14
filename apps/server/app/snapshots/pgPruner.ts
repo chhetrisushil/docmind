@@ -1,4 +1,4 @@
-import { LogLifecycle } from "@loom/workflow-runtime";
+import { LogLifecycle } from "@loomwork/workflow-runtime";
 import { pgSessionLock } from "../db/sessionLock";
 import type { DurableStorage } from "../storage";
 import type { SnapshotPruneDeps } from "./pruner";

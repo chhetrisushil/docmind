@@ -1,5 +1,5 @@
 import type { ViewName } from "@docmind/contracts";
-import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loom-ui/core";
+import type { ContainerNode, Experience, ProviderSpec, SemanticNode } from "@loomwork/ui-core";
 import { CONTENT_VIEW, SOURCES_VIEW, SUMMARY_VIEW, TYPE_VIEW } from "./a2ui";
 import { type Child, build, panel, tabs, widget } from "./compose";
 import {

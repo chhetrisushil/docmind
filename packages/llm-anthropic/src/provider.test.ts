@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import type { LlmRequest } from "@loom/llm";
+import type { LlmRequest } from "@loomwork/llm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { LlmAbortedError, LlmRefusalError, LlmRequestError, LlmUnavailableError } from "./errors";

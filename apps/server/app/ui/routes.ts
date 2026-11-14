@@ -8,8 +8,8 @@ import {
 } from "@docmind/contracts";
 import { ORD_PATTERN, Uuid } from "@docmind/contracts";
 import { type UiReaders, type Views, documentsOfVisuals } from "@docmind/experiences";
-import type { Experience } from "@loom-ui/core";
-import type { Lineage } from "@loom-ui/lineage";
+import type { Experience } from "@loomwork/ui-core";
+import type { Lineage } from "@loomwork/ui-lineage";
 import type { ChatIdResolver } from "../chats/chatIds";
 import { getChat } from "../chats/sessions";
 import { withTenant } from "../db/tenant";

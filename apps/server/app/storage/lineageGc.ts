@@ -1,4 +1,4 @@
-import { type ContentStore, sweepUnpinnedContent } from "@loom/plugin-content";
+import { type ContentStore, sweepUnpinnedContent } from "@loomwork/plugin-content";
 import type { SessionLock } from "../db/sessionLock";
 import { StartupConfigError } from "../startupError";
 

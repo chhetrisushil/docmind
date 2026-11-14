@@ -1,6 +1,6 @@
 import type { ChatReasoningDto, ChatToolStep, Citation } from "@docmind/contracts";
-import { checkKindValue } from "@loom-ui/core/browser";
-import type { ChatValue } from "@loom-ui/core/chat-ui";
+import { checkKindValue } from "@loomwork/ui-core/browser";
+import type { ChatValue } from "@loomwork/ui-core/chat-ui";
 import { describe, expect, it } from "vitest";
 import type { Extras } from "./feedAdapter";
 import { toTranscript } from "./transcript";

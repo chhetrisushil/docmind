@@ -1,5 +1,5 @@
 import { ParseAbortedError } from "@docmind/parsers";
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { chunkDocument } from "../chunker";
 import type { IngestStartInput } from "../flow";
 import type { ChunkStore } from "../pgChunks";

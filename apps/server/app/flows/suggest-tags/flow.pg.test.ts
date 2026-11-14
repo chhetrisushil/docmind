@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentProgressEvent } from "@docmind/contracts";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider } from "@loom/llm";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { TagKeys } from "../../crypto/tagKeys";

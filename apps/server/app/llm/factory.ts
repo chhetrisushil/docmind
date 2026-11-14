@@ -1,5 +1,10 @@
 import { AnthropicMessagesProvider, type CallObserver } from "@docmind/llm-anthropic";
-import { GeminiProvider, type LlmCapabilities, type LlmProvider, OpenAiProvider } from "@loom/llm";
+import {
+  GeminiProvider,
+  type LlmCapabilities,
+  type LlmProvider,
+  OpenAiProvider,
+} from "@loomwork/llm";
 import type { ChatEffort } from "../chats/settings";
 import { StartupConfigError } from "../startupError";
 import { bounded } from "./bounded";

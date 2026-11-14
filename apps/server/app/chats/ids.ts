@@ -9,7 +9,7 @@ export const CHAT_FLOW_ID = "doc-chat";
 export const CHAT_GK_FLOW_ID = "doc-chat-gk";
 export const CHAT_TITLE_FLOW_ID = "chat-title";
 export const CHAT_MODEL_TOOL_ID = "chat-model";
-/** The rolling summary of evicted turns (`@loom/conversation` `budget.summarizerToolId`, Loom's `createSummarizerEffect`). */
+/** The rolling summary of evicted turns (`@loomwork/conversation` `budget.summarizerToolId`, Loom's `createSummarizerEffect`). */
 export const CHAT_SUMMARIZER_TOOL_ID = "chat-summarize";
 export const CHAT_TOOL_IDS = [
   "search_docs",

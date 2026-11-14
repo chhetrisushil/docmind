@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { ReasoningReader, ReasoningStore } from "@loom/llm";
+import type { ReasoningReader, ReasoningStore } from "@loomwork/llm";
 import { type FieldCrypto, FieldKeyUnavailableError } from "../crypto/fields";
 import { chatIdOfConversation } from "./ids";
 import { chatScope } from "./scope";

@@ -6,7 +6,7 @@ Date: 2026-11-08. Status: draft for review.
 
 Help a reader grasp a document faster by showing, next to its summary, the visuals that make it
 clearer than prose: its figures as charts and metric cards, and its key facts as tables. The visuals
-are composed by a model through loom-ui's planner (`@loom-ui/planner`), in **ambient** mode: a
+are composed by a model through loom-ui's planner (`@loomwork/ui-planner`), in **ambient** mode: a
 background Loom flow composes them after ingestion, outside any request, and the view replays the
 recorded result with no model call.
 
@@ -30,7 +30,7 @@ Sub-project 1 ships in three steps on one design:
 | V5 | A separate, closed catalogue `docmind.visuals.v1`; the M6 catalogue is untouched. |
 | V6 | Everything stored is per-user sealed: `visual_facts.fact_enc` under `FieldCrypto`, the lineage on the sealed event store. Erasure shreds it with the user's key. |
 | V7 | Gaps in loom-ui are closed generically in loom-ui first (M6 D11). Step (a) needs one (V8); step (c) needs another. |
-| V8 | **Prerequisite.** `@loom-ui/lineage` streams (`__loom_ui_lineage__:*`) sit in loom's reserved namespace, which `shredSubject` refuses, and lineage stores artifacts in the content store without per-subject access. Step (a) waits for a generic loom / loom-ui change that makes a lineage line erasable with its subject: events sealed under the subject's key and artifacts stored under the subject's content access. It has its own spec. |
+| V8 | **Prerequisite.** `@loomwork/ui-lineage` streams (`__loom_ui_lineage__:*`) sit in loom's reserved namespace, which `shredSubject` refuses, and lineage stores artifacts in the content store without per-subject access. Step (a) waits for a generic loom / loom-ui change that makes a lineage line erasable with its subject: events sealed under the subject's key and artifacts stored under the subject's content access. It has its own spec. |
 | V9 | The Visuals tab is part of a per-document detail experience: the static detail view plus a "Visuals" panel holding the planner's nodes and providers, compiled per (document, visuals head) and cached. loom-ui has no experience-in-experience embedding. |
 | V10 | `visualize-document` starts when the ingest-status fold turns a document `ready`, plus a boot sweep for ready documents without a visualize execution. The start is idempotent through its execution id. |
 
@@ -169,7 +169,7 @@ once the documents whose last run ended `visuals-model-unavailable`. A permanent
 execution's log; the paths of the planner's recorded choice that hold ops and summary are added to
 `SENSITIVE_EVENT_PATHS` in the same PR, and the raw-event content proof covers the new flow.
 
-**Lineage** (after V8). `@loom-ui/lineage` with `eventStoreLineageStore` over DocMind's sealed
+**Lineage** (after V8). `@loomwork/ui-lineage` with `eventStoreLineageStore` over DocMind's sealed
 Postgres event store, and the erasable-line mechanism V8 delivers. Experience id
 `visuals-<userId>-<documentId>` (ids only). First version: `start(genesis, by)` then `compose({
 expectedHead, ops, by, summary, summaryClass })`, each op wrapped as a `RecordedOperation { op, by, at
@@ -194,7 +194,7 @@ retry once, then fail.
 - Status reaches the browser over SSE (`GET /api/documents/events`), not a poll.
   `DocumentProgressEvent` gains an optional `visuals: "ready"`; when `visualize-document` commits a
   head, the server sends it, and the open detail page calls `ViewSession.reload()` (which re-GETs
-  the view), not `invalidate()`. `@loom-ui/changes` is deferred to step (b).
+  the view), not `invalidate()`. `@loomwork/ui-changes` is deferred to step (b).
 
 ## 8. Failure, erasure, testing
 
@@ -231,7 +231,7 @@ the user's key destruction shreds `fact_enc`, the sealed decision and (after V8)
 
 Superseded by `2026-11-08-document-connections-design.md`. Connections are LIVE data: a `doc.connections`
 provider is read at hydrate time and bound by the planner once. Another document's ingest or deletion therefore
-needs no `planner.revise`, no `@loom-ui/changes` and no `crossDoc` fact kind. Figure comparison across documents
+needs no `planner.revise`, no `@loomwork/ui-changes` and no `crossDoc` fact kind. Figure comparison across documents
 is out of scope.
 
 ## 10. Step (c): diagrams

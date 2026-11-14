@@ -106,7 +106,7 @@ const snippet = (body: string) =>
     new Map([
       [
         VIRTUAL,
-        `import type { Conversations } from "@loom/conversation";
+        `import type { Conversations } from "@loomwork/conversation";
          import { legacyIds } from "./opaqueIds";
          declare const ids: import("./chats/chatIds").ChatIdBuilders;
          declare const userIds: import("./opaqueIds").UserIds;
@@ -162,7 +162,7 @@ describe("Conversations.start", () => {
       new Map([
         [
           VIRTUAL,
-          `import type { Conversations } from "@loom/conversation";
+          `import type { Conversations } from "@loomwork/conversation";
            declare const ids: { conversationId(): string };
            declare const c: Conversations; declare const p: never;
            export async function f() { await c.start({ conversationId: ids.conversationId() as never, principal: p }); }`,

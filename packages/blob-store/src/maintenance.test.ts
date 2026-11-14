@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 import { eraseUserBlobs, removeStaleTemp } from "./maintenance";

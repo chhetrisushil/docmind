@@ -1,4 +1,4 @@
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../../db/testSupport";
 import {

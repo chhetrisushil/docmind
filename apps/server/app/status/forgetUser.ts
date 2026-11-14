@@ -1,4 +1,4 @@
-import type { ReadModelEventSource, ReadModelService } from "@loom/plugin-read-model";
+import type { ReadModelEventSource, ReadModelService } from "@loomwork/plugin-read-model";
 import { isOwnedBy, userPrefixes } from "../opaqueIds";
 
 /** The user's rows of a model that are not yet tombstoned (their execution ids, never their state), under both id formats when the user has a handle. */

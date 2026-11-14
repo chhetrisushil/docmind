@@ -1,7 +1,7 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { type Kek, PostgresKeyStore } from "@docmind/keystore-pg";
-import { runKeyStoreConformance } from "@loom/conformance";
-import type { KeyStore } from "@loom/plugin-crypto";
+import { runKeyStoreConformance } from "@loomwork/conformance";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword } from "../db/migrate";

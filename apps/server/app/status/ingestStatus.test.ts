@@ -4,7 +4,7 @@ import {
   type FoldedApply,
   type FoldedApplyResult,
   InMemoryReadModelStore,
-} from "@loom/plugin-read-model";
+} from "@loomwork/plugin-read-model";
 import { afterEach, describe, expect, it } from "vitest";
 import { INGEST_GENERATION } from "../documents/ingest";
 import { InMemoryProgressBus } from "../documents/progress";

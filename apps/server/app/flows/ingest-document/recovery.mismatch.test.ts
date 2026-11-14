@@ -1,4 +1,4 @@
-import { flow$, step$ } from "@loom/core";
+import { flow$, step$ } from "@loomwork/core";
 import { describe, expect, it, vi } from "vitest";
 import { foldIngestStatus } from "../../status/model";
 import {

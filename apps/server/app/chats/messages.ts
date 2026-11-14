@@ -1,7 +1,7 @@
 import type { Identity } from "@docmind/auth";
 import { ChatFailureReason, type ChatMessageDto } from "@docmind/contracts";
-import type { Conversations, HistoryEntry } from "@loom/conversation";
-import type { PrincipalChain } from "@loom/effect-runtime";
+import type { Conversations, HistoryEntry } from "@loomwork/conversation";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
 import type { ChatConversationId } from "../opaqueIds";
 import { citeReply, documentTitles } from "./citations";
 import type { ChatRouteDeps } from "./routes";

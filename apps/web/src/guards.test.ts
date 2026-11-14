@@ -44,16 +44,17 @@ function specifiers(text: string): string[] {
   return out;
 }
 
-const BROWSER_LOOM = ["@loom/projection-runtime", "@loom/blueprint-runtime"];
+const BROWSER_LOOM = ["@loomwork/projection-runtime", "@loomwork/blueprint-runtime"];
 const isServerOnly = (s: string) =>
   /^(?:\.{1,2}\/)+(?:[\w.-]+\/)*packages\/(experiences|auth)(\/|$)/.test(s) ||
   /^@docmind\/(experiences|auth)(\/|$)/.test(s) ||
-  /^@loom-ui\/core\/log(\/|$)/.test(s) ||
-  s === "@loom-ui/core" ||
-  s === "@loom-ui/hydration" ||
-  /^@loom-ui\/renderer-terminal(\/|$)/.test(s);
+  /^@loomwork\/ui-core\/log(\/|$)/.test(s) ||
+  s === "@loomwork/ui-core" ||
+  s === "@loomwork/ui-hydration" ||
+  /^@loomwork\/ui-renderer-terminal(\/|$)/.test(s);
 const isForbiddenLoom = (s: string) => {
-  if (!s.startsWith("@loom/")) return false;
+  // loom-ui shares the @loomwork scope as @loomwork/ui-*; isServerOnly governs those.
+  if (!s.startsWith("@loomwork/") || s.startsWith("@loomwork/ui-")) return false;
   return !BROWSER_LOOM.some((ok) => s === ok || s.startsWith(`${ok}/`));
 };
 
@@ -138,19 +139,19 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
 
   it("accepts clean sources and the real theme shape", () => {
     expect(violations(MISC, `import { html } from "lit";\nimport "./dm-icon";`)).toEqual([]);
-    expect(violations(MISC, `import "@loom/projection-runtime";`)).toEqual([]);
-    expect(violations(MISC, `const m = await import("@loom/blueprint-runtime");`)).toEqual([]);
+    expect(violations(MISC, `import "@loomwork/projection-runtime";`)).toEqual([]);
+    expect(violations(MISC, `const m = await import("@loomwork/blueprint-runtime");`)).toEqual([]);
     expect(violations(THEME, GOOD_THEME)).toEqual([]);
   });
 
   it.each([
     ["static double-quoted", `import { a } from "@docmind/experiences";`],
     ["static single-quoted", `import { a } from '@docmind/auth';`],
-    ["bare", `import "@loom-ui/core/log";`],
-    ["bare single", `import '@loom-ui/hydration';`],
-    ["dynamic", `const m = await import("@loom-ui/core");`],
-    ["export-from", `export * from "@loom-ui/renderer-terminal";`],
-    ["renderer-terminal subpath", `import x from "@loom-ui/renderer-terminal/dist/x.js";`],
+    ["bare", `import "@loomwork/ui-core/log";`],
+    ["bare single", `import '@loomwork/ui-hydration';`],
+    ["dynamic", `const m = await import("@loomwork/ui-core");`],
+    ["export-from", `export * from "@loomwork/ui-renderer-terminal";`],
+    ["renderer-terminal subpath", `import x from "@loomwork/ui-renderer-terminal/dist/x.js";`],
     [
       "relative path to experiences",
       `import { a } from "../../../../packages/experiences/src/views";`,
@@ -163,10 +164,10 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
   });
 
   it.each([
-    ["static", `import { a } from "@loom/pg-store";`],
-    ["bare", `import "@loom/kernel";`],
-    ["dynamic", `await import('@loom/blueprint-engine');`],
-    ["lookalike of an allowed runtime", `import x from "@loom/projection-runtime-server";`],
+    ["static", `import { a } from "@loomwork/pg-store";`],
+    ["bare", `import "@loomwork/kernel";`],
+    ["dynamic", `await import('@loomwork/blueprint-engine');`],
+    ["lookalike of an allowed runtime", `import x from "@loomwork/projection-runtime-server";`],
   ])("a Loom package that is not a browser runtime, %s", (_n, src) => {
     expect(violations(MISC, src)).toContain("loom-package");
   });
@@ -177,7 +178,7 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
   });
 
   it("does not mistake a string that merely mentions a package for an import", () => {
-    expect(violations(MISC, `const doc = "see @loom/kernel for details";`)).toEqual([]);
+    expect(violations(MISC, `const doc = "see @loomwork/kernel for details";`)).toEqual([]);
   });
 
   it.each([
@@ -300,7 +301,7 @@ describe("the guards catch what they claim to (fixture strings, not real files)"
   });
 
   it("applies to .html: a module script's import and an inline sink are caught", () => {
-    const page = `<script type="module">import "@loom/kernel"; import x from '@docmind/auth';</script>`;
+    const page = `<script type="module">import "@loomwork/kernel"; import x from '@docmind/auth';</script>`;
     expect(violations("index.html", page)).toEqual(
       expect.arrayContaining(["loom-package", "server-only"]),
     );

@@ -1,4 +1,4 @@
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { TITLE_MAX_CHARS, cleanTitle, titleRequest } from "./title";
 

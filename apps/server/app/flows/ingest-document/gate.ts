@@ -1,4 +1,4 @@
-import { createFairScheduler } from "@loom/fair-scheduler";
+import { createFairScheduler } from "@loomwork/fair-scheduler";
 import { IngestAbortedError } from "./errors";
 
 interface Lane {

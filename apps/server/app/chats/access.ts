@@ -1,6 +1,6 @@
 import type { Identity } from "@docmind/auth";
 import { type ChatScope, Uuid } from "@docmind/contracts";
-import type { PrincipalChain } from "@loom/effect-runtime";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
 import type { PoolClient } from "pg";
 import { withTenant } from "../db/tenant";
 import { type RouteContext, sendError } from "../http/respond";

@@ -1,4 +1,4 @@
-import { MAX_DIAGRAM_NODES, diagramProblems } from "@loom-ui/core";
+import { MAX_DIAGRAM_NODES, diagramProblems } from "@loomwork/ui-core";
 import { MAX_RELATION_ENTITIES, nameKey } from "./visuals";
 import type { EntityMapFact, OutlineFact, RelationsFact, TimelineFact } from "./visuals";
 

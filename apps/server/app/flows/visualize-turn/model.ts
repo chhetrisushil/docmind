@@ -1,5 +1,5 @@
 import { RecordOrd } from "@docmind/contracts";
-import type { RetryPolicy } from "@loom/core";
+import type { RetryPolicy } from "@loomwork/core";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { MAX_FACTS, StoredFact } from "../visualize-document/facts";

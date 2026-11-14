@@ -5,7 +5,7 @@ import {
   type ContentStore,
   contentAddress,
   contentListPageLimit,
-} from "@loom/plugin-content";
+} from "@loomwork/plugin-content";
 import type { Pool } from "pg";
 
 export interface PgContentStoreOptions {

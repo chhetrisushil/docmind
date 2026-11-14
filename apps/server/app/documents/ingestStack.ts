@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { type FakeOllama, startFakeOllama } from "@docmind/embeddings/testing";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { type FakeAnthropic, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import { Pool } from "pg";
 import { bootIngest } from "../bootIngest";
 import type { ChatIdBuilders } from "../chats/chatIds";

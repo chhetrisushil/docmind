@@ -58,7 +58,7 @@ Repo `loom-ui`, branch `feat/core-markdown-document`.
 - Test: `packages/core/src/mdDocument.test.ts`
 
 **Interfaces:**
-- Produces (exported from `@loom-ui/core/chat-ui`, `@loom-ui/core/chat` and the root):
+- Produces (exported from `@loomwork/ui-core/chat-ui`, `@loomwork/ui-core/chat` and the root):
   - `interface MdRange { readonly from: number; readonly to: number }` (UTF-16 offsets into the input, `to` exclusive)
   - `interface MdDocument extends MdDoc { readonly ranges: readonly MdRange[] }` (`ranges[i]` is the source range of `blocks[i]`)
   - `parseMarkdownDocument(text: unknown): MdDocument`
@@ -350,7 +350,7 @@ Run: `cd packages/core && pnpm vitest run src/mdDocument.test.ts` — Expected: 
 
 - [ ] **Step 9: Full core gate, then commit**
 
-Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loom-ui/core test && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
+Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loomwork/ui-core test && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 Expected: all pass (the chat markdown suites are unchanged because every new `MdState` field is optional).
 
 ```bash
@@ -375,7 +375,7 @@ Repo `loom-ui`, branch `feat/core-org-document` (from main after Task 1).
 
 **Interfaces:**
 - Consumes: `documentLines`, `spansToRanges`, `MdDocument`, `MD_DOC_MAX_NODES`, `MD_DOC_MAX_TABLE_ROWS` (Task 1); `take`, `work`, `safeLinkHref`, `MD_MAX_INLINE_DEPTH`, `MD_MAX_TABLE_COLS`, `MdBlock`, `MdInline`, `MdState` (`chatMdTypes.ts`).
-- Produces: `parseOrgDocument(text: unknown): MdDocument` and `parseOrgDocumentWith(text, meter)` (internal), exported `parseOrgDocument` from `@loom-ui/core/chat-ui`.
+- Produces: `parseOrgDocument(text: unknown): MdDocument` and `parseOrgDocumentWith(text, meter)` (internal), exported `parseOrgDocument` from `@loomwork/ui-core/chat-ui`.
 
 - [ ] **Step 1: Write the failing tests (one per spec table row, plus ranges and bounds)**
 
@@ -807,7 +807,7 @@ Expected: PASS. Fix the parser (not the test) until every row passes; the expect
 
 - [ ] **Step 6: Gate and commit**
 
-Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loom-ui/core test && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
+Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loomwork/ui-core test && pnpm typecheck && pnpm typecheck:tests && pnpm lint`
 
 ```bash
 git add packages/core/src/orgInline.ts packages/core/src/orgDocument.ts packages/core/src/orgDocument.test.ts packages/core/src/chatUi.ts
@@ -846,7 +846,7 @@ Cut every rule whose selector starts with `.md` from `lu-chat.ts`'s `static styl
 
 - [ ] **Step 2: Verify nothing changed**
 
-Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loom-ui/renderer-lit test && pnpm typecheck && pnpm lint && pnpm build`
+Run: `cd /Users/such/workspace/loom-ui && pnpm --filter @loomwork/ui-renderer-lit test && pnpm typecheck && pnpm lint && pnpm build`
 Expected: PASS, including `treeShaking.test.ts` (lu-chat already may import `chatMarkdown`).
 
 - [ ] **Step 3: Commit**
@@ -941,7 +941,7 @@ Run: `cd packages/core && pnpm test` — Expected: PASS.
 
 ```ts
 // packages/renderer-lit/src/widgets/lu-prose.test.ts
-import { customWidget$ } from "@loom/blueprint-runtime";
+import { customWidget$ } from "@loomwork/blueprint-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../register";
 
@@ -1020,8 +1020,8 @@ Run: `cd packages/renderer-lit && pnpm vitest run src/widgets/lu-prose.test.ts` 
 - [ ] **Step 4: Implement `lu-prose.ts`**
 
 ```ts
-import type { ProseValue } from "@loom-ui/core/browser";
-import { type MdDocument, parseMarkdownDocument, parseOrgDocument } from "@loom-ui/core/chat-ui";
+import type { ProseValue } from "@loomwork/ui-core/browser";
+import { type MdDocument, parseMarkdownDocument, parseOrgDocument } from "@loomwork/ui-core/chat-ui";
 import { type PropertyValues, type TemplateResult, css, html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { say } from "../say";
@@ -1589,7 +1589,7 @@ Branch `feat/detail-prose` (after Tasks 4 and 6).
 - [ ] **Step 1: Pull loom-ui and rebuild**
 
 ```bash
-cd /Users/such/workspace/loom-ui && git switch main && git pull --rebase && pnpm install && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build
+cd /Users/such/workspace/loom-ui && git switch main && git pull --rebase && pnpm install && pnpm --filter @loomwork/ui-core --filter @loomwork/ui-hydration --filter @loomwork/ui-renderer-lit --filter @loomwork/ui-renderer-terminal build
 cd /Users/such/workspace/docmind && git -C ../loom-ui rev-parse HEAD   # put this in LOOM_UI_REF
 ```
 
@@ -1661,7 +1661,7 @@ and `providers` gains
       }),
 ```
 
-`apps/web/src/ui/elements.ts`: add `import "@loom-ui/renderer-lit/elements/lu-prose";`.
+`apps/web/src/ui/elements.ts`: add `import "@loomwork/ui-renderer-lit/elements/lu-prose";`.
 `.github/workflows/ci.yml`: `LOOM_UI_REF:` → the SHA from Step 1.
 
 The page sends `{ id, upto, passage }` to every provider. If hydrate rejects `upto` for `doc-source` (a test in Step 4 will show a `invalidArgs`/override finding), add `"upto"` handling by scoping: in Task 8, call `session.setParams(params, "doc-content")` for `upto` and `session.setParams({ id, passage }, "doc-source")`, or add `upto` to neither `args` nor `overridable` and confirm the runtime ignores unknown keys — pick whichever the loom-ui hydration code (`serveHandles`) does; check it before choosing.

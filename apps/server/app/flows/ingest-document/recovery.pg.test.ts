@@ -1,7 +1,7 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
 import { ParseAbortedError } from "@docmind/parsers";
-import type { LeaseStore } from "@loom/event-runtime";
+import type { LeaseStore } from "@loomwork/event-runtime";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";

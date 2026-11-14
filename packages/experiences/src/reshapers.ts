@@ -1,6 +1,6 @@
 import type { ChatSessionDto, DocumentDto } from "@docmind/contracts";
 import { locatorText } from "@docmind/contracts";
-import { defineReshapers } from "@loom-ui/hydration";
+import { defineReshapers } from "@loomwork/ui-hydration";
 import { CONNECTION_SHAPES } from "./connectionShapes";
 import { formatBytes } from "./format";
 import type { RawContent, RawDocuments, SourceResult } from "./invoker";

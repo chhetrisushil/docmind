@@ -3,7 +3,7 @@ import {
   type LlmRequest,
   type LlmResultPart,
   fenceUntrustedMedia,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 import { type RedactedBlock, type ThinkingBlock, usableReasoning, wireBlockOf } from "./reasoning";
 

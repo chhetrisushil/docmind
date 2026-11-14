@@ -19,10 +19,10 @@ This covers spec §9 items 27–33 and the retrieval half of the accepted linked
 | Stop | `ConversationConfig.bargeIn` is a function. DocMind's `stoppableBargeIn` wraps `inboxBargeIn` and adds an in-process stop signal fired by `POST /api/chats/:id/stop`. |
 | Citations, thinking and tool steps in history | A sealed side table `chat_turn_items`, keyed by chat and the turn key, written by the model effect and the tools, merged into history reads. |
 | `thinking` / `tool` / `answer` stream kinds | DocMind's own SSE route, built from Loom's `followConversation`, `ConversationHub` and the plugin's `frame` helper, plus a DocMind `ChatBus` for thinking and tool events. There is no internal proxy. | *(Superseded by the M4 amendment.)*
-| Session list | A relational `chat_sessions` table (titles, scope, soft delete) joined with a `chat-activity` folded read model (message count, last activity) on `@loom/plugin-read-model`, the same plugin the ingest status uses. |
+| Session list | A relational `chat_sessions` table (titles, scope, soft delete) joined with a `chat-activity` folded read model (message count, last activity) on `@loomwork/plugin-read-model`, the same plugin the ingest status uses. |
 | Auto titles | A one-step durable flow, `chat-title`, started once per chat by the send route, titled from the first question. |
 
-**Tech Stack:** everything through M3 part 2, plus `@loom/conversation`, `@loom/agent`, `@loom/knowledge` (`checkCitations`) and `@loom/plugin-conversation-sse` (only its `frame` helper and `SseSink`). Loom is pinned at `58fb2f5c…` (ADR 0133); nothing here needs a Loom change. pgvector ≥ 0.8.0 (iterative index scans); the local cluster has 0.8.0.
+**Tech Stack:** everything through M3 part 2, plus `@loomwork/conversation`, `@loomwork/agent`, `@loomwork/knowledge` (`checkCitations`) and `@loomwork/plugin-conversation-sse` (only its `frame` helper and `SseSink`). Loom is pinned at `58fb2f5c…` (ADR 0133); nothing here needs a Loom change. pgvector ≥ 0.8.0 (iterative index scans); the local cluster has 0.8.0.
 
 **Spec:** `/Users/such/workspace/docmind/docs/specs/2026-10-18-docmind-design.md`:
 - §3.1 interfaces, §3.2 reuse, §4.2 tables, §4.3 tenancy, §4.4 crypto-shredding;
@@ -271,7 +271,7 @@ Copied from the spec, the M3 plans and the owner's standing rules; every task in
   - Packages never import from apps.
   - Only `app/config.ts`, `app/compose.ts`, `app/setup.ts`, `app/main.ts`, `flows/ingest-document/limits.ts` and the new `chats/wiring.ts` (the wiring) and `chats/pgCollaborators.ts` choose implementations. There are no process globals; the one `AsyncLocalStorage` (`chatScope`) is created in `chats/scope.ts` and holds no state of its own.
   - New dependencies:
-    - `apps/server`: `@loom/conversation`, `@loom/agent`, `@loom/knowledge`, `@loom/plugin-conversation-sse`, each `link:` through the root `pnpm.overrides` like the other `@loom/*` packages (Task 142 adds them).
+    - `apps/server`: `@loomwork/conversation`, `@loomwork/agent`, `@loomwork/knowledge`, `@loomwork/plugin-conversation-sse`, each `link:` through the root `pnpm.overrides` like the other `@loomwork/*` packages (Task 142 adds them).
     - `packages/llm-anthropic`: none new.
     - No Anthropic SDK (open question 7).
 - **Toolchain pins:** `pnpm@9.14.4`, `@biomejs/biome` `1.9.4` (exact), `typescript` `^5.6.3`, `vitest` `^2.1.8`, Node `>=22.13.0`.
@@ -500,7 +500,7 @@ Implements D3's request shape. After this task `complete()` can already carry a 
 - Modify: `packages/llm-anthropic/src/request.ts`, `src/request.test.ts`, `src/provider.ts`, `src/provider.test.ts`, `src/index.ts`, `tsconfig.json`
 
 **Interfaces:**
-- Consumes: `LlmRequest`, `LlmContentPart`, `LlmResultPart`, `fenceUntrustedMedia` from `@loom/llm`; M3b's `toMessagesBody`, `LlmRequestError`.
+- Consumes: `LlmRequest`, `LlmContentPart`, `LlmResultPart`, `fenceUntrustedMedia` from `@loomwork/llm`; M3b's `toMessagesBody`, `LlmRequestError`.
 - Produces (128a):
   - `AnthropicBody` gains `tools?: { name; description; input_schema }[]`; `Block` gains `tool_use` and `tool_result`.
   - `toMessagesBody` maps `request.tools`, `tool_use` parts (assistant messages only) and `tool_result` parts (user messages only). Empty assistant text blocks are dropped (the API rejects them).
@@ -641,7 +641,7 @@ import {
   type LlmRequest,
   type LlmResultPart,
   fenceUntrustedMedia,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 
 type TextBlock = { type: "text"; text: string };
@@ -1069,7 +1069,7 @@ import {
   type LlmRequest,
   type LlmResultPart,
   fenceUntrustedMedia,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 import { type ReasoningBlock, isReasoningBlock, isThinkingBlock } from "./observer";
 
@@ -1672,7 +1672,7 @@ Task 130 tests do not use `FakeAnthropic` (its streaming mode is Task 132, which
 - Modify: `packages/llm-anthropic/src/streamState.ts`, `src/provider.ts`, `src/provider.stream.test.ts`
 
 **Interfaces:**
-- Consumes: Task 128 (`#body`, options, `observer.ts`), Task 129 (`readSse`, `LlmStreamError`), `LlmStreamChunk`, `LlmToolCall` from `@loom/llm`.
+- Consumes: Task 128 (`#body`, options, `observer.ts`), Task 129 (`readSse`, `LlmStreamError`), `LlmStreamChunk`, `LlmToolCall` from `@loomwork/llm`.
 - Produces:
   - `AnthropicMessagesProvider.stream(request: LlmRequest): AsyncIterable<LlmStreamChunk>`.
     - Chunks: `{delta, done: false}` for text; `{delta: "", done: false, toolDelta: {id, name?, inputDelta}}` for tool arguments (the first carries `name`); exactly one terminal `{delta: "", done: true, toolCalls?, stopReason, usage?}` last. Thinking text is never in `delta` (it goes to `observer.onThinking`).
@@ -1762,7 +1762,7 @@ export const allReleased = (t: { bodies: { released: boolean }[] }): boolean =>
 Create `src/provider.stream.test.ts`:
 
 ```ts
-import type { LlmRequest, LlmStreamChunk } from "@loom/llm";
+import type { LlmRequest, LlmStreamChunk } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { allReleased, sseFetch } from "./__helpers__/bodyOf";
 import * as f from "./__helpers__/frames";
@@ -2046,7 +2046,7 @@ export function parseResponse(text: string): Parsed {
 Create `src/streamState.ts`:
 
 ```ts
-import type { LlmStreamChunk, LlmToolCall } from "@loom/llm";
+import type { LlmStreamChunk, LlmToolCall } from "@loomwork/llm";
 import { LlmRequestError, LlmStreamError } from "./errors";
 import {
   type StopReason,
@@ -2212,7 +2212,7 @@ export class StreamState {
 Replace `src/provider.ts` entirely with (it contains Task 128b's changes, the `#open` refactor and `stream`):
 
 ```ts
-import type { LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmResponse, LlmStreamChunk } from "@loomwork/llm";
 import {
   LlmAbortedError,
   LlmRefusalError,
@@ -3001,7 +3001,7 @@ describe("complete(): tool calls, reasoning blocks, usage detail and refusal", (
 - [ ] **Step 3: Implement.** Replace `src/response.ts` with:
 
 ```ts
-import type { LlmToolCall } from "@loom/llm";
+import type { LlmToolCall } from "@loomwork/llm";
 import { LlmRequestError } from "./errors";
 import { type UsageFields, isCount, usageFieldsOf } from "./mapping";
 import type { ReasoningBlock } from "./observer";
@@ -3606,8 +3606,8 @@ with
 - [ ] **Step 6 (132b): Replace `conformance.test.ts`** (with `toolRequest: null` removed the Loom kit demands tool-call parity, and the thinking variant demands that thinking never reaches `content`). Write the whole file:
 
 ```ts
-import { runLlmProviderConformance } from "@loom/conformance";
-import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loom/llm";
+import { runLlmProviderConformance } from "@loomwork/conformance";
+import { type LlmRequest, type LlmStreamChunk, assembleStream } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { LlmRefusalError } from "./errors";
@@ -3760,7 +3760,7 @@ describe("complete() and stream() agree on refusals, usage detail and reasoning 
 Create `src/realApi.test.ts` (the opt-in smoke suite; it replaces the "real Anthropic API" block that was in `conformance.test.ts`, which Step 6 removed):
 
 ```ts
-import type { LlmRequest, LlmStreamChunk } from "@loom/llm";
+import type { LlmRequest, LlmStreamChunk } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { AnthropicMessagesProvider, type AnthropicOptions } from "./provider";
@@ -7511,7 +7511,7 @@ Implements D9 end to end: embed, candidates, seeds, hops, budget, read. It is th
 - Test: `apps/server/app/chats/retrieval/retriever.test.ts`
 
 **Interfaces:**
-- Consumes: `ChunkVectorStore` with Task 136's `search` filter and `vectors` (a twin in the tests), `EmbeddingProvider` (`@loom/memory`), `EmbeddingUnavailableError` (`@docmind/embeddings`), `PassageReader.read` (138), `LinkReader.from` (139), `mmr`, `expandHops`, `hop2Frontier`, `cosine` (140).
+- Consumes: `ChunkVectorStore` with Task 136's `search` filter and `vectors` (a twin in the tests), `EmbeddingProvider` (`@loomwork/memory`), `EmbeddingUnavailableError` (`@docmind/embeddings`), `PassageReader.read` (138), `LinkReader.from` (139), `mmr`, `expandHops`, `hop2Frontier`, `cosine` (140).
 - Produces (the catalogue's names): `Retriever { search, related }`, `SearchUnavailableError` (message `search is unavailable`); also the D9 constants `CANDIDATES = 24`, `SEEDS = 8`, `MIN_SCORE = 0.2`, `MMR_LAMBDA = 0.7`, `PER_CHUNK = 4`, `K_DEFAULT = 8`, `K_MAX = 12`, `RELATED_MAX = 8`. The deps are typed `passages: Pick<PassageReader, "read">` and `links: Pick<LinkReader, "from">`, so the real classes fit and tests pass small fakes.
   - `search(scope, chatScope, query, k, signal?)`:
     1. Embeds `[query]` as it is, with no task prefix (H14). `EmbeddingUnavailableError` becomes `SearchUnavailableError` and nothing is searched; an abort passes through as the embedder's own `EmbeddingAbortedError`; any other failure passes through unchanged.
@@ -7526,7 +7526,7 @@ Implements D9 end to end: embed, candidates, seeds, hops, budget, read. It is th
 ```ts
 import { EmbeddingAbortedError, EmbeddingUnavailableError } from "@docmind/embeddings";
 import { InMemoryChunkVectors, type VectorScope } from "@docmind/vector-pg";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import { describe, expect, it } from "vitest";
 import type { LinkKind } from "../../flows/ingest-document/pgLinks";
 import type { LinkHop } from "./links";
@@ -7812,7 +7812,7 @@ describe("Retriever.related", () => {
 import type { ChatScope } from "@docmind/contracts";
 import { EmbeddingUnavailableError } from "@docmind/embeddings";
 import type { ChunkVectorStore, VectorScope } from "@docmind/vector-pg";
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import type { LinkKind } from "../../flows/ingest-document/pgLinks";
 import { cosine, expandHops, hop2Frontier, mmr } from "./core";
 import type { LinkHop, LinkReader } from "./links";
@@ -8032,7 +8032,7 @@ Implements D2 and H4/H5.
 - Modify: `package.json` (root: four `pnpm.overrides`), `apps/server/package.json` (four dependencies); `pnpm-lock.yaml` regenerates.
 
 **Interfaces:**
-- Consumes: Loom `isValidConversationId` (`@loom/conversation`), `GrantTable`, `executionAccessPolicy`.
+- Consumes: Loom `isValidConversationId` (`@loomwork/conversation`), `GrantTable`, `executionAccessPolicy`.
 - Produces:
   - `ids.ts`: `chatConversationId(userId, chatId): ChatConversationId` (`"u_<user>.c-<chat>"`, both canonical lower-case UUIDs, `RangeError` otherwise), the branded type `ChatConversationId`, `chatIdOfConversation(id): { userId; chatId } | null` (accepts a generation suffix `~<n>`, `n ≥ 1`), and the constants `CHAT_FLOW_ID = "doc-chat"`, `CHAT_GK_FLOW_ID = "doc-chat-gk"`, `CHAT_TITLE_FLOW_ID = "chat-title"`, `CHAT_MODEL_TOOL_ID = "chat-model"`, `CHAT_TOOL_IDS` (`search_docs`, `related`, `read_section`, `get_summary`, `list_documents`), `CHAT_EFFECT_IDS` (the model id then the tool ids), `isChatFlowId(id)`, `isChatTitleExecution(id)` (the id `executionIdFor(userId, "chat-title-<chatId>")` builds, `u_<user>:chat-title-<chat>`) and `isRecoverableChatExecution(id)` (a chat conversation of any generation, or a title execution: what boot recovery claims, ruling P5). `agent.ts` (Task 146) re-exports `CHAT_FLOW_ID`; the constants live here so `security.ts` does not import the agent (ruling P9).
   - `subject.ts`: `subjectOfExecution` maps `u_<uuid>.c-…` (and `~n` generations) to the user; it re-exports `chatConversationId`, `chatIdOfConversation`, `ChatConversationId`.
@@ -8044,15 +8044,15 @@ Implements D2 and H4/H5.
 In root `package.json`, add to `pnpm.overrides`, keeping the keys in alphabetical order:
 
 ```json
-"@loom/agent": "link:../loom/packages/agent",
-"@loom/conversation": "link:../loom/packages/conversation",
-"@loom/knowledge": "link:../loom/packages/knowledge",
-"@loom/plugin-conversation-sse": "link:../loom/plugins/conversation-sse",
+"@loomwork/agent": "link:../loom/packages/agent",
+"@loomwork/conversation": "link:../loom/packages/conversation",
+"@loomwork/knowledge": "link:../loom/packages/knowledge",
+"@loomwork/plugin-conversation-sse": "link:../loom/plugins/conversation-sse",
 ```
 
-In `apps/server/package.json` `dependencies`, add `"@loom/agent": "*"`, `"@loom/conversation": "*"`, `"@loom/knowledge": "*"`, `"@loom/plugin-conversation-sse": "*"`, in order. Run `pnpm install`.
+In `apps/server/package.json` `dependencies`, add `"@loomwork/agent": "*"`, `"@loomwork/conversation": "*"`, `"@loomwork/knowledge": "*"`, `"@loomwork/plugin-conversation-sse": "*"`, in order. Run `pnpm install`.
 
-Probe (Loom must be built, see the plan's preconditions): `pnpm -C apps/server exec node -e "for (const m of ['@loom/agent','@loom/conversation','@loom/knowledge','@loom/plugin-conversation-sse']) console.log(m, typeof require(m))"`. Expected: four lines ending in `object`. If one throws `Cannot find module`, run `pnpm -C ../loom build` once and retry; if it still fails, the `link:` path is wrong (check the package's directory under `../loom`). Do not continue until all four load.
+Probe (Loom must be built, see the plan's preconditions): `pnpm -C apps/server exec node -e "for (const m of ['@loomwork/agent','@loomwork/conversation','@loomwork/knowledge','@loomwork/plugin-conversation-sse']) console.log(m, typeof require(m))"`. Expected: four lines ending in `object`. If one throws `Cannot find module`, run `pnpm -C ../loom build` once and retry; if it still fails, the `link:` path is wrong (check the package's directory under `../loom`). Do not continue until all four load.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -8289,7 +8289,7 @@ const snippet = (body: string) =>
     new Map([
       [
         VIRTUAL,
-        `import type { Conversations } from "@loom/conversation";
+        `import type { Conversations } from "@loomwork/conversation";
          import { chatConversationId } from "./chats/ids";
          declare const c: Conversations; declare const user: string; declare const chat: string; declare const p: never;
          export async function f() { ${body} }`,
@@ -8326,7 +8326,7 @@ describe("Conversations.start", () => {
 - [ ] **Step 4: Implement `ids.ts`**
 
 ```ts
-import { isValidConversationId } from "@loom/conversation";
+import { isValidConversationId } from "@loomwork/conversation";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const CANONICAL = new RegExp(`^${UUID}$`);
@@ -8424,7 +8424,7 @@ export const executionAuthorizer: ExecutionAuthorizer = executionAccessPolicy({
 });
 ```
 
-Because `createConversations({ policy: executionAuthorizer })` reads `.scopes`, give `executionAuthorizer` the type `ExecutionAccessPolicy` (exported by `@loom/workflow-runtime`) instead of `ExecutionAuthorizer`.
+Because `createConversations({ policy: executionAuthorizer })` reads `.scopes`, give `executionAuthorizer` the type `ExecutionAccessPolicy` (exported by `@loomwork/workflow-runtime`) instead of `ExecutionAuthorizer`.
 
 - [ ] **Step 7: Run the tests and the full gate.** Expected: PASS. Run `pnpm gen` and check `app/loom.gen.ts` is unchanged (no `tool$`/`agent$` exists yet).
 
@@ -8455,7 +8455,7 @@ Implements D3 (the app half) and D4. Split along the seam named below: 143a is p
 `scope.test.ts`:
 
 ```ts
-import type { EffectContext } from "@loom/effect-runtime";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { describe, expect, it } from "vitest";
 import { chatConversationId } from "./ids";
 import { ChatScopeError, chatScope, scopeOfEffect, turnKeyOfRecord } from "./scope";
@@ -8642,8 +8642,8 @@ describe("ChatBus", () => {
 
 ```ts
 import { AsyncLocalStorage } from "node:async_hooks";
-import { conversationIdOf } from "@loom/conversation";
-import type { EffectContext } from "@loom/effect-runtime";
+import { conversationIdOf } from "@loomwork/conversation";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { chatIdOfConversation, isChatFlowId } from "./ids";
 import type { ChatRef } from "./turnItems";
 
@@ -8851,10 +8851,10 @@ This is the part of the task that could not be settled by reading alone. Fact C5
 `model.test.ts`:
 
 ```ts
-import { createAgentModelEffect } from "@loom/agent";
-import type { AgentModelCall } from "@loom/agent";
-import { EffectRuntime, type Effect } from "@loom/effect-runtime";
-import type { LlmProvider, LlmResponse } from "@loom/llm";
+import { createAgentModelEffect } from "@loomwork/agent";
+import type { AgentModelCall } from "@loomwork/agent";
+import { EffectRuntime, type Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider, LlmResponse } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { ChatBus, type LiveChatEvent } from "./bus";
 import { chatModelEffect } from "./model";
@@ -8921,7 +8921,7 @@ describe("chatModelEffect on the real EffectRuntime (the probe)", () => {
 });
 ```
 
-Run it: `pnpm -C apps/server vitest run app/chats/model.test.ts` (it fails only because `./model` and `./testing` do not exist yet). After Step 3 it must pass. **If** the first test fails with `deltas` empty while the inner effect alone delivers them, the wrapper is not forwarding `deltaSink`: re-check the spread below. **Fallback** if the real runtime rejects a plain object for some reason the probe shows (for example a future `instanceof` check): build the wrapper as `class ChatModelEffect extends LlmEffect<AgentModelCall, LlmResponse>` from `@loom/effect-runtime`, passing `(input, ctx) => run(input, ctx)` as `fn` and `{ warm, deltaSink }` as its options. The behaviour tests below are unchanged.
+Run it: `pnpm -C apps/server vitest run app/chats/model.test.ts` (it fails only because `./model` and `./testing` do not exist yet). After Step 3 it must pass. **If** the first test fails with `deltas` empty while the inner effect alone delivers them, the wrapper is not forwarding `deltaSink`: re-check the spread below. **Fallback** if the real runtime rejects a plain object for some reason the probe shows (for example a future `instanceof` check): build the wrapper as `class ChatModelEffect extends LlmEffect<AgentModelCall, LlmResponse>` from `@loomwork/effect-runtime`, passing `(input, ctx) => run(input, ctx)` as `fn` and `{ warm, deltaSink }` as its options. The behaviour tests below are unchanged.
 
 - [ ] **Step 2: Write the remaining failing tests**
 
@@ -9192,7 +9192,7 @@ The first provider test is the probe for the Phase A contract (ruling P1): it ne
 
 ```ts
 import type { ReasoningBlock } from "@docmind/llm-anthropic";
-import type { EffectContext } from "@loom/effect-runtime";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { chatConversationId } from "./ids";
 import type { ChatRef, PgReasoningBlocks, PgTurnItems, TurnItem } from "./turnItems";
 
@@ -9244,9 +9244,9 @@ export class FakeBlocks implements Pick<PgReasoningBlocks, "put" | "get"> {
 - [ ] **Step 3: Implement `model.ts`**
 
 ```ts
-import type { AgentModelCall } from "@loom/agent";
-import type { Effect, EffectContext } from "@loom/effect-runtime";
-import type { LlmResponse } from "@loom/llm";
+import type { AgentModelCall } from "@loomwork/agent";
+import type { Effect, EffectContext } from "@loomwork/effect-runtime";
+import type { LlmResponse } from "@loomwork/llm";
 import type { ChatBus } from "./bus";
 import { chatScope, scopeOfEffect } from "./scope";
 import type { PgTurnItems } from "./turnItems";
@@ -9403,7 +9403,7 @@ Implements D10 for the three passage tools. Split along the seam: 144a is the ha
 
 ```ts
 import type { ChatScope } from "@docmind/contracts";
-import type { EffectContext } from "@loom/effect-runtime";
+import type { EffectContext } from "@loomwork/effect-runtime";
 import { ChatBus, type LiveChatEvent } from "../bus";
 import type { Passage } from "../retrieval";
 import { C, FakeItems, T, U, modelCtx } from "../testing";
@@ -9455,7 +9455,7 @@ export const vectorScope = { tenantId: T, ownerId: U };
 `tools/search.test.ts`:
 
 ```ts
-import { isTainted, taintOf, unwrapTainted } from "@loom/classify";
+import { isTainted, taintOf, unwrapTainted } from "@loomwork/classify";
 import { describe, expect, it } from "vitest";
 import { ChatScopeError } from "../scope";
 import { SearchUnavailableError } from "../retrieval";
@@ -9593,8 +9593,8 @@ describe("the search_docs definition", () => {
 ```ts
 import type { ChatScope, ChatToolStep } from "@docmind/contracts";
 import type { VectorScope } from "@docmind/vector-pg";
-import { type TaintedValue, tainted } from "@loom/classify";
-import { type EffectContext, ToolEffect } from "@loom/effect-runtime";
+import { type TaintedValue, tainted } from "@loomwork/classify";
+import { type EffectContext, ToolEffect } from "@loomwork/effect-runtime";
 import type { ZodType, ZodTypeDef } from "zod";
 import type { ChatBus } from "../bus";
 import type { Passage } from "../retrieval";
@@ -9721,7 +9721,7 @@ export const modelPassageOf = (p: Passage) => ({
 - [ ] **Step 4: Implement `search.ts`**
 
 ```ts
-import { tool$ } from "@loom/core";
+import { tool$ } from "@loomwork/core";
 import { z } from "zod";
 import { SearchUnavailableError } from "../retrieval";
 import type { Retriever } from "../retrieval";
@@ -9792,7 +9792,7 @@ TypeScript note: the two returns have different `out` shapes; give `toolEffect` 
 - [ ] **Step 1: Write the failing tests** (`read.test.ts`)
 
 ```ts
-import { unwrapTainted } from "@loom/classify";
+import { unwrapTainted } from "@loomwork/classify";
 import { describe, expect, it } from "vitest";
 import { ChatToolInputError } from "./harness";
 import { SECTION_MAX_CHARS, SECTION_MAX_PASSAGES, capSection, readEffects } from "./read";
@@ -9939,7 +9939,7 @@ describe("capSection", () => {
 - [ ] **Step 3: Implement `read.ts`**
 
 ```ts
-import { tool$ } from "@loom/core";
+import { tool$ } from "@loomwork/core";
 import { z } from "zod";
 import type { PassageReader, Retriever } from "../retrieval";
 import type { Passage } from "../retrieval";
@@ -10072,7 +10072,7 @@ Implements D10 for the two document-level tools, with their Postgres reads.
 `documents.test.ts`:
 
 ```ts
-import { unwrapTainted } from "@loom/classify";
+import { unwrapTainted } from "@loomwork/classify";
 import { describe, expect, it } from "vitest";
 import { ChatToolInputError } from "./harness";
 import { type DocumentSummaryView, type ListedDocument, documentEffects } from "./documents";
@@ -10264,7 +10264,7 @@ describe.skipIf(!PG_URL)("PgDocumentReads (needs DOCMIND_TEST_PG_URL)", () => {
 ```ts
 import type { DocumentStats, DocumentSummary } from "@docmind/contracts";
 import type { VectorScope } from "@docmind/vector-pg";
-import { tool$ } from "@loom/core";
+import { tool$ } from "@loomwork/core";
 import { z } from "zod";
 import { type ToolHarnessDeps, clip, inScope, notFound, toolEffect } from "./harness";
 
@@ -10439,7 +10439,7 @@ export class PgDocumentReads implements DocumentReads {
 - [ ] **Step 5: Implement `index.ts`**
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { type DocumentToolDeps, documentEffects, getSummaryTool, listDocumentsTool } from "./documents";
 import { type ReadDeps, readEffects, readSectionTool, relatedTool } from "./read";
 import { type SearchDeps, searchDocsTool, searchEffects } from "./search";
@@ -10487,7 +10487,7 @@ Implements D8 and D11.
 `stop.test.ts`:
 
 ```ts
-import type { BargeInHandlers, BargeInSource } from "@loom/conversation";
+import type { BargeInHandlers, BargeInSource } from "@loomwork/conversation";
 import { describe, expect, it, vi } from "vitest";
 import { StopRegistry, stoppableBargeIn } from "./stop";
 
@@ -10600,8 +10600,8 @@ describe("stoppableBargeIn", () => {
 `agent.test.ts`:
 
 ```ts
-import { ConversationHub } from "@loom/conversation";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { ConversationHub } from "@loomwork/conversation";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { DOC_ASSISTANT_GK_PROMPT, DOC_ASSISTANT_PROMPT, chatFlow, docAssistant } from "./agent";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";
@@ -10695,7 +10695,7 @@ describe("chatFlow (D11)", () => {
 - [ ] **Step 3: Implement `stop.ts`**
 
 ```ts
-import type { BargeInSource } from "@loom/conversation";
+import type { BargeInSource } from "@loomwork/conversation";
 
 /**
  * The in-process stop signal (D8, H6). Loom fires a turn's abort only when a NEW message lands, so a stop
@@ -10771,9 +10771,9 @@ import {
   type ConversationFlow,
   type ConversationHub,
   conversation$,
-} from "@loom/conversation";
-import { agent$ } from "@loom/core";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+} from "@loomwork/conversation";
+import { agent$ } from "@loomwork/core";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_MODEL_TOOL_ID } from "./ids";
 import { CHAT_TOOL_DEFS } from "./tools";
 
@@ -11192,7 +11192,7 @@ export function loadChatSettings(env: NodeJS.ProcessEnv = process.env): ChatSett
 
 ```ts
 import { AnthropicMessagesProvider, type CallObserver } from "@docmind/llm-anthropic";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import { StartupConfigError } from "../startupError";
 import type { ChatSettings } from "./settings";
 
@@ -11280,9 +11280,9 @@ The paths are narrow on purpose. They name content fields, not whole `input`/`ou
 `sensitive.test.ts` (the paths seal what they name and nothing else, and tolerate a decision whose `choice` is not an object):
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { chatConversationId } from "./chats/ids";
 import { SENSITIVE_EVENT_PATHS } from "./sensitive";
@@ -11370,7 +11370,7 @@ describe("SENSITIVE_EVENT_PATHS for conversations", () => {
 `eventLogProof.test.ts` (the helper must catch a leak, or the proof proves nothing):
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import { describe, expect, it } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 
@@ -11425,7 +11425,7 @@ describe("sealedPaths", () => {
 `wiring.test.ts`:
 
 ```ts
-import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
+import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loomwork/event-runtime";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../config";
 import { CHAT_EFFECT_IDS, CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";
@@ -11515,7 +11515,7 @@ it("composes without chat exactly as before: no chat flow, no chat effect", asyn
 `eventLog.chat.test.ts` (the proof; in memory, no Postgres, so it runs everywhere):
 
 ```ts
-import { inboxStreamId, inboxTopicStreamId } from "@loom/workflow-runtime";
+import { inboxStreamId, inboxTopicStreamId } from "@loomwork/workflow-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertNoPlaintext, sealedPaths } from "./eventLogProof";
 import { chatConversationId } from "./ids";
@@ -11643,9 +11643,9 @@ Update the file's header comment: M4 registers the conversation paths here, with
 - [ ] **Step 4: Implement `config.ts`**
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
-import type { TimerStore } from "@loom/event-runtime";
-import type { RegisteredFlow } from "@loom/workflow-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { TimerStore } from "@loomwork/event-runtime";
+import type { RegisteredFlow } from "@loomwork/workflow-runtime";
 
 /** What the chat needs registered on the Loom app (built by `prepareChat`, chats/wiring.ts). */
 export interface ChatDeps {
@@ -11693,7 +11693,7 @@ If the typechecker rejects `timers`/`kernel` spreads under `exactOptionalPropert
 - [ ] **Step 5: Implement `wiring.ts`**
 
 ```ts
-import { createAgentModelEffect } from "@loom/agent";
+import { createAgentModelEffect } from "@loomwork/agent";
 import {
   ConversationHub,
   type ConversationFlow,
@@ -11701,10 +11701,10 @@ import {
   type Conversations,
   createConversations,
   inboxBargeIn,
-} from "@loom/conversation";
-import type { Effect } from "@loom/effect-runtime";
-import type { EventStore, TimerStore } from "@loom/event-runtime";
-import type { RegisteredFlow, WorkflowRuntime } from "@loom/workflow-runtime";
+} from "@loomwork/conversation";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { EventStore, TimerStore } from "@loomwork/event-runtime";
+import type { RegisteredFlow, WorkflowRuntime } from "@loomwork/workflow-runtime";
 import type { ChatDeps } from "../config";
 import { executionAuthorizer } from "../security";
 import { type ChatFlowConfig, chatFlow } from "./agent";
@@ -11850,7 +11850,7 @@ export function connectChat(p: PreparedChat, runtime: WorkflowRuntime, eventStor
 - [ ] **Step 6: Implement `eventLogProof.ts`**
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 
 const MIN_SECRET_CHARS = 12;
 const isEnvelope = (v: unknown): boolean =>
@@ -11896,9 +11896,9 @@ export function sealedPaths(raw: readonly EventEnvelope[]): Set<string> {
 
 ```ts
 import { type FakeAnthropic, type StreamScript, startFakeAnthropic } from "@docmind/llm-anthropic/testing";
-import { followConversation } from "@loom/conversation";
-import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loom/event-runtime";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import { followConversation } from "@loomwork/conversation";
+import { InMemoryAsyncEventStore, InMemoryTimerStore } from "@loomwork/event-runtime";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { buildApp } from "../config";
 import { SENSITIVE_EVENT_PATHS } from "../sensitive";
 import { chatConversationId } from "./ids";
@@ -12049,8 +12049,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Claim = { isAbandoned?: (c: { executionId: string; updatedAt: number }) => boolean };
 const seen = vi.hoisted(() => [] as Claim[]);
-vi.mock("@loom/workflow-runtime", async (orig) => ({
-  ...(await orig<typeof import("@loom/workflow-runtime")>()),
+vi.mock("@loomwork/workflow-runtime", async (orig) => ({
+  ...(await orig<typeof import("@loomwork/workflow-runtime")>()),
   collectGhostLeases: vi.fn(async () => 0),
   recoverAbandoned: vi.fn(async (_rt: unknown, options: Claim) => {
     seen.push(options);
@@ -12138,12 +12138,12 @@ The existing cases pass no `closeChat` and keep their step counts, because the s
 
 - [ ] **Step 3: Implement.**
 
-`storage.ts`: import `PostgresTimerStore` from `@loom/plugin-postgres`; in `createDurableStorage` add `const timers = new PostgresTimerStore(pool as never);` (the same cast the preset call uses, for the pg typings), return it as `timers` and add `timers: PostgresTimerStore` to `DurableStorage` (doc: "Loom's durable timers; borrows the Loom pool"). In `openDurableStorage`'s probe list add `durable.timers.due(0, 1)` so the timers DDL runs before the server listens.
+`storage.ts`: import `PostgresTimerStore` from `@loomwork/plugin-postgres`; in `createDurableStorage` add `const timers = new PostgresTimerStore(pool as never);` (the same cast the preset call uses, for the pg typings), return it as `timers` and add `timers: PostgresTimerStore` to `DurableStorage` (doc: "Loom's durable timers; borrows the Loom pool"). In `openDurableStorage`'s probe list add `durable.timers.due(0, 1)` so the timers DDL runs before the server listens.
 
 `chats/pgCollaborators.ts`:
 
 ```ts
-import type { EmbeddingProvider } from "@loom/memory";
+import type { EmbeddingProvider } from "@loomwork/memory";
 import type { ChunkVectorStore } from "@docmind/vector-pg";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
@@ -12278,7 +12278,7 @@ The model is a copy of `ingest-status` in everything that matters: the same `Rea
 **Interfaces:**
 - Consumes:
   - Task 142: `chatIdOfConversation(executionOrConversationId): { userId, chatId } | null` (strips `~n`), `chatConversationId`.
-  - Loom: `RECORD_SOURCE` from `@loom/conversation`. A recorded message is a `DECISION_RECORDED` event whose payload is `{ decisionId: "conv#o<ord>:user" | "conv#o<ord>:reply", source: "conversation-record", choice: MessageRecord }` (read from `WorkflowContext.decide` and `conversation.ts` `record(`). `<ord>` here is the flow's consumed-message counter (the turn key `<o>` of the step ids), and `choice.ord` is the record ordinal, a different counter (see Task 151). The fold counts records and keeps `lastOrd` as the highest turn key seen; nothing reads it as a record ordinal.
+  - Loom: `RECORD_SOURCE` from `@loomwork/conversation`. A recorded message is a `DECISION_RECORDED` event whose payload is `{ decisionId: "conv#o<ord>:user" | "conv#o<ord>:reply", source: "conversation-record", choice: MessageRecord }` (read from `WorkflowContext.decide` and `conversation.ts` `record(`). `<ord>` here is the flow's consumed-message counter (the turn key `<o>` of the step ids), and `choice.ord` is the record ordinal, a different counter (see Task 151). The fold counts records and keeps `lastOrd` as the highest turn key seen; nothing reads it as a record ordinal.
 - Produces:
   - `CHAT_ACTIVITY_MODEL = "chat-activity"`, `chatActivity` (a `projection$`, version `"1"`), `ChatActivityState { messages: number; lastOrd: number; lastAt: string | null }`.
   - `chatKeyOf`, `chatScopeOf`, `isChatExecution`, `recordOf(e): { ord; role: "user" | "reply"; status } | undefined`.
@@ -12290,8 +12290,8 @@ The model is a copy of `ingest-status` in everything that matters: the same `Rea
 
 ```ts
 import { randomUUID } from "node:crypto";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryReadModelStore, foldedStates } from "@loomwork/plugin-read-model";
 import { describe, expect, it } from "vitest";
 import { MemoryLog, evt } from "../status/testing";
 import {
@@ -12449,14 +12449,14 @@ describe("ChatActivity", () => {
 - [ ] **Step 3: Write `activity.ts`**
 
 ```ts
-import { RECORD_SOURCE } from "@loom/conversation";
-import { type EventEnvelope, projection$ } from "@loom/core";
+import { RECORD_SOURCE } from "@loomwork/conversation";
+import { type EventEnvelope, projection$ } from "@loomwork/core";
 import {
   type ReadModelEventSource,
   ReadModelService,
   type ReadModelStore,
   type SensitiveMap,
-} from "@loom/plugin-read-model";
+} from "@loomwork/plugin-read-model";
 import { chatIdOfConversation } from "./ids";
 
 export const CHAT_ACTIVITY_MODEL = "chat-activity";
@@ -12636,7 +12636,7 @@ export async function bootStatus(
 In `compose.ts`, the single `feed.onEvent` slot becomes a list. Replace the `feed` declaration, the `onEvent` option, the `feed.onEvent = status.onEvent` line and the `detachStatusFeed` body:
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import { ChatActivity } from "./chats/activity";
 // ...
 type Sink = (event: EventEnvelope) => void;
@@ -12729,7 +12729,7 @@ Split seam: **149a** is create and get, with the access helpers, DTO mapping, th
 - [ ] **Step 1 (149a): Write the test double and the harness.** `testing.ts` stands in for Loom's `Conversations`. It enforces the owner check exactly as Loom does (a principal mismatch throws `ConversationNotFoundError`), pages backward like the real reader (including a `pageCap` that makes a call return fewer entries than asked with `done: false`), and exposes a stub event store (`subscribe` wakes a stream follower).
 
 ```ts
-import type { PrincipalChain } from "@loom/effect-runtime";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
 import {
   ConversationNotFoundError,
   type Conversations,
@@ -12738,9 +12738,9 @@ import {
   type ReadOptions,
   type ReadResult,
   parseCursor,
-} from "@loom/conversation";
-import type { EventEnvelope } from "@loom/core";
-import type { EventStore } from "@loom/event-runtime";
+} from "@loomwork/conversation";
+import type { EventEnvelope } from "@loomwork/core";
+import type { EventStore } from "@loomwork/event-runtime";
 
 const keyOf = (p?: PrincipalChain) => `${p?.tenant}|${p?.actor}`;
 
@@ -12908,9 +12908,9 @@ export type FakeConversations = ReturnType<typeof fakeConversations>;
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import type { Identity } from "@docmind/auth";
-import { ConversationHub } from "@loom/conversation";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { InMemoryReadModelStore } from "@loom/plugin-read-model";
+import { ConversationHub } from "@loomwork/conversation";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryReadModelStore } from "@loomwork/plugin-read-model";
 import { Pool } from "pg";
 import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
@@ -13187,7 +13187,7 @@ describe.skipIf(!PG_URL)("POST /api/chats and GET /api/chats/:id (needs DOCMIND_
 ```ts
 import type { Identity } from "@docmind/auth";
 import { type ChatScope, Uuid } from "@docmind/contracts";
-import type { PrincipalChain } from "@loom/effect-runtime";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
 import type { PoolClient } from "pg";
 import { withTenant } from "../db/tenant";
 import { type RouteContext, sendError } from "../http/respond";
@@ -13300,7 +13300,7 @@ export async function toChatDto(
 import { randomUUID } from "node:crypto";
 import type { Authenticator } from "@docmind/auth";
 import { CreateChatRequest } from "@docmind/contracts";
-import type { EventStore } from "@loom/event-runtime";
+import type { EventStore } from "@loomwork/event-runtime";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
@@ -13557,7 +13557,7 @@ An empty `q` (`?q=`) lists everything. `toChatDto(row, cipher, row)` works becau
 
 ### Task 150: `citeReply`, grounded citations (D6)
 
-Implements spec §6.3 validation: `[[passageId]]` markers are checked with `@loom/knowledge` `checkCitations` against the passages the turn retrieved, and an ungrounded marker is stripped. It is pure; Tasks 151 and 152 call it when they build a `message`.
+Implements spec §6.3 validation: `[[passageId]]` markers are checked with `@loomwork/knowledge` `checkCitations` against the passages the turn retrieved, and an ungrounded marker is stripped. It is pure; Tasks 151 and 152 call it when they build a `message`.
 
 `checkCitations(claimed, passages)` compares ids exactly against `Passage.docId`, so the retrieved chunk ids go in as `docId` (H7). The `Passage` type also wants an `index` and tainted `text`; both are filler here (`checkCitations` never reads them).
 
@@ -13566,7 +13566,7 @@ Implements spec §6.3 validation: `[[passageId]]` markers are checked with `@loo
 - Test: `apps/server/app/chats/citations.test.ts`, `apps/server/app/chats/citationTitles.pg.test.ts`
 
 **Interfaces:**
-- Consumes: Task 133 `Citation`, Task 135 `StoredPassage`, `@loom/knowledge` `checkCitations`, `@loom/classify` `tainted`, `documents/repo.ts` `titleBind`.
+- Consumes: Task 133 `Citation`, Task 135 `StoredPassage`, `@loomwork/knowledge` `checkCitations`, `@loomwork/classify` `tainted`, `documents/repo.ts` `titleBind`.
 - Produces:
   - `citeReply(text, retrieved, titles): { text: string; citations: Citation[] }`.
   - `documentTitles(pool, fields, identity, documentIds): Promise<Map<string, string>>`: owner-scoped titles of the documents that still exist.
@@ -13662,7 +13662,7 @@ import { FieldCrypto } from "../crypto/fields";
 import { migrate, setAppRolePassword } from "../db/migrate";
 import { APP_PASSWORD, PG_URL, type TestDb, createTestDb } from "../db/testSupport";
 import { ALICE, ALICE2, BOB, seedDoc, seedUsers } from "../documents/testHarness";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { documentTitles } from "./citations";
 
 describe.skipIf(!PG_URL)("documentTitles (needs DOCMIND_TEST_PG_URL)", () => {
@@ -13704,8 +13704,8 @@ describe.skipIf(!PG_URL)("documentTitles (needs DOCMIND_TEST_PG_URL)", () => {
 ```ts
 import type { Identity } from "@docmind/auth";
 import type { Citation } from "@docmind/contracts";
-import { tainted } from "@loom/classify";
-import { checkCitations } from "@loom/knowledge";
+import { tainted } from "@loomwork/classify";
+import { checkCitations } from "@loomwork/knowledge";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { withTenant } from "../db/tenant";
@@ -13813,7 +13813,7 @@ Split seam: **151a** is history (`messages.ts` plus the GET route); **151b** is 
 - Test: `apps/server/app/http/body.test.ts`, `apps/server/app/chats/send.pg.test.ts`
 
 **Interfaces:**
-- Consumes: Task 133 `ChatMessageDto`, `ListMessagesQuery`, `ListMessagesResponse`, `SendMessageRequest`, `SendMessageResponse`; Task 135 `PgTurnItems.forTurns`, `TurnItem`, `StoredPassage`; Task 143 `turnKeyOfRecord`; Task 150 `citeReply`, `documentTitles`; Task 149 `loadChat`, `principalOf`, `notFound`, `unavailable`, `ChatRouteDeps`; `InvalidCursorError`, `InvalidTurnError`, `ConversationNotFoundError`, `QueueFullError`, `SubscriberLimitError` from `@loom/conversation`; `InboxClosedError`, `InboxFullError` from `@loom/workflow-runtime`.
+- Consumes: Task 133 `ChatMessageDto`, `ListMessagesQuery`, `ListMessagesResponse`, `SendMessageRequest`, `SendMessageResponse`; Task 135 `PgTurnItems.forTurns`, `TurnItem`, `StoredPassage`; Task 143 `turnKeyOfRecord`; Task 150 `citeReply`, `documentTitles`; Task 149 `loadChat`, `principalOf`, `notFound`, `unavailable`, `ChatRouteDeps`; `InvalidCursorError`, `InvalidTurnError`, `ConversationNotFoundError`, `QueueFullError`, `SubscriberLimitError` from `@loomwork/conversation`; `InboxClosedError`, `InboxFullError` from `@loomwork/workflow-runtime`.
 - Produces:
   - `HISTORY_PAGE = 30`.
   - `turnKeyOf(entry): number | undefined`.
@@ -13994,8 +13994,8 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/messages (needs DOCMIND_TEST_PG_URL
 ```ts
 import type { Identity } from "@docmind/auth";
 import type { ChatMessageDto } from "@docmind/contracts";
-import type { Conversations, HistoryEntry } from "@loom/conversation";
-import type { PrincipalChain } from "@loom/effect-runtime";
+import type { Conversations, HistoryEntry } from "@loomwork/conversation";
+import type { PrincipalChain } from "@loomwork/effect-runtime";
 import type { Pool } from "pg";
 import type { FieldCrypto } from "../crypto/fields";
 import { citeReply, documentTitles } from "./citations";
@@ -14117,7 +14117,7 @@ export async function toMessageDtos(
 ```ts
 import { ListMessagesQuery } from "@docmind/contracts";
 import type { ListMessagesResponse } from "@docmind/contracts";
-import { ConversationNotFoundError, InvalidCursorError } from "@loom/conversation";
+import { ConversationNotFoundError, InvalidCursorError } from "@loomwork/conversation";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, json, sendError } from "../http/respond";
 import { loadChat, notFound, principalOf } from "./access";
@@ -14192,8 +14192,8 @@ describe("readJson with a larger cap", () => {
 ```ts
 import { randomUUID } from "node:crypto";
 import { SendMessageResponse } from "@docmind/contracts";
-import { InvalidTurnError } from "@loom/conversation";
-import { InboxClosedError } from "@loom/workflow-runtime";
+import { InvalidTurnError } from "@loomwork/conversation";
+import { InboxClosedError } from "@loomwork/workflow-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE } from "../documents/testHarness";
@@ -14275,7 +14275,7 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
     const chatId = await seedChat(h, ALICE);
     h.fake.failNextSend(new InboxClosedError("x", "completed"));
     h.fake.failNextSend(new InvalidTurnError("edit-invalid"));
-    h.fake.failNextSend(new (await import("@loom/conversation")).QueueFullError());
+    h.fake.failNextSend(new (await import("@loomwork/conversation")).QueueFullError());
     const codes = [];
     for (let i = 0; i < 3; i++) {
       const res = await send("alice", chatId, { text: "hi" });
@@ -14286,7 +14286,7 @@ describe.skipIf(!PG_URL)("POST /api/chats/:id/messages (needs DOCMIND_TEST_PG_UR
 });
 ```
 
-(Replace the dynamic `import("@loom/conversation")` by adding `QueueFullError` to the static import from `@loom/conversation` when writing the file; it is inline above only to keep the first import line short.)
+(Replace the dynamic `import("@loomwork/conversation")` by adding `QueueFullError` to the static import from `@loomwork/conversation` when writing the file; it is inline above only to keep the first import line short.)
 
 - [ ] **Step 7 (151b): Run, see them fail** (`readJson` has no fourth parameter, and the POST route does not exist).
 
@@ -14333,8 +14333,8 @@ In `messageRoutes.ts` add the send route and its error mapping:
 ```ts
 import { SendMessageRequest } from "@docmind/contracts";
 import type { SendMessageResponse } from "@docmind/contracts";
-import { InvalidTurnError, QueueFullError, SubscriberLimitError } from "@loom/conversation";
-import { InboxClosedError, InboxFullError } from "@loom/workflow-runtime";
+import { InvalidTurnError, QueueFullError, SubscriberLimitError } from "@loomwork/conversation";
+import { InboxClosedError, InboxFullError } from "@loomwork/workflow-runtime";
 import type { ServerResponse } from "node:http";
 import { readJson } from "../http/body";
 import { unavailable } from "./access";
@@ -14408,7 +14408,7 @@ Split seam: **152a** is the route with the durable half, resume, status and the 
 - Consumes:
   - Task 143 `ChatBus` (`publish`, `subscribe`, `partial`), `LiveChatEvent`. Task 147 `ChatWiring` (`hub`, `bus`, `conversations`, `reader`).
   - Task 151 `toMessageDtos`. Task 149 `loadChat`, `principalOf`, `notFound`, `ChatRouteDeps`.
-  - Loom: `followConversation`, `ConversationHub.subscribe`/`partialOf`/`LiveEvent`, `parseCursor`, `ConversationNotFoundError`, `InvalidCursorError`, `SubscriberLimitError`; `frame` and `SseSink` from `@loom/plugin-conversation-sse` (both are exported from its index).
+  - Loom: `followConversation`, `ConversationHub.subscribe`/`partialOf`/`LiveEvent`, `parseCursor`, `ConversationNotFoundError`, `InvalidCursorError`, `SubscriberLimitError`; `frame` and `SseSink` from `@loomwork/plugin-conversation-sse` (both are exported from its index).
   - `Schedule` and `intervalSchedule` from `documents/events.ts`.
 - Produces:
   - `CHAT_STREAM_ROUTE = "GET /api/chats/:id/stream"`.
@@ -14544,8 +14544,8 @@ import {
   InvalidCursorError,
   followConversation,
   parseCursor,
-} from "@loom/conversation";
-import { SseSink, frame } from "@loom/plugin-conversation-sse";
+} from "@loomwork/conversation";
+import { SseSink, frame } from "@loomwork/plugin-conversation-sse";
 import { type Schedule, intervalSchedule } from "../documents/events";
 import { requireAuth } from "../http/requireAuth";
 import { type Handler, sendError } from "../http/respond";
@@ -14741,7 +14741,7 @@ function attachLive(_deps: ChatStreamDeps, _c: StreamCall, _sink: SseSink, _clea
 - [ ] **Step 6 (152b): Write the failing tests** (`streamLive.pg.test.ts`)
 
 ```ts
-import { withTurnScope } from "@loom/conversation";
+import { withTurnScope } from "@loomwork/conversation";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, openSse } from "../documents/testHarness";
@@ -14871,8 +14871,8 @@ describe.skipIf(!PG_URL)("GET /api/chats/:id/stream, live kinds and limits (need
 - [ ] **Step 7 (152b): Implement the live half.** Replace the 152a stub `attachLive` in `stream.ts`:
 
 ```ts
-import type { LiveEvent } from "@loom/conversation";
-import { SubscriberLimitError } from "@loom/conversation";
+import type { LiveEvent } from "@loomwork/conversation";
+import { SubscriberLimitError } from "@loomwork/conversation";
 import { ChatBusLimitError, type LiveChatEvent } from "./bus";
 
 /**
@@ -15079,8 +15079,8 @@ describe.skipIf(!PG_URL)("PATCH, DELETE and stop (needs DOCMIND_TEST_PG_URL)", (
 ```ts
 import { PatchChatRequest } from "@docmind/contracts";
 import type { StopChatResponse } from "@docmind/contracts";
-import { ConversationNotFoundError } from "@loom/conversation";
-import { InboxClosedError } from "@loom/workflow-runtime";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import { InboxClosedError } from "@loomwork/workflow-runtime";
 import { withTenant } from "../db/tenant";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";
@@ -15176,7 +15176,7 @@ Split seam: **154a** is the flow, its step and the title logic (registered, gran
 - Test: `apps/server/app/flows/chat-title/start.test.ts`, `apps/server/app/chats/titleOnSend.pg.test.ts`, `apps/server/app/flows/chat-title/flow.pg.test.ts`, `apps/server/app/bootIngest.test.ts`
 
 **Interfaces:**
-- Consumes: Task 134 `getChat`, `setTitle`, `chatTitleBind`; Task 142 `chatConversationId`; Task 151b `chatMessageRoutes` (the send route); Task 147a `ChatSettings.titleModel` and `ChatLlm`; `ComposeOptions.chat` (`{ settings, llm?, timers }`) gains `titleLlm?: LlmProvider`, built by this task's `createTitleLlm`; `subject.ts` `executionIdFor`; `@loom/llm` `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE`; `@loom/classify` `tainted`.
+- Consumes: Task 134 `getChat`, `setTitle`, `chatTitleBind`; Task 142 `chatConversationId`; Task 151b `chatMessageRoutes` (the send route); Task 147a `ChatSettings.titleModel` and `ChatLlm`; `ComposeOptions.chat` (`{ settings, llm?, timers }`) gains `titleLlm?: LlmProvider`, built by this task's `createTitleLlm`; `subject.ts` `executionIdFor`; `@loomwork/llm` `guardRequest`, `UNTRUSTED_CONTENT_SYSTEM_NOTE`; `@loomwork/classify` `tainted`.
 - Produces:
   - `ChatTitleInput = { tenantId: Uuid; userId: Uuid; chatId: Uuid }` (strict), `ChatTitleOutput = { outcome: "titled" | "skipped" }`, `CHAT_TITLE_RETRY`, `chatTitleStep` (id `"chat-title"`), `chatTitleFlow` (`"chat-title"`, `1.0.0`).
   - `createTitleLlm(env, settings): LlmProvider | undefined` (`flows/chat-title/llm.ts`): an `AnthropicMessagesProvider` for `settings.titleModel`, `maxTokens: 256`, `timeoutMs: 30_000`, `ANTHROPIC_BASE_URL` honoured, no thinking, no observer; `undefined` without `ANTHROPIC_API_KEY`. `setup.ts` calls it next to `createChatLlm` and passes `titleLlm` in `chat`.
@@ -15188,7 +15188,7 @@ Split seam: **154a** is the flow, its step and the title logic (registered, gran
 - [ ] **Step 1 (154a): Write the failing tests for the pure part** (`title.test.ts`)
 
 ```ts
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { TITLE_MAX_CHARS, cleanTitle, titleRequest } from "./title";
 
@@ -15241,8 +15241,8 @@ describe("titleRequest", () => {
 - [ ] **Step 2 (154a): Write `title.ts`**
 
 ```ts
-import { tainted } from "@loom/classify";
-import { type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loom/llm";
+import { tainted } from "@loomwork/classify";
+import { type LlmRequest, UNTRUSTED_CONTENT_SYSTEM_NOTE, guardRequest } from "@loomwork/llm";
 
 export const TITLE_MAX_CHARS = 60;
 const TEXT_MAX = 2000;
@@ -15290,9 +15290,9 @@ export function cleanTitle(raw: string): string | null {
 `flow.ts`:
 
 ```ts
-import { flow$, step$ } from "@loom/core";
-import type { RetryPolicy } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { RetryPolicy } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 
 /** Ids only. The execution id is `executionIdFor(userId, "chat-title-" + chatId)`, which makes the start once-only. */
@@ -15339,9 +15339,9 @@ import {
   LlmRequestError,
   LlmUnavailableError,
 } from "@docmind/llm-anthropic";
-import type { ConversationReader } from "@loom/conversation";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { ConversationReader } from "@loomwork/conversation";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import type { Pool } from "pg";
 import { chatConversationId } from "../../chats/ids";
 import { chatTitleBind, getChat, setTitle } from "../../chats/sessions";
@@ -15442,7 +15442,7 @@ export function chatTitleEffect(deps: ChatTitleDeps): Effect<ChatTitleInput, Cha
 
 ```ts
 import { LlmAbortedError, LlmRefusalError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import type { LlmProvider, LlmRequest, LlmResponse } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmResponse } from "@loomwork/llm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chatTitleBind, setTitle } from "../../chats/sessions";
 import { type ChatHarness, seedChat, startChatServer } from "../../chats/testHarness";
@@ -15661,7 +15661,7 @@ describe("createTitleLlm", () => {
 
 ```ts
 import { AnthropicMessagesProvider } from "@docmind/llm-anthropic";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import type { ChatSettings } from "../../chats/settings";
 
 /** The small model that names chats: one short, non-streamed call, no thinking, no observer. Absent without a key. */
@@ -15687,7 +15687,7 @@ export function createTitleLlm(env: NodeJS.ProcessEnv, settings: ChatSettings): 
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { isChatExecution } from "../../chats/activity";
 import { isRecoverableChatExecution } from "../../chats/ids";
@@ -15742,7 +15742,7 @@ describe("loomTitleStarter", () => {
 `titleOnSend.pg.test.ts` (the send route is the trigger; the harness takes a `titles` option that becomes `ChatRouteDeps.titles`):
 
 ```ts
-import { InboxClosedError } from "@loom/workflow-runtime";
+import { InboxClosedError } from "@loomwork/workflow-runtime";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, T1, U1 } from "../documents/testHarness";
@@ -15801,7 +15801,7 @@ describe.skipIf(!PG_URL)("starting the chat title from the send route (needs DOC
 `flow.pg.test.ts` (the whole path through a real in-memory Loom app, no fakes of Loom):
 
 ```ts
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chatConversationId } from "../../chats/ids";
 import { chatTitleBind } from "../../chats/sessions";
@@ -15866,7 +15866,7 @@ import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import type { ChatRef } from "../../chats/turnItems";
 import { executionIdFor } from "../../subject";
 import { ChatTitleInput, chatTitleFlow } from "./flow";
@@ -15942,7 +15942,7 @@ In `testHarness.ts`, `startChatServer`'s options gain `titles?: Pick<TitleStarte
 In `compose.ts`:
 
 ```ts
-import { createConversationReader } from "@loom/conversation";
+import { createConversationReader } from "@loomwork/conversation";
 import { loomTitleStarter } from "./flows/chat-title/start";
 // ... before buildApp:
 const titleLlm = options.chat?.titleLlm; // this task: the DOCMIND_TITLE_MODEL provider, absent without a key
@@ -16715,9 +16715,9 @@ A reference that two batches both match (the same chunk id cannot appear in two 
     - `ChatSessionStore` row: `chat_sessions` table plus the `chat-activity` folded model; no projection writes to Postgres.
     - New rows: `PassageReader`, `LinkReader` and `Retriever` (apps/server, owner-scoped reads and the retrieval of D9).
   - **§3.2.**
-    - `@loom/plugin-conversation-sse`: only `frame` and `SseSink` are used; DocMind serves its own SSE routes (H2).
-    - `@loom/agent`: `agentLoop$` through `conversation$`; `@loom/knowledge`: `checkCitations` on markers DocMind extracts (H7).
-    - `@loom/conversation`: `createConversations`, `followConversation`, `ConversationHub`, `inboxBargeIn` (wrapped by `stoppableBargeIn`).
+    - `@loomwork/plugin-conversation-sse`: only `frame` and `SseSink` are used; DocMind serves its own SSE routes (H2).
+    - `@loomwork/agent`: `agentLoop$` through `conversation$`; `@loomwork/knowledge`: `checkCitations` on markers DocMind extracts (H7).
+    - `@loomwork/conversation`: `createConversations`, `followConversation`, `ConversationHub`, `inboxBargeIn` (wrapped by `stoppableBargeIn`).
   - **§4.1.** The chat row: "Chat messages: Loom event log. Citations, thinking and tool steps: sealed `chat_turn_items`, merged on read."
   - **§4.2.**
     - Replace the `chat_sessions` bullet: `(id uuid, tenant_id, user_id, title_enc, title_source none|auto|user, scope jsonb, created_at, updated_at, deleted_at)`. `id` is minted by the server; the Loom conversation id is `u_<user>.c-<chat>` (D1, D2). Message count and last activity come from the `chat-activity` folded model, summed over a conversation's generations.

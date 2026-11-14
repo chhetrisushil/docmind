@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { EncryptedFsContentStore } from "./EncryptedFsContentStore";
 import { ADDRESS_PREFIX, deriveFingerprintKey, fingerprintOf } from "./address";

@@ -1,5 +1,5 @@
-import { type ProviderSpec, type SemanticCatalog, defineSemanticCatalog } from "@loom-ui/core";
-import type { CapabilityRef } from "@loom-ui/planner";
+import { type ProviderSpec, type SemanticCatalog, defineSemanticCatalog } from "@loomwork/ui-core";
+import type { CapabilityRef } from "@loomwork/ui-planner";
 import { DOCMIND_CATALOG, SURFACES } from "./catalog";
 import { connectionsCapability } from "./connections";
 import { KIND, PINS, provider } from "./providers";

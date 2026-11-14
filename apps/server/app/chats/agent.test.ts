@@ -1,5 +1,5 @@
-import { ConversationHub } from "@loom/conversation";
-import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loom/llm";
+import { ConversationHub } from "@loomwork/conversation";
+import { UNTRUSTED_CONTENT_SYSTEM_NOTE } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { DOC_ASSISTANT_GK_PROMPT, DOC_ASSISTANT_PROMPT, chatFlow, docAssistant } from "./agent";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID, CHAT_TOOL_IDS } from "./ids";

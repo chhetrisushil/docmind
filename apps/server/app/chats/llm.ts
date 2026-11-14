@@ -1,5 +1,5 @@
 import type { CallObserver } from "@docmind/llm-anthropic";
-import type { LlmProvider } from "@loom/llm";
+import type { LlmProvider } from "@loomwork/llm";
 import { createRoleProvider } from "../llm/factory";
 import { loadLlmRoles } from "../llm/roles";
 import { SUMMARY_MAX_TOKENS } from "./agent";

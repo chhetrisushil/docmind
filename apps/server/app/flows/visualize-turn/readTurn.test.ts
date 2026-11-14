@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { HistoryEntry } from "@loom/conversation";
+import type { HistoryEntry } from "@loomwork/conversation";
 import { describe, expect, it, vi } from "vitest";
 import { fixedChatIds } from "../../chats/testing";
 import type { StoredPassage, TurnItem } from "../../chats/turnItems";

@@ -1,4 +1,4 @@
-import type { ChatEntryRef } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryRef } from "@loomwork/ui-renderer-lit/chat";
 import { describe, expect, it, vi } from "vitest";
 import type { VisualsView } from "./visuals";
 import { type AccessoryEntry, type StripHost, VisualsAccessories } from "./visualsAccessory";

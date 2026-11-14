@@ -1,12 +1,12 @@
 import type { Identity } from "@docmind/auth";
 import { factFormatFingerprint } from "@docmind/experiences";
-import { LineErasedError, type Lineage } from "@loom-ui/lineage";
+import { LineErasedError, type Lineage } from "@loomwork/ui-lineage";
 import {
   ExecutionAlreadyExistsError,
   type ExecutionHandle,
   type RegisteredFlow,
   type WorkflowRuntime,
-} from "@loom/workflow-runtime";
+} from "@loomwork/workflow-runtime";
 import type { Pool } from "pg";
 import {
   type UserIdSource,

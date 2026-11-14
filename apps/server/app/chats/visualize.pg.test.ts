@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { VisualizeTurnResponse } from "@docmind/contracts";
-import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, BOB } from "../documents/testHarness";

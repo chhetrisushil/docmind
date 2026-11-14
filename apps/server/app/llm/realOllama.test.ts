@@ -1,5 +1,5 @@
 import { LlmRequestError } from "@docmind/llm-anthropic";
-import type { LlmProvider, LlmRequest, LlmStreamChunk } from "@loom/llm";
+import type { LlmProvider, LlmRequest, LlmStreamChunk } from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { DOC_ASSISTANT_PROMPT } from "../chats/agent";
 import { VisionReader } from "../flows/ingest-document/vision";

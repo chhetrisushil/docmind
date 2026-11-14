@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type PgConfig, PostgresReadModelStore, foldedStateDdl } from "@loom/plugin-postgres";
+import { type PgConfig, PostgresReadModelStore, foldedStateDdl } from "@loomwork/plugin-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { T1, T2, U1, U1B, U2, seedUsers } from "../documents/testHarness";

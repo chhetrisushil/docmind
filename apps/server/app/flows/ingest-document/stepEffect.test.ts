@@ -9,7 +9,7 @@ import {
   ParseRejectedError,
   ParseTimeoutError,
 } from "@docmind/parsers";
-import { EmbeddingError } from "@loom/memory";
+import { EmbeddingError } from "@loomwork/memory";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../../crypto/fields";
 import { legacyIngestId } from "../../opaqueIds/testing";

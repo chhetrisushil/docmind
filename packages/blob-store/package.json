@@ -12,11 +12,11 @@
     "typecheck:tests": "tsc -p tsconfig.test.json"
   },
   "dependencies": {
-    "@loom/plugin-content": "*",
-    "@loom/plugin-crypto": "*"
+    "@loomwork/plugin-content": "*",
+    "@loomwork/plugin-crypto": "*"
   },
   "devDependencies": {
-    "@loom/conformance": "*",
+    "@loomwork/conformance": "*",
     "@types/node": "^22.0.0",
     "vitest": "^2.1.8"
   }

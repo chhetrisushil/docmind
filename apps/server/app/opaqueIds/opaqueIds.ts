@@ -1,4 +1,4 @@
-import type { KeyStore } from "@loom/plugin-crypto";
+import type { KeyStore } from "@loomwork/plugin-crypto";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../crypto/fields";
 import {
   HANDLE_RE,

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { type EventEnvelope, flowContentHash, flowHashMatches } from "@loom/core";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { InMemoryContentStore } from "@loom/plugin-content";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import { type EventEnvelope, flowContentHash, flowHashMatches } from "@loomwork/core";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../config";
 import { FieldKeyStoreError } from "../../crypto/fields";

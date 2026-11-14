@@ -25,7 +25,7 @@ This plan was amended after the pre-flight scan (`.superpowers/sdd/2026-11-08-ch
 
 **Goal:** After a chat answer that cites at least one document has settled, a background Loom flow composes the visuals that make the answer clearer (charts, metric cards, tables) from the figures behind it, and the chat shows them in a collapsible "Visuals" strip under the assistant message. The answer streams exactly as it does today; its visuals arrive later, or never.
 
-**Architecture:** `visualize-turn` is a new Loom flow. It is started by a `turnSettledObserver` listener (Loom's generic helper in `@loom/conversation`, composed into the runtime's single `onDurableEvent`) and by an on-demand route. Its steps are:
+**Architecture:** `visualize-turn` is a new Loom flow. It is started by a `turnSettledObserver` listener (Loom's generic helper in `@loomwork/conversation`, composed into the runtime's single `onDurableEvent`) and by an on-demand route. Its steps are:
 - `turn-load`: reads the turn's retrieved passages and reply, computes the cited passages with `citeReply`, and keeps the stored facts (`visual_facts`) whose `chunkIds` intersect the cited chunks (at most 12). Output: references only.
 - `turn-extract`: only when nothing was kept. Extracts facts from the turn's own retrieved chunks with sub-project 1's prompt and grounding, sealed in `turn_visual_facts`.
 - `turn-facts`: reads the kept facts back as planner input. Its output is sealed (the same `output.facts` path as `visualize-load`).
@@ -34,7 +34,7 @@ This plan was amended after the pre-flight scan (`.superpowers/sdd/2026-11-08-ch
 
 The server serves the turn's compiled visuals through a new view source `{ turn: { chatId, ord } }` on the sub-project 1 hydration path. The web shows the strip.
 
-**Tech Stack:** TypeScript, Loom (`@loom/core`, `@loom/conversation`, `@loom/workflow-runtime`, `@loom/llm`), loom-ui (`@loom-ui/core`, `@loom-ui/planner`, `@loom-ui/lineage`, `@loom-ui/hydration`), Postgres with RLS, vitest, Lit.
+**Tech Stack:** TypeScript, Loom (`@loomwork/core`, `@loomwork/conversation`, `@loomwork/workflow-runtime`, `@loomwork/llm`), loom-ui (`@loomwork/ui-core`, `@loomwork/ui-planner`, `@loomwork/ui-lineage`, `@loomwork/ui-hydration`), Postgres with RLS, vitest, Lit.
 
 **Spec:** `docs/specs/2026-11-08-chat-visuals-design.md` (binding). Sub-project 1: `docs/specs/2026-11-08-document-visuals-design.md` (the `R<n>` tags below are sub-project 1's numbered rulings; each is glossed where it appears, and the full set lives in the PR #489 report, not in the docs). Read both first: decisions C1 to C7, sections 3 to 10.
 
@@ -74,17 +74,17 @@ Test commands: server `pnpm --filter @docmind/server exec vitest run <path relat
 - Create: `S/chats/loomPin.test.ts`, `WEB/ui/loomUiPin.test.ts`
 
 **Interfaces:**
-- Consumes: `turnSettledObserver(flow: { definition: { id: string } }, listener: TurnSettledListener): (event: EventEnvelope) => void | Promise<void>` and `TurnSettledEvent` from `@loom/conversation` (loom `packages/conversation/src/settled.ts`, merged by loom PR #776 as commit `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19`, which contains the current pin `db28b1b`).
-- Consumes: `createChatLitRegistry({ chatAccessories })`, `ChatEntryAccessories`, `ChatEntryRef` from `@loom-ui/renderer-lit/chat` (loom-ui `packages/renderer-lit/src/widgets/chatAccessory.ts` and `src/chat.ts`, merged by loom-ui PR #125 as commit `d036e842361226470d5f939aa5e6a01ba6803205`, which contains the current pin `6d4f6ca`).
+- Consumes: `turnSettledObserver(flow: { definition: { id: string } }, listener: TurnSettledListener): (event: EventEnvelope) => void | Promise<void>` and `TurnSettledEvent` from `@loomwork/conversation` (loom `packages/conversation/src/settled.ts`, merged by loom PR #776 as commit `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19`, which contains the current pin `db28b1b`).
+- Consumes: `createChatLitRegistry({ chatAccessories })`, `ChatEntryAccessories`, `ChatEntryRef` from `@loomwork/ui-renderer-lit/chat` (loom-ui `packages/renderer-lit/src/widgets/chatAccessory.ts` and `src/chat.ts`, merged by loom-ui PR #125 as commit `d036e842361226470d5f939aa5e6a01ba6803205`, which contains the current pin `6d4f6ca`).
 - Produces: `LOOM_REF` = `4af27eaa5d1f7b57eb0d234c926eddf62b02dc19` and `LOOM_UI_REF` = `d036e842361226470d5f939aa5e6a01ba6803205`.
 
-How DocMind resolves Loom: `pnpm-workspace.yaml` `overrides` map every `@loom/*` package to `link:../loom/packages/...`, a sibling checkout. There is no version or lockfile entry to change. The pins are the `LOOM_REF` and `LOOM_UI_REF` env vars in `.github/workflows/ci.yml`, which check `chhetrisushil/loom` and `chhetrisushil/loom-ui` out next to the repo at those refs and build them. Locally the developer's `../loom` and `../loom-ui` checkouts must be at (or after) the same commits and built; Step 3 does that, and Step 4's guard tests fail if they are not.
+How DocMind resolves Loom: `pnpm-workspace.yaml` `overrides` map every `@loomwork/*` package to `link:../loom/packages/...`, a sibling checkout. There is no version or lockfile entry to change. The pins are the `LOOM_REF` and `LOOM_UI_REF` env vars in `.github/workflows/ci.yml`, which check `chhetrisushil/loom` and `chhetrisushil/loom-ui` out next to the repo at those refs and build them. Locally the developer's `../loom` and `../loom-ui` checkouts must be at (or after) the same commits and built; Step 3 does that, and Step 4's guard tests fail if they are not.
 
 - [ ] **Step 1: Write the failing test** (`S/chats/loomPin.test.ts`)
 
 ```ts
-import { turnSettledObserver } from "@loom/conversation";
-import type { EventEnvelope } from "@loom/core";
+import { turnSettledObserver } from "@loomwork/conversation";
+import type { EventEnvelope } from "@loomwork/core";
 import { describe, expect, it, vi } from "vitest";
 
 // A guard that the Loom DocMind links to exports the turn-settled hook (loom PR #776). It fails on an older ../loom checkout.
@@ -101,7 +101,7 @@ describe("the pinned Loom exports turnSettledObserver", () => {
 `WEB/ui/loomUiPin.test.ts` (a guard that the loom-ui DocMind links to can draw host content under a chat entry, loom-ui PR #125; it fails on an older `../loom-ui` checkout):
 
 ```ts
-import { createChatLitRegistry } from "@loom-ui/renderer-lit/chat";
+import { createChatLitRegistry } from "@loomwork/ui-renderer-lit/chat";
 import { describe, expect, it } from "vitest";
 
 describe("the pinned loom-ui draws host content under a chat entry", () => {
@@ -116,17 +116,17 @@ describe("the pinned loom-ui draws host content under a chat entry", () => {
 
 - [ ] **Step 2: Check they fail against the old checkouts**
 
-Run: `git -C ../loom checkout db28b1b4e76ae749b382f4a34c66ee158ffcb1a7 && (cd ../loom && pnpm build) && git -C ../loom-ui checkout 6d4f6cac8861e9448d2380351b36b33b19e8f8b6 && (cd ../loom-ui && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build) && pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts && pnpm --filter @docmind/web exec vitest run src/ui/loomUiPin.test.ts`
+Run: `git -C ../loom checkout db28b1b4e76ae749b382f4a34c66ee158ffcb1a7 && (cd ../loom && pnpm build) && git -C ../loom-ui checkout 6d4f6cac8861e9448d2380351b36b33b19e8f8b6 && (cd ../loom-ui && pnpm --filter @loomwork/ui-core --filter @loomwork/ui-hydration --filter @loomwork/ui-lineage --filter @loomwork/ui-planner --filter @loomwork/ui-renderer-lit --filter @loomwork/ui-renderer-terminal build) && pnpm --filter @docmind/server exec vitest run app/chats/loomPin.test.ts && pnpm --filter @docmind/web exec vitest run src/ui/loomUiPin.test.ts`
 Expected: FAIL (`turnSettledObserver` is not exported; `lu-chat` has no `chatAccessories`). Skip this step if the sibling checkouts are already newer.
 
 - [ ] **Step 3: Pin and rebuild**
   - In `.github/workflows/ci.yml` replace the `LOOM_REF` and `LOOM_UI_REF` values and their comments:
 
 ```yaml
-  # 4af27ea: turnSettledObserver (@loom/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
+  # 4af27ea: turnSettledObserver (@loomwork/conversation, loom PR #776): a callback per settled conversation turn once its record is durable. Contains db28b1b (EncryptingContentStore honours the per-call ContentAccess; reserved lineage streams are never tombstoned).
   LOOM_REF: 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19
   # The loom-ui commit DocMind links to (core, hydration, lineage, planner, renderer-lit, renderer-terminal, built from source).
-  # d036e84: chatAccessories (@loom-ui/renderer-lit/chat, loom-ui PR #125): host content drawn under a chat transcript entry. Contains 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
+  # d036e84: chatAccessories (@loomwork/ui-renderer-lit/chat, loom-ui PR #125): host content drawn under a chat transcript entry. Contains 6d4f6ca (erasable lineage, the planner's keyed decision id); its own CI builds against the LOOM_REF above.
   # Bump deliberately, like LOOM_REF.
   LOOM_UI_REF: d036e842361226470d5f939aa5e6a01ba6803205
 ```
@@ -135,7 +135,7 @@ Expected: FAIL (`turnSettledObserver` is not exported; `lu-chat` has no `chatAcc
 
 ```bash
 git -C ../loom checkout 4af27eaa5d1f7b57eb0d234c926eddf62b02dc19 && (cd ../loom && pnpm install --frozen-lockfile && pnpm build)
-git -C ../loom-ui checkout d036e842361226470d5f939aa5e6a01ba6803205 && (cd ../loom-ui && pnpm install --frozen-lockfile && pnpm --filter @loom-ui/core --filter @loom-ui/hydration --filter @loom-ui/lineage --filter @loom-ui/planner --filter @loom-ui/renderer-lit --filter @loom-ui/renderer-terminal build)
+git -C ../loom-ui checkout d036e842361226470d5f939aa5e6a01ba6803205 && (cd ../loom-ui && pnpm install --frozen-lockfile && pnpm --filter @loomwork/ui-core --filter @loomwork/ui-hydration --filter @loomwork/ui-lineage --filter @loomwork/ui-planner --filter @loomwork/ui-renderer-lit --filter @loomwork/ui-renderer-terminal build)
 pnpm install
 ```
 
@@ -596,7 +596,7 @@ describe("turnWithVisuals", () => {
 });
 ```
 
-(`SemanticNode`, `Experience`, `Operation`, `ProviderSpec`, `genesis`, `replay` come from `@loom-ui/core`; add whatever the file does not already import.)
+(`SemanticNode`, `Experience`, `Operation`, `ProviderSpec`, `genesis`, `replay` come from `@loomwork/ui-core`; add whatever the file does not already import.)
 
 `PE/hydrate.test.ts` (append inside a new `describe`):
 
@@ -1031,7 +1031,7 @@ it("owns a chat turn's visuals lineage line by its user, and refuses a malformed
 });
 ```
 
-(import `LINEAGE_STREAM_PREFIX` from `@loom-ui/lineage` at the top of that file if absent; `USER` is that file's existing constant.)
+(import `LINEAGE_STREAM_PREFIX` from `@loomwork/ui-lineage` at the top of that file if absent; `USER` is that file's existing constant.)
 
 `ID/stepEffect.test.ts` (append; reuse this file's `runEffect`/`REF` helpers where they exist, else the inline call below):
 
@@ -1246,7 +1246,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 - Test: `VT/readTurn.test.ts`, `VT/coverage.test.ts`, `VT/steps.load.test.ts`
 
 **Interfaces:**
-- Consumes: `citeReply`, `documentTitles` (`CH/citations.ts`), `turnKeyOfRecord` (`CH/scope.ts`), `chatConversationId` (`CH/ids.ts`), `PgTurnItems.forTurns` and `StoredPassage` (`CH/turnItems.ts`), `ConversationReader.read` (`@loom/conversation`), `VisualFactStore.list` (`VD/pgFacts.ts`), `isDocumentGone` (`ID/errors.ts`).
+- Consumes: `citeReply`, `documentTitles` (`CH/citations.ts`), `turnKeyOfRecord` (`CH/scope.ts`), `chatConversationId` (`CH/ids.ts`), `PgTurnItems.forTurns` and `StoredPassage` (`CH/turnItems.ts`), `ConversationReader.read` (`@loomwork/conversation`), `VisualFactStore.list` (`VD/pgFacts.ts`), `isDocumentGone` (`ID/errors.ts`).
 - Produces:
   - `readTurn(deps: TurnReadDeps, ref: TurnRef, signal?: AbortSignal): Promise<TurnRead | null>`
     - `interface TurnReadDeps { reader: Pick<ConversationReader, "read">; items: Pick<PgTurnItems, "forTurns">; pool: Pool; fields: FieldCrypto }`
@@ -1314,7 +1314,7 @@ describe("coverFacts", () => {
 
 ```ts
 import { randomUUID } from "node:crypto";
-import type { HistoryEntry } from "@loom/conversation";
+import type { HistoryEntry } from "@loomwork/conversation";
 import { describe, expect, it, vi } from "vitest";
 import type { StoredPassage, TurnItem } from "../../chats/turnItems";
 import { readTurn } from "./readTurn";
@@ -1494,7 +1494,7 @@ export function coverFacts(input: {
 `VT/readTurn.ts`:
 
 ```ts
-import type { ConversationReader, HistoryEntry } from "@loom/conversation";
+import type { ConversationReader, HistoryEntry } from "@loomwork/conversation";
 import type { Pool } from "pg";
 import { citeReply, documentTitles } from "../../chats/citations";
 import { chatConversationId } from "../../chats/ids";
@@ -1572,7 +1572,7 @@ export async function readTurn(deps: TurnReadDeps, ref: TurnRef, signal?: AbortS
 
 ```ts
 import { RecordOrd } from "@docmind/contracts";
-import type { RetryPolicy } from "@loom/core";
+import type { RetryPolicy } from "@loomwork/core";
 import { z } from "zod";
 import { FAILURE_CODES } from "../ingest-document/errors";
 import { MAX_FACTS, StoredFact } from "../visualize-document/facts";
@@ -1604,7 +1604,7 @@ export type TurnLoadOutput = z.infer<typeof TurnLoadOutput>;
 `VT/steps.ts` (first slice):
 
 ```ts
-import type { Effect } from "@loom/effect-runtime";
+import type { Effect } from "@loomwork/effect-runtime";
 import { isDocumentGone } from "../ingest-document/errors";
 import { type StepGuard, type StepSeams, ingestStepOptions, stepEffectOf } from "../ingest-document/stepEffect";
 import type { Fact } from "../visualize-document/facts";
@@ -1696,7 +1696,7 @@ Plan decision: `turn-facts` is a step of its own (the spec lists four). The plan
 ```ts
 import { randomUUID } from "node:crypto";
 import { LlmRefusalError } from "@docmind/llm-anthropic";
-import { type LlmProvider } from "@loom/llm";
+import { type LlmProvider } from "@loomwork/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { Fact } from "../visualize-document/facts";
 import type { TurnRef } from "./ids";
@@ -1912,8 +1912,8 @@ export type TurnFactsOutput = z.infer<typeof TurnFactsOutput>;
 
 ```ts
 import { LlmRefusalError } from "@docmind/llm-anthropic";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import { isDocumentGone } from "../ingest-document/errors";
 import {
   LLM_BACKOFF_CAP_MS,
@@ -2127,7 +2127,7 @@ describe("commitPlanTo a turn's line", () => {
 `VT/plan.test.ts`:
 
 ```ts
-import { ReferencePlanner } from "@loom-ui/planner";
+import { ReferencePlanner } from "@loomwork/ui-planner";
 import { describe, expect, it } from "vitest";
 import { recording, scriptedPlannerModel } from "../visualize-document/testing";
 import { TURN_INTENT, planTurn } from "./plan";
@@ -2153,7 +2153,7 @@ describe("planTurn", () => {
       ctx,
     );
     expect(plan.findings.filter((f) => f.severity === "error")).toEqual([]);
-    // `remapProvider` is the planner's provider operation (`Operation` of @loom-ui/core has no other provider-adding member)
+    // `remapProvider` is the planner's provider operation (`Operation` of @loomwork/ui-core has no other provider-adding member)
     const pins = plan.ops.flatMap((o) => (o.type === "remapProvider" ? [o.spec.executionGraph[0]?.toolSchemaHash] : [])).sort();
     expect(pins).toEqual([`docmind:visual.facts@1#${A}/fact-0`, `docmind:visual.facts@1#${B}/fact-0`].sort());
     // replay: composing again with the same decision context is served from it, with no further model call
@@ -2175,8 +2175,8 @@ The assertion is that every provider the plan adds carries the pin of its capabi
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
 import { describe, expect, it, vi } from "vitest";
 import { ChatBus, type LiveChatEvent } from "../../chats/bus";
 import { SENSITIVE_EVENT_PATHS } from "../../sensitive";
@@ -2268,7 +2268,7 @@ In `CH/streamLive.pg.test.ts` add one case in the style of its existing `tool` f
 `VT/testing.ts`:
 
 ```ts
-import type { PlanResult } from "@loom-ui/planner";
+import type { PlanResult } from "@loomwork/ui-planner";
 import { scriptedFigurePlan } from "../visualize-document/testing";
 import { planTurn } from "./plan";
 
@@ -2310,12 +2310,12 @@ export const commitPlan = (lineage: Lineage, ref: VisualizeRef, plan: CommitPlan
   commitPlanTo(lineage, { experienceId: experienceIdOf(ref), intent: VISUALS_INTENT, sourceKind: "document-visuals" }, plan, now);
 ```
 
-(import `type Intent` from `@loom-ui/core`.)
+(import `type Intent` from `@loomwork/ui-core`.)
 
 `VD/plan.ts`: the body of `planVisuals` becomes one exported function both flows call (the document flow keeps its output unchanged):
 
 ```ts
-import type { CapabilityRef } from "@loom-ui/planner"; // add to the file's existing @loom-ui/planner import
+import type { CapabilityRef } from "@loomwork/ui-planner"; // add to the file's existing @loomwork/ui-planner import
 
 /** One `ctx.decide` (the planner's own): the model's plan for `intent` over `capabilities`, recorded and replayable. */
 export const composeVisuals = (planner: Planner, intent: Intent, capabilities: CapabilityRef[], ctx: DecideContext): Promise<PlanResult> =>
@@ -2365,8 +2365,8 @@ export async function committing<T>(commit: () => Promise<T>): Promise<T> {
 
 ```ts
 import { type OfferedFact, factCapabilities } from "@docmind/experiences";
-import type { Intent } from "@loom-ui/core";
-import type { DecideContext, PlanResult, Planner } from "@loom-ui/planner";
+import type { Intent } from "@loomwork/ui-core";
+import type { DecideContext, PlanResult, Planner } from "@loomwork/ui-planner";
 import { composeVisuals } from "../visualize-document/plan";
 
 export const TURN_INTENT: Intent = {
@@ -2386,10 +2386,10 @@ export const planTurn = (planner: Planner, offered: readonly OfferedFact[], ctx:
 `VT/commit.ts`:
 
 ```ts
-import type { Operation } from "@loom-ui/core";
-import type { Lineage } from "@loom-ui/lineage";
-import type { PlanReport, PlanResult } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
+import type { Operation } from "@loomwork/ui-core";
+import type { Lineage } from "@loomwork/ui-lineage";
+import type { PlanReport, PlanResult } from "@loomwork/ui-planner";
+import type { Effect } from "@loomwork/effect-runtime";
 import type { ChatBus } from "../../chats/bus";
 import { VisualsLineageError } from "../ingest-document/errors";
 import { type StepGuard, StepResult, type StepSeams, ingestStepOptions, stepEffectOf } from "../ingest-document/stepEffect";
@@ -2510,7 +2510,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
   - `loomTurnStarter(runtime: Pick<WorkflowRuntime, "start">, flow: RegisteredFlow, o: TurnStarterOptions): TurnVisualsStarter` where `TurnVisualsStarter { onSettled(e: TurnSettledEvent): void; visualize(ref: TurnRef): Promise<VisualizeStart>; running(ref: TurnRef): boolean; idle(): Promise<void> }` (`idle()` awaits the checks and `runtime.start` calls in flight, never an execution's completion: the chat-title pattern, `flows/chat-title/start.ts`) and `VisualizeStart = { kind: "started"; rerun: number } | { kind: "running" } | { kind: "disabled" }`
   - `composeDurableObservers(...observers: ((e: EventEnvelope) => void | Promise<void>)[]): (e: EventEnvelope) => void`
   - `FlowDeps.visualizeTurn?: { flow: RegisteredFlow; deps: TurnVisualizeDeps }`, `FlowDeps.onDurableEvent?: (e: EventEnvelope) => void | Promise<void>` (passed to `observability.onDurableEvent`)
-- Consumes: `turnSettledObserver`, `TurnSettledEvent` (`@loom/conversation`, Task 1), `chatIdOfConversation`, `CHAT_FLOW_ID`, `CHAT_GK_FLOW_ID` (`CH/ids.ts`), `newVisualizeGate()` (`VD/deps.ts`), `planTurn`, `turnCommitEffect`, the steps of Tasks 5 to 7.
+- Consumes: `turnSettledObserver`, `TurnSettledEvent` (`@loomwork/conversation`, Task 1), `chatIdOfConversation`, `CHAT_FLOW_ID`, `CHAT_GK_FLOW_ID` (`CH/ids.ts`), `newVisualizeGate()` (`VD/deps.ts`), `planTurn`, `turnCommitEffect`, the steps of Tasks 5 to 7.
 
 Plan decision: the visuals gate is `newVisualizeGate()`'s one instance, shared by `visualize-document` and `visualize-turn` (sub-project 1's "at most 2 in flight"), and the backpressure count is that gate's `waiting` (queued attempts waiting for their tenant slot). It undercounts attempts queued behind the process slots of the fair scheduler; at two process slots that is a bounded error, and the cap is a safety valve, not a quota.
 
@@ -2528,7 +2528,7 @@ Plan decision: on demand, the next re-run number is found by probing `-r1`, `-r2
 
 ```ts
 import { randomUUID } from "node:crypto";
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../../chats/ids";
 import type { TurnRead } from "./readTurn";
@@ -2598,7 +2598,7 @@ describe("turnToVisualize", () => {
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { chatConversationId } from "../../chats/ids";
 import { turnExecutionId } from "./ids";
@@ -2714,12 +2714,12 @@ describe("the turn starter: on demand", () => {
 
 ```ts
 import { randomUUID } from "node:crypto";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
-import { InMemoryContentStore } from "@loom/plugin-content";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
+import { ExecutionAlreadyExistsError } from "@loomwork/workflow-runtime";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../config";
 import { ChatBus, type LiveChatEvent } from "../../chats/bus";
@@ -2863,7 +2863,7 @@ describe("visualize-turn flow", () => {
 `S/observers.test.ts`:
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 import { describe, expect, it, vi } from "vitest";
 import { composeDurableObservers } from "./observers";
 
@@ -2921,9 +2921,9 @@ Expected: FAIL.
 `VT/flow.ts`:
 
 ```ts
-import type { Planner } from "@loom-ui/planner";
-import { flow$, step$ } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import type { Planner } from "@loomwork/ui-planner";
+import { flow$, step$ } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 import { StepResult } from "../ingest-document/stepEffect";
 import type { TurnRef } from "./ids";
@@ -3006,10 +3006,10 @@ export const visualizeTurnFlow = (planner: () => Planner | undefined = () => und
 `VT/deps.ts`:
 
 ```ts
-import type { Lineage } from "@loom-ui/lineage";
-import type { Planner } from "@loom-ui/planner";
-import type { Effect } from "@loom/effect-runtime";
-import type { LlmProvider } from "@loom/llm";
+import type { Lineage } from "@loomwork/ui-lineage";
+import type { Planner } from "@loomwork/ui-planner";
+import type { Effect } from "@loomwork/effect-runtime";
+import type { LlmProvider } from "@loomwork/llm";
 import type { ChatBus } from "../../chats/bus";
 import type { StepGuard, StepSeams } from "../ingest-document/stepEffect";
 import type { VisualFactStore } from "../visualize-document/pgFacts";
@@ -3049,7 +3049,7 @@ export const turnEffects = (d: TurnVisualizeDeps): Record<string, Effect> => ({
 `VT/trigger.ts`:
 
 ```ts
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 import { chatIdOfConversation } from "../../chats/ids";
 import type { TurnRef } from "./ids";
 import type { TurnRead } from "./readTurn";
@@ -3087,8 +3087,8 @@ export async function turnToVisualize(e: TurnSettledEvent, d: TriggerDeps): Prom
 `VT/start.ts`:
 
 ```ts
-import type { TurnSettledEvent } from "@loom/conversation";
-import { ExecutionAlreadyExistsError, type ExecutionHandle, type RegisteredFlow, type WorkflowRuntime } from "@loom/workflow-runtime";
+import type { TurnSettledEvent } from "@loomwork/conversation";
+import { ExecutionAlreadyExistsError, type ExecutionHandle, type RegisteredFlow, type WorkflowRuntime } from "@loomwork/workflow-runtime";
 import { type TurnRef, turnExecutionId } from "./ids";
 import { TurnInput } from "./model";
 import { type TriggerDeps, turnToVisualize } from "./trigger";
@@ -3193,7 +3193,7 @@ export function loomTurnStarter(
 `S/observers.ts`:
 
 ```ts
-import type { EventEnvelope } from "@loom/core";
+import type { EventEnvelope } from "@loomwork/core";
 
 type Observer = (event: EventEnvelope) => void | Promise<void>;
 
@@ -3241,7 +3241,7 @@ then `const flows = [...(deps.chat?.flows ?? []), ...(deps.visualize ? [deps.vis
 `S/compose.ts` (after `visualize` is built and before `buildApp`, and after `app`/`status` exist for the starter):
 
 ```ts
-import { turnSettledObserver } from "@loom/conversation";
+import { turnSettledObserver } from "@loomwork/conversation";
 import { readTurn } from "./flows/visualize-turn/readTurn";
 import { PgTurnVisualFacts } from "./flows/visualize-turn/pgTurnFacts";
 import { PgTurnGuard } from "./flows/visualize-turn/guard";
@@ -3251,8 +3251,8 @@ import { MAX_WAITING } from "./flows/visualize-turn/trigger";
 import { composeDurableObservers } from "./observers";
 import { CHAT_FLOW_ID, CHAT_GK_FLOW_ID } from "./chats/ids";
 import type { TurnRef } from "./flows/visualize-turn/ids";
-import type { EventEnvelope } from "@loom/core";
-import type { TurnSettledEvent } from "@loom/conversation";
+import type { EventEnvelope } from "@loomwork/core";
+import type { TurnSettledEvent } from "@loomwork/conversation";
 
 // --- before buildApp ---
 // The turn-settled hook needs the runtime that buildApp creates, so the observer is late-bound (as `statusReads` is).
@@ -3666,7 +3666,7 @@ it("lists the distinct documents the planner's providers name, and none for turn
 `S/ui/routes.test.ts` (this file's `lineage`, `get`, `post`, `ID` and `authenticator` exist; the changes below are to its top and to the `uiRoutes({...})` call in `beforeAll`). The owner check must be exercised, so the file gets a second identity (bob, another user of the same tenant) and `ownsChat` decides by the identity it is given:
 
 ```ts
-import { ReferencePlanner } from "@loom-ui/planner";
+import { ReferencePlanner } from "@loomwork/ui-planner";
 import { commitPlanTo } from "../flows/visualize-document/lineage";   // the file imports commitPlan from this module already: extend that import
 import { recording, scriptedPlannerModel } from "../flows/visualize-document/testing"; // aPlan is imported from here already: extend that import
 import { turnExperienceId } from "../flows/visualize-turn/ids";
@@ -4011,7 +4011,7 @@ async turnFacts({ chatId, ord }) {
 `CH/turnHeads.ts`:
 
 ```ts
-import type { Lineage } from "@loom-ui/lineage";
+import type { Lineage } from "@loomwork/ui-lineage";
 import { turnExperienceId } from "../flows/visualize-turn/ids";
 
 export interface TurnHeads {
@@ -4081,7 +4081,7 @@ Claude-Session: https://claude.ai/code/session_011uGukQihQRMMZgAPLXQiX6"
 
 ### Task 11: The web: the Visuals strip, the action states and the live frame
 
-The strip is placed by loom-ui itself: loom-ui `d036e84` (loom-ui PR #125, pinned in Task 1) lets a host draw content inside one transcript entry through `chatAccessories` (`@loom-ui/renderer-lit/chat`). DocMind implements `ChatEntryAccessories`: a per-page map `entryId -> host-owned strip node`, where the entry id is `t<turn>.assistant`. There is no reach into `lu-chat`'s shadow root, no `MutationObserver` and no reconciler.
+The strip is placed by loom-ui itself: loom-ui `d036e84` (loom-ui PR #125, pinned in Task 1) lets a host draw content inside one transcript entry through `chatAccessories` (`@loomwork/ui-renderer-lit/chat`). DocMind implements `ChatEntryAccessories`: a per-page map `entryId -> host-owned strip node`, where the entry id is `t<turn>.assistant`. There is no reach into `lu-chat`'s shadow root, no `MutationObserver` and no reconciler.
 
 **Files:**
 - Modify: `WEB/api/client.ts` (`ViewSource`, `uiTurnVisuals`, `visualizeTurn`), `WEB/ui/session.ts` (`fetchPayload`, `mount` takes `chatAccessories` and passes it to `createChatLitRegistry`, the real call site), `WEB/components/dm-view.ts` (`turn` and `chatAccessories` properties)
@@ -4102,7 +4102,7 @@ The strip is placed by loom-ui itself: loom-ui `d036e84` (loom-ui PR #125, pinne
   - `class VisualsAccessories implements ChatEntryAccessories` with `constructor(o: { chatId: string; make: () => StripHost; onVisualize(ord: number): void })`, `update(entries: readonly AccessoryEntry[]): void`, `render(entry: ChatEntryRef): Node | null`, `subscribe(changed): () => void`, `dispose(): void`; `interface StripHost extends HTMLElement { chatId: string; ord: number; rev: number; view: VisualsView | null }`; `AccessoryEntry = { id: string; role: "user" | "assistant"; ord?: number; visualsRev: number; visuals: VisualsView | null }`
   - `<dm-turn-visuals>`: properties `chatId: string`, `ord: number`, `rev: number`, `view: VisualsView | null`; dispatches `visualize` (a `CustomEvent<{ ord: number }>`, `bubbles`, `composed`); stops its nested view's `view-ready` and `view-problem` at itself
   - `dm-view` properties `turn: { chatId: string; ord: number } | undefined` (a third source beside `name` and `document`) and `chatAccessories: ChatEntryAccessories | undefined` (given to `ViewSession.mount`)
-- Consumes: `UiViewResponse`, `ChatStreamEvent` (with the `visuals` member), `ChatMessageDto.hasVisuals` (Tasks 7 and 10), `ViewSession`, `ApiError` (`WEB/api/http.ts`), `ChatEntryAccessories`, `ChatEntryRef` (`@loom-ui/renderer-lit/chat`, pinned in Task 1).
+- Consumes: `UiViewResponse`, `ChatStreamEvent` (with the `visuals` member), `ChatMessageDto.hasVisuals` (Tasks 7 and 10), `ViewSession`, `ApiError` (`WEB/api/http.ts`), `ChatEntryAccessories`, `ChatEntryRef` (`@loomwork/ui-renderer-lit/chat`, pinned in Task 1).
 
 How the accessory behaves (loom-ui `chatAccessory.ts`, d036e84): `lu-chat` calls `render(entry, chat)` once per entry and status (first appearance, a streaming reply settling) and again on `changed(entryId)`; never on streaming deltas, never for a restricted entry. It draws the returned node inside the entry's `<article>`, after the body, wrapped in `<div data-entry-accessory part="entry-accessory">`. A host-owned node that is returned again is never remounted, so the strip keeps its expanded state and its mounted widgets across the transcript's redraws. A throwing `render` or `subscribe` draws nothing.
 
@@ -4156,7 +4156,7 @@ describe("visualsViewOf", () => {
 `WEB/chat/visualsAccessory.test.ts` (the accessory driven directly, as `lu-chat` drives it):
 
 ```ts
-import type { ChatEntryRef } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryRef } from "@loomwork/ui-renderer-lit/chat";
 import { describe, expect, it, vi } from "vitest";
 import { type AccessoryEntry, type StripHost, VisualsAccessories } from "./visualsAccessory";
 import type { VisualsView } from "./visuals";
@@ -4578,7 +4578,7 @@ visualizeTurn: async (chatId, ord) => {
 `WEB/ui/session.ts`: widen the three `Pick<Api, "uiView" | "uiDocumentDetail" ...>` types with `"uiTurnVisuals"` and
 
 ```ts
-import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryAccessories } from "@loomwork/ui-renderer-lit/chat";
 
 const fetchPayload = (api: Pick<Api, "uiView" | "uiDocumentDetail" | "uiTurnVisuals">, source: ViewSource, signal: AbortSignal | undefined): Promise<UiViewResponse> =>
   "view" in source
@@ -4598,7 +4598,7 @@ mount(host: HTMLElement, onAction: ActionHandler, o: { chatAccessories?: ChatEnt
 `WEB/components/dm-view.ts`: add `turn: { attribute: false }` and `chatAccessories: { attribute: false }` to `properties`, and
 
 ```ts
-import type { ChatEntryAccessories } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryAccessories } from "@loomwork/ui-renderer-lit/chat";
 declare turn: { chatId: string; ord: number } | undefined;
 /** Host content drawn under chat entries (a Chat view only): given to the view session's registry. */
 declare chatAccessories: ChatEntryAccessories | undefined;
@@ -4664,7 +4664,7 @@ export function visualsViewOf(e: {
 `WEB/chat/visualsAccessory.ts`:
 
 ```ts
-import type { ChatEntryAccessories, ChatEntryRef } from "@loom-ui/renderer-lit/chat";
+import type { ChatEntryAccessories, ChatEntryRef } from "@loomwork/ui-renderer-lit/chat";
 import type { VisualsView } from "./visuals";
 
 /** The element the page puts under a reply: `<dm-turn-visuals>` in the app, a stand-in in tests. */

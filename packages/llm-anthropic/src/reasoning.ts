@@ -4,8 +4,8 @@ import type {
   LlmReasoning,
   LlmReasoningPart,
   LlmToolCall,
-} from "@loom/llm";
-import { layoutOf } from "@loom/llm";
+} from "@loomwork/llm";
+import { layoutOf } from "@loomwork/llm";
 import type { ContentBlock } from "./mapping";
 
 /** The provider id on every reasoning part: a part is only sent back to the provider that produced it (ADR 0133 D2). */

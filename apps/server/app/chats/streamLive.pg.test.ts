@@ -1,6 +1,6 @@
 import http from "node:http";
-import { tainted } from "@loom/classify";
-import { withTurnScope } from "@loom/conversation";
+import { tainted } from "@loomwork/classify";
+import { withTurnScope } from "@loomwork/conversation";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { ALICE, ALICE2, openSse } from "../documents/testHarness";

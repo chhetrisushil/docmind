@@ -1,4 +1,4 @@
-import { EmbeddingError } from "@loom/memory";
+import { EmbeddingError } from "@loomwork/memory";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   EmbeddingAbortedError,

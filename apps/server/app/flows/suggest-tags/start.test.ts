@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ExecutionAlreadyExistsError, type ExecutionHandle } from "@loom/workflow-runtime";
+import { ExecutionAlreadyExistsError, type ExecutionHandle } from "@loomwork/workflow-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { deterministicUser, legacySuggestTagsId, testIdSource } from "../../opaqueIds/testing";
 import { loomSuggestTagsStarter } from "./start";

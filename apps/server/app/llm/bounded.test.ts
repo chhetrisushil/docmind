@@ -13,7 +13,7 @@ import {
   type LlmResponse,
   type LlmStreamChunk,
   UnsupportedModalityError,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { LlmConfigError, bounded, mapLlmError } from "./bounded";
 
@@ -54,7 +54,7 @@ describe("mapLlmError", () => {
       });
     },
   );
-  it("matches Loom errors by name, so a second copy of @loom/llm is handled", () => {
+  it("matches Loom errors by name, so a second copy of @loomwork/llm is handled", () => {
     class LlmHttpError extends Error {
       status = 503;
       name = "LlmHttpError";
@@ -327,7 +327,7 @@ describe("mapLlmError on an LlmHttpError of kind auth", () => {
       message: `the language model credentials were rejected (HTTP ${status})`,
     });
   });
-  it("matches by name, so a second copy of @loom/llm is handled", () => {
+  it("matches by name, so a second copy of @loomwork/llm is handled", () => {
     const e = mapLlmError(
       Object.assign(new Error("sentinel"), { name: "LlmHttpError", status: 400, kind: "auth" }),
     );

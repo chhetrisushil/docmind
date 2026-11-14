@@ -4,7 +4,7 @@ import {
   type SemanticCatalog,
   defineSemanticCatalog,
   isChatFamilyKind,
-} from "@loom-ui/core";
+} from "@loomwork/ui-core";
 
 /** The surfaces DocMind compiles for. Adding one means adding a key to every entry below, nothing else. */
 export const SURFACES = ["web", "terminal"] as const;

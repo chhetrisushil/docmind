@@ -3,7 +3,7 @@ import {
   type LlmRequest,
   type LlmStreamChunk,
   assistantMessageOf,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { describe, expect, it } from "vitest";
 import { recordingObserver } from "./__helpers__/observer";
 import { AnthropicMessagesProvider, type AnthropicOptions } from "./provider";

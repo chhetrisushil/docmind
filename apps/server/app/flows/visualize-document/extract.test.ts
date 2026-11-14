@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { LlmRefusalError, LlmRequestError, LlmUnavailableError } from "@docmind/llm-anthropic";
-import { tainted } from "@loom/classify";
+import { tainted } from "@loomwork/classify";
 import {
   type LlmProvider,
   type LlmRequest,
   UNTRUSTED_CONTENT_SYSTEM_NOTE,
   guardRequest,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import { describe, expect, it, vi } from "vitest";
 import { legacyVisualizeId } from "../../opaqueIds/testing";
 import { LLM_RETRY } from "../ingest-document/stepEffect";

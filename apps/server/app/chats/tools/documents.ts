@@ -1,6 +1,6 @@
 import type { DocumentStats, DocumentSummary } from "@docmind/contracts";
 import type { VectorScope } from "@docmind/vector-pg";
-import { tool$ } from "@loom/core";
+import { tool$ } from "@loomwork/core";
 import { z } from "zod";
 import {
   type ToolHarnessDeps,

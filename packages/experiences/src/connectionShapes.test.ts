@@ -1,4 +1,4 @@
-import { DiagramValue, MAX_DIAGRAM_NODES, TableValue, diagramProblems } from "@loom-ui/core";
+import { DiagramValue, MAX_DIAGRAM_NODES, TableValue, diagramProblems } from "@loomwork/ui-core";
 import { describe, expect, it } from "vitest";
 import { EMPTY_RELATED, SELF_LABEL } from "./connectionShapes";
 import type { RawConnections } from "./invoker";

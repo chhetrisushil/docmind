@@ -6,7 +6,7 @@ import {
   type UploadDocumentResponse,
 } from "@docmind/contracts";
 import type { FakeRequest } from "@docmind/llm-anthropic/testing";
-import { DEFAULT_SUMMARIZER_INSTRUCTION } from "@loom/agent";
+import { DEFAULT_SUMMARIZER_INSTRUCTION } from "@loomwork/agent";
 import { afterAll, describe, expect, it } from "vitest";
 import { PG_URL } from "../db/testSupport";
 import { type IngestStack, startIngestStack } from "../documents/ingestStack";

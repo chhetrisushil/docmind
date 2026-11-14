@@ -2,7 +2,7 @@
 
 Date: 2026-11-03. Status: implemented on feat/chat-rolling-summary (summarizer; DocMind-only sealing via an event-store
 decorator). One deviation, see Implementation notes.
-Loom: `252cf914` (`@loom/conversation` `budget.summarizerToolId`, `@loom/agent` `createSummarizerEffect`, ADR 0137).
+Loom: `252cf914` (`@loomwork/conversation` `budget.summarizerToolId`, `@loomwork/agent` `createSummarizerEffect`, ADR 0137).
 
 ## Problem
 

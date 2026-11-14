@@ -1,8 +1,8 @@
 import { createSecretKey, randomBytes, randomUUID } from "node:crypto";
 import { PostgresKeyStore } from "@docmind/keystore-pg";
-import { LINEAGE_STREAM_PREFIX, LINEAGE_WORKFLOW_ID } from "@loom-ui/lineage";
-import type { EventEnvelope } from "@loom/core";
-import { isKeyUnavailable, isPayloadShredded } from "@loom/event-runtime";
+import type { EventEnvelope } from "@loomwork/core";
+import { isKeyUnavailable, isPayloadShredded } from "@loomwork/event-runtime";
+import { LINEAGE_STREAM_PREFIX, LINEAGE_WORKFLOW_ID } from "@loomwork/ui-lineage";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setAppRolePassword, setRolePassword } from "../../db/migrate";

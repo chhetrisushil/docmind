@@ -1,5 +1,5 @@
 import { RecordOrd } from "@docmind/contracts";
-import type { PlanResult } from "@loom-ui/planner";
+import type { PlanResult } from "@loomwork/ui-planner";
 import { UUID_PATTERN, legacyIds } from "../../opaqueIds";
 import { scriptedFigurePlan } from "../visualize-document/testing";
 import { planTurn } from "./plan";

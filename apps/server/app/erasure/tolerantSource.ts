@@ -1,6 +1,6 @@
-import type { EventEnvelope } from "@loom/core";
-import { type EventStore, isKeyUnavailable } from "@loom/event-runtime";
-import { EncryptingEventStore, type KeyStore } from "@loom/plugin-crypto";
+import type { EventEnvelope } from "@loomwork/core";
+import { type EventStore, isKeyUnavailable } from "@loomwork/event-runtime";
+import { EncryptingEventStore, type KeyStore } from "@loomwork/plugin-crypto";
 import { subjectOfExecution } from "../subject";
 
 /** `["EVENT_TYPE.path", …]` (a store's `sealingCapability().covers`) back into the per-type path map. */

@@ -1,5 +1,5 @@
-import type { EventEnvelope } from "@loom/core";
-import type { ReadModelEventSource } from "@loom/plugin-read-model";
+import type { EventEnvelope } from "@loomwork/core";
+import type { ReadModelEventSource } from "@loomwork/plugin-read-model";
 import { INGEST_GENERATION } from "../documents/ingest";
 
 /** Documents at the default generation, in the shape `forPage` takes. */

@@ -1,4 +1,4 @@
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { legacyChatConversationId } from "../../chats/ids";
 import { chatTitleBind } from "../../chats/sessions";

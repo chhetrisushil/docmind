@@ -1,4 +1,4 @@
-import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";
+import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";
 import { describe, expect, it } from "vitest";
 import { legacyIds, opaqueIds } from "./opaqueIds";
 import { testOpaqueIds } from "./opaqueIds/testing";

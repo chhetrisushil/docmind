@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createViews } from "@docmind/experiences";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { InMemoryAsyncEventStore } from "@loom/event-runtime";
-import type { LlmProvider, LlmRequest } from "@loom/llm";
-import { InMemoryContentStore } from "@loom/plugin-content";
-import { EncryptingEventStore, InMemoryKeyStore } from "@loom/plugin-crypto";
-import { ExecutionAlreadyExistsError } from "@loom/workflow-runtime";
+import { InMemoryAsyncEventStore } from "@loomwork/event-runtime";
+import type { LlmProvider, LlmRequest } from "@loomwork/llm";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { EncryptingEventStore, InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
+import { ExecutionAlreadyExistsError } from "@loomwork/workflow-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatBus, type LiveChatEvent } from "../../chats/bus";
 import { fixedChatIds } from "../../chats/testing";

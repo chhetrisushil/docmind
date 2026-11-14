@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { InMemoryLineageStore, Lineage } from "@loom-ui/lineage";
-import { InMemoryContentStore } from "@loom/plugin-content";
+import { InMemoryContentStore } from "@loomwork/plugin-content";
+import { InMemoryLineageStore, Lineage } from "@loomwork/ui-lineage";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatBus, LiveChatEvent } from "../../chats/bus";
 import { fixedChatIds } from "../../chats/testing";

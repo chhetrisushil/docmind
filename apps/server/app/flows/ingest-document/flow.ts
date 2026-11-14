@@ -1,5 +1,5 @@
-import { flow$, step$ } from "@loom/core";
-import type { FlowRunner, RegisteredFlow } from "@loom/workflow-runtime";
+import { flow$, step$ } from "@loomwork/core";
+import type { FlowRunner, RegisteredFlow } from "@loomwork/workflow-runtime";
 import { z } from "zod";
 import { EMBED_RETRY, LLM_RETRY, STEP_RETRY, StepResult } from "./stepEffect";
 

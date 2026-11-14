@@ -1,4 +1,4 @@
-import type { BargeInSource } from "@loom/conversation";
+import type { BargeInSource } from "@loomwork/conversation";
 
 /**
  * The in-process stop signal (D8, H6). Loom fires a turn's abort only when a NEW message lands, so a stop

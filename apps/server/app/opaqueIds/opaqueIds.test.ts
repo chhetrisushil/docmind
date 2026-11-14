@@ -1,5 +1,5 @@
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
-import { MAX_EXECUTION_ID_BYTES } from "@loom/plugin-postgres";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
+import { MAX_EXECUTION_ID_BYTES } from "@loomwork/plugin-postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldKeyStoreError, FieldKeyUnavailableError } from "../crypto/fields";
 import {

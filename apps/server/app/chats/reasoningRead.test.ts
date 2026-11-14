@@ -1,8 +1,8 @@
 import { ReasoningResponse } from "@docmind/contracts";
-import { tainted } from "@loom/classify";
-import { ConversationNotFoundError } from "@loom/conversation";
-import { type LlmReasoning, type ReasoningStepRead, captureReasoning } from "@loom/llm";
-import { InMemoryKeyStore } from "@loom/plugin-crypto";
+import { tainted } from "@loomwork/classify";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import { type LlmReasoning, type ReasoningStepRead, captureReasoning } from "@loomwork/llm";
+import { InMemoryKeyStore } from "@loomwork/plugin-crypto";
 import { describe, expect, it } from "vitest";
 import { FieldCrypto } from "../crypto/fields";
 import { legacyChatConversationId } from "./ids";

@@ -1,4 +1,7 @@
-import { type Experience, type Intent, genesis, replay } from "@loom-ui/core";
+import type { EventStore } from "@loomwork/event-runtime";
+import type { ContentStore } from "@loomwork/plugin-content";
+import type { KeyStore } from "@loomwork/plugin-crypto";
+import { type Experience, type Intent, genesis, replay } from "@loomwork/ui-core";
 import {
   type Committed,
   LineErasedError,
@@ -6,11 +9,8 @@ import {
   Lineage,
   type LineageResult,
   eventStoreLineageStore,
-} from "@loom-ui/lineage";
-import { type PlanResult, plannerProvenance } from "@loom-ui/planner";
-import type { EventStore } from "@loom/event-runtime";
-import type { ContentStore } from "@loom/plugin-content";
-import type { KeyStore } from "@loom/plugin-crypto";
+} from "@loomwork/ui-lineage";
+import { type PlanResult, plannerProvenance } from "@loomwork/ui-planner";
 import type { UserIdSource } from "../../documents/executionCandidates";
 import type { VisualizeRef } from "./pgFacts";
 import { VISUALS_INTENT } from "./plan";

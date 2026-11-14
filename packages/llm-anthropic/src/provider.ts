@@ -4,7 +4,7 @@ import type {
   LlmRequest,
   LlmResponse,
   LlmStreamChunk,
-} from "@loom/llm";
+} from "@loomwork/llm";
 import {
   LlmAbortedError,
   LlmRefusalError,

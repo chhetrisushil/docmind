@@ -75,7 +75,7 @@ const snippet = (body: string) =>
     new Map([
       [
         VIRTUAL,
-        `import type { WorkflowRuntime } from "@loom/workflow-runtime";
+        `import type { WorkflowRuntime } from "@loomwork/workflow-runtime";
          import { legacyIds } from "./opaqueIds";
          declare const rt: WorkflowRuntime; declare const flow: never; declare const user: string;
          export async function f() { ${body} }`,
@@ -192,7 +192,7 @@ describe("no id is built or parsed outside opaqueIds", () => {
     ["a lineage template", "export const a = `visuals-${user}-${doc}`;"],
     ["a turn lineage regex", "export const a = new RegExp(`^turnvisuals-(${U})`);"],
     ["a lineage regex literal", "export const a = /^visuals-(x)/;"],
-    ["the lineage stream prefix", 'import { LINEAGE_STREAM_PREFIX } from "@loom-ui/lineage";'],
+    ["the lineage stream prefix", 'import { LINEAGE_STREAM_PREFIX } from "@loomwork/ui-lineage";'],
   ])("flags %s (the scan is not blind)", (_name, body) => {
     expect(idShapesIn([], new Map([[join(APP, "__virtual__.ts"), body]]))).toEqual([
       "__virtual__.ts:1",

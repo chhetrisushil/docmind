@@ -1,7 +1,7 @@
 import type { StopChatResponse } from "@docmind/contracts";
 import { PatchChatRequest } from "@docmind/contracts";
-import { ConversationNotFoundError } from "@loom/conversation";
-import { InboxClosedError } from "@loom/workflow-runtime";
+import { ConversationNotFoundError } from "@loomwork/conversation";
+import { InboxClosedError } from "@loomwork/workflow-runtime";
 import { withTenant } from "../db/tenant";
 import { readJson } from "../http/body";
 import { requireAuth } from "../http/requireAuth";

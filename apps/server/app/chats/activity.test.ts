@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { EventEnvelope } from "@loom/core";
-import { InMemoryReadModelStore, foldedStates } from "@loom/plugin-read-model";
+import type { EventEnvelope } from "@loomwork/core";
+import { InMemoryReadModelStore, foldedStates } from "@loomwork/plugin-read-model";
 import { afterEach, describe, expect, it } from "vitest";
 import { OpaqueIds, opaqueIds } from "../opaqueIds";
 import { testOpaqueIds } from "../opaqueIds/testing";

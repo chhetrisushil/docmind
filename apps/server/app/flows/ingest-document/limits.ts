@@ -1,8 +1,8 @@
 import { OllamaEmbeddingProvider } from "@docmind/embeddings";
 import { ParseRunner, ParserRegistry, createDefaultParsers } from "@docmind/parsers";
 import type { ParseLimits } from "@docmind/parsers";
-import type { LlmProvider } from "@loom/llm";
-import { EmbeddingError, type EmbeddingProvider } from "@loom/memory";
+import type { LlmProvider } from "@loomwork/llm";
+import { EmbeddingError, type EmbeddingProvider } from "@loomwork/memory";
 import { loadLimits, positiveInt } from "../../documents/limits";
 import { InMemoryProgressBus, type ProgressBus } from "../../documents/progress";
 import { createRoleProvider } from "../../llm/factory";
